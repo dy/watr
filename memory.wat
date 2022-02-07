@@ -2,6 +2,7 @@
   (import "js" "log" (func $log (param i32)))
   (import "js" "mem" (memory 1))
   ;; (memory 1) ;; create memory with 1 page - per module
+  ;; (memory $xxx 1) ;; create memory with 1 page - per module
 
   (func $populate (export "populate")
     i32.const 0

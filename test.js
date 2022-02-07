@@ -11,7 +11,7 @@ t.skip('table', () => {
   console.log(instance.exports.callByIndex(2)) // => error
 })
 
-t.only('global', () => {
+t('global', () => {
   var buf = fs.readFileSync('./global.wasm')
   const mod = new WebAssembly.Module(buf)
   const importObj = {
@@ -27,6 +27,18 @@ t.only('global', () => {
   console.log(getG1())
   setG1(100)
   console.log(getG1())
+})
+
+
+t('stack', () => {
+  var buf = fs.readFileSync('./stack.wasm')
+  const mod = new WebAssembly.Module(buf)
+  const importObj = {"js": {}}
+  const instance = new WebAssembly.Instance(mod, importObj)
+  const {get, swap, mul} = instance.exports
+  console.log(mul(12,13))
+  // console.log(swap(1,2,3,4))
+  // console.log(get())
 })
 
 t('memory', () => {
@@ -48,6 +60,43 @@ t('memory', () => {
 
   // grow by one page
   console.log(importObj.js.mem.grow(1))
+})
+
+
+
+t('loop', () => {
+  var buf = fs.readFileSync('./loops.wasm')
+  const mod = new WebAssembly.Module(buf)
+  // const mem = new WebAssembly.Memory({ initial:1 })
+  // const f32mem = new Float32Array(mem.buffer)
+  const importObj = {console: {log:(arg)=>console.log(arg)}}
+  const instance = new WebAssembly.Instance(mod, importObj)
+
+})
+
+
+t.only('array', () => {
+  const BLOCK = 1024
+  var buf = fs.readFileSync('./array.wasm')
+  const mod = new WebAssembly.Module(buf)
+  const mem = new WebAssembly.Memory({ initial:1 })
+  const blockSize = new WebAssembly.Global({value: 'i32', mutable: true}, BLOCK)
+  // blockSize.value
+  const f32mem = new Float32Array(mem.buffer)
+  const importObj = {js: {mem, blockSize}, console:{log(a,b){console.log(a,b)}}}
+  const instance = new WebAssembly.Instance(mod, importObj)
+  const {amp} = instance.exports
+
+  let src = Array.from({length:BLOCK}, (a,i)=>i)
+  f32mem.set(src)
+
+  console.time('wasm amp')
+  for (let i = 0; i < 1e3; i++) amp(.5)
+  console.timeEnd('wasm amp')
+
+  console.time('js amp')
+  for (let i = 0; i < 1e3; i++) for (let j = 0; j < src.length; j++) src[j]*=.5
+  console.timeEnd('js amp')
 })
 
 
