@@ -85,17 +85,34 @@ t.only('array', () => {
   const f32mem = new Float32Array(mem.buffer)
   const importObj = {js: {mem, blockSize}, console:{log(a,b){console.log(a,b)}}}
   const instance = new WebAssembly.Instance(mod, importObj)
-  const {amp} = instance.exports
+  const {amp, ampMulti, ampShort} = instance.exports
 
   let src = Array.from({length:BLOCK}, (a,i)=>i)
-  f32mem.set(src)
 
+  const MAX = 1e5
+  f32mem.set(src)
+  console.time('warmup')
+  for (let i = 0; i < MAX; i++) amp(.5)
+  console.timeEnd('warmup')
+
+  f32mem.set(src)
   console.time('wasm amp')
-  for (let i = 0; i < 1e3; i++) amp(.5)
+  for (let i = 0; i < MAX; i++) amp(.5)
   console.timeEnd('wasm amp')
 
+  f32mem.set(src)
+  console.time('wasm amp multivariable')
+  for (let i = 0; i < MAX; i++) ampMulti(.5)
+  console.timeEnd('wasm amp multivariable')
+
+  f32mem.set(src)
+  console.time('wasm short')
+  for (let i = 0; i < MAX; i++) ampShort(.5)
+  console.timeEnd('wasm short')
+
+
   console.time('js amp')
-  for (let i = 0; i < 1e3; i++) for (let j = 0; j < src.length; j++) src[j]*=.5
+  for (let i = 0; i < MAX; i++) for (let j = 0; j < src.length; j++) src[j]*=.5
   console.timeEnd('js amp')
 })
 
