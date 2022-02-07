@@ -14,3 +14,8 @@ Experiments:
 * [x] memory: passing pointer to a function
 * [x] benchmark array setting agains js loop
   → it's faster almost twice
+
+## Useful links
+
+* [MDN: control flow](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/Control_flow)
+* [WASM reference manual](https://github.com/sunfishcode/wasm-reference-manual/blob/master/WebAssembly.md#loop)
