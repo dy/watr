@@ -1,7 +1,17 @@
 (module
   (import "js" "log" (func $log (param i32)))
-  (import "js" "mem" (memory 1))
-  ;; (memory 1) ;; create memory with 1 page - per module
+
+  ;; reexport memory
+  ;; note: it requires import.
+  (import "js" "mem" (memory $mem 2))
+  (export "mem" (memory $mem))
+
+  ;; (memory $mem (import "mem") (export "mem") 1) ;; create memory with 1 page - per module
+
+  ;; (import "js" "g" (global $g f32))
+  ;; (export "g" (global $g))
+
+  ;; (global (export "g") (mut f32) (f32.const 1.5))
   ;; (memory $xxx 1) ;; create memory with 1 page - per module
 
   (func $populate (export "populate")
