@@ -3,7 +3,7 @@
 
   (global $g0 i32 (i32.const 12))
 
-  (func i32.const 0 return)
+  (func i32.const 0 return) ;; TF?
 
   (func $get (export "get") (result i32 i32)
     ;; note: you cannot push more items to stack than needed for the next op

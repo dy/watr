@@ -1,17 +1,22 @@
 import fs from 'fs'
 import t from 'tst'
 
-t.skip('table', () => {
+t.only('table', () => {
   var buffer = fs.readFileSync('./table.wasm');
   const mod = new WebAssembly.Module(buffer)
   const instance = new WebAssembly.Instance(mod)
 
-  console.log(instance.exports.callByIndex(0)) // => 42
-  console.log(instance.exports.callByIndex(1)) // => 13
-  console.log(instance.exports.callByIndex(2)) // => error
+  const {callByIndex, getByIndex} = instance.exports
+
+  console.log(callByIndex(0)) // => 42
+  console.log(callByIndex(1)) // => 13
+  // console.log(callByIndex(2)) // => error
+
+  let fn = getByIndex(0)
+  console.log(fn, fn?.())
 })
 
-t.only('global', () => {
+t('global', () => {
   var buf = fs.readFileSync('./global.wasm')
   const mod = new WebAssembly.Module(buf)
   const importObj = {

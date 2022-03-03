@@ -13,4 +13,9 @@
     (ref.null extern)
     (return (local.get 0) (local.get 1) (local.get 2))
   )
+
+  (elem func 0)
+  (func $f (export "f") (result funcref)
+    (return (ref.func 0))
+  )
 )
