@@ -6,6 +6,11 @@ t.only('table', () => {
   const mod = new WebAssembly.Module(buffer)
   const instance = new WebAssembly.Instance(mod)
 
+  // console.time('instantiate')
+  // for (let i = 0; i < 30000; i++) new WebAssembly.Instance(mod)
+  // console.timeEnd('instantiate')
+  // 290ms to instantiate 30k modules
+
   const {callByIndex, getByIndex} = instance.exports
 
   console.log(callByIndex(0)) // => 42

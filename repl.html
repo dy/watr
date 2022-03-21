@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+
+<style>
+*{box-sizing: border-box}
+html, body {height: 100%; margin: 0}
+</style>
+
+<body style="display: flex; flex-direction: column;">
+<textarea id="wat" style="display: block; flex-grow: 1;">
+(module
+  (global $g0 (mut i32) (i32.const 1))
+)
+</textarea>
+<div id="log" style="height: 50%;"></div>
+
+<script type="module">
+  import Wabt from './wabt.js'
+
+  let wabt = await Wabt()
+  let textarea = document.getElementById('wat'),
+      errarea = document.getElementById('log')
+
+  textarea.onchange = () => {
+    compile(textarea.value)
+  }
+  compile(textarea.value)
+
+  function compile(code) {
+    errarea.textContent = ''
+    try {
+      var wasmModule = wabt.parseWat('', code)
+      let wasmBinary = wasmModule.toBinary({log: true})
+      const mod = new WebAssembly.Module(wasmBinary.buffer)
+      // const instance = new WebAssembly.Instance(mod)
+      // console.log(instance)
+    }
+    catch (e) {
+      console.error(e)
+      errarea.textContent = e
+    }
+  }
+</script>
+</body>
+
