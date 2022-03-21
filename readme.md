@@ -2,7 +2,9 @@
 
 Set of experiments with wasm text format.
 
-Main goal is to get very fluent with wasm text and to know it from within.
+Main goal is to get very fluent with wasm text and to know it.
+
+Also it provides tiny _wasm repl_: https://audio-lab.github.io/watr/repl.html.
 
 Experiments:
 
