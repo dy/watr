@@ -3,7 +3,7 @@
 > tiny WAT compiler
 
 Main purpose is happy-path wat compiler at minimal size, providing a way to map human-readable WAT to binary.
-It doesn't support legacy constructs nor aliases, as well as many edge cases. For that use wabt.
+It doesn't support legacy constructs, aliases, custom secions and many other edge-cases. For that use wabt.
 It can be used as intermediate layer for compilation from hi-level languages, eg. [sonl](https://github.com/audio-lab/sonl).
 Based on [subscript](https://github.com/spectjs/subscript).
 

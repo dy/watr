@@ -1,24 +1,21 @@
 import t, { is, ok, same } from 'tst'
 import compile from '../src/compile.js'
 
-t.only('compile: empty', t => {
-  is(compile(['module']), hex`
-    00 61 73 6d
-    01 00 00 00
-  `)
+t('compile: empty', t => {
+  is(compile(['module']), hex`00 61 73 6d 01 00 00 00`)
 })
 
 t('compile: (module (func))', t => {
-  let {binary} = compile(tree)
-  is(binary, hex`
-    00 61 73 6d 01 00 00 00  01 04 01 60 00 00 03 02
-    01 00 0a 04 01 02 00 0b
+  is(compile(['module', ['func']]), hex`
+    00 61 73 6d 01 00 00 00
+    01 04 01 60 00 00         ; type section
+    03 02 01 00               ; func section
+    0a 04 01 02 00 0b         ; code section
   `)
 })
 
-t('compile: (module (memory 1) (func))', t => {
-  let {binary} = compile(tree)
-  is(binary, hex`
+t.only('compile: (module (memory 1) (func))', t => {
+  is(compile(['module', ['memory', 1], ['func']]), hex`
     00 61 73 6d 01 00 00 00 01 04 01 60 00 00 03 02
     01 00 05 03 01 00 01 0a 04 01 02 00 0b
   `)
@@ -56,6 +53,8 @@ const hex = (str, ...fields) =>
   new Uint8Array(
     String.raw.call(null, str, fields)
     .trim()
+    .replace(/;[^\n]*/g,'')
     .split(/[\s\n]+/)
+    .filter(n => n !== '')
     .map(n => parseInt(n, 16))
   )
