@@ -5,19 +5,23 @@ t('compile: empty', t => {
   is(compile(['module']), hex`00 61 73 6d 01 00 00 00`)
 })
 
+// first 3 words: section code, section length, section #items
 t('compile: (module (func))', t => {
   is(compile(['module', ['func']]), hex`
     00 61 73 6d 01 00 00 00
-    01 04 01 60 00 00         ; type section
-    03 02 01 00               ; func section
-    0a 04 01 02 00 0b         ; code section
+    01 04 01  60 00 00         ; type section
+    03 02 01  00               ; func section
+    0a 04 01  02 00 0b         ; code section
   `)
 })
 
-t.only('compile: (module (memory 1) (func))', t => {
+t('compile: (module (memory 1) (func))', t => {
   is(compile(['module', ['memory', 1], ['func']]), hex`
-    00 61 73 6d 01 00 00 00 01 04 01 60 00 00 03 02
-    01 00 05 03 01 00 01 0a 04 01 02 00 0b
+    00 61 73 6d 01 00 00 00
+    01 04 01  60 00 00       ; type
+    03 02 01  00             ; func
+    05 03 01  00 01          ; memory
+    0a 04 01  02 00 0b       ; code
   `)
 })
 
