@@ -1,87 +1,112 @@
 // convert wat tree to wasm binary
 // ref: https://ontouchstart.pages.dev/chapter_wasm_binary
 // ref: https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md#function-section
+import {OP, SECTION, RANGE, TYPE, ETYPE, ALIGN} from './const.js'
 
+export default (tree) => new Uint8Array([
+  0x00, 0x61, 0x73, 0x6d, // magic
+  0x01, 0x00, 0x00, 0x00, // version
+  ...compile[tree[0]](tree.slice(1))
+])
 
-// FIXME: make these regular constants?
-const RANGE_MIN=0, RANGE_MIN_MAX=1,
-SECTION = {type:1, import:2, function:3, table:4, memory:5, global:6, export:7, start:8, element:9, code:10, data:11},
-TYPE = {i32:0x7f, i64:0x7e, f32:0x7d, f64:0x7c, void:0x40, func:0x60, funcref:0x70},
-ETYPE = {func: 0, table: 1, mem: 2, global: 3}
+const compile = {
+  module(nodes) {
+    const section = {
+      type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], element: [], code: [], data: []
+    }
+    // NOTE: formally can be done as name section
+    const alias = {func: [], global: []}
 
-export default (tree) => {
-  return new Uint8Array(module(tree))
-}
+    for (let [key, ...parts] of nodes) compile[key](parts, section, alias)
 
-export const module = ([_, ...nodes]) => {
-  const magic = [0x00, 0x61, 0x73, 0x6d];
-  const version = [0x01, 0x00, 0x00, 0x00];
+    return Object.keys(section).flatMap((key, items, count) => (
+      !(count = (items = section[key]).length) ? [] : (
+        (items = items.flat()).unshift(SECTION[key], items.length+1, count), items
+      )
+    ))
+  },
 
-  const types = [], fns = [], codes = [], imports = [],
-        tables = [], mems = [], globals = [], exports = [],
-        starts = [], elements = [], datas = []
+  // (func $name? ...params result ...body)
+  func(parts, ctx) {
+    let args=[], result=[], body = parts.slice()
 
-  const node = {
-    func: (parts, section) => {
-      let param_count = 0, return_count = 0, param_types=[], return_types=[]
-      // FIXME: count params/types
-      // FIXME: count returns/types
-      let idx = types.push([TYPE.func, param_count, ...param_types, return_count, ...return_types])-1
-      fns.push(idx)
+    while (body[0] && body[0][0] === 'param') args.push(...body.shift().slice(1).map(t => TYPE[t]))
+    if (body[0] && body[0][0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
 
-      // FIXME: collect actual statements
-      // FIXME: map statements to codes
-      let vars=0, ops = []//parts.flat()
-      codes.push([ops.length+2, vars, ...ops, 0x0b])
-    },
-    memory: (parts) => {
-      let imp = false
-      // (memory (import "js" "mem") 1) → (import "js" "mem" (memory 1))
-      if (parts[0][0] === 'import') {
-        imp = parts.shift()
-        // node.import([...parts[0].slice(1), ['memory', ...parts.slice(1)]])
+    ctx.func.push(ctx.type.push([TYPE.func, args.length, ...args, result.length, ...result])-1)
+
+    // FIXME: detect fn name and save alias pointing to fn index
+
+    const vars = []
+    body = body.flatMap(instr => {
+      // FIXME: instructions may have optional immediates
+      // some immediates examples:
+      // align=n offset=m
+      // call_indirect (type $name)
+      // if (result type) instr end
+      // (if (result type) (then instr))
+      let op, params = []
+
+      if (!Array.isArray(instr)) {
+        op = instr
       }
-
-      let [min, max, shared] = parts,
-          dfn = max ? [RANGE_MIN_MAX, min, max] : [RANGE_MIN, min]
-
-      if (!imp) mems.push(dfn)
       else {
-        let [_, mod, name] = imp
-        imports.push([mod.length, ...encoder.encode(mod), name.length, ...encoder.encode(name), ETYPE.mem, ...dfn])
+        [op, ...params] = instr
       }
-    },
-    global: ([type, mutable]) => globals.push([]),
-    table: ([type, limits]) => tables.push([]),
 
-    // (import mod name ref)
-    import: ([mod, name, ref]) => {
-      node[ref[0]]([['import', mod, name], ...ref.slice(1)])
-    },
-  }
+      // FIXME:
+      if (op === 'i32.store') {
+        let align = ALIGN[instr], offset = 0
+        if (params[0]?.startsWith('align')) align = +params.pop().split('=')[1]
+        if (params[0]?.startsWith('offset')) offset = +params.pop().split('=')[1]
+        params.push(align, offset)
+      }
 
-  for (let [key, ...parts] of nodes) node[key](parts)
+      return [OP[op], ...params]
+    })
 
-  return [ ...magic, ...version,
-    ...section(SECTION.type, types),
-    ...section(SECTION.import, imports),
-    ...section(SECTION.function, fns),
-    // ...section(tables),
-    ...section(SECTION.memory, mems),
-    // ...section(globals),
-    // ...section(exports),
-    // ...section(starts),
-    // ...section(elements),
-    ...section(SECTION.code, codes),
-    // ...section(datas)
-  ]
-}
+    ctx.code.push([body.length+2, vars.length, ...body, 0x0b])
+  },
 
-// generate section prefixed with length, #items
-const section = (code, items) => {
-  if (!items.length) return []
-  let data = [items.length, ...items.flat()]
-  return [code, data.length, ...data]
+  // (memory min max shared)
+  memory(parts, ctx) {
+    parts = parts.slice()
+    let imp = false
+    // (memory (import "js" "mem") 1) → (import "js" "mem" (memory 1))
+    if (parts[0][0] === 'import') imp = parts.shift()
+
+    let [min, max, shared] = parts,
+        dfn = max ? [RANGE.minmax, min, max] : [RANGE.min, min]
+
+    if (!imp) ctx.memory.push(dfn)
+    else {
+      let [_, mod, name] = imp
+      ctx.import.push([mod.length, ...encoder.encode(mod), name.length, ...encoder.encode(name), ETYPE.memory, ...dfn])
+    }
+  },
+
+  // mut
+  global([type, mutable], ctx) { ctx.global.push([]) },
+
+  table([type, limits], ctx) { ctx.table.push([]) },
+
+  //  (export "name" ([type] $name|idx))
+  export([name, [type, idx]], ctx) {
+    if (typeof idx === 'string') idx = ctx.alias[type][idx]
+    ctx.export.push([name.length, ...encoder.encode(name), ETYPE[type], idx])
+  },
+
+  // (import mod name ref)
+  import([mod, name, ref], ctx) {
+    // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
+    compile[ref[0]]([['import', mod, name], ...ref.slice(1)])
+  },
+
+  // data
+  // type
+  // elem
+  // start
+  // offset
 }
 
 const encoder = new TextEncoder()

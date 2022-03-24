@@ -30,10 +30,14 @@ Experiments:
 
 ## Refs
 
-* [mdn wat](https://developer.mozilla.org/en-US/docs/WebAssembly/Understanding_the_text_format)
-* [wasm book](https://ontouchstart.pages.dev/chapter_wasm_binary)
-* [hackernoon](https://web.archive.org/web/20210215171830/https://hackernoon.com/webassembly-binary-format-explained-part-2-hj1t33yp?source=rss)
+* [mdn wasm text format](https://developer.mozilla.org/en-US/docs/WebAssembly/Understanding_the_text_format)
+* [wasm reference manual](https://github.com/sunfishcode/wasm-reference-manual/blob/master/WebAssembly.md)
+* [wabt source search](https://github.com/WebAssembly/wabt/search?p=5&q=then)
+* [wat control flow](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/Control_flow)
 * [wasm binary encoding](https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md)
+* [ontouchstart wasm book](https://ontouchstart.pages.dev/chapter_wasm_binary)
+* [wat-compiler](https://github.com/stagas/wat-compiler/)
+* [hackernoon](https://web.archive.org/web/20210215171830/https://hackernoon.com/webassembly-binary-format-explained-part-2-hj1t33yp?source=rss)
 * [webassemblyjs](https://github.com/xtuc/webassemblyjs)
 
 -->

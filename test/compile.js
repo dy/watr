@@ -39,27 +39,34 @@ t('compile: (module (memory (import "js" "mem") 1) (func))', t => {
     03 02 01 00                             ; func
     0a 04 01 02 00 0b                       ; code
   `
-  const mod = new WebAssembly.Module(buffer)
+  new WebAssembly.Module(buffer)
   is(compile(['module', ['memory', ['import', 'js', 'mem'], 1], ['func']]), buffer)
 })
 
-t.todo('compile: export mem/func', t => {
-  // (module
-  //   (memory 1)
-  //   (func (param i32 i32) (result i32)
-  //     local.get 0
-  //     local.get 1
-  //     i32.store
-  //     local.get 1
-  //   )
-  //   (export "m" (memory 0 ))
-  //   (export "f" (func 0 ))
-  // )
-  is(binary, hex`
-    00 61 73 6d 01 00 00 00 01 07 01 60 02 7f 7f 01
-  7f 03 02 01 00 05 03 01 00 01 07 09 02 01 6d 02
-  00 01 66 00 00 0a 0d 01 0b 00 20 00 20 01 36 02
-  00 20 01 0b `)
+t('compile: export mem/func', t => {
+  let buffer = hex`
+    00 61 73 6d 01 00 00 00
+    01 07 01 60 02 7f 7f 01 7f                    ; type
+    03 02 01 00                                   ; function
+    05 03 01 00 01                                ; memory
+    07 09 02 01 6d 02 00 01 66 00 00              ; export
+    0a 0d 01 0b 00 20 00 20 01 36 02 00 20 01 0b  ; code
+  `
+  is(compile(['module',                                   // (module
+    ['memory', 1],                                        //   (memory 1)
+    ['func', ['param', 'i32', 'i32'], ['result', 'i32'],  //   (func (param i32 i32) (result i32)
+      ['local.get', 0],                                   //     local.get 0
+      ['local.get', 1],                                   //     local.get 1
+      // FIXME: make sure align is 2 here
+      ['i32.store', 'align=2'],                           //     i32.store
+      ['local.get', 1]                                    //     local.get 1
+    ],                                                    //   )
+    ['export', 'm', ['memory', 0]],                       //   (export "m" (memory 0 ))
+    ['export', 'f', ['func', 0]],                         //   (export "f" (func 0 ))
+  ]),                                                     // )
+  buffer)
+
+  new WebAssembly.Module(buffer)
 })
 
 const hex = (str, ...fields) =>

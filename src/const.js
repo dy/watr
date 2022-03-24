@@ -1,33 +1,5 @@
-export const keywords = {
-  module: "module",
-  func: "func",
-  param: "param",
-  result: "result",
-  export: "export",
-  loop: "loop",
-  block: "block",
-  if: "if",
-  then: "then",
-  else: "else",
-  call: "call",
-  call_indirect: "call_indirect",
-  import: "import",
-  memory: "memory",
-  shared: "shared",
-  table: "table",
-  global: "global",
-  anyfunc: "anyfunc",
-  mut: "mut",
-  data: "data",
-  type: "type",
-  elem: "elem",
-  start: "start",
-  offset: "offset",
-};
-
-
 // ref: https://github.com/stagas/wat-compiler/blob/main/lib/const.js
-const opCodes = [
+export const OP = Object.fromEntries([
   'unreachable', 'nop', 'block', 'loop', 'if', 'else', ,,,,,
 
   'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', ,,,,,,,,
@@ -66,9 +38,15 @@ const opCodes = [
   'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
 
   'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64',
-]
+].flatMap((key,i)=>key && [[key,i]])),
 
-const ALIGN = {
+RANGE = {min:0, minmax:1, shared:3},
+GLOBAL = {const:0,mut:1},
+SECTION = {type:1, import:2, func:3, table:4, memory:5, global:6, export:7, start:8, element:9, code:10, data:11},
+TYPE = {i32:0x7f, i64:0x7e, f32:0x7d, f64:0x7c, void:0x40, func:0x60, funcref:0x70},
+ETYPE = {func: 0, table: 1, memory: 2, global: 3},
+
+ALIGN = {
   'i32.load': 4,
   'i64.load': 8,
   'f32.load': 4,
@@ -96,40 +74,4 @@ const ALIGN = {
   'i64.store8': 1,
   'i64.store16': 2,
   'i64.store32': 4,
-}
-
-export const BYTE = {
-  'type.i32': 0x7f,
-  'type.i64': 0x7e,
-  'type.f32': 0x7d,
-  'type.f64': 0x7c,
-  'type.void': 0x40,
-  'type.func': 0x60,
-  'type.funcref': 0x70,
-  'section.custom': 0,
-  'section.type': 1,
-  'section.import': 2,
-  'section.function': 3,
-  'section.table': 4,
-  'section.memory': 5,
-  'section.global': 6,
-  'section.export': 7,
-  'section.start': 8,
-  'section.element': 9,
-  'section.code': 10,
-  'section.data': 11,
-  'import.func': 0x00,
-  'import.table': 0x01,
-  'import.memory': 0x02,
-  'import.global': 0x03,
-  'export.function': 0x00,
-  'export.table': 0x01,
-  'export.memory': 0x02,
-  'export.global': 0x03,
-  'global.const': 0x00,
-  'global.var': 0x01,
-  'global.mut': 0x01,
-  'limits.min': 0x00,
-  'limits.minmax': 0x01,
-  'limits.shared': 0x03,
 }
