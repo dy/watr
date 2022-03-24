@@ -7,34 +7,43 @@ t('compile: empty', t => {
 
 // first 3 words: section code, section length, section #items
 t('compile: (module (func))', t => {
-  is(compile(['module', ['func']]), hex`
+  let buffer
+  is(compile(['module', ['func']]), buffer = hex`
     00 61 73 6d 01 00 00 00
     01 04 01  60 00 00         ; type section
     03 02 01  00               ; func section
     0a 04 01  02 00 0b         ; code section
   `)
+
+  new WebAssembly.Module(buffer)
 })
 
 t('compile: (module (memory 1) (func))', t => {
-  is(compile(['module', ['memory', 1], ['func']]), hex`
+  let buffer = hex`
     00 61 73 6d 01 00 00 00
     01 04 01  60 00 00       ; type
     03 02 01  00             ; func
     05 03 01  00 01          ; memory
     0a 04 01  02 00 0b       ; code
-  `)
+  `
+  new WebAssembly.Module(buffer)
+
+  is(compile(['module', ['memory', 1], ['func']]), buffer )
 })
 
 t('compile: (module (memory (import "js" "mem") 1) (func))', t => {
-  let {binary} = compile(tree)
-  is(binary, hex`
-    00 61 73 6d 01 00 00 00 01 04 01 60 00 00 02 0b
-    01 02 6a 73 03 6d 65 6d 02 00 01 03 02 01 00 0a
-    04 01 02 00 0b
-  `)
+  let buffer = hex`
+    00 61 73 6d 01 00 00 00
+    01 04 01 60 00 00                       ; type
+    02 0b 01 02 6a 73 03 6d 65 6d 02 00 01  ; import
+    03 02 01 00                             ; func
+    0a 04 01 02 00 0b                       ; code
+  `
+  const mod = new WebAssembly.Module(buffer)
+  is(compile(['module', ['memory', ['import', 'js', 'mem'], 1], ['func']]), buffer)
 })
 
-t('compile: export mem/func', t => {
+t.todo('compile: export mem/func', t => {
   // (module
   //   (memory 1)
   //   (func (param i32 i32) (result i32)

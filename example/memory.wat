@@ -6,7 +6,7 @@
   (import "js" "mem" (memory $mem 2))
   (export "mem" (memory $mem))
 
-  ;; (memory $mem (import "mem") (export "mem") 1) ;; create memory with 1 page - per module
+  ;; (memory $mem (import "js" "mem") (export "mem") 1) ;; create memory with 1 page - per module
 
   ;; (import "js" "g" (global $g f32))
   ;; (export "g" (global $g))

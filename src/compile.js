@@ -3,13 +3,11 @@
 // ref: https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md#function-section
 
 
-const SEC_TYPE=1, SEC_IMPORT=2, SEC_FUNC=3, SEC_TABLE=4, SEC_MEM=5, SEC_GLOBAL=6, SEC_EXPORT=7, SEC_START=8, SEC_EL=9, SEC_CODE=10, SEC_DATA=11,
-
-TYPE_I32=0x7f, TYPE_I64=0x7e, TYPE_F32=0x7d, TYPE_F64=0x7c, TYPE_VOID=0x40, TYPE_FUNC=0x60, TYPE_FUNCREF=0x70,
-
-EXT_FUNC=0, EXT_TABLE=1, EXT_MEM=2, EXT_GLOBAL=3,
-
-RANGE_MIN=0, RANGE_MIN_MAX=1
+// FIXME: make these regular constants?
+const RANGE_MIN=0, RANGE_MIN_MAX=1,
+SECTION = {type:1, import:2, function:3, table:4, memory:5, global:6, export:7, start:8, element:9, code:10, data:11},
+TYPE = {i32:0x7f, i64:0x7e, f32:0x7d, f64:0x7c, void:0x40, func:0x60, funcref:0x70},
+ETYPE = {func: 0, table: 1, mem: 2, global: 3}
 
 export default (tree) => {
   return new Uint8Array(module(tree))
@@ -24,11 +22,11 @@ export const module = ([_, ...nodes]) => {
         starts = [], elements = [], datas = []
 
   const node = {
-    func: (parts) => {
+    func: (parts, section) => {
       let param_count = 0, return_count = 0, param_types=[], return_types=[]
       // FIXME: count params/types
       // FIXME: count returns/types
-      let idx = types.push([TYPE_FUNC, param_count, ...param_types, return_count, ...return_types])-1
+      let idx = types.push([TYPE.func, param_count, ...param_types, return_count, ...return_types])-1
       fns.push(idx)
 
       // FIXME: collect actual statements
@@ -36,25 +34,44 @@ export const module = ([_, ...nodes]) => {
       let vars=0, ops = []//parts.flat()
       codes.push([ops.length+2, vars, ...ops, 0x0b])
     },
-    memory: ([min, max, shared]) => mems.push(max ? [RANGE_MIN_MAX, min, max] : [RANGE_MIN, min]),
+    memory: (parts) => {
+      let imp = false
+      // (memory (import "js" "mem") 1) → (import "js" "mem" (memory 1))
+      if (parts[0][0] === 'import') {
+        imp = parts.shift()
+        // node.import([...parts[0].slice(1), ['memory', ...parts.slice(1)]])
+      }
+
+      let [min, max, shared] = parts,
+          dfn = max ? [RANGE_MIN_MAX, min, max] : [RANGE_MIN, min]
+
+      if (!imp) mems.push(dfn)
+      else {
+        let [_, mod, name] = imp
+        imports.push([mod.length, ...encoder.encode(mod), name.length, ...encoder.encode(name), ETYPE.mem, ...dfn])
+      }
+    },
     global: ([type, mutable]) => globals.push([]),
     table: ([type, limits]) => tables.push([]),
-    // import: () => ,
+
+    // (import mod name ref)
+    // import: ([mod, name, ref]) => {
+    // },
   }
 
   for (let [key, ...parts] of nodes) node[key](parts)
 
   return [ ...magic, ...version,
-    ...section(SEC_TYPE, types),
-    // ...section(imports),
-    ...section(SEC_FUNC, fns),
+    ...section(SECTION.type, types),
+    ...section(SECTION.import, imports),
+    ...section(SECTION.function, fns),
     // ...section(tables),
-    ...section(SEC_MEM, mems),
+    ...section(SECTION.memory, mems),
     // ...section(globals),
     // ...section(exports),
     // ...section(starts),
     // ...section(elements),
-    ...section(SEC_CODE, codes),
+    ...section(SECTION.code, codes),
     // ...section(datas)
   ]
 }
@@ -65,3 +82,5 @@ const section = (code, items) => {
   let data = [items.length, ...items.flat()]
   return [code, data.length, ...data]
 }
+
+const encoder = new TextEncoder()
