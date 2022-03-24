@@ -55,8 +55,9 @@ export const module = ([_, ...nodes]) => {
     table: ([type, limits]) => tables.push([]),
 
     // (import mod name ref)
-    // import: ([mod, name, ref]) => {
-    // },
+    import: ([mod, name, ref]) => {
+      node[ref[0]]([['import', mod, name], ...ref.slice(1)])
+    },
   }
 
   for (let [key, ...parts] of nodes) node[key](parts)
