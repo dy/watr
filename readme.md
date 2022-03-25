@@ -1,13 +1,11 @@
 # watr
 
-Unsugared WAT compiler. Provides minimal human interface to WASM.
+> Unsugared WAT compiler.
 
-Useful as compilation target for hi-level languages to avoid binary hassle.
-
-Based on [subscript](https://github.com/spectjs/subscript).
-
-Used by [sonl](https://github.com/audio-lab/sonl).
-
+Provides minimal human interface to WASM.<br>
+Useful as compilation target for hi-level languages to avoid binary hassle.<br>
+Based on [subscript](https://github.com/spectjs/subscript).<br>
+Used by [sonl](https://github.com/audio-lab/sonl).<br>
 Also provides _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.html)_.
 
 <!-- ## Features -->
