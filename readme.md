@@ -13,11 +13,11 @@ Also provides _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.htm
 
 ## Comparison
 
-&nbsp; | watr | wat-compiler | wabt
+&nbsp; | Size | Compile | Parse
 ---|---|---|---
-Size | | |
-Compile | | |
-Parse | | |
+watr | | |
+wat-compiler | | |
+wabt | | |
 
 
 <!--
