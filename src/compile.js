@@ -54,12 +54,11 @@ const compile = {
         [op, ...params] = instr
       }
 
-      // FIXME:
+      // store may have optional immediates
       if (op === 'i32.store') {
-        let align = ALIGN[instr], offset = 0
-        if (params[0]?.startsWith('align')) align = +params.pop().split('=')[1]
-        if (params[0]?.startsWith('offset')) offset = +params.pop().split('=')[1]
-        params.push(align, offset)
+        let o = {align: ALIGN[instr], offset: 0}, p
+        while (params[0] && params[0][0]==='=') { p = params.shift(); o[p[1]] = +p[2] }
+        params.unshift(o.align, o.offset)
       }
 
       return [OP[op], ...params]
