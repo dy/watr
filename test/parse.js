@@ -8,10 +8,12 @@ t('parser: s-expr', () => {
 
 t('parser: s-expr no instruction (throws)', () => {
   try {
-    parse(tokenize('()'))
+    parse('()')
   } catch (error) {
-    expect(error.message).to.include('expected: instr')
+    ok(/Empty/.test(error.message))
+    return
   }
+  throw 'Failed'
 })
 
 t('parser: s-expr named', () => {
@@ -68,4 +70,100 @@ t.skip('parser: children', () => {
   const tree = parse(code)
   console.log(code)
   is(tree, ['data', ['i32.const', '0'], '"\\2a"'])
+})
+
+t('parse: instr', () => {
+  const tokens = parse('hello')
+  is(tokens, 'hello')
+})
+
+t('parse: param', () => {
+  const tokens = parse('align=4')
+  is(tokens, ['align', '4'])
+})
+
+t('parse: label', () => {
+  const tokens = parse('$$hi')
+  is(tokens, '$$hi')
+})
+
+t.skip('parse: string', () => {
+  const r = String.raw
+  const tokens = parse(r`"hello""ano\"t\n\ther""more"`)
+  expect(tokens).to.deep.equal([
+    { value: 'hello', kind: 'string', index: 0 },
+    { value: r`ano\"t\n\ther`, kind: 'string', index: 7 },
+    { value: 'more', kind: 'string', index: 22 }
+  ])
+})
+
+t('parse: number', () => {
+  const tokens = parse('123')
+  is(tokens, '123')
+})
+
+t('parse: hex', () => {
+  const tokens = parse('0xf2')
+  is(tokens, '0xf2')
+})
+
+t('parse: comments', () => {
+  const tokens = parse('(an (; inline ;) comment\n);; line comment')
+  is(tokens, ['an', 'comment'])
+})
+
+t('parse: nul', () => {
+  const tokens = parse(' \n\t')
+  is(tokens, "")
+})
+
+t('parse: error', () => {
+  try {
+    parse('§what')
+  } catch (e) {
+    ok(/syntax/.test(e.message))
+  }
+})
+
+t('number', t => {
+  ;[
+    '12',
+    '12.3',
+    '-12.3',
+    '+12.3',
+    '1e5',
+    '1.23e5',
+    '1.23e-5',
+    '1.23e+5',
+    'nan',
+    'inf',
+    '+inf',
+    '-inf',
+  ].forEach(n => {
+    const tokens = parse(n)
+    is(tokens, n)
+  })
+
+  ;[
+    '-0xf2',
+    '+0xf2',
+    '0xf2.ef',
+    '0xf2.ePf',
+    '0xf2.P-f',
+    'nan:0xff',
+  ].forEach(n => {
+    const tokens = parse(n)
+    is(tokens, n)
+  })
+})
+
+
+t('parse: complex case 1', () => {
+  const tokens = parse(`(
+(hello $hi
+"world")
+;; (should) be a comment
+and (; another ;) line 0x312 43.23
+)`)
+  is(tokens, [['hello', '$hi', '"world"'], 'and', 'line', '0x312', '43.23'])
 })
