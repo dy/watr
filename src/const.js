@@ -41,7 +41,7 @@ export const OP = Object.fromEntries([
 ].flatMap((key,i)=>key && [[key,i]])),
 
 RANGE = {min:0, minmax:1, shared:3},
-GLOBAL = {const:0,mut:1},
+GLOBAL = {const:0, mut:1},
 SECTION = {type:1, import:2, func:3, table:4, memory:5, global:6, export:7, start:8, element:9, code:10, data:11},
 TYPE = {i32:0x7f, i64:0x7e, f32:0x7d, f64:0x7c, void:0x40, func:0x60, funcref:0x70},
 ETYPE = {func: 0, table: 1, memory: 2, global: 3},

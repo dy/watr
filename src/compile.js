@@ -57,7 +57,7 @@ const compile = {
       // store may have optional immediates
       if (op === 'i32.store') {
         let o = {align: ALIGN[instr], offset: 0}, p
-        while (params[0] && params[0][0]==='=') { p = params.shift(); o[p[1]] = +p[2] }
+        while (params[0] && params[0][0] in o) { p = params.shift(); o[p[0]] = +p[1] }
         params.unshift(o.align, o.offset)
       }
 
