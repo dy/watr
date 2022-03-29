@@ -25,8 +25,5 @@
   "devDependencies": {
     "tst": "^7.1.1",
     "wabt": "^1.0.26"
-  },
-  "dependencies": {
-    "subscript": "^7.0.7"
   }
 }
