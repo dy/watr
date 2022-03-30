@@ -125,7 +125,7 @@ t.skip('parse: error', () => {
   }
 })
 
-t('number', t => {
+t('parse: number', t => {
   ;[
     '12',
     '12.3',
@@ -166,4 +166,9 @@ t('parse: complex case 1', () => {
 and (; another ;) line 0x312 43.23
 )`)
   is(tokens, [['hello', '$hi', '"world"'], 'and', 'line', '0x312', '43.23'])
+})
+
+t('parse: minimal function', () => {
+  let tokens = parse('(func (export "answer") (result i32) (i32.const 42))')
+  is(tokens, ['func', ['export', '"answer"'], ['result', 'i32'], ['i32.const', '42']])
 })

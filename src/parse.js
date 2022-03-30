@@ -1,3 +1,6 @@
+const OPAREN=40, CPAREN=41, OBRACK=91, CBRACK=93, SPACE=32, DQUOTE=34, PERIOD=46,
+_0=48, _9=57, SEMIC=59, NEWLINE=32, PLUS=43, MINUS=45, COLON=58
+
 export default (str) => {
   let i = 0
 
