@@ -1,11 +1,13 @@
 import t, { is, ok, same } from 'tst'
 import compile from '../src/compile.js'
+import parse from '../src/parse.js'
+import Wabt from './wabt.js'
 
+// basic
 t('compile: empty', t => {
   is(compile(['module']), hex`00 61 73 6d 01 00 00 00`)
 })
 
-// first 3 words: section code, section length, section #items
 t('compile: (module (func))', t => {
   let buffer
   is(compile(['module', ['func']]), buffer = hex`
@@ -68,6 +70,32 @@ t('compile: export mem/func', t => {
 
   new WebAssembly.Module(buffer)
 })
+
+// wat-compiler
+t.only('minimal function', t => {
+  let src = '(func (export "answer") (result i32) (i32.const 42))'
+  parse(src)
+  // console.log(wat(src))
+})
+
+
+
+let wabt = await Wabt()
+
+function wat (code) {
+  const parsed = wabt.parseWat('inline', code, {})
+  console.time('wat build')
+  const binary = parsed.toBinary({
+    log: true,
+    canonicalize_lebs: true,
+    relocatable: false,
+    write_debug_names: false,
+  })
+  parsed.destroy()
+  console.timeEnd('wat build')
+
+  return binary
+}
 
 const hex = (str, ...fields) =>
   new Uint8Array(
