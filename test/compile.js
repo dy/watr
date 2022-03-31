@@ -63,8 +63,8 @@ t('compile: export mem/func', t => {
       ['i32.store', ['align','2']],                           //     i32.store
       ['local.get', 1]                                    //     local.get 1
     ],                                                    //   )
-    ['export', 'm', ['memory', 0]],                       //   (export "m" (memory 0 ))
-    ['export', 'f', ['func', 0]],                         //   (export "f" (func 0 ))
+    ['export', '"m"', ['memory', 0]],                       //   (export "m" (memory 0 ))
+    ['export', '"f"', ['func', 0]],                         //   (export "f" (func 0 ))
   ]),                                                     // )
   buffer)
 
@@ -74,16 +74,22 @@ t('compile: export mem/func', t => {
 // wat-compiler
 t('minimal function', t => {
   let src = '(module (func (export "answer") (result i32) (i32.const 42)))'
+
+  console.time('watr')
+  let tree = parse(src)
+  compile(tree)
+  console.timeEnd('watr')
+
   is(compile(parse(src)), wat(src).buffer)
 })
 
-
+// t('')
 
 let wabt = await Wabt()
 
 function wat (code) {
   const parsed = wabt.parseWat('inline', code, {})
-  console.time('wat build')
+  console.time('wabt build')
   const binary = parsed.toBinary({
     log: true,
     canonicalize_lebs: true,
@@ -91,7 +97,7 @@ function wat (code) {
     write_debug_names: false,
   })
   parsed.destroy()
-  console.timeEnd('wat build')
+  console.timeEnd('wabt build')
 
   return binary
 }

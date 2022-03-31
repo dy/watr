@@ -6,18 +6,18 @@ import {OP, SECTION, RANGE, TYPE, ETYPE, ALIGN} from './const.js'
 export default (tree) => new Uint8Array([
   0x00, 0x61, 0x73, 0x6d, // magic
   0x01, 0x00, 0x00, 0x00, // version
-  ...compile[tree[0]](tree.slice(1))
+  ...compile[tree[0]](tree)
 ])
 
 const compile = {
-  module(nodes) {
+  module([_,...nodes]) {
     const section = {
       type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], element: [], code: [], data: []
     }
     // NOTE: formally can be done as name section
     const alias = {func: [], global: []}
 
-    for (let [key, ...parts] of nodes) compile[key](parts, section, alias)
+    for (let node of nodes) compile[node[0]](node, section, alias)
 
     return Object.keys(section).flatMap((key, items, count) => (
       !(count = (items = section[key]).length) ? [] : (
@@ -27,11 +27,11 @@ const compile = {
   },
 
   // (func $name? ...params result ...body)
-  func(parts, ctx) {
-    let args=[], result=[], body = parts.slice(), name, idx=ctx.func.length
+  func([_,...body], ctx) {
+    let args=[], result=[], name, idx=ctx.func.length
 
     while (body[0]?.[0] === 'param') args.push(...body.shift().slice(1).map(t => TYPE[t]))
-    if (body[0]?.[0] === 'export') compile.export([body.shift()[1].slice(1,-1), ['func', name || idx]], ctx)
+    if (body[0]?.[0] === 'export') compile.export([...body.shift(), ['func', name || idx]], ctx)
     if (body[0]?.[0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
 
     ctx.func.push(ctx.type.push([TYPE.func, args.length, ...args, result.length, ...result])-1)
@@ -69,8 +69,7 @@ const compile = {
   },
 
   // (memory min max shared)
-  memory(parts, ctx) {
-    parts = parts.slice()
+  memory([_, ...parts], ctx) {
     let imp = false
     // (memory (import "js" "mem") 1) → (import "js" "mem" (memory 1))
     if (parts[0][0] === 'import') imp = parts.shift()
@@ -86,20 +85,21 @@ const compile = {
   },
 
   // mut
-  global([type, mutable], ctx) { ctx.global.push([]) },
+  global([_, type, mutable], ctx) { ctx.global.push([]) },
 
-  table([type, limits], ctx) { ctx.table.push([]) },
+  table([_, type, limits], ctx) { ctx.table.push([]) },
 
   //  (export "name" ([type] $name|idx))
-  export([name, [type, idx]], ctx) {
+  export([_, name, [type, idx]], ctx) {
+    if (name[0]==='"') name = name.slice(1,-1)
     if (typeof idx === 'string') idx = ctx.alias[type][idx]
     ctx.export.push([name.length, ...encoder.encode(name), ETYPE[type], idx])
   },
 
-  // (import mod name ref)
-  import([mod, name, ref], ctx) {
+  // (import "mod" "name" ref)
+  import([_, mod, name, ref], ctx) {
     // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
-    compile[ref[0]]([['import', mod, name], ...ref.slice(1)])
+    compile[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
   },
 
   // data
