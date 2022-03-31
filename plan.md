@@ -14,4 +14,5 @@
 
 ## Backlog
 
+* make repl support switch of compiler
 * wat-based wat-compiler

@@ -1,14 +1,10 @@
 # watr
 
-> Tiny WAT compiler.
-
-Simply compile WAT or WAT-tree to WASM binary.<br>
+> Light WAT compiler.
 
 * Tiny
 * Fast
 * Embeddable
-
-Also provides _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.html)_.
 
 ## Comparison
 
@@ -17,6 +13,8 @@ Also provides _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.htm
 watr | | |
 wat-compiler | | |
 wabt | | |
+
+See also _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.html)_.
 
 ## Usage
 
