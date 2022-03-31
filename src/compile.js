@@ -18,7 +18,9 @@ export default (tree) => {
     ...Object.keys(section).flatMap((key) => {
       let items=section[key], count=items.length, binary
       if (!count) return []
+
       binary = items.flat()
+
       binary.unshift(SECTION[key], binary.length+1, count)
       return binary
     })
@@ -38,7 +40,7 @@ const compile = {
     while (body[0]?.[0] === 'param') params.push(...body.shift().slice(1).map(t => TYPE[t]))
     if (body[0]?.[0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
 
-    ctx.func.push(ctx.type.push([TYPE.func, params.length, ...params, result.length, ...result])-1)
+    ctx.func.push([ctx.type.push([TYPE.func, params.length, ...params, result.length, ...result])-1])
 
     // FIXME: detect fn name and save alias pointing to fn index
 
@@ -52,19 +54,23 @@ const compile = {
       // (if (result type) (then instr))
       let op, immediates = []
 
-      if (!Array.isArray(instr)) {
-        op = instr
-      }
-      else {
-        [op, ...immediates] = instr
-      }
+      // i32.add
+      if (!Array.isArray(instr)) op = instr
+      // (i32.add a b)
+      else [op, ...immediates] = instr
 
       // store may have optional immediates
       if (op === 'i32.store') {
         let o = {align: ALIGN[instr], offset: 0}, p
-        while (immediates[0] && immediates[0][0] in o) { p = immediates.shift(); o[p[0]] = +p[1] }
+        while (immediates[0]?.[0] in o) p = immediates.shift(), o[p[0]] = +p[1]
         immediates.unshift(o.align, o.offset)
       }
+
+      // convert numbers
+      immediates = immediates.map(imm => {
+        // if (typeof[imm] === 'number')
+        return imm
+      })
 
       return [OP[op], ...immediates]
     })
