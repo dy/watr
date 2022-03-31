@@ -10,3 +10,8 @@
 * [ ] Basic parsing instructions from mdn & examples
 * [ ] Benchmark against wabt, wat-compiler
 * [ ] Build script
+
+
+## Backlog
+
+* wat-based wat-compiler

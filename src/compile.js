@@ -19,11 +19,13 @@ const compile = {
 
     for (let node of nodes) compile[node[0]](node, section, alias)
 
-    return Object.keys(section).flatMap((key, items, count) => (
-      !(count = (items = section[key]).length) ? [] : (
-        (items = items.flat()).unshift(SECTION[key], items.length+1, count), items
-      )
-    ))
+    return Object.keys(section).flatMap((key) => {
+      let items=section[key], count=items.length, binary
+      if (!count) return []
+      binary = items.flat()
+      binary.unshift(SECTION[key], binary.length+1, count)
+      return binary
+    })
   },
 
   // (func $name? ...params result ...body)

@@ -14,12 +14,12 @@ export default (str) => {
     for (let c, root; i < str.length; ) {
       c = str.charCodeAt(i)
       if (c === OPAREN) {
-        if (str.charCodeAt(i+1) === SEMIC) i=str.indexOf(';)', i)+2
+        if (str.charCodeAt(i+1) === SEMIC) i=str.indexOf(';)', i)+2 // (; ... ;)
         else i++, (root=level).push(level=[]), parseLevel(), level=root
       }
+      else if (c === SEMIC) i=str.indexOf('\n', i)+1  // ; ...
       else if (c <= SPACE) commit(), i++
       else if (c === CPAREN) return commit(), i++
-      else if (c === SEMIC) i=str.indexOf('\n', i)+1
       else buf+=str[i++]
     }
 
