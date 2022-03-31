@@ -34,36 +34,42 @@ t('wat-compiler: function with 1 param', () => {
   is(answer(42), 42)
 })
 
-//
-t.todo('wat-compiler: function with 2 params', () => buffers(`
-  (func (export "answer") (param i32 i32) (result i32)
-    (local.get 0)
-    (local.get 1)
-    (i32.add)
-    )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).answer(20,22)).to.equal(42)
-  expect((await wasm(act)).answer(20,22)).to.equal(42)
-}))
+t('wat-compiler: function with 2 params', () => {
+  let src = `
+    (func (export "answer") (param i32 i32) (result i32)
+      (local.get 0)
+      (local.get 1)
+      (i32.add)
+      )
+  `
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
 
-//
-t.todo('wat-compiler: function with 2 params 2 results', () => buffers(`
-  (func (export "answer") (param i32 i32) (result i32 i32)
-    (local.get 0)
-    (local.get 1)
-    (i32.add)
-    (i32.const 666)
-    )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).answer(20,22)).to.deep.equal([42,666])
-  expect((await wasm(act)).answer(20,22)).to.deep.equal([42,666])
-}))
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {answer} = instance.exports
+  is(answer(20,22), 42)
+})
 
-//
+t.only('wat-compiler: function with 2 params 2 results', () => {
+  let src = `
+    (func (export "answer") (param i32 i32) (result i32 i32)
+      (local.get 0)
+      (local.get 1)
+      (i32.add)
+      (i32.const 666)
+      )
+  `
+
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {answer} = instance.exports
+  is(answer(20,22), [42,666])
+})
+
 t.todo('wat-compiler: named function named param', () => buffers(`
   (func $dbl (export "dbl") (param $a i32) (result i32)
     (i32.add (local.get $a) (local.get $a))
@@ -75,7 +81,6 @@ t.todo('wat-compiler: named function named param', () => buffers(`
   expect((await wasm(act)).dbl(21)).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: call function direct', () => buffers(`
   (func $dbl (param $a i32) (result i32)
     (i32.add (local.get $a) (local.get $a))
@@ -90,7 +95,6 @@ t.todo('wat-compiler: call function direct', () => buffers(`
   expect((await wasm(act)).call_function_direct(333)).to.equal(666)
 }))
 
-//
 t.todo('wat-compiler: function param + local', () => buffers(`
   (func (export "add") (param $a i32) (result i32)
     (local $b i32)
@@ -104,7 +108,6 @@ t.todo('wat-compiler: function param + local', () => buffers(`
   expect((await wasm(act)).add(22)).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: call function indirect (table)', () => buffers(`
   (type $return_i32 (func (result i32)))
   (table 2 funcref)
@@ -125,7 +128,6 @@ t.todo('wat-compiler: call function indirect (table)', () => buffers(`
   expect((await wasm(act)).call_function_indirect(1)).to.equal(13)
 }))
 
-//
 t.todo('wat-compiler: call function indirect (table) non zero indexed ref types', () => buffers(`
   (type $return_i32 (func (result i32)))
   (type $return_i64 (func (result i64)))
@@ -149,7 +151,6 @@ t.todo('wat-compiler: call function indirect (table) non zero indexed ref types'
   expect((await wasm(act)).call_function_indirect(1)).to.equal(13)
 }))
 
-//
 t.todo('wat-compiler: 1 global const (immutable)', () => buffers(`
   (global $answer i32 (i32.const 42))
   (func (export "get") (result i32)
@@ -162,7 +163,6 @@ t.todo('wat-compiler: 1 global const (immutable)', () => buffers(`
   expect((await wasm(act)).get()).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: 1 global var (mut)', () => buffers(`
   (global $answer (mut i32) (i32.const 42))
   (func (export "get") (result i32)
@@ -175,7 +175,6 @@ t.todo('wat-compiler: 1 global var (mut)', () => buffers(`
   expect((await wasm(act)).get()).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: 1 global var (mut) + mutate', () => buffers(`
   (global $answer (mut i32) (i32.const 42))
   (func (export "get") (result i32)
@@ -189,7 +188,6 @@ t.todo('wat-compiler: 1 global var (mut) + mutate', () => buffers(`
   expect((await wasm(act)).get()).to.equal(666)
 }))
 
-//
 t.todo('wat-compiler: memory.grow', () => buffers(String.raw`
   (memory 1)
   (func (export "main") (result i32)
@@ -198,7 +196,6 @@ t.todo('wat-compiler: memory.grow', () => buffers(String.raw`
 `)
 .then(([exp,act]) => hexAssertEqual(exp,act)))
 
-//
 t.todo('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => buffers(String.raw`
   (memory 1)
   (data (i32.const 0) "\2a")
@@ -212,7 +209,6 @@ t.todo('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => buff
   expect((await wasm(act)).get()).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => buffers(String.raw`
   (memory 1 2)
   (data (i32.const 0) "\2a")
@@ -231,7 +227,6 @@ t.todo('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () =
   expect((await wasm(act)).get()).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: import function', () => buffers(`
   (import "math" "add" (func $add (param i32 i32) (result i32)))
   (func (export "call_imported_function") (result i32)
@@ -245,31 +240,26 @@ t.todo('wat-compiler: import function', () => buffers(`
   expect((await wasm(act, { math })).call_imported_function()).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: import memory 1', () => buffers(`
   (import "env" "mem" (memory 1))
 `)
 .then(([exp,act]) => hexAssertEqual(exp,act)))
 
-//
 t.todo('wat-compiler: import memory 1 2', () => buffers(`
   (import "env" "mem" (memory 1 2))
 `)
 .then(([exp,act]) => hexAssertEqual(exp,act)))
 
-//
 t.todo('wat-compiler: import memory 1 2 shared', () => buffers(`
   (import "env" "mem" (memory 1 2 shared))
 `)
 .then(([exp,act]) => hexAssertEqual(exp,act)))
 
-//
 t.todo('wat-compiler: import memory $foo 1 2 shared', () => buffers(`
   (import "env" "mem" (memory $foo 1 2 shared))
 `)
 .then(([exp,act]) => hexAssertEqual(exp,act)))
 
-//
 t.todo('wat-compiler: set a start function', () => buffers(`
   (global $answer (mut i32) (i32.const 42))
   (start $main)
@@ -286,7 +276,6 @@ t.todo('wat-compiler: set a start function', () => buffers(`
   expect((await wasm(act)).get()).to.equal(666)
 }))
 
-//
 t.todo('wat-compiler: if else', () => buffers(`
   (func $dummy)
   (func (export "foo") (param i32) (result i32)
@@ -304,7 +293,6 @@ t.todo('wat-compiler: if else', () => buffers(`
   expect((await wasm(act)).foo(1)).to.equal(1)
 }))
 
-//
 t.todo('wat-compiler: block', () => buffers(`
   (func (export "answer") (result i32)
     (block (nop))
@@ -317,7 +305,6 @@ t.todo('wat-compiler: block', () => buffers(`
   expect((await wasm(act)).answer()).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: block multi', () => buffers(`
   (func $dummy)
   (func (export "multi") (result i32)
@@ -331,7 +318,6 @@ t.todo('wat-compiler: block multi', () => buffers(`
   expect((await wasm(act)).multi()).to.equal(8)
 }))
 
-//
 t.todo('wat-compiler: br', () => buffers(`
   (global $answer (mut i32) (i32.const 42))
   (func $set
@@ -348,7 +334,6 @@ t.todo('wat-compiler: br', () => buffers(`
   expect((await wasm(act)).main()).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: br mid', () => buffers(`
   (global $answer (mut i32) (i32.const 42))
   (func $set
@@ -365,7 +350,6 @@ t.todo('wat-compiler: br mid', () => buffers(`
   expect((await wasm(act)).main()).to.equal(666)
 }))
 
-//
 t.todo('wat-compiler: block named + br', () => buffers(`
   (global $answer (mut i32) (i32.const 42))
   (func $set
@@ -388,7 +372,6 @@ t.todo('wat-compiler: block named + br', () => buffers(`
   expect((await wasm(act)).main()).to.equal(0)
 }))
 
-//
 t.todo('wat-compiler: block named 2 + br', () => buffers(`
   (global $answer (mut i32) (i32.const 42))
   (func $set
@@ -415,7 +398,6 @@ t.todo('wat-compiler: block named 2 + br', () => buffers(`
   expect((await wasm(act)).main()).to.equal(0)
 }))
 
-//
 t.todo('wat-compiler: br_table', () => buffers(`
   (func (export "main") (param i32) (result i32)
     (block
@@ -436,7 +418,6 @@ t.todo('wat-compiler: br_table', () => buffers(`
   expect((await wasm(act)).main(1)).to.equal(20)
 }))
 
-//
 t.todo('wat-compiler: br_table multiple', () => buffers(`
   (func (export "main") (param i32) (result i32)
     (block
@@ -472,7 +453,6 @@ t.todo('wat-compiler: br_table multiple', () => buffers(`
   expect((await wasm(act)).main(4)).to.equal(104)
 }))
 
-//
 t.todo('wat-compiler: loop', () => buffers(`
   (func (export "main") (result i32)
     (loop (nop))
@@ -485,7 +465,6 @@ t.todo('wat-compiler: loop', () => buffers(`
   expect((await wasm(act)).main()).to.equal(42)
 }))
 
-//
 t.todo('wat-compiler: break-value', () => buffers(`
   (func (export "main") (result i32)
     (block (result i32)
@@ -499,7 +478,6 @@ t.todo('wat-compiler: break-value', () => buffers(`
   expect((await wasm(act)).main()).to.equal(18)
 }))
 
-//
 t.todo('wat-compiler: br_if', () => buffers(`
   (func (export "main") (result i32)
     (block (result i32)
@@ -522,7 +500,6 @@ t.todo('wat-compiler: br_if', () => buffers(`
   expect((await wasm(act)).main()).to.equal(18)
 }))
 
-//
 t.todo('wat-compiler: while', () => buffers(`
   (func (export "main") (param i32) (result i32)
     (local i32)
@@ -544,7 +521,6 @@ t.todo('wat-compiler: while', () => buffers(`
   expect((await wasm(act)).main()).to.equal(1)
 }))
 
-//
 t.todo('wat-compiler: select', () => buffers(`
   (func (export "main") (result i32)
     (select (loop (result i32) (i32.const 1)) (i32.const 2) (i32.const 3))
@@ -556,7 +532,6 @@ t.todo('wat-compiler: select', () => buffers(`
   expect((await wasm(act)).main()).to.equal(1)
 }))
 
-//
 t.todo('wat-compiler: select mid', () => buffers(`
   (func (export "main") (result i32)
     (select (i32.const 2) (loop (result i32) (i32.const 1)) (i32.const 3))
@@ -568,7 +543,6 @@ t.todo('wat-compiler: select mid', () => buffers(`
   expect((await wasm(act)).main()).to.equal(2)
 }))
 
-//
 t.todo('wat-compiler: block labels', () => buffers(`
   (func (export "main") (result i32)
     (block $exit (result i32)
@@ -583,7 +557,6 @@ t.todo('wat-compiler: block labels', () => buffers(`
   expect((await wasm(act)).main()).to.equal(1)
 }))
 
-//
 t.todo('wat-compiler: loop labels', () => buffers(`
   (func (export "main") (result i32)
     (local $i i32)
@@ -605,7 +578,6 @@ t.todo('wat-compiler: loop labels', () => buffers(`
   expect((await wasm(act)).main()).to.equal(5)
 }))
 
-//
 t.todo('wat-compiler: loop labels 2', () => buffers(`
   (func (export "main") (result i32)
     (local $i i32)
@@ -631,7 +603,6 @@ t.todo('wat-compiler: loop labels 2', () => buffers(`
   expect((await wasm(act)).main()).to.equal(8)
 }))
 
-//
 t.todo('wat-compiler: switch', () => buffers(`
   (func (export "main") (param i32) (result i32)
     (block $ret (result i32)
@@ -666,7 +637,6 @@ t.todo('wat-compiler: switch', () => buffers(`
   expect((await wasm(act)).main(3)).to.equal(3)
 }))
 
-//
 t.todo('wat-compiler: label redefinition', () => buffers(`
   (func (export "main") (result i32)
     (block $l1 (result i32)
@@ -683,7 +653,6 @@ t.todo('wat-compiler: label redefinition', () => buffers(`
   expect((await wasm(act)).main()).to.equal(5)
 }))
 
-//
 t.todo('wat-compiler: address', () => buffers(`
   (memory 1)
   (data (i32.const 0) "abcdefghijklmnopqrstuvwxyz")
@@ -718,7 +687,6 @@ t.todo('wat-compiler: address', () => buffers(`
   expect((await wasm(act)).z()).to.equal(122)
 }))
 
-//
 t.todo('wat-compiler: int literals', () => buffers(`
   (func (export "i32.test") (result i32) (return (i32.const 0x0bAdD00D)))
   (func (export "i32.umax") (result i32) (return (i32.const 0xffffffff)))
@@ -753,7 +721,6 @@ t.todo('wat-compiler: int literals', () => buffers(`
 `)
 .then(([exp,act]) => hexAssertEqual(exp,act)))
 
-//
 t.todo('wat-compiler: float literals', () => buffers(`
   ;; f32 special values
   (func (export "f32.nan") (result i32) (i32.reinterpret_f32 (f32.const nan)))
