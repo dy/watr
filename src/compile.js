@@ -2,15 +2,15 @@
 // ref: https://ontouchstart.pages.dev/chapter_wasm_binary
 // ref: https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md#function-section
 import {OP, SECTION, RANGE, TYPE, ETYPE, ALIGN} from './const.js'
+import { i32 } from './leb128.js'
 
 export default (tree) => {
+  // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
   const section = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], element: [], code: [], data: []
   }
-  // NOTE: formally can be done as name section
-  const alias = {func: [], global: []}
 
-  compile[tree[0]](tree, section, alias)
+  compile[tree[0]](tree, section)
 
   return new Uint8Array([
     0x00, 0x61, 0x73, 0x6d, // magic
@@ -28,52 +28,59 @@ export default (tree) => {
 }
 
 const compile = {
-  module([_,...nodes], section, alias) {
-    for (let node of nodes) compile[node[0]](node, section, alias)
+  module([_,...nodes], section) {
+    for (let node of nodes) compile[node[0]](node, section)
   },
 
   // (func $name? ...params result ...body)
   func([_,...body], ctx) {
-    let params=[], result=[], name, idx=ctx.func.length
+    let params=[], result=[], idx=ctx.func.length, vars = []
 
-    if (body[0]?.[0] === 'export') compile.export([...body.shift(), ['func', name || idx]], ctx)
-    while (body[0]?.[0] === 'param') params.push(...body.shift().slice(1).map(t => TYPE[t]))
+    if (body[0]?.[0] === '$') ctx.func[body.shift()] = idx
+    if (body[0]?.[0] === 'export') compile.export([...body.shift(), ['func', idx]], ctx)
+    while (body[0]?.[0] === 'param') {
+      let [_, ...paramTypes] = body.shift()
+      if (paramTypes[0]?.[0] === '$') params[paramTypes.shift()] = params.length
+      params.push(...paramTypes.map(t => TYPE[t]))
+    }
     if (body[0]?.[0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
 
     ctx.func.push([ctx.type.push([TYPE.func, params.length, ...params, result.length, ...result])-1])
 
-    // FIXME: detect fn name and save alias pointing to fn index
-
-    const vars = []
-    body = body.flatMap(instr => {
+    // parse instruction block
+    const instr = (node) => {
       // FIXME: instructions may have optional immediates
       // some immediates examples:
-      // align=n offset=m
       // call_indirect (type $name)
       // if (result type) instr end
       // (if (result type) (then instr))
-      let op, immediates = []
-
-      // i32.add
-      if (!Array.isArray(instr)) op = instr
       // (i32.add a b)
-      else [op, ...immediates] = instr
+      let [op, ...args] = node, immediates = []
+      let [type, typeOp] = op.split('.')
 
-      // store may have optional immediates
-      if (op === 'i32.store') {
-        let o = {align: ALIGN[instr], offset: 0}, p
-        while (immediates[0]?.[0] in o) p = immediates.shift(), o[p[0]] = +p[1]
-        immediates.unshift(o.align, o.offset)
+      // i32.store align=n offset=m
+      if (typeOp === 'store') {
+        let o = {align: [ALIGN[op]], offset: [0]}, p
+        while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = i32(p[1])
+        immediates.push(...o.align, ...o.offset)
+      }
+      // i32.const 123
+      else if (typeOp === 'const') {
+        immediates.push(...i32(args.shift()))
+      }
+      // local.get id
+      else if (type === 'local') {
+        immediates.push(...i32(args.shift()))
+      }
+      // other immediates are prev instructions, ie. (i32.add a b) → a b i32.add
+      else {
+        args = args.map(instr)
       }
 
-      // convert numbers
-      immediates = immediates.map(imm => {
-        // if (typeof[imm] === 'number')
-        return imm
-      })
+      return [...args, OP[op], ...immediates]
+    }
 
-      return [OP[op], ...immediates]
-    })
+    body = body.flatMap(node => Array.isArray(node) ? instr(node) : [OP[node]])
 
     ctx.code.push([body.length+2, vars.length, ...body, 0x0b])
   },

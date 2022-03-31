@@ -51,7 +51,7 @@ t('wat-compiler: function with 2 params', () => {
   is(answer(20,22), 42)
 })
 
-t.only('wat-compiler: function with 2 params 2 results', () => {
+t('wat-compiler: function with 2 params 2 results', () => {
   let src = `
     (func (export "answer") (param i32 i32) (result i32 i32)
       (local.get 0)
@@ -62,7 +62,7 @@ t.only('wat-compiler: function with 2 params 2 results', () => {
   `
 
   let buffer = compile(parse(src))
-  console.log(wat(src))
+  // console.log(wat(src))
   is(buffer, wat(src).buffer)
 
   const mod = new WebAssembly.Module(buffer)
@@ -71,16 +71,23 @@ t.only('wat-compiler: function with 2 params 2 results', () => {
   is(answer(20,22), [42,666])
 })
 
-t.todo('wat-compiler: named function named param', () => buffers(`
-  (func $dbl (export "dbl") (param $a i32) (result i32)
-    (i32.add (local.get $a) (local.get $a))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).dbl(21)).to.equal(42)
-  expect((await wasm(act)).dbl(21)).to.equal(42)
-}))
+t('wat-compiler: named function named param', () => {
+  let src = `
+    (func $dbl (export "dbl") (param $a i32) (result i32)
+      (i32.add (local.get $a) (local.get $a))
+    )
+  `
+
+  let buffer = compile(parse(src))
+  // console.log(wat(src))
+  is(buffer, wat(src).buffer)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {dbl} = instance.exports
+  is(dbl(21), 42)
+})
+
 
 t.todo('wat-compiler: call function direct', () => buffers(`
   (func $dbl (param $a i32) (result i32)
