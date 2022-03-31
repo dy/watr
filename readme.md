@@ -1,8 +1,8 @@
 # watr
 
-> Unsugared WAT compiler.
+> Tiny WAT compiler.
 
-Provides minimal human interface to WASM.<br>
+Provides minimal interface to compile WAT to WASM.<br>
 Useful as compilation target for hi-level languages to avoid binary hassle.
 
 Based on [subscript](https://github.com/spectjs/subscript).<br>

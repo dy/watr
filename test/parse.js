@@ -172,3 +172,8 @@ t('parse: minimal function', () => {
   let tokens = parse('(func (export "answer") (result i32) (i32.const 42))')
   is(tokens, ['func', ['export', '"answer"'], ['result', 'i32'], ['i32.const', '42']])
 })
+
+t('parse: multiple functions', () => {
+  let tokens = parse('(func $a) (func $b)')
+  is(tokens, [['func','$a'],['func','$b']])
+})

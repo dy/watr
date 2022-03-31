@@ -28,5 +28,5 @@ export default (str) => {
 
   parseLevel()
 
-  return level[0]
+  return level.length>1 ? level : level[0]
 }

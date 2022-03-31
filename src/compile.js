@@ -10,7 +10,8 @@ export default (tree) => {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], element: [], code: [], data: []
   }
 
-  compile[tree[0]](tree, section)
+  if (typeof tree[0] === 'string') tree = [tree]
+  for (let node of tree) compile[node[0]](node, section)
 
   return new Uint8Array([
     0x00, 0x61, 0x73, 0x6d, // magic
@@ -59,6 +60,7 @@ const compile = {
       let [type, typeOp] = op.split('.')
 
       // i32.store align=n offset=m
+      console.log(op)
       if (typeOp === 'store') {
         let o = {align: [ALIGN[op]], offset: [0]}, p
         while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = i32(p[1])
@@ -70,18 +72,23 @@ const compile = {
       }
       // local.get id
       else if (type === 'local') {
-        immediates.push(...i32(args.shift()))
+        let id = args.shift()
+        immediates.push(...i32(id[0]==='$' ? params[id] : id))
       }
+      // call id arg1 argN
+      else if (op === 'call') {
+        let id = args.shift()
+        immediates.push(...i32(id[0]==='$' in ctx.func ? ctx.func[id] : id))
+      }
+
       // other immediates are prev instructions, ie. (i32.add a b) → a b i32.add
-      else {
-        args = args.map(instr)
-      }
+      args = args.flatMap(instr)
+      console.log('->', args, op, immediates)
 
       return [...args, OP[op], ...immediates]
     }
 
     body = body.flatMap(node => Array.isArray(node) ? instr(node) : [OP[node]])
-
     ctx.code.push([body.length+2, vars.length, ...body, 0x0b])
   },
 

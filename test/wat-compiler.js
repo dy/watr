@@ -79,7 +79,6 @@ t('wat-compiler: named function named param', () => {
   `
 
   let buffer = compile(parse(src))
-  // console.log(wat(src))
   is(buffer, wat(src).buffer)
 
   const mod = new WebAssembly.Module(buffer)
@@ -89,19 +88,26 @@ t('wat-compiler: named function named param', () => {
 })
 
 
-t.todo('wat-compiler: call function direct', () => buffers(`
+t.only('wat-compiler: call function direct', () => {
+
+  let src = `
   (func $dbl (param $a i32) (result i32)
     (i32.add (local.get $a) (local.get $a))
   )
   (func (export "call_function_direct") (param $a i32) (result i32)
     (call $dbl (local.get $a))
   )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).call_function_direct(333)).to.equal(666)
-  expect((await wasm(act)).call_function_direct(333)).to.equal(666)
-}))
+  `
+
+  let buffer = compile(parse(src))
+  // console.log(wat(src))
+  // is(buffer, wat(src).buffer)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {call_function_direct} = instance.exports
+  is(call_function_direct(333), 666)
+})
 
 t.todo('wat-compiler: function param + local', () => buffers(`
   (func (export "add") (param $a i32) (result i32)
