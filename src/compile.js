@@ -28,10 +28,11 @@ const compile = {
 
   // (func $name? ...params result ...body)
   func(parts, ctx) {
-    let args=[], result=[], body = parts.slice()
+    let args=[], result=[], body = parts.slice(), name, idx=ctx.func.length
 
-    while (body[0] && body[0][0] === 'param') args.push(...body.shift().slice(1).map(t => TYPE[t]))
-    if (body[0] && body[0][0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
+    while (body[0]?.[0] === 'param') args.push(...body.shift().slice(1).map(t => TYPE[t]))
+    if (body[0]?.[0] === 'export') compile.export([body.shift()[1].slice(1,-1), ['func', name || idx]], ctx)
+    if (body[0]?.[0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
 
     ctx.func.push(ctx.type.push([TYPE.func, args.length, ...args, result.length, ...result])-1)
 

@@ -72,10 +72,9 @@ t('compile: export mem/func', t => {
 })
 
 // wat-compiler
-t.only('minimal function', t => {
-  let src = '(func (export "answer") (result i32) (i32.const 42))'
-  parse(src)
-  // console.log(wat(src))
+t('minimal function', t => {
+  let src = '(module (func (export "answer") (result i32) (i32.const 42)))'
+  is(compile(parse(src)), wat(src).buffer)
 })
 
 
