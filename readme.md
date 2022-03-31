@@ -1,10 +1,6 @@
 # watr
 
-> Light WAT compiler.
-
-* Tiny
-* Fast
-* Embeddable
+Light, fast & embeddable WAT compiler.
 
 ## Comparison
 
@@ -14,7 +10,7 @@ watr | | |
 wat-compiler | | |
 wabt | | |
 
-See also _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.html)_.
+See _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.html)_.
 
 ## Usage
 
