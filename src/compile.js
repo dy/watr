@@ -3,29 +3,31 @@
 // ref: https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md#function-section
 import {OP, SECTION, RANGE, TYPE, ETYPE, ALIGN} from './const.js'
 
-export default (tree) => new Uint8Array([
-  0x00, 0x61, 0x73, 0x6d, // magic
-  0x01, 0x00, 0x00, 0x00, // version
-  ...compile[tree[0]](tree)
-])
+export default (tree) => {
+  const section = {
+    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], element: [], code: [], data: []
+  }
+  // NOTE: formally can be done as name section
+  const alias = {func: [], global: []}
 
-const compile = {
-  module([_,...nodes]) {
-    const section = {
-      type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], element: [], code: [], data: []
-    }
-    // NOTE: formally can be done as name section
-    const alias = {func: [], global: []}
+  compile[tree[0]](tree, section, alias)
 
-    for (let node of nodes) compile[node[0]](node, section, alias)
-
-    return Object.keys(section).flatMap((key) => {
+  return new Uint8Array([
+    0x00, 0x61, 0x73, 0x6d, // magic
+    0x01, 0x00, 0x00, 0x00, // version
+    ...Object.keys(section).flatMap((key) => {
       let items=section[key], count=items.length, binary
       if (!count) return []
       binary = items.flat()
       binary.unshift(SECTION[key], binary.length+1, count)
       return binary
     })
+  ])
+}
+
+const compile = {
+  module([_,...nodes], section, alias) {
+    for (let node of nodes) compile[node[0]](node, section, alias)
   },
 
   // (func $name? ...params result ...body)
