@@ -1,7 +1,5 @@
 import t, { is, ok, same } from 'tst'
 import compile from '../src/compile.js'
-import parse from '../src/parse.js'
-import Wabt from './wabt.js'
 
 // basic
 t('compile: empty', t => {
@@ -71,36 +69,6 @@ t('compile: export mem/func', t => {
   new WebAssembly.Module(buffer)
 })
 
-// wat-compiler
-t('minimal function', t => {
-  let src = '(module (func (export "answer") (result i32) (i32.const 42)))'
-
-  console.time('watr')
-  let tree = parse(src)
-  compile(tree)
-  console.timeEnd('watr')
-
-  is(compile(parse(src)), wat(src).buffer)
-})
-
-// t('')
-
-let wabt = await Wabt()
-
-function wat (code) {
-  const parsed = wabt.parseWat('inline', code, {})
-  console.time('wabt build')
-  const binary = parsed.toBinary({
-    log: true,
-    canonicalize_lebs: true,
-    relocatable: false,
-    write_debug_names: false,
-  })
-  parsed.destroy()
-  console.timeEnd('wabt build')
-
-  return binary
-}
 
 const hex = (str, ...fields) =>
   new Uint8Array(
