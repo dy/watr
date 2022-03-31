@@ -32,13 +32,13 @@ const compile = {
 
   // (func $name? ...params result ...body)
   func([_,...body], ctx) {
-    let args=[], result=[], name, idx=ctx.func.length
+    let params=[], result=[], name, idx=ctx.func.length
 
-    while (body[0]?.[0] === 'param') args.push(...body.shift().slice(1).map(t => TYPE[t]))
     if (body[0]?.[0] === 'export') compile.export([...body.shift(), ['func', name || idx]], ctx)
+    while (body[0]?.[0] === 'param') params.push(...body.shift().slice(1).map(t => TYPE[t]))
     if (body[0]?.[0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
 
-    ctx.func.push(ctx.type.push([TYPE.func, args.length, ...args, result.length, ...result])-1)
+    ctx.func.push(ctx.type.push([TYPE.func, params.length, ...params, result.length, ...result])-1)
 
     // FIXME: detect fn name and save alias pointing to fn index
 
@@ -50,23 +50,23 @@ const compile = {
       // call_indirect (type $name)
       // if (result type) instr end
       // (if (result type) (then instr))
-      let op, params = []
+      let op, immediates = []
 
       if (!Array.isArray(instr)) {
         op = instr
       }
       else {
-        [op, ...params] = instr
+        [op, ...immediates] = instr
       }
 
       // store may have optional immediates
       if (op === 'i32.store') {
         let o = {align: ALIGN[instr], offset: 0}, p
-        while (params[0] && params[0][0] in o) { p = params.shift(); o[p[0]] = +p[1] }
-        params.unshift(o.align, o.offset)
+        while (immediates[0] && immediates[0][0] in o) { p = immediates.shift(); o[p[0]] = +p[1] }
+        immediates.unshift(o.align, o.offset)
       }
 
-      return [OP[op], ...params]
+      return [OP[op], ...immediates]
     })
 
     ctx.code.push([body.length+2, vars.length, ...body, 0x0b])

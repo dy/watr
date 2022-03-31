@@ -15,19 +15,24 @@ t('wat-compiler: minimal function', t => {
   is(compile(parse(src)), wat(src).buffer)
 })
 
-t.todo('wat-compiler: function with 1 param', t => {
+t('wat-compiler: function with 1 param', t => {
   let src = '(func (export "answer") (param i32) (result i32) (local.get 0))'
+  // console.log(compile(parse(src)),wat(src))
+  is(compile(parse(src)), wat(src).buffer)
 })
 
-//
-t.todo('wat-compiler: function with 1 param', () => buffers(`
-  (func (export "answer") (param i32) (result i32) (local.get 0))
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).answer(42)).to.equal(42)
-  expect((await wasm(act)).answer(42)).to.equal(42)
-}))
+t('wat-compiler: function with 1 param', () => {
+  let src = `
+    (func (export "answer") (param i32) (result i32) (local.get 0))
+  `
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {answer} = instance.exports
+  is(answer(42), 42)
+})
 
 //
 t.todo('wat-compiler: function with 2 params', () => buffers(`
