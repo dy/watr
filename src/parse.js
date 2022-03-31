@@ -17,8 +17,8 @@ export default (str) => {
         if (str.charCodeAt(i+1) === SEMIC) i=str.indexOf(';)', i)+2
         else i++, (root=level).push(level=[]), parseLevel(), level=root
       }
-      else if (c === CPAREN) return commit(), i++
       else if (c <= SPACE) commit(), i++
+      else if (c === CPAREN) return commit(), i++
       else if (c === SEMIC) i=str.indexOf('\n', i)+1
       else buf+=str[i++]
     }
