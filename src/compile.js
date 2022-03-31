@@ -59,6 +59,7 @@ const compile = {
       let [op, ...args] = node, immediates = []
       let [type, typeOp] = op.split('.')
 
+      // FIXME: figure out how to generalize this case
       // i32.store align=n offset=m
       console.log(op)
       if (typeOp === 'store') {

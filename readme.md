@@ -2,14 +2,13 @@
 
 > Tiny WAT compiler.
 
-Provides minimal interface to compile WAT to WASM.<br>
-Useful as compilation target for hi-level languages to avoid binary hassle.
+Simply compile WAT or WAT-tree to WASM binary.<br>
 
-Based on [subscript](https://github.com/spectjs/subscript).<br>
-Used by [sonl](https://github.com/audio-lab/sonl).<br>
+* Tiny
+* Fast
+* Embeddable
+
 Also provides _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.html)_.
-
-<!-- ## Features -->
 
 ## Comparison
 
@@ -19,6 +18,40 @@ watr | | |
 wat-compiler | | |
 wabt | | |
 
+## Usage
+
+```js
+import wat from 'watr'
+
+// compile text to binary
+const buffer = wat('(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))')
+
+// create instance
+const module = new WebAssembly.Module(buffer)
+const instance = new WebAssembly.Instance(module)
+
+// use API
+const {double} = instance.exports
+double(108) // 216
+```
+
+## Compiler
+
+WAT tree can be compiled directly. That can be useful as WASM API layer for hi-level languages, to bypass text parsing (eg. used by [sonl](https://github.com/audio-lab/sonl)):
+
+```js
+import { compile } from 'watr'
+
+const buffer = compile([
+  'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
+  ['f64.mul', ['local.get', 0], ['f64.const', 2]]
+])
+const module = new WebAssembly.Module(buffer)
+const instance = new WebAssembly.Instance(module)
+const {double} = instance.exports
+
+double(108) // 216
+```
 
 <!--
 Main goal is to get very fluent with wasm text and to know it from within.
