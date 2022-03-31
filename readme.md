@@ -1,6 +1,6 @@
 # watr
 
-Light, fast & embeddable WAT compiler.
+Light & fast embeddable WAT compiler.
 
 ## Comparison
 
