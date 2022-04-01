@@ -108,7 +108,7 @@ t('wat-compiler: call function direct', () => {
   is(call_function_direct(333), 666)
 })
 
-t.only('wat-compiler: function param + local', () => {
+t('wat-compiler: function param + local', () => {
   let src = `
     (func (export "add") (param $a i32) (result i32)
       (local $b i32)
@@ -118,7 +118,6 @@ t.only('wat-compiler: function param + local', () => {
   `
 
   let buffer = compile(parse(src))
-  // console.log(wat(src))
   is(buffer, wat(src).buffer)
 
   const mod = new WebAssembly.Module(buffer)

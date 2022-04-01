@@ -35,21 +35,40 @@ const compile = {
 
   // (func $name? ...params result ...body)
   func([_,...body], ctx) {
-    let params=[], result=[], idx=ctx.func.length, vars = []
+    let params=[],
+        result=[], // result types
+        idx=ctx.func.length, // fn index
+        locals=[] // list of local variables
 
+    // fn name
     if (body[0]?.[0] === '$') ctx.func[body.shift()] = idx
+
+    // export binding
     if (body[0]?.[0] === 'export') compile.export([...body.shift(), ['func', idx]], ctx)
+
+    // collect params
     while (body[0]?.[0] === 'param') {
       let [_, ...paramTypes] = body.shift()
       if (paramTypes[0]?.[0] === '$') params[paramTypes.shift()] = params.length
       params.push(...paramTypes.map(t => TYPE[t]))
     }
+
+    // collect result type
     if (body[0]?.[0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
 
     // reuse existing type or register new one
     let type = [TYPE.func, params.length, ...params, result.length, ...result]
     let typeIdx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === type[i]))
     ctx.func.push([typeIdx >= 0 ? typeIdx : ctx.type.push(type)-1])
+
+    // collect locals
+    while (body[0]?.[0] === 'local') {
+      let [_, ...localTypes] = body.shift(), name
+      if (localTypes[0][0]==='$')
+        params[name=localTypes.shift()] ? err('Ambiguous name '+name) : name,
+        locals[name] = params.length + locals.length
+      localTypes.forEach(t => locals.push(TYPE[t]))
+    }
 
     // parse instruction block
     const instr = (node) => {
@@ -74,10 +93,10 @@ const compile = {
       else if (typeOp === 'const') {
         immediates.push(...i32(args.shift()))
       }
-      // local.get id
+      // local.get id, local.tee id
       else if (type === 'local') {
         let id = args.shift()
-        immediates.push(...i32(id[0]==='$' ? params[id] : id))
+        immediates.push(...i32(id[0]==='$' ? params[id] || locals[id] : id))
       }
       // call id arg1 argN
       else if (op === 'call') {
@@ -94,7 +113,8 @@ const compile = {
     }
 
     body = body.flatMap(node => Array.isArray(node) ? instr(node) : [OP[node]])
-    ctx.code.push([body.length+2, vars.length, ...body, 0x0b])
+
+    ctx.code.push([body.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...body, 0x0b])
   },
 
   // (memory min max shared)
@@ -139,3 +159,5 @@ const compile = {
 }
 
 const encoder = new TextEncoder()
+
+const err = text => { throw Error(text) }
