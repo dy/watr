@@ -46,7 +46,10 @@ const compile = {
     }
     if (body[0]?.[0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
 
-    ctx.func.push([ctx.type.push([TYPE.func, params.length, ...params, result.length, ...result])-1])
+    // reuse existing type or register new one
+    let type = [TYPE.func, params.length, ...params, result.length, ...result]
+    let typeIdx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === type[i]))
+    ctx.func.push([typeIdx >= 0 ? typeIdx : ctx.type.push(type)-1])
 
     // parse instruction block
     const instr = (node) => {
@@ -61,7 +64,7 @@ const compile = {
 
       // FIXME: figure out how to generalize this case
       // i32.store align=n offset=m
-      console.log(op)
+      console.group(op)
       if (typeOp === 'store') {
         let o = {align: [ALIGN[op]], offset: [0]}, p
         while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = i32(p[1])
@@ -84,7 +87,8 @@ const compile = {
 
       // other immediates are prev instructions, ie. (i32.add a b) → a b i32.add
       args = args.flatMap(instr)
-      console.log('->', args, op, immediates)
+      console.log(args, op, immediates)
+      console.groupEnd()
 
       return [...args, OP[op], ...immediates]
     }

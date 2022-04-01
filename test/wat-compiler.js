@@ -88,8 +88,7 @@ t('wat-compiler: named function named param', () => {
 })
 
 
-t.only('wat-compiler: call function direct', () => {
-
+t('wat-compiler: call function direct', () => {
   let src = `
   (func $dbl (param $a i32) (result i32)
     (i32.add (local.get $a) (local.get $a))
@@ -101,7 +100,7 @@ t.only('wat-compiler: call function direct', () => {
 
   let buffer = compile(parse(src))
   // console.log(wat(src))
-  // is(buffer, wat(src).buffer)
+  is(buffer, wat(src).buffer)
 
   const mod = new WebAssembly.Module(buffer)
   const instance = new WebAssembly.Instance(mod)
@@ -109,18 +108,24 @@ t.only('wat-compiler: call function direct', () => {
   is(call_function_direct(333), 666)
 })
 
-t.todo('wat-compiler: function param + local', () => buffers(`
-  (func (export "add") (param $a i32) (result i32)
-    (local $b i32)
-    (local.tee $b (i32.const 20))
-    (i32.add (local.get $a))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).add(22)).to.equal(42)
-  expect((await wasm(act)).add(22)).to.equal(42)
-}))
+t.only('wat-compiler: function param + local', () => {
+  let src = `
+    (func (export "add") (param $a i32) (result i32)
+      (local $b i32)
+      (local.tee $b (i32.const 20))
+      (i32.add (local.get $a))
+    )
+  `
+
+  let buffer = compile(parse(src))
+  // console.log(wat(src))
+  is(buffer, wat(src).buffer)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {add} = instance.exports
+  is(add(22), 42)
+})
 
 t.todo('wat-compiler: call function indirect (table)', () => buffers(`
   (type $return_i32 (func (result i32)))
