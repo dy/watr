@@ -1,7 +1,8 @@
 import t, { is, ok, same } from 'tst'
 import compile from '../src/compile.js'
 
-// basic
+// examples from https://ontouchstart.pages.dev/chapter_wasm_binary
+
 t('compile: empty', t => {
   is(compile(['module']), hex`00 61 73 6d 01 00 00 00`)
 })
@@ -57,8 +58,7 @@ t('compile: export mem/func', t => {
     ['func', ['param', 'i32', 'i32'], ['result', 'i32'],  //   (func (param i32 i32) (result i32)
       ['local.get', 0],                                   //     local.get 0
       ['local.get', 1],                                   //     local.get 1
-      // FIXME: make sure align is 2 here
-      ['i32.store', ['align','2']],                           //     i32.store
+      ['i32.store', ['align','4']],                           //     i32.store
       ['local.get', 1]                                    //     local.get 1
     ],                                                    //   )
     ['export', '"m"', ['memory', 0]],                       //   (export "m" (memory 0 ))

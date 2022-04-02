@@ -1,6 +1,3 @@
-// convert wat tree to wasm binary
-// ref: https://ontouchstart.pages.dev/chapter_wasm_binary
-// ref: https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md#function-section
 // ref: https://github.com/stagas/wat-compiler/blob/main/lib/const.js
 const OP = Object.fromEntries([
   'unreachable', 'nop', 'block', 'loop', 'if', 'else', ,,,,,
@@ -75,9 +72,9 @@ ALIGN = {
   'i64.store32': 4,
 },
 
-END = 0x0b,
-BSLASH = 92
+END = 0x0b
 
+// convert wat tree to wasm binary
 export default (nodes) => {
   // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
   let sections = {
@@ -184,9 +181,10 @@ const build = {
 
       // i32.store align=n offset=m
       else if (ALIGN[op]) {
-        let o = {align: [Math.log2(ALIGN[op])], offset: [0]}, p
-        while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = i32(p[1])
-        imm = [...o.align, ...o.offset]
+        // FIXME: figure out point in Math.log2 aligns
+        let o = {align: ALIGN[op], offset: 0}, p
+        while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = +p[1]
+        imm = [...i32(Math.log2(o.align)), ...i32(Math.log2(o.offset))]
       }
 
       // (local.get id), (local.tee id)
@@ -316,7 +314,7 @@ const iinit = ([op, literal], ctx) =>
 // build string binary
 const str = str => {
   str = str[0]==='"' ? str.slice(1,-1) : str
-  let res = [0], i = 0, c
+  let res = [0], i = 0, c, BSLASH=92
   // spec https://webassembly.github.io/spec/core/text/values.html#strings
   for (; i < str.length;) c=str.charCodeAt(i++), res.push(c===BSLASH ? parseInt(str.slice(i,i+=2), 16) : c)
   res[0]=res.length-1

@@ -264,7 +264,7 @@ t('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => {
   is(get(), 42)
 })
 
-t.todo('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
+t('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
   let src = String.raw`
     (memory 1 2)
     (data (i32.const 0) "\2a")
@@ -289,18 +289,25 @@ t.todo('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () =
   is(get(), 42)
 })
 
-t.todo('wat-compiler: import function', () => buffers(`
-  (import "math" "add" (func $add (param i32 i32) (result i32)))
-  (func (export "call_imported_function") (result i32)
-    (call $add (i32.const 20) (i32.const 22))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
+t.todo('wat-compiler: import function', () => {
+  let src = `
+    (import "math" "add" (func $add (param i32 i32) (result i32)))
+    (func (export "call_imported_function") (result i32)
+      (call $add (i32.const 20) (i32.const 22))
+    )
+  `
+
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+  // let {buffer}=wat(src)
+
   const math = { add: (a, b) => a + b }
-  expect((await wasm(exp, { math })).call_imported_function()).to.equal(42)
-  expect((await wasm(act, { math })).call_imported_function()).to.equal(42)
-}))
+  const mod = new WebAssembly.Module(buffer, math)
+  const instance = new WebAssembly.Instance(mod)
+  let {call_imported_function} = instance.exports
+
+  is(call_imported_function(), 42)
+})
 
 t.todo('wat-compiler: import memory 1', () => buffers(`
   (import "env" "mem" (memory 1))
