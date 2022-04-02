@@ -1,14 +1,12 @@
 # watr
 
-Light & fast WAT compiler.
+Light & fast WAT compiler. See [REPL](https://audio-lab.github.io/watr/repl.html).
 
 &nbsp; | Size | Compile | Parse
 ---|---|---|---
 watr | | |
 wat-compiler | | |
 wabt | | |
-
-Also _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.html)_.
 
 ## Usage
 
@@ -29,7 +27,7 @@ double(108) // 216
 
 ## Compiler
 
-WAT tree can be compiled directly bypassing text parsing. That can be useful as WASM API layer for hi-level languages, eg. [sonl](https://github.com/audio-lab/sonl):
+WAT tree can be compiled directly bypassing text parsing.
 
 ```js
 import { compile } from 'watr'
@@ -44,6 +42,8 @@ const {double} = instance.exports
 
 double(108) // 216
 ```
+
+That can be useful as WASM API layer for hi-level languages, eg. [sonl](https://github.com/audio-lab/sonl).
 
 <!--
 Main goal is to get very fluent with wasm text and to know it from within.
