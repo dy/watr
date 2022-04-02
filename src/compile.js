@@ -125,7 +125,7 @@ const build = {
         imm = i32(id[0]==='$' ? ctx.func[id] : id)
       }
 
-      // (call_indirect (type i32) tableId)
+      // (call_indirect (type i32) idx)
       else if (op === 'call_indirect') {
         let type = args.shift(), [_,id] = type
         imm = i32(id[0]==='$' ? ctx.type[id] : id)

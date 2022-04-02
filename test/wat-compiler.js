@@ -153,40 +153,49 @@ t('wat-compiler: call function indirect (table)', () => {
   is(call_function_indirect(1), 13)
 })
 
-t.todo('wat-compiler: call function indirect (table) non zero indexed ref types', () => buffers(`
-  (type $return_i32 (func (result i32)))
-  (type $return_i64 (func (result i64)))
-  (table 2 funcref)
-    (elem (i32.const 0) $f1 $f2)
-    (func $xx (result i32)
-      i32.const 42)
-    (func $f1 (result i32)
-      i32.const 42)
-    (func $f2 (result i32)
-      i32.const 13)
-  (func (export "call_function_indirect") (param $a i32) (result i32)
-    (call_indirect (type $return_i32) (local.get $a))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).call_function_indirect(0)).to.equal(42)
-  expect((await wasm(exp)).call_function_indirect(1)).to.equal(13)
-  expect((await wasm(act)).call_function_indirect(0)).to.equal(42)
-  expect((await wasm(act)).call_function_indirect(1)).to.equal(13)
-}))
+t('wat-compiler: call function indirect (table) non zero indexed ref types', () => {
+  let src = `
+    (type $return_i32 (func (result i32)))
+    (type $return_i64 (func (result i64)))
+    (table 2 funcref)
+      (elem (i32.const 0) $f1 $f2)
+      (func $xx (result i32)
+        i32.const 42)
+      (func $f1 (result i32)
+        i32.const 42)
+      (func $f2 (result i32)
+        i32.const 13)
+    (func (export "call_function_indirect") (param $a i32) (result i32)
+      (call_indirect (type $return_i32) (local.get $a))
+    )
+  `
 
-t.todo('wat-compiler: 1 global const (immutable)', () => buffers(`
-  (global $answer i32 (i32.const 42))
-  (func (export "get") (result i32)
-    (global.get $answer)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).get()).to.equal(42)
-  expect((await wasm(act)).get()).to.equal(42)
-}))
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {call_function_indirect} = instance.exports
+  is(call_function_indirect(0), 42)
+  is(call_function_indirect(1), 13)
+})
+
+t.todo('wat-compiler: 1 global const (immutable)', () => {
+  let src = `
+    (global $answer i32 (i32.const 42))
+    (func (export "get") (result i32)
+      (global.get $answer)
+    )
+  `
+
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {get} = instance.exports
+  is(get(), 42)
+})
 
 t.todo('wat-compiler: 1 global var (mut)', () => buffers(`
   (global $answer (mut i32) (i32.const 42))
