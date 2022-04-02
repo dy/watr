@@ -41,7 +41,7 @@ const OP = Object.fromEntries([
 ].flatMap((key,i)=>key && [[key,i]])),
 
 RANGE = {min:0, minmax:1, shared:3},
-SECTION = {type:1, import:2, func:3, table:4, memory:5, global:6, export:7, start:8, element:9, code:10, data:11},
+SECTION = {type:1, import:2, func:3, table:4, memory:5, global:6, export:7, start:8, elem:9, code:10, data:11},
 TYPE = {i32:0x7f, i64:0x7e, f32:0x7d, f64:0x7c, void:0x40, func:0x60, funcref:0x70},
 ETYPE = {func: 0, table: 1, memory: 2, global: 3},
 
@@ -96,39 +96,42 @@ const i32 = (value) => {
 
 // convert wat tree to wasm binary
 
-var compile = (tree) => {
+const END = 0x0b;
+
+var compile = (nodes) => {
   // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
-  let section = {
-    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], element: [], code: [], data: []
-  }, binary;
-
-  if (typeof tree[0] === 'string') tree = [tree];
-  for (let node of tree) compile$1[node[0]]?.(node, section);
-
-  binary = new Uint8Array([
+  let sections = {
+    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
+  },
+  binary = [
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
-    ...Object.keys(section).flatMap((key) => {
-      let items=section[key], count=items.length, binary;
-      if (!count) return []
+  ];
 
-      binary = items.flat();
+  // (func) → [(func)]
+  if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes];
 
-      binary.unshift(SECTION[key], binary.length+1, count);
-      return binary
-    })
-  ]);
-console.log(section);
-  binary.section = section;
+  // build nodes in order of sections, to properly initialize indexes/aliases
+  // must come separate from binary builder: func can define types etc.
+  // FIXME: alternatively iterables can be used instead that initialize aliases on the moment of binary building:
+  // that can make things faster; or find reason not to do that - maybe we need hoisting etc.
+  for (let name in sections)
+    for (let node of nodes)
+      if (node[0] === name) build[name](node, sections);
 
-  return binary
+  // build binary sectuibs
+  for (let name in sections) {
+    let items=sections[name], count=items.length;
+    if (!count) continue
+    let sizePtr = binary.length+1;
+    binary.push(SECTION[name], 0, count, ...items.flat());
+    binary[sizePtr] = binary.length - sizePtr - 1;
+  }
+
+  return new Uint8Array(binary)
 };
 
-const compile$1 = {
-  module([_,...nodes], section) {
-    for (let node of nodes) compile$1[node[0]](node, section);
-  },
-
+const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
   // FIXME: handle non-function types
@@ -172,10 +175,10 @@ const compile$1 = {
     if (body[0]?.[0] === '$') ctx.func[body.shift()] = idx;
 
     // export binding
-    if (body[0]?.[0] === 'export') compile$1.export([...body.shift(), ['func', idx]], ctx);
+    if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', idx]], ctx);
 
     // register type
-    let [typeIdx, params, result] = compile$1.type([,['func',...body]], ctx);
+    let [typeIdx, params, result] = build.type([,['func',...body]], ctx);
     while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift(); // FIXME: is there a way to generalize consuming?
     ctx.func.push([typeIdx]);
 
@@ -188,56 +191,63 @@ const compile$1 = {
       localTypes.forEach(t => locals.push(TYPE[t]));
     }
 
-    // parse instruction block
-    const instr = (node) => {
-      // some immediates examples:
-      // call_indirect (type $name)
-      // if (result type) instr end
-      // (if (result type) (then instr))
-      // (i32.add a b)
-      let [op, ...args] = node, immediates = [];
-      let [type, typeOp] = op.split('.');
+    // consume instruction with immediates
+    const immediates = (args) => {
+      let op = args.shift(), imm = [];
 
-      // FIXME: figure out how to generalize this case
       // i32.store align=n offset=m
-      // console.group(op)
-      if (typeOp === 'store') {
+      if (op.endsWith('store')) {
         let o = {align: [ALIGN[op]], offset: [0]}, p;
         while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = i32(p[1]);
-        immediates.push(...o.align, ...o.offset);
+        imm = [...o.align, ...o.offset];
       }
+
       // i32.const 123
-      else if (typeOp === 'const') {
-        immediates.push(...i32(args.shift()));
-      }
-      // local.get id, local.tee id
-      else if (type === 'local') {
+      else if (op.endsWith('const')) imm = i32(args.shift());
+
+      // (local.get id), (local.tee id)
+      else if (op.startsWith('local')) {
         let id = args.shift();
-        immediates.push(...i32(id[0]==='$' ? params[id] || locals[id] : id));
+        imm = i32(id[0]==='$' ? params[id] || locals[id] : id);
       }
-      // call id arg1 argN
+
+      // (call id)
       else if (op === 'call') {
         let id = args.shift();
-        immediates.push(...i32(id[0]==='$' ? ctx.func[id] : id));
+        imm = i32(id[0]==='$' ? ctx.func[id] : id);
       }
+
+      // (call_indirect (type i32) idx)
       else if (op === 'call_indirect') {
         let type = args.shift(), [_,id] = type;
-        immediates.push(...i32(id[0]==='$' ? ctx.type[id] : id), 0);
+        imm = i32(id[0]==='$' ? ctx.type[id] : id);
+        imm.push(0);
       }
 
-      // other immediates are prev instructions, ie. (i32.add a b) → a b i32.add
-      args = args.flatMap(instr);
-      // console.log(args, op, immediates)
-      // console.groupEnd()
+      imm.unshift(OP[op]);
 
-      return [...args, OP[op], ...immediates]
+      return imm
     };
 
-    // FIXME: some instructions may have flat ungrouped immediates, like i32.const 12, i32.store align=a offset=b
-    // so this is going to be a different loop
-    body = body.flatMap(node => Array.isArray(node) ? instr(node) : [OP[node]]);
+    // consume instruction block
+    const instr = (args) => {
+      if (typeof args[0] === 'string') return immediates(args)
 
-    ctx.code.push([body.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...body, 0x0b]);
+      // (a b (c))
+      if (Array.isArray(args[0])) {
+        let op = args.shift();
+        let imm = immediates(op);
+        return [...op.flatMap(arg => instr(arg)), ...imm]
+      }
+
+      throw Error('Unknown ' + op)
+    };
+
+    let code = [];
+    while (body.length) code.push(...instr(body));
+
+    // FIXME: smush local type defs
+    ctx.code.push([code.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...code, END]);
   },
 
   // (memory min max shared)
@@ -263,10 +273,21 @@ const compile$1 = {
     let name = args[0][0]==='$' && args.shift();
 
     let [min, max, kind] = args,
-        dfn = kind ? [RANGE.minmax, +min, +max, TYPE[kind]] : [RANGE.min, +min, TYPE[max]];
+        dfn = kind ? [TYPE[kind], RANGE.minmax, +min, +max] : [TYPE[max], RANGE.min, +min];
 
     if (name) ctx.table[name] = ctx.table.length;
     ctx.table.push(dfn);
+  },
+
+  // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
+  elem([_, offset, ...elems], ctx) {
+    const tableIdx = 0;
+
+    // FIXME: offset calc can be generalized as instantiation-time initializer
+    let [op, ref] = offset;
+    if (op === 'global.get') ref = ref[0]==='$' ? ctx.global[ref] : ref;
+
+    ctx.elem.push([tableIdx, OP[op], ...i32(ref), END, elems.length, ...elems.map(el => el[0]==='$' ? ctx.func[el] : +el)]);
   },
 
   //  (export "name" ([type] $name|idx))
@@ -279,13 +300,16 @@ const compile$1 = {
   // (import "mod" "name" ref)
   import([_, mod, name, ref], ctx) {
     // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
-    compile$1[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)]);
+    build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)]);
   },
 
-  // data
-  // elem
-  // start
-  // offset
+  data() {
+
+  },
+
+  start() {
+
+  }
 };
 
 const encoder = new TextEncoder();

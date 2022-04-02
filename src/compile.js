@@ -32,7 +32,8 @@ export default (nodes) => {
     let items=sections[name], count=items.length
     if (!count) continue
     let sizePtr = binary.length+1
-    binary.push(SECTION[name], 0, count, ...items.flat())
+    binary.push(SECTION[name], 0, count)
+    for (let item of items) binary.push(...item)
     binary[sizePtr] = binary.length - sizePtr - 1
   }
 
@@ -211,9 +212,13 @@ const build = {
     build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
   },
 
-  // data
-  // start
-  // offset
+  data() {
+
+  },
+
+  start() {
+
+  }
 }
 
 const encoder = new TextEncoder()
