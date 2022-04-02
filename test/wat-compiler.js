@@ -126,7 +126,7 @@ t('wat-compiler: function param + local', () => {
   is(add(22), 42)
 })
 
-t.todo('wat-compiler: call function indirect (table)', () => {
+t.only('wat-compiler: call function indirect (table)', () => {
   let src = `
     (type $return_i32 (func (result i32)))
     (table 2 funcref)
@@ -141,7 +141,7 @@ t.todo('wat-compiler: call function indirect (table)', () => {
   `
   console.log(wat(src))
 
-  // let buffer = compile(parse(src))
+  let buffer = compile(parse(src))
   // is(buffer, wat(src).buffer)
 
   // const mod = new WebAssembly.Module(buffer)

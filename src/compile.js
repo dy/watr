@@ -6,14 +6,14 @@ import { i32 } from './leb128.js'
 
 export default (tree) => {
   // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
-  const section = {
+  let section = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], element: [], code: [], data: []
-  }
+  }, binary
 
   if (typeof tree[0] === 'string') tree = [tree]
-  for (let node of tree) compile[node[0]](node, section)
+  for (let node of tree) compile[node[0]]?.(node, section)
 
-  return new Uint8Array([
+  binary = new Uint8Array([
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
     ...Object.keys(section).flatMap((key) => {
@@ -26,6 +26,10 @@ export default (tree) => {
       return binary
     })
   ])
+
+  binary.section = section
+
+  return binary
 }
 
 const compile = {
@@ -36,27 +40,33 @@ const compile = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
   // FIXME: handle non-function types
-  type([_, [kind, ...args]], ctx) {
+  type([_, ...args], ctx) {
     let name = args[0]?.[0]==='$' && args.shift(),
         params = [],
-        result = []
+        result = [],
+        decl = args[0]
 
-    // collect params
-    while (args[0]?.[0] === 'param') {
-      let [_, ...types] = args.shift()
-      if (types[0]?.[0] === '$') params[types.shift()] = params.length
-      params.push(...types.map(t => TYPE[t]))
+    if (decl[0]==='func') {
+      decl.shift()
+
+      // collect params
+      while (decl[0]?.[0] === 'param') {
+        let [_, ...types] = decl.shift()
+        if (types[0]?.[0] === '$') params[types.shift()] = params.length
+        params.push(...types.map(t => TYPE[t]))
+      }
+
+      // collect result type
+      if (decl[0]?.[0] === 'result') result = decl.shift().slice(1).map(t => TYPE[t])
+
+      // reuse existing type or register new one
+      let bytes = [TYPE.func, params.length, ...params, result.length, ...result]
+      let idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]))
+
+      if (idx < 0) idx = ctx.type.push(bytes)-1
+      return [idx, params, result]
     }
-
-    // collect result type
-    if (args[0]?.[0] === 'result') result = args.shift().slice(1).map(t => TYPE[t])
-
-    // reuse existing type or register new one
-    let bytes = [TYPE.func, params.length, ...params, result.length, ...result]
-    let idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]))
-
-    if (idx < 0) idx = ctx.type.push(bytes)-1
-    return [idx, params, result]
+    // TODO: handle non-func other types
   },
 
   // (func $name? ...params result ...body)
