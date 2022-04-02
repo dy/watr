@@ -126,7 +126,7 @@ t('wat-compiler: function param + local', () => {
   is(add(22), 42)
 })
 
-t.only('wat-compiler: call function indirect (table)', () => {
+t('wat-compiler: call function indirect (table)', () => {
   let src = `
     (type $return_i32 (func (result i32)))
     (table 2 funcref)
@@ -140,15 +140,17 @@ t.only('wat-compiler: call function indirect (table)', () => {
     )
   `
 
-  console.log(wat(src))
+  console.time('watr build')
   let buffer = compile(parse(src))
-  // is(buffer, wat(src).buffer)
+  console.timeEnd('watr build')
 
-  // const mod = new WebAssembly.Module(buffer)
-  // const instance = new WebAssembly.Instance(mod)
-  // let {call_function_indirect} = instance.exports
-  // is(call_function_indirect(0), 42)
-  // is(call_function_indirect(1), 13)
+  is(buffer, wat(src).buffer)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {call_function_indirect} = instance.exports
+  is(call_function_indirect(0), 42)
+  is(call_function_indirect(1), 13)
 })
 
 t.todo('wat-compiler: call function indirect (table) non zero indexed ref types', () => buffers(`

@@ -12,12 +12,15 @@ export default (tree) => {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
   }
 
-  if (typeof tree[0] === 'string') tree = [tree]
+  // (func ...args) → (module (func ...args))
+  if (typeof tree[0] === 'string') { if (tree[0] !== 'module') tree = ['module', tree] }
+  // [(func), (func)] → (module (func) (func))
+  else tree = ['module', ...tree]
 
-  // compile nodes in order of sections
+  // build nodes in order of sections
   for (let name in section)
     for (let node of tree)
-      if (node[0] === name) compile[name](node, section)
+      if (node[0] === name) build[name](node, section)
 
   let binary = new Uint8Array([
     0x00, 0x61, 0x73, 0x6d, // magic
@@ -32,17 +35,13 @@ export default (tree) => {
       return binary
     })
   ])
-console.log(section)
+
   binary.section = section
 
   return binary
 }
 
-const compile = {
-  module([_,...nodes], section) {
-    for (let node of nodes) compile[node[0]](node, section)
-  },
-
+const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
   // FIXME: handle non-function types
@@ -86,10 +85,10 @@ const compile = {
     if (body[0]?.[0] === '$') ctx.func[body.shift()] = idx
 
     // export binding
-    if (body[0]?.[0] === 'export') compile.export([...body.shift(), ['func', idx]], ctx)
+    if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', idx]], ctx)
 
     // register type
-    let [typeIdx, params, result] = compile.type([,['func',...body]], ctx)
+    let [typeIdx, params, result] = build.type([,['func',...body]], ctx)
     while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift() // FIXME: is there a way to generalize consuming?
     ctx.func.push([typeIdx])
 
@@ -102,57 +101,63 @@ const compile = {
       localTypes.forEach(t => locals.push(TYPE[t]))
     }
 
-    // parse instruction block
-    const instr = (node) => {
-      // some immediates examples:
-      // call_indirect (type $name)
-      // if (result type) instr end
-      // (if (result type) (then instr))
-      // (i32.add a b)
-      let [op, ...args] = node, immediates = []
-      let [type, typeOp] = op.split('.')
+    // consume instruction with immediates
+    const immediates = (args) => {
+      let op = args.shift(), imm = []
 
-      // FIXME: figure out how to generalize this case
       // i32.store align=n offset=m
-      // console.group(op)
-      if (typeOp === 'store') {
+      if (op.endsWith('store')) {
         let o = {align: [ALIGN[op]], offset: [0]}, p
         while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = i32(p[1])
-        immediates.push(...o.align, ...o.offset)
+        imm = [...o.align, ...o.offset]
       }
+
       // i32.const 123
-      else if (typeOp === 'const') {
-        immediates.push(...i32(args.shift()))
-      }
-      // local.get id, local.tee id
-      else if (type === 'local') {
+      else if (op.endsWith('const')) imm = i32(args.shift())
+
+      // (local.get id), (local.tee id)
+      else if (op.startsWith('local')) {
         let id = args.shift()
-        immediates.push(...i32(id[0]==='$' ? params[id] || locals[id] : id))
+        imm = i32(id[0]==='$' ? params[id] || locals[id] : id)
       }
-      // call id arg1 argN
+
+      // (call id)
       else if (op === 'call') {
         let id = args.shift()
-        immediates.push(...i32(id[0]==='$' ? ctx.func[id] : id))
+        imm = i32(id[0]==='$' ? ctx.func[id] : id)
       }
+
+      // (call_indirect (type i32) tableId)
       else if (op === 'call_indirect') {
         let type = args.shift(), [_,id] = type
-        immediates.push(...i32(id[0]==='$' ? ctx.type[id] : id), 0)
+        imm = i32(id[0]==='$' ? ctx.type[id] : id)
+        imm.push(0)
       }
 
-      // other immediates are prev instructions, ie. (i32.add a b) → a b i32.add
-      args = args.flatMap(instr)
-      // console.log(args, op, immediates)
-      // console.groupEnd()
+      imm.unshift(OP[op])
 
-      return [...args, OP[op], ...immediates]
+      return imm
     }
 
-    // FIXME: some instructions may have flat ungrouped immediates, like i32.const 12, i32.store align=a offset=b
-    // so this is going to be a different loop
-    body = body.flatMap(node => Array.isArray(node) ? instr(node) : [OP[node]])
+    // consume instruction block
+    const instr = (args) => {
+      if (typeof args[0] === 'string') return immediates(args)
+
+      // (a b (c))
+      if (Array.isArray(args[0])) {
+        let op = args.shift()
+        let imm = immediates(op)
+        return [...op.flatMap(arg => instr(arg)), ...imm]
+      }
+
+      throw Error('Unknown ' + op)
+    }
+
+    let code = []
+    while (body.length) code.push(...instr(body))
 
     // FIXME: smush local type defs
-    ctx.code.push([body.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...body, END])
+    ctx.code.push([code.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...code, END])
   },
 
   // (memory min max shared)
@@ -178,7 +183,7 @@ const compile = {
     let name = args[0][0]==='$' && args.shift()
 
     let [min, max, kind] = args,
-        dfn = kind ? [RANGE.minmax, +min, +max, TYPE[kind]] : [RANGE.min, +min, TYPE[max]]
+        dfn = kind ? [TYPE[kind], RANGE.minmax, +min, +max] : [TYPE[max], RANGE.min, +min]
 
     if (name) ctx.table[name] = ctx.table.length
     ctx.table.push(dfn)
@@ -205,7 +210,7 @@ const compile = {
   // (import "mod" "name" ref)
   import([_, mod, name, ref], ctx) {
     // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
-    compile[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
+    build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
   },
 
   // data
