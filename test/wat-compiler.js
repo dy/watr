@@ -180,7 +180,7 @@ t('wat-compiler: call function indirect (table) non zero indexed ref types', () 
   is(call_function_indirect(1), 13)
 })
 
-t.todo('wat-compiler: 1 global const (immutable)', () => {
+t('wat-compiler: 1 global const (immutable)', () => {
   let src = `
     (global $answer i32 (i32.const 42))
     (func (export "get") (result i32)
@@ -197,38 +197,52 @@ t.todo('wat-compiler: 1 global const (immutable)', () => {
   is(get(), 42)
 })
 
-t.todo('wat-compiler: 1 global var (mut)', () => buffers(`
-  (global $answer (mut i32) (i32.const 42))
-  (func (export "get") (result i32)
-    (global.get $answer)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).get()).to.equal(42)
-  expect((await wasm(act)).get()).to.equal(42)
-}))
+t('wat-compiler: 1 global var (mut)', () => {
+  let src = `
+    (global $answer (mut i32) (i32.const 42))
+    (func (export "get") (result i32)
+      (global.get $answer)
+    )
+  `
 
-t.todo('wat-compiler: 1 global var (mut) + mutate', () => buffers(`
-  (global $answer (mut i32) (i32.const 42))
-  (func (export "get") (result i32)
-    (global.set $answer (i32.const 666))
-    (global.get $answer)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).get()).to.equal(666)
-  expect((await wasm(act)).get()).to.equal(666)
-}))
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
 
-t.todo('wat-compiler: memory.grow', () => buffers(String.raw`
-  (memory 1)
-  (func (export "main") (result i32)
-    (memory.grow (i32.const 2))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act)))
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {get} = instance.exports
+  is(get(), 42)
+})
+
+t('wat-compiler: 1 global var (mut) + mutate', () => {
+  let src = `
+    (global $answer (mut i32) (i32.const 42))
+    (func (export "get") (result i32)
+      (global.set $answer (i32.const 777))
+      (global.get $answer)
+    )
+  `
+
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {get} = instance.exports
+  is(get(), 777)
+})
+
+t.todo('wat-compiler: memory.grow', () => {
+  let src = `
+    (memory 1)
+    (func (export "main") (result i32)
+      (memory.grow (i32.const 2))
+    )
+  `
+
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+})
 
 t.todo('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => buffers(String.raw`
   (memory 1)

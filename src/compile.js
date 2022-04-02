@@ -71,7 +71,8 @@ const build = {
 
       return [idx, params, result]
     }
-    // TODO: handle non-func other types
+
+    err('Unsupported type ' + decl[0])
   },
 
   // (func $name? ...params result ...body)
