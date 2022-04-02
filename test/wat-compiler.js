@@ -252,8 +252,9 @@ t('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => {
       (i32.load (i32.const 0))
     )
   `
-
+  console.time('watr build')
   let buffer = compile(parse(src))
+  console.timeEnd('watr build')
   is(buffer, wat(src).buffer)
   // let {buffer}=wat(src)
 

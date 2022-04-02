@@ -1,7 +1,7 @@
 // convert wat tree to wasm binary
 // ref: https://ontouchstart.pages.dev/chapter_wasm_binary
 // ref: https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md#function-section
-import {OP, SECTION, RANGE, TYPE, ETYPE, ALIGN, GLOBAL, END} from './const.js'
+import {OP, SECTION, TYPE, ETYPE, ALIGN, END} from './const.js'
 import { i32 } from './leb128.js'
 
 export default (nodes) => {
@@ -25,8 +25,8 @@ export default (nodes) => {
     nodes = remaining
   }
 
-  console.log(sections)
-  // build binary sectuibs
+  // console.log(sections)
+  // build binary sections
   for (let name in sections) {
     let items=sections[name], count=items.length
     if (!count) continue
@@ -47,11 +47,10 @@ const build = {
     let name = args[0]?.[0]==='$' && args.shift(),
         params = [],
         result = [],
-        decl = args[0]
+        decl = args[0],
+        kind = decl.shift()
 
-    if (decl[0]==='func') {
-      decl.shift()
-
+    if (kind==='func') {
       // collect params
       while (decl[0]?.[0] === 'param') {
         let [_, ...types] = decl.shift()
@@ -72,7 +71,7 @@ const build = {
       return [idx, params, result]
     }
 
-    err('Unsupported type ' + decl[0])
+    err('Unsupported type ' + kind)
   },
 
   // (func $name? ...params result ...body)
@@ -104,7 +103,8 @@ const build = {
     const immediates = (args) => {
       let op = args.shift(), imm = []
 
-      // FIXME: make faster lookup
+      // FIXME: make faster lookup.
+      // FIXME: Maybe make use of iinit also
       // i32.const 123
       if (op.endsWith('const')) imm = i32(args.shift())
 
@@ -180,59 +180,42 @@ const build = {
     // (memory (import "js" "mem") 1) → (import "js" "mem" (memory 1))
     if (parts[0][0] === 'import') imp = parts.shift()
 
-    let [min, max, shared] = parts, dfn = max ? [RANGE.minmax, +min, +max] : [RANGE.min, +min]
-
-    if (!imp) ctx.memory.push(dfn)
+    if (!imp) ctx.memory.push(range(parts))
     else {
-      let [_, mod, name] = imp
-      mod = str(mod), name = str(name)
-      ctx.import.push([mod.length, ...encoder.encode(mod), name.length, ...encoder.encode(name), ETYPE.memory, ...dfn])
+      ctx.import.push([...str(imp[1]), ...str(imp[2]), ETYPE.memory, ...range(parts)])
     }
   },
 
   // (global i32 (i32.const 42)), (global $id i32 (i32.const 42)), (global $id (mut i32) (i32.const 42))
   global([_, ...args], ctx) {
     let name = args[0][0]==='$' && args.shift()
-    let dfn = []
-    let type = args.shift()
-
-    if (type[0]==='mut') dfn.push(TYPE[type[1]], GLOBAL.mut)
-    else dfn.push(TYPE[type], GLOBAL.const)
-
-    let [op, literal] = args.shift()
-    dfn.push(OP[op], ...i32(literal), END)
-
     if (name) ctx.global[name] = ctx.global.length
-    ctx.global.push(dfn)
+
+    let [type, init] = args, mut = type[0] === 'mut'
+
+    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...iinit(init)])
   },
 
   // (table 1 2? funcref)
   table([_, ...args], ctx) {
     let name = args[0][0]==='$' && args.shift()
-
-    let [min, max, kind] = args,
-        dfn = kind ? [TYPE[kind], RANGE.minmax, +min, +max] : [TYPE[max], RANGE.min, +min]
-
     if (name) ctx.table[name] = ctx.table.length
-    ctx.table.push(dfn)
+
+    let lims = range(args)
+    ctx.table.push([TYPE[args[0]], ...lims])
   },
 
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
   elem([_, offset, ...elems], ctx) {
     const tableIdx = 0 // FIXME: table index can be defined
 
-    // FIXME: offset calc can be generalized as instantiation-time initializer
-    let [op, ref] = offset
-    if (op === 'global.get') ref = ref[0]==='$' ? ctx.global[ref] : ref
-
-    ctx.elem.push([tableIdx, OP[op], ...i32(ref), END, elems.length, ...elems.map(el => el[0]==='$' ? ctx.func[el] : +el)])
+    ctx.elem.push([tableIdx, ...iinit(offset, ctx), elems.length, ...elems.map(el => el[0]==='$' ? ctx.func[el] : +el)])
   },
 
-  //  (export "name" ([type] $name|idx))
+  //  (export "name" (kind $name|idx))
   export([_, name, [kind, idx]], ctx) {
-    name = str(name)
     if (idx[0]==='$') idx = ctx[kind][idx]
-    ctx.export.push([name.length, ...encoder.encode(name), ETYPE[kind], idx])
+    ctx.export.push([...str(name), ETYPE[kind], idx])
   },
 
   // (import "mod" "name" ref)
@@ -243,11 +226,8 @@ const build = {
 
   // (data (i32.const 0) "\2a")
   data([_, offset, init], ctx) {
-    let dfn = [0, ...instinit(offset)] // FIXME: segment flag - memory index
-
-    init = str(init)
-    dfn.push(init.length, ...encoder.encode(init))
-    ctx.data.push(dfn)
+    // FIXME: first is mem index
+    ctx.data.push([0, ...iinit(offset,ctx), ...str(init)])
   },
 
   start() {
@@ -255,16 +235,21 @@ const build = {
   }
 }
 
-const encoder = new TextEncoder()
+// (i32.const 0) - instantiation time initializer
+const iinit = ([op, literal], ctx) =>
+  [OP[op], ...i32(literal[0] === '$' ? ctx.global[literal] : literal), END]
+
+// build string binary
+const str = str => {
+  str = str[0]==='"' ? str.slice(1,-1) : str
+  let res = [0], i = 0
+  // spec https://webassembly.github.io/spec/core/text/values.html#strings
+  for (; i < str.length;) res.push(str[i]==='\\' ? parseInt(str.slice(++i,i+=2), 16) : str.charCodeAt(i++))
+  res[0]=res.length-1
+  return res
+}
+
+// build range/limits sequence
+const range = (args, min=args.shift()) => isNaN(parseInt(args[0])) ? [0, +min] : [1, +min, +args.shift()]
 
 const err = text => { throw Error(text) }
-
-// (i32.const 0) - instantiation time initializer
-const instinit = ([op, literal]) => [OP[op], ...i32(literal), END]
-
-
-// spec https://webassembly.github.io/spec/core/text/values.html#strings
-const str = str => (
-  str = str[0]==='"' ? str.slice(1,-1) : str,
-  str.replaceAll(/\\([0-9a-f]{2})/g, (v,code) => String.fromCharCode(parseInt(code, 16)))
-)
