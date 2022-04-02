@@ -8,7 +8,7 @@ const END = 0x0b
 
 export default (nodes) => {
   // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
-  let section = {
+  let sections = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
   },
   binary = [
@@ -23,32 +23,17 @@ export default (nodes) => {
   // must come separate from binary builder: func can define types etc.
   // FIXME: alternatively iterables can be used instead that initialize aliases on the moment of final binary building:
   // that can make things faster
-  for (let name in section)
+  for (let name in sections)
     for (let node of nodes)
-      if (node[0] === name) build[name](node, section)
+      if (node[0] === name) build[name](node, sections)
 
-  for (let name in section) {
-    let items=section[name], count=items.length, sbin
+  for (let name in sections) {
+    let items=sections[name], count=items.length
     if (!count) continue
-
-    sbin = items.flat()
-    sbin.unshift(SECTION[name], sbin.length+1, count)
-    binary.push(...sbin)
+    let sizePtr = binary.length+1
+    binary.push(SECTION[name], 0, count, ...items.flat())
+    binary[sizePtr] = binary.length - sizePtr - 1
   }
-
-  // for (let name in sections)
-  //   for (let node of nodes)
-  //     if (node[0] === name) {
-  //       // build nodes in order of sections, to properly initialize indexes/aliases
-  //       build[name](node, sections)
-
-  //       let items=sections[name], count=items.length
-  //       if (count) {
-  //         let sizePtr = binary.length+1
-  //         binary.push(SECTION[name], 0, count, ...items.flat())
-  //         binary[sizePtr] = binary.length - sizePtr
-  //       }
-  //     }
 
   return new Uint8Array(binary)
 }
