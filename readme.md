@@ -77,7 +77,8 @@ Experiments:
 * [webassemblyjs](https://github.com/xtuc/webassemblyjs)
 * [chasm](https://github.com/ColinEberhardt/chasm/blob/master/src/encoding.ts)
 * [WebBS](https://github.com/j-s-n/WebBS)
-
+* [leb128a](https://github.com/minhducsun2002/leb128/blob/master/src/index.ts)
+* [leb128b](https://github.com/shmishtopher/wasm-LEB128/tree/master/esm)
 -->
 
 ## Alternatives

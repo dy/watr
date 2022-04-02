@@ -4,16 +4,22 @@
 import {OP, SECTION, RANGE, TYPE, ETYPE, ALIGN} from './const.js'
 import { i32 } from './leb128.js'
 
+const END = 0x0b
+
 export default (tree) => {
   // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
   let section = {
-    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], element: [], code: [], data: []
-  }, binary
+    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
+  }
 
   if (typeof tree[0] === 'string') tree = [tree]
-  for (let node of tree) compile[node[0]]?.(node, section)
 
-  binary = new Uint8Array([
+  // compile nodes in order of sections
+  for (let name in section)
+    for (let node of tree)
+      if (node[0] === name) compile[name](node, section)
+
+  let binary = new Uint8Array([
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
     ...Object.keys(section).flatMap((key) => {
@@ -145,7 +151,8 @@ const compile = {
     // so this is going to be a different loop
     body = body.flatMap(node => Array.isArray(node) ? instr(node) : [OP[node]])
 
-    ctx.code.push([body.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...body, 0x0b])
+    // FIXME: smush local type defs
+    ctx.code.push([body.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...body, END])
   },
 
   // (memory min max shared)
@@ -177,6 +184,17 @@ const compile = {
     ctx.table.push(dfn)
   },
 
+  // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
+  elem([_, offset, ...elems], ctx) {
+    const tableIdx = 0
+
+    // FIXME: offset calc can be generalized as instantiation-time initializer
+    let [op, ref] = offset
+    if (op === 'global.get') ref = ref[0]==='$' ? ctx.global[ref] : ref
+
+    ctx.elem.push([tableIdx, OP[op], ...i32(ref), END, elems.length, ...elems.map(el => el[0]==='$' ? ctx.func[el] : +el)])
+  },
+
   //  (export "name" ([type] $name|idx))
   export([_, name, [kind, idx]], ctx) {
     if (name[0]==='"') name = name.slice(1,-1)
@@ -191,7 +209,6 @@ const compile = {
   },
 
   // data
-  // elem
   // start
   // offset
 }
