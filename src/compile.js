@@ -10,33 +10,47 @@ export default (nodes) => {
   // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
   let section = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
-  }
+  },
+  binary = [
+    0x00, 0x61, 0x73, 0x6d, // magic
+    0x01, 0x00, 0x00, 0x00, // version
+  ]
 
-  // (func ...args) → (module (func ...args))
+  // (func) → [(func)]
   if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes]
 
-  // build nodes in order of sections
+  // build nodes in order of sections, to properly initialize indexes/aliases
+  // must come separate from binary builder: func can define types etc.
+  // FIXME: alternatively iterables can be used instead that initialize aliases on the moment of final binary building:
+  // that can make things faster
   for (let name in section)
     for (let node of nodes)
       if (node[0] === name) build[name](node, section)
 
-  let binary = new Uint8Array([
-    0x00, 0x61, 0x73, 0x6d, // magic
-    0x01, 0x00, 0x00, 0x00, // version
-    ...Object.keys(section).flatMap((key) => {
-      let items=section[key], count=items.length, binary
-      if (!count) return []
+  for (let name in section) {
+    let items=section[name], count=items.length, sbin
+    if (!count) continue
 
-      binary = items.flat()
+    sbin = items.flat()
+    sbin.unshift(SECTION[name], sbin.length+1, count)
+    binary.push(...sbin)
+  }
 
-      binary.unshift(SECTION[key], binary.length+1, count)
-      return binary
-    })
-  ])
+  // for (let name in sections)
+  //   for (let node of nodes)
+  //     if (node[0] === name) {
+  //       // build nodes in order of sections, to properly initialize indexes/aliases
+  //       build[name](node, sections)
 
-  binary.section = section
+  //       let items=sections[name], count=items.length
+  //       if (count) {
+  //         let sizePtr = binary.length+1
+  //         binary.push(SECTION[name], 0, count, ...items.flat())
+  //         binary[sizePtr] = binary.length - sizePtr
+  //       }
+  //     }
 
-  return binary
+  return new Uint8Array(binary)
 }
 
 const build = {
