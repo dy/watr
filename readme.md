@@ -30,7 +30,7 @@ double(108) // 216
 
 ## Compiler
 
-WAT tree can be compiled directly bypassing text parsing.
+WAT tree can be compiled directly, bypassing text parsing:
 
 ```js
 import { compile } from 'watr'
