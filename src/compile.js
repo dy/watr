@@ -26,7 +26,7 @@ export default (tree) => {
       return binary
     })
   ])
-
+console.log(section)
   binary.section = section
 
   return binary
@@ -61,9 +61,11 @@ const compile = {
 
       // reuse existing type or register new one
       let bytes = [TYPE.func, params.length, ...params, result.length, ...result]
-      let idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]))
 
+      let idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]))
       if (idx < 0) idx = ctx.type.push(bytes)-1
+      if (name) ctx.type[name] = idx
+
       return [idx, params, result]
     }
     // TODO: handle non-func other types
@@ -82,7 +84,7 @@ const compile = {
 
     // register type
     let [typeIdx, params, result] = compile.type([,['func',...body]], ctx)
-    while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift()
+    while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift() // FIXME: is there a way to generalize consuming?
     ctx.func.push([typeIdx])
 
     // collect locals
@@ -96,7 +98,6 @@ const compile = {
 
     // parse instruction block
     const instr = (node) => {
-      // FIXME: instructions may have optional immediates
       // some immediates examples:
       // call_indirect (type $name)
       // if (result type) instr end
@@ -125,7 +126,11 @@ const compile = {
       // call id arg1 argN
       else if (op === 'call') {
         let id = args.shift()
-        immediates.push(...i32(id[0]==='$' in ctx.func ? ctx.func[id] : id))
+        immediates.push(...i32(id[0]==='$' ? ctx.func[id] : id))
+      }
+      else if (op === 'call_indirect') {
+        let type = args.shift(), [_,id] = type
+        immediates.push(...i32(id[0]==='$' ? ctx.type[id] : id), 0)
       }
 
       // other immediates are prev instructions, ie. (i32.add a b) → a b i32.add
@@ -136,6 +141,8 @@ const compile = {
       return [...args, OP[op], ...immediates]
     }
 
+    // FIXME: some instructions may have flat ungrouped immediates, like i32.const 12, i32.store align=a offset=b
+    // so this is going to be a different loop
     body = body.flatMap(node => Array.isArray(node) ? instr(node) : [OP[node]])
 
     ctx.code.push([body.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...body, 0x0b])
@@ -147,8 +154,7 @@ const compile = {
     // (memory (import "js" "mem") 1) → (import "js" "mem" (memory 1))
     if (parts[0][0] === 'import') imp = parts.shift()
 
-    let [min, max, shared] = parts,
-        dfn = max ? [RANGE.minmax, min, max] : [RANGE.min, min]
+    let [min, max, shared] = parts, dfn = max ? [RANGE.minmax, +min, +max] : [RANGE.min, +min]
 
     if (!imp) ctx.memory.push(dfn)
     else {
@@ -160,13 +166,22 @@ const compile = {
   // mut
   global([_, type, mutable], ctx) { ctx.global.push([]) },
 
-  table([_, type, limits], ctx) { ctx.table.push([]) },
+  // (table 1 2? funcref)
+  table([_, ...args], ctx) {
+    let name = args[0][0]==='$' && args.shift()
+
+    let [min, max, kind] = args,
+        dfn = kind ? [RANGE.minmax, +min, +max, TYPE[kind]] : [RANGE.min, +min, TYPE[max]]
+
+    if (name) ctx.table[name] = ctx.table.length
+    ctx.table.push(dfn)
+  },
 
   //  (export "name" ([type] $name|idx))
-  export([_, name, [type, idx]], ctx) {
+  export([_, name, [kind, idx]], ctx) {
     if (name[0]==='"') name = name.slice(1,-1)
-    if (typeof idx === 'string') idx = ctx.alias[type][idx]
-    ctx.export.push([name.length, ...encoder.encode(name), ETYPE[type], idx])
+    if (idx[0]==='$') idx = ctx[kind][idx]
+    ctx.export.push([name.length, ...encoder.encode(name), ETYPE[kind], idx])
   },
 
   // (import "mod" "name" ref)
