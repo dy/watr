@@ -29,7 +29,7 @@ double(108) // 216
 
 ## Compiler
 
-WAT tree can be compiled directly. That can be useful as WASM API layer for hi-level languages, to bypass text parsing (eg. used by [sonl](https://github.com/audio-lab/sonl)):
+WAT tree can be compiled directly bypassing text parsing. That can be useful as WASM API layer for hi-level languages, eg. [sonl](https://github.com/audio-lab/sonl):
 
 ```js
 import { compile } from 'watr'
