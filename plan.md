@@ -11,7 +11,7 @@
 * [ ] Normalize tree in parser, not in compiler - keep compiler small & fast
 * [ ] Basic parsing instructions from mdn & examples
 * [ ] Benchmark against wabt, wat-compiler
-* [ ] Build script
+* [x] Build script
 
 ## Backlog
 

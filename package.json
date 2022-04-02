@@ -5,7 +5,9 @@
   "main": "watr.js",
   "type": "module",
   "scripts": {
-    "test": "node test"
+    "test": "node test",
+    "build": "rollup src/watr.js --file watr.js --format esm --name \"Watr\"",
+    "min": "terser watr.js -o watr.min.js --module -c passes=3 -m"
   },
   "repository": {
     "type": "git",
@@ -23,6 +25,8 @@
   },
   "homepage": "https://github.com/dy/watr#readme",
   "devDependencies": {
+    "rollup": "^2.70.1",
+    "terser": "^5.12.1",
     "tst": "^7.1.1",
     "wabt": "^1.0.26"
   }
