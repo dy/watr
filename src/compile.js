@@ -21,12 +21,13 @@ export default (nodes) => {
 
   // build nodes in order of sections, to properly initialize indexes/aliases
   // must come separate from binary builder: func can define types etc.
-  // FIXME: alternatively iterables can be used instead that initialize aliases on the moment of binary building:
-  // that can make things faster; or find reason not to do that - maybe we need hoisting etc.
-  for (let name in sections)
-    for (let node of nodes)
-      if (node[0] === name) build[name](node, sections)
+  for (let name in sections) {
+    let remaining = []
+    for (let node of nodes) node[0] === name ? build[name](node, sections) : remaining.push(node)
+    nodes = remaining
+  }
 
+// console.log(sections)
   // build binary sectuibs
   for (let name in sections) {
     let items=sections[name], count=items.length
@@ -120,10 +121,11 @@ const build = {
         imm = i32(id[0]==='$' ? params[id] || locals[id] : id)
       }
 
-      // (global.get), (global.set)
-      // else if (op.startsWith('global')) {
-
-      // }
+      // (global.get id), (global.set id)
+      else if (op.startsWith('global')) {
+        let id = args.shift()
+        imm = i32(id[0]==='$' ? ctx.global[id] : id)
+      }
 
       // (call id)
       else if (op === 'call') {
