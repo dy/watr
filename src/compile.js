@@ -6,20 +6,18 @@ import { i32 } from './leb128.js'
 
 const END = 0x0b
 
-export default (tree) => {
+export default (nodes) => {
   // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
   let section = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
   }
 
   // (func ...args) → (module (func ...args))
-  if (typeof tree[0] === 'string') { if (tree[0] !== 'module') tree = ['module', tree] }
-  // [(func), (func)] → (module (func) (func))
-  else tree = ['module', ...tree]
+  if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes]
 
   // build nodes in order of sections
   for (let name in section)
-    for (let node of tree)
+    for (let node of nodes)
       if (node[0] === name) build[name](node, section)
 
   let binary = new Uint8Array([
