@@ -1,10 +1,8 @@
 // convert wat tree to wasm binary
 // ref: https://ontouchstart.pages.dev/chapter_wasm_binary
 // ref: https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md#function-section
-import {OP, SECTION, RANGE, TYPE, ETYPE, ALIGN} from './const.js'
+import {OP, SECTION, RANGE, TYPE, ETYPE, ALIGN, GLOBAL, END} from './const.js'
 import { i32 } from './leb128.js'
-
-const END = 0x0b
 
 export default (nodes) => {
   // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
@@ -186,8 +184,21 @@ const build = {
     }
   },
 
-  // mut
-  global([_, type, mutable], ctx) { ctx.global.push([]) },
+  // (global i32 (i32.const 42)), (global $id i32 (i32.const 42)), (global $id (mut i32) (i32.const 42))
+  global([_, ...args], ctx) {
+    let name = args[0][0]==='$' && args.shift()
+    let dfn = []
+    let type = args.shift()
+
+    if (type[0]==='mut') dfn.push(TYPE[type[1]], GLOBAL.mut)
+    else dfn.push(TYPE[type], GLOBAL.const)
+
+    let [op, literal] = args.shift()
+    dfn.push(OP[op], ...i32(literal), END)
+
+    if (name) ctx.global[name] = ctx.global.length
+    ctx.global.push(dfn)
+  },
 
   // (table 1 2? funcref)
   table([_, ...args], ctx) {
