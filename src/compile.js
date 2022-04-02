@@ -25,7 +25,7 @@ export default (nodes) => {
     nodes = remaining
   }
 
-// console.log(sections)
+  console.log(sections)
   // build binary sectuibs
   for (let name in sections) {
     let items=sections[name], count=items.length
@@ -104,15 +104,16 @@ const build = {
     const immediates = (args) => {
       let op = args.shift(), imm = []
 
+      // FIXME: make faster lookup
+      // i32.const 123
+      if (op.endsWith('const')) imm = i32(args.shift())
+
       // i32.store align=n offset=m
-      if (op.endsWith('store')) {
-        let o = {align: [ALIGN[op]], offset: [0]}, p
+      else if (op.includes('store') || op.includes('load')) {
+        let o = {align: [Math.log2(ALIGN[op])], offset: [0]}, p
         while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = i32(p[1])
         imm = [...o.align, ...o.offset]
       }
-
-      // i32.const 123
-      else if (op.endsWith('const')) imm = i32(args.shift())
 
       // (local.get id), (local.tee id)
       else if (op.startsWith('local')) {
@@ -138,6 +139,9 @@ const build = {
         imm = i32(id[0]==='$' ? ctx.type[id] : id)
         imm.push(0)
       }
+
+      // memory.grow memoryIdx
+      else if (op === 'memory.grow') imm = [0]
 
       imm.unshift(OP[op])
 
@@ -181,6 +185,7 @@ const build = {
     if (!imp) ctx.memory.push(dfn)
     else {
       let [_, mod, name] = imp
+      mod = str(mod), name = str(name)
       ctx.import.push([mod.length, ...encoder.encode(mod), name.length, ...encoder.encode(name), ETYPE.memory, ...dfn])
     }
   },
@@ -214,7 +219,7 @@ const build = {
 
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
   elem([_, offset, ...elems], ctx) {
-    const tableIdx = 0
+    const tableIdx = 0 // FIXME: table index can be defined
 
     // FIXME: offset calc can be generalized as instantiation-time initializer
     let [op, ref] = offset
@@ -225,7 +230,7 @@ const build = {
 
   //  (export "name" ([type] $name|idx))
   export([_, name, [kind, idx]], ctx) {
-    if (name[0]==='"') name = name.slice(1,-1)
+    name = str(name)
     if (idx[0]==='$') idx = ctx[kind][idx]
     ctx.export.push([name.length, ...encoder.encode(name), ETYPE[kind], idx])
   },
@@ -236,8 +241,13 @@ const build = {
     build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
   },
 
-  data() {
+  // (data (i32.const 0) "\2a")
+  data([_, offset, init], ctx) {
+    let dfn = [0, ...instinit(offset)] // FIXME: segment flag - memory index
 
+    init = str(init)
+    dfn.push(init.length, ...encoder.encode(init))
+    ctx.data.push(dfn)
   },
 
   start() {
@@ -248,3 +258,13 @@ const build = {
 const encoder = new TextEncoder()
 
 const err = text => { throw Error(text) }
+
+// (i32.const 0) - instantiation time initializer
+const instinit = ([op, literal]) => [OP[op], ...i32(literal), END]
+
+
+// spec https://webassembly.github.io/spec/core/text/values.html#strings
+const str = str => (
+  str = str[0]==='"' ? str.slice(1,-1) : str,
+  str.replaceAll(/\\([0-9a-f]{2})/g, (v,code) => String.fromCharCode(parseInt(code, 16)))
+)

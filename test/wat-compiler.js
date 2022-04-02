@@ -232,7 +232,7 @@ t('wat-compiler: 1 global var (mut) + mutate', () => {
   is(get(), 777)
 })
 
-t.todo('wat-compiler: memory.grow', () => {
+t('wat-compiler: memory.grow', () => {
   let src = `
     (memory 1)
     (func (export "main") (result i32)
@@ -244,18 +244,24 @@ t.todo('wat-compiler: memory.grow', () => {
   is(buffer, wat(src).buffer)
 })
 
-t.todo('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => buffers(String.raw`
-  (memory 1)
-  (data (i32.const 0) "\2a")
-  (func (export "get") (result i32)
-    (i32.load (i32.const 0))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).get()).to.equal(42)
-  expect((await wasm(act)).get()).to.equal(42)
-}))
+t('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => {
+  let src = String.raw`
+    (memory 1)
+    (data (i32.const 0) "\2a")
+    (func (export "get") (result i32)
+      (i32.load (i32.const 0))
+    )
+  `
+
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+  // let {buffer}=wat(src)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {get} = instance.exports
+  is(get(), 42)
+})
 
 t.todo('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => buffers(String.raw`
   (memory 1 2)
