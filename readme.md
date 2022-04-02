@@ -8,7 +8,7 @@ watr | | |
 wat-compiler | | |
 wabt | | |
 
-See _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.html)_.
+Also _[WebAssembly text REPL](https://audio-lab.github.io/watr/repl.html)_.
 
 ## Usage
 
@@ -83,7 +83,7 @@ Experiments:
 
 ## Alternatives
 
-* [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web.
-* [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT
+* [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web, industry standard.
+* [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT, no general support.
 
 <p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>

@@ -264,23 +264,30 @@ t('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => {
   is(get(), 42)
 })
 
-t.todo('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => buffers(String.raw`
-  (memory 1 2)
-  (data (i32.const 0) "\2a")
-  (func (export "get") (result i32)
-    i32.const 1
-    i32.const 2
-    drop
-    drop
-    i32.const 0
-    i32.load offset=0 align=4
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).get()).to.equal(42)
-  expect((await wasm(act)).get()).to.equal(42)
-}))
+t.todo('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
+  let src = String.raw`
+    (memory 1 2)
+    (data (i32.const 0) "\2a")
+    (func (export "get") (result i32)
+      i32.const 1
+      i32.const 2
+      drop
+      drop
+      i32.const 0
+      i32.load offset=0 align=4
+    )
+  `
+  console.time('watr build')
+  let buffer = compile(parse(src))
+  console.timeEnd('watr build')
+  is(buffer, wat(src).buffer)
+  // let {buffer}=wat(src)
+
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod)
+  let {get} = instance.exports
+  is(get(), 42)
+})
 
 t.todo('wat-compiler: import function', () => buffers(`
   (import "math" "add" (func $add (param i32 i32) (result i32)))
