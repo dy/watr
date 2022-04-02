@@ -120,6 +120,11 @@ const build = {
         imm = i32(id[0]==='$' ? params[id] || locals[id] : id)
       }
 
+      // (global.get), (global.set)
+      // else if (op.startsWith('global')) {
+
+      // }
+
       // (call id)
       else if (op === 'call') {
         let id = args.shift()
@@ -140,16 +145,21 @@ const build = {
 
     // consume instruction block
     const instr = (args) => {
-      if (typeof args[0] === 'string') return immediates(args)
+      let op = args[0]
+
+      // FIXME: risk of consuming non-inlinable instructions like (local.get id), (call id)
+      if (typeof op === 'string' && OP[op]) return immediates(args)
 
       // (a b (c))
-      if (Array.isArray(args[0])) {
-        let op = args.shift()
+      else if (Array.isArray(op)) {
+        op = args.shift()
         let imm = immediates(op)
-        return [...op.flatMap(arg => instr(arg)), ...imm]
+        let opInstr = op.flatMap(arg => instr(arg))
+        opInstr.push(...imm)
+        return opInstr
       }
 
-      throw Error('Unknown ' + op)
+      err('Unknown ' + op)
     }
 
     let code = []

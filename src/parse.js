@@ -4,9 +4,8 @@ _0=48, _9=57, SEMIC=59, NEWLINE=32, PLUS=43, MINUS=45, COLON=58
 export default (str) => {
   let i = 0, level = [], buf=''
 
-  const commit = (k,v) => buf && (
-    [k, v] = buf.split('='),
-    level.push(v ? [k,v] : k),
+  const commit = () => buf && (
+    level.push(~buf.indexOf('=') ? buf.split('=') : buf),
     buf = ''
   )
 
