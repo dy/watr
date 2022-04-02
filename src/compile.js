@@ -33,11 +33,35 @@ const compile = {
     for (let node of nodes) compile[node[0]](node, section)
   },
 
+  // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
+  // signature part is identical to function
+  // FIXME: handle non-function types
+  type([_, [kind, ...args]], ctx) {
+    let name = args[0]?.[0]==='$' && args.shift(),
+        params = [],
+        result = []
+
+    // collect params
+    while (args[0]?.[0] === 'param') {
+      let [_, ...types] = args.shift()
+      if (types[0]?.[0] === '$') params[types.shift()] = params.length
+      params.push(...types.map(t => TYPE[t]))
+    }
+
+    // collect result type
+    if (args[0]?.[0] === 'result') result = args.shift().slice(1).map(t => TYPE[t])
+
+    // reuse existing type or register new one
+    let bytes = [TYPE.func, params.length, ...params, result.length, ...result]
+    let idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]))
+
+    if (idx < 0) idx = ctx.type.push(bytes)-1
+    return [idx, params, result]
+  },
+
   // (func $name? ...params result ...body)
   func([_,...body], ctx) {
-    let params=[],
-        result=[], // result types
-        idx=ctx.func.length, // fn index
+    let idx=ctx.func.length, // fn index
         locals=[] // list of local variables
 
     // fn name
@@ -46,20 +70,10 @@ const compile = {
     // export binding
     if (body[0]?.[0] === 'export') compile.export([...body.shift(), ['func', idx]], ctx)
 
-    // collect params
-    while (body[0]?.[0] === 'param') {
-      let [_, ...paramTypes] = body.shift()
-      if (paramTypes[0]?.[0] === '$') params[paramTypes.shift()] = params.length
-      params.push(...paramTypes.map(t => TYPE[t]))
-    }
-
-    // collect result type
-    if (body[0]?.[0] === 'result') result.push(...body.shift().slice(1).map(t => TYPE[t]))
-
-    // reuse existing type or register new one
-    let type = [TYPE.func, params.length, ...params, result.length, ...result]
-    let typeIdx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === type[i]))
-    ctx.func.push([typeIdx >= 0 ? typeIdx : ctx.type.push(type)-1])
+    // register type
+    let [typeIdx, params, result] = compile.type([,['func',...body]], ctx)
+    while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift()
+    ctx.func.push([typeIdx])
 
     // collect locals
     while (body[0]?.[0] === 'local') {
@@ -83,7 +97,7 @@ const compile = {
 
       // FIXME: figure out how to generalize this case
       // i32.store align=n offset=m
-      console.group(op)
+      // console.group(op)
       if (typeOp === 'store') {
         let o = {align: [ALIGN[op]], offset: [0]}, p
         while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = i32(p[1])
@@ -106,8 +120,8 @@ const compile = {
 
       // other immediates are prev instructions, ie. (i32.add a b) → a b i32.add
       args = args.flatMap(instr)
-      console.log(args, op, immediates)
-      console.groupEnd()
+      // console.log(args, op, immediates)
+      // console.groupEnd()
 
       return [...args, OP[op], ...immediates]
     }
@@ -152,7 +166,6 @@ const compile = {
   },
 
   // data
-  // type
   // elem
   // start
   // offset

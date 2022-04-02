@@ -126,25 +126,30 @@ t('wat-compiler: function param + local', () => {
   is(add(22), 42)
 })
 
-t.todo('wat-compiler: call function indirect (table)', () => buffers(`
-  (type $return_i32 (func (result i32)))
-  (table 2 funcref)
-    (elem (i32.const 0) $f1 $f2)
-    (func $f1 (result i32)
-      i32.const 42)
-    (func $f2 (result i32)
-      i32.const 13)
-  (func (export "call_function_indirect") (param $a i32) (result i32)
-    (call_indirect (type $return_i32) (local.get $a))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).call_function_indirect(0)).to.equal(42)
-  expect((await wasm(exp)).call_function_indirect(1)).to.equal(13)
-  expect((await wasm(act)).call_function_indirect(0)).to.equal(42)
-  expect((await wasm(act)).call_function_indirect(1)).to.equal(13)
-}))
+t.todo('wat-compiler: call function indirect (table)', () => {
+  let src = `
+    (type $return_i32 (func (result i32)))
+    (table 2 funcref)
+      (elem (i32.const 0) $f1 $f2)
+      (func $f1 (result i32)
+        i32.const 42)
+      (func $f2 (result i32)
+        i32.const 13)
+    (func (export "call_function_indirect") (param $a i32) (result i32)
+      (call_indirect (type $return_i32) (local.get $a))
+    )
+  `
+  console.log(wat(src))
+
+  // let buffer = compile(parse(src))
+  // is(buffer, wat(src).buffer)
+
+  // const mod = new WebAssembly.Module(buffer)
+  // const instance = new WebAssembly.Instance(mod)
+  // let {call_function_indirect} = instance.exports
+  // is(call_function_indirect(0), 42)
+  // is(call_function_indirect(1), 13)
+})
 
 t.todo('wat-compiler: call function indirect (table) non zero indexed ref types', () => buffers(`
   (type $return_i32 (func (result i32)))

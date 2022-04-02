@@ -75,6 +75,8 @@ Experiments:
 * [wat-compiler](https://github.com/stagas/wat-compiler/)
 * [hackernoon](https://web.archive.org/web/20210215171830/https://hackernoon.com/webassembly-binary-format-explained-part-2-hj1t33yp?source=rss)
 * [webassemblyjs](https://github.com/xtuc/webassemblyjs)
+* [chasm](https://github.com/ColinEberhardt/chasm/blob/master/src/encoding.ts)
+* [WebBS](https://github.com/j-s-n/WebBS)
 
 -->
 
