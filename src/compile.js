@@ -245,8 +245,10 @@ const build = {
   },
 
   // (memory min max shared)
+  // (memory $name min max shared)
   // (memory (import "js" "mem") min max shared)
   memory([_, ...parts], ctx) {
+    if (parts[0][0]==='$') ctx.memory[parts.shift()] = ctx.memory.length
     if (parts[0][0] === 'import') {
       let [imp, ...limits] = parts
       // (import "js" "mem" (memory 1))
@@ -293,6 +295,7 @@ const build = {
 
   // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
   // (import "js" "mem" (memory 1))
+  // (import "js" "mem" (memory $name 1))
   import([_, mod, name, ref], ctx) {
     // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
     // build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
@@ -305,6 +308,7 @@ const build = {
       details = [typeIdx]
     }
     else if (kind==='memory') {
+      if (parts[0][0]==='$') ctx.memory[parts.shift()] = ctx.memory.length
       details = range(parts)
     }
 
