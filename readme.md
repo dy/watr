@@ -1,4 +1,4 @@
-# w&#844;atr
+# wa&#844;tr
 
 Light & fast WAT compiler. See [REPL](https://audio-lab.github.io/watr/repl.html).
 
