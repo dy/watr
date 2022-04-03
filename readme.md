@@ -45,10 +45,10 @@ const {double} = instance.exports
 double(108) // 216
 ```
 
-That can be useful as WASM API layer for hi-level languages, eg. [sonl](https://github.com/audio-lab/sonl).
+That can be useful as WASM API layer for hi-level languages. <!--, eg. [sonl](https://github.com/audio-lab/sonl). -->
 
 <!--
-Main goal is to get very fluent with wasm text and to know it from within.
+Main goal is to get very fluent with wasm text.
 
 Experiments:
 
@@ -81,11 +81,11 @@ Experiments:
 * [WebBS](https://github.com/j-s-n/WebBS)
 * [leb128a](https://github.com/minhducsun2002/leb128/blob/master/src/index.ts)
 * [leb128b](https://github.com/shmishtopher/wasm-LEB128/tree/master/esm)
--->
 
 ## Alternatives
 
 * [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web, industry standard.
 * [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT, limited support.
+-->
 
 <p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>
