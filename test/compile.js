@@ -1,7 +1,7 @@
 import t, { is, ok, same } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
-import Wabt from './lib/wabt.js'
+import Wabt from '../lib/wabt.js'
 
 // examples from https://ontouchstart.pages.dev/chapter_wasm_binary
 
