@@ -247,12 +247,15 @@ const build = {
   },
 
   // (memory min max shared)
-  // FIXME (memory (import "js" "mem") 1)
+  // (memory (import "js" "mem") min max shared)
   memory([_, ...parts], ctx) {
-    let imp = false
-    if (parts[0][0] === 'import') imp = parts.shift()
+    if (parts[0][0] === 'import') {
+      let [imp, ...limits] = parts
+      // (import "js" "mem" (memory 1))
+      return build.import([...imp, ['memory', ...limits]], ctx)
+    }
 
-    if (!imp) ctx.memory.push(range(parts))
+    ctx.memory.push(range(parts))
   },
 
   // (global i32 (i32.const 42))
@@ -274,7 +277,7 @@ const build = {
     if (name) ctx.table[name] = ctx.table.length
 
     let lims = range(args)
-    ctx.table.push([TYPE[args[0]], ...lims])
+    ctx.table.push([TYPE[args.pop()], ...lims])
   },
 
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
@@ -307,7 +310,7 @@ const build = {
       details = range(parts)
     }
 
-    ctx.import.push([...str(mod), ...str(name), KIND[ref[0]], ...details])
+    ctx.import.push([...str(mod), ...str(name), KIND[kind], ...details])
   },
 
   // (data (i32.const 0) "\2a")
@@ -335,8 +338,8 @@ const str = str => {
   return res
 }
 
-// build range/limits sequence
-const range = (args, min=args.shift()) => isNaN(parseInt(args[0])) ? [0, +min] : [1, +min, +args.shift()]
+// build range/limits sequence (non-consuming)
+const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, +min] : [shared==='shared'?3:1, +min, +max]
 
 // direct wiki example https://en.wikipedia.org/wiki/LEB128#Signed_LEB128
 const i32 = (value) => {

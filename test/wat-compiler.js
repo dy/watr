@@ -313,20 +313,25 @@ t('wat-compiler: import memory 1', () => {
   let src = `
     (import "env" "mem" (memory 1))
   `
-
   let buffer = compile(parse(src))
   is(buffer, wat(src).buffer)
 })
 
-t.todo('wat-compiler: import memory 1 2', () => buffers(`
-  (import "env" "mem" (memory 1 2))
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act)))
+t('wat-compiler: import memory 1 2', () => {
+  let src = `
+    (import "env" "mem" (memory 1 2))
+  `
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+})
 
-t.todo('wat-compiler: import memory 1 2 shared', () => buffers(`
-  (import "env" "mem" (memory 1 2 shared))
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act)))
+t('wat-compiler: import memory 1 2 shared', () => {
+  let src = `
+    (import "env" "mem" (memory 1 2 shared))
+  `
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+})
 
 t.todo('wat-compiler: import memory $foo 1 2 shared', () => buffers(`
   (import "env" "mem" (memory $foo 1 2 shared))

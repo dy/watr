@@ -45,7 +45,7 @@ t('compile: (module (memory (import "js" "mem") 1) (func))', t => {
   is(compile(['module', ['memory', ['import', 'js', 'mem'], 1], ['func']]), buffer)
 })
 
-t.only('compile: export mem/func', t => {
+t('compile: export mem/func', t => {
   let buffer = hex`
     00 61 73 6d 01 00 00 00
     01 07 01 60 02 7f 7f 01 7f                    ; type
