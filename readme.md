@@ -2,11 +2,10 @@
 
 Light & fast WAT compiler. See [REPL](https://audio-lab.github.io/watr/repl.html).
 
-&nbsp; | Size | Perf
----|---|---
-watr | |
-wat-compiler | |
-wabt | |
+&nbsp; | watr | wat-compiler | wabt
+---|---|---|---
+Size | | |
+Performance | | |
 
 ## Usage
 
