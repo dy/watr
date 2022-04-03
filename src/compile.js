@@ -41,7 +41,7 @@ const OP = Object.fromEntries([
 ].flatMap((key,i)=>key && [[key,i]])),
 SECTION = {type:1, import:2, func:3, table:4, memory:5, global:6, export:7, start:8, elem:9, code:10, data:11},
 TYPE = {i32:0x7f, i64:0x7e, f32:0x7d, f64:0x7c, void:0x40, func:0x60, funcref:0x70},
-ETYPE = {func: 0, table: 1, memory: 2, global: 3},
+KIND = {func: 0, table: 1, memory: 2, global: 3},
 ALIGN = {
   'i32.load': 4,
   'i64.load': 8,
@@ -96,7 +96,7 @@ export default (nodes) => {
     nodes = remaining
   }
 
-  // console.log(sections)
+  console.log(sections)
   // build binary sections
   for (let name in sections) {
     let items=sections[name], count=items.length
@@ -114,12 +114,12 @@ const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
   // FIXME: handle non-function types
-  type([_, ...args], ctx) {
-    let name = args[0]?.[0]==='$' && args.shift(),
-        params = [],
+  type([_, typeName, decl], ctx) {
+    if (typeName[0]!=='$') decl=typeName, typeName=null
+    let params = [],
         result = [],
-        decl = args[0],
-        kind = decl.shift()
+        kind = decl.shift(),
+        idx, bytes
 
     if (kind==='func') {
       // collect params
@@ -133,21 +133,20 @@ const build = {
       if (decl[0]?.[0] === 'result') result = decl.shift().slice(1).map(t => TYPE[t])
 
       // reuse existing type or register new one
-      let bytes = [TYPE.func, params.length, ...params, result.length, ...result]
+      bytes = [TYPE.func, params.length, ...params, result.length, ...result]
 
-      let idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]))
+      idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]))
       if (idx < 0) idx = ctx.type.push(bytes)-1
-      if (name) ctx.type[name] = idx
-
-      return [idx, params, result]
     }
 
-    err('Unsupported type ' + kind)
+    if (typeName) ctx.type[typeName] = idx
+
+    return [idx, params, result]
   },
 
   // (func $name? ...params result ...body)
   func([_,...body], ctx) {
-    let idx=ctx.func.length, // fn index
+    let idx=(ctx.import.func||0) + ctx.func.length, // fn index comes after impoted fns
         locals=[] // list of local variables
 
     // fn name
@@ -158,7 +157,8 @@ const build = {
 
     // register type
     let [typeIdx, params, result] = build.type([,['func',...body]], ctx)
-    while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift() // FIXME: is there a way to generalize consuming?
+    // FIXME: try merging with build.type: it should be able to consume body
+    while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift()
     ctx.func.push([typeIdx])
 
     // collect locals
@@ -205,7 +205,7 @@ const build = {
         imm = i32(id[0]==='$' ? ctx.func[id] : id)
       }
 
-      // (call_indirect (type i32) idx)
+      // (call_indirect (type $typeName) idx)
       else if (op === 'call_indirect') {
         let type = args.shift(), [_,id] = type
         imm = i32(id[0]==='$' ? ctx.type[id] : id)
@@ -247,18 +247,18 @@ const build = {
   },
 
   // (memory min max shared)
+  // FIXME (memory (import "js" "mem") 1)
   memory([_, ...parts], ctx) {
     let imp = false
-    // (memory (import "js" "mem") 1) → (import "js" "mem" (memory 1))
     if (parts[0][0] === 'import') imp = parts.shift()
 
     if (!imp) ctx.memory.push(range(parts))
-    else {
-      ctx.import.push([...str(imp[1]), ...str(imp[2]), ETYPE.memory, ...range(parts)])
-    }
   },
 
-  // (global i32 (i32.const 42)), (global $id i32 (i32.const 42)), (global $id (mut i32) (i32.const 42))
+  // (global i32 (i32.const 42))
+  // (global $id i32 (i32.const 42))
+  // (global $id (mut i32) (i32.const 42))
+  // FIXME (global $g1 (import "js" "g1") (mut i32))  ;; import from js
   global([_, ...args], ctx) {
     let name = args[0][0]==='$' && args.shift()
     if (name) ctx.global[name] = ctx.global.length
@@ -287,13 +287,27 @@ const build = {
   //  (export "name" (kind $name|idx))
   export([_, name, [kind, idx]], ctx) {
     if (idx[0]==='$') idx = ctx[kind][idx]
-    ctx.export.push([...str(name), ETYPE[kind], idx])
+    ctx.export.push([...str(name), KIND[kind], idx])
   },
 
-  // (import "mod" "name" ref)
+  // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
+  // (import "js" "mem" (memory 1))
   import([_, mod, name, ref], ctx) {
     // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
-    build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
+    // build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
+
+    let details, [kind, ...parts] = ref
+    if (kind==='func') {
+      if (parts[0]?.[0]==='$') ctx.func[parts.shift()] = ctx.import.func||=0
+      ctx.import.func++ // track imported fn count for proper fn indexing
+      let [typeIdx] = build.type([, ['func', ...parts]], ctx)
+      details = [typeIdx]
+    }
+    else if (kind==='memory') {
+      details = range(parts)
+    }
+
+    ctx.import.push([...str(mod), ...str(name), KIND[ref[0]], ...details])
   },
 
   // (data (i32.const 0) "\2a")

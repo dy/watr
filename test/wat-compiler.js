@@ -1,7 +1,7 @@
 import t, { is, ok, same } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
-import Wabt from './lib/wabt.js'
+import {wat} from './lib/util.js'
 
 // wat-compiler
 t('wat-compiler: minimal function', t => {
@@ -289,7 +289,7 @@ t('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
   is(get(), 42)
 })
 
-t.todo('wat-compiler: import function', () => {
+t('wat-compiler: import function', () => {
   let src = `
     (import "math" "add" (func $add (param i32 i32) (result i32)))
     (func (export "call_imported_function") (result i32)
@@ -302,17 +302,21 @@ t.todo('wat-compiler: import function', () => {
   // let {buffer}=wat(src)
 
   const math = { add: (a, b) => a + b }
-  const mod = new WebAssembly.Module(buffer, math)
-  const instance = new WebAssembly.Instance(mod)
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod, {math})
   let {call_imported_function} = instance.exports
 
   is(call_imported_function(), 42)
 })
 
-t.todo('wat-compiler: import memory 1', () => buffers(`
-  (import "env" "mem" (memory 1))
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act)))
+t('wat-compiler: import memory 1', () => {
+  let src = `
+    (import "env" "mem" (memory 1))
+  `
+
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+})
 
 t.todo('wat-compiler: import memory 1 2', () => buffers(`
   (import "env" "mem" (memory 1 2))
@@ -1235,20 +1239,3 @@ t.todo('dummy function', () => buffers(`
 
 
 
-
-let wabt = await Wabt()
-
-function wat (code) {
-  const parsed = wabt.parseWat('inline', code, {})
-  console.time('wabt build')
-  const binary = parsed.toBinary({
-    log: true,
-    canonicalize_lebs: true,
-    relocatable: false,
-    write_debug_names: false,
-  })
-  parsed.destroy()
-  console.timeEnd('wabt build')
-
-  return binary
-}

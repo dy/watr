@@ -12,6 +12,8 @@
 * [ ] Basic parsing instructions from mdn & examples
 * [ ] Benchmark against wabt, wat-compiler
 * [x] Build script
+* [ ] Test: test case with all language features;
+  * [ ] make sure compiler doesn't modify tree
 
 ## Backlog
 

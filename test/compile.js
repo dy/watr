@@ -1,5 +1,6 @@
 import t, { is, ok, same } from 'tst'
 import compile from '../src/compile.js'
+import { hex, wat } from './lib/util.js'
 
 // examples from https://ontouchstart.pages.dev/chapter_wasm_binary
 
@@ -44,7 +45,7 @@ t('compile: (module (memory (import "js" "mem") 1) (func))', t => {
   is(compile(['module', ['memory', ['import', 'js', 'mem'], 1], ['func']]), buffer)
 })
 
-t('compile: export mem/func', t => {
+t.only('compile: export mem/func', t => {
   let buffer = hex`
     00 61 73 6d 01 00 00 00
     01 07 01 60 02 7f 7f 01 7f                    ; type
@@ -70,12 +71,25 @@ t('compile: export mem/func', t => {
 })
 
 
-const hex = (str, ...fields) =>
-  new Uint8Array(
-    String.raw.call(null, str, fields)
-    .trim()
-    .replace(/;[^\n]*/g,'')
-    .split(/[\s\n]+/)
-    .filter(n => n !== '')
-    .map(n => parseInt(n, 16))
-  )
+t.todo('wat-compiler: reexport', () => {
+  let src = `
+    (export "f0" (func 0))
+    (export "f1" (func 1))
+    (import "math" "add" (func (param i32 i32) (result i32)))
+    (func (param i32 i32) (result i32)
+      (i32.sub (local.get 0) (local.get 1))
+    )
+  `
+  console.log(wat(src))
+  // let buffer = compile(parse(src))
+  // is(buffer, wat(src).buffer)
+  let {buffer}=wat(src)
+
+  const math = { add: (a, b) => a + b }
+  const mod = new WebAssembly.Module(buffer)
+  const instance = new WebAssembly.Instance(mod, {math})
+  let {f0, f1} = instance.exports
+
+  console.log(f0(3,1), f1(3,1))
+})
+
