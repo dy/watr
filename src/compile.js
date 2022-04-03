@@ -102,7 +102,8 @@ export default (nodes) => {
     let items=sections[name], count=items.length
     if (!count) continue
     let sizePtr = binary.length+1
-    binary.push(SECTION[name], 0, count)
+    binary.push(SECTION[name], 0)
+    if (name !== 'start') binary.push(count)
     for (let item of items) binary.push(...item)
     binary[sizePtr] = binary.length - sizePtr - 1
   }
@@ -321,8 +322,9 @@ const build = {
     ctx.data.push([0, ...iinit(offset,ctx), ...str(init)])
   },
 
-  start() {
-
+  // (start $main)
+  start([_, name],ctx) {
+    if (!ctx.start.length) ctx.start.push([name[0]==='$' ? ctx.func[name] : name])
   }
 }
 

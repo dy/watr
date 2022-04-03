@@ -321,38 +321,37 @@ t('wat-compiler: import memory $foo 1 2 shared', () => run(`
 `, {env:{mem: new WebAssembly.Memory({initial:1, maximum: 1, shared: 1})}}))
 
 
-t.todo('wat-compiler: set a start function', () => buffers(`
-  (global $answer (mut i32) (i32.const 42))
-  (start $main)
-  (func $main
-    (global.set $answer (i32.const 666))
-  )
-  (func (export "get") (result i32)
-    (global.get $answer)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).get()).to.equal(666)
-  expect((await wasm(act)).get()).to.equal(666)
-}))
-
-t.todo('wat-compiler: if else', () => buffers(`
-  (func $dummy)
-  (func (export "foo") (param i32) (result i32)
-    (if (result i32) (local.get 0)
-      (then (call $dummy) (i32.const 1))
-      (else (call $dummy) (i32.const 0))
+t('wat-compiler: set a start function', () => {
+  let src = `
+    (global $answer (mut i32) (i32.const 42))
+    (start $main)
+    (func $main
+      (global.set $answer (i32.const 666))
     )
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).foo(0)).to.equal(0)
-  expect((await wasm(exp)).foo(1)).to.equal(1)
-  expect((await wasm(act)).foo(0)).to.equal(0)
-  expect((await wasm(act)).foo(1)).to.equal(1)
-}))
+    (func (export "get") (result i32)
+      (global.get $answer)
+    )
+  `
+  let {get} = run(src).exports
+
+  is(get(), 666)
+})
+
+t.todo('wat-compiler: if else', () => {
+  let src = `
+    (func $dummy)
+    (func (export "foo") (param i32) (result i32)
+      (if (result i32) (local.get 0)
+        (then (call $dummy) (i32.const 1))
+        (else (call $dummy) (i32.const 0))
+      )
+    )
+  `
+  wat(src)
+  let {foo} = run(src).exports
+  is(foo(0), 0)
+  is(foo(1), 1)
+})
 
 t.todo('wat-compiler: block', () => buffers(`
   (func (export "answer") (result i32)
