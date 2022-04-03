@@ -229,11 +229,9 @@ const build = {
 
       // (a b (c))
       else if (Array.isArray(op)) {
-        op = args.shift()
-        let imm = immediates(op)
-        let opInstr = op.flatMap(arg => instr(arg))
-        opInstr.push(...imm)
-        return opInstr
+        [...args] = args.shift() // FIXME: this spread can be solved more elegantly somewhere
+        let imm = immediates(args)
+        return [...args.flatMap(instr), ...imm]
       }
 
       err('Unknown ' + op)

@@ -3,131 +3,91 @@ import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import {wat} from './lib/util.js'
 
+// run test case against wabt, return instance
+const run = (src, importObj) => {
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+  const mod = new WebAssembly.Module(buffer)
+  return new WebAssembly.Instance(mod, importObj)
+}
+
 // wat-compiler
 t('wat-compiler: minimal function', t => {
-  let src = '(module (func (export "answer") (result i32) (i32.const 42)))'
-
-  console.time('watr')
-  let tree = parse(src)
-  compile(tree)
-  console.timeEnd('watr')
-
-  is(compile(parse(src)), wat(src).buffer)
+  run('(module (func (export "answer") (result i32) (i32.const 42)))')
 })
 
 t('wat-compiler: function with 1 param', t => {
-  let src = '(func (export "answer") (param i32) (result i32) (local.get 0))'
-  // console.log(compile(parse(src)),wat(src))
-  is(compile(parse(src)), wat(src).buffer)
+  run('(func (export "answer") (param i32) (result i32) (local.get 0))')
 })
 
 t('wat-compiler: function with 1 param', () => {
-  let src = `
+  let {answer} = run(`
     (func (export "answer") (param i32) (result i32) (local.get 0))
-  `
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {answer} = instance.exports
+  `).exports
   is(answer(42), 42)
 })
 
 t('wat-compiler: function with 2 params', () => {
-  let src = `
+  let {answer} = run(`
     (func (export "answer") (param i32 i32) (result i32)
       (local.get 0)
       (local.get 1)
       (i32.add)
       )
-  `
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {answer} = instance.exports
+  `).exports
   is(answer(20,22), 42)
 })
 
 t('wat-compiler: function with 2 params 2 results', () => {
-  let src = `
+  let {answer} = run(`
     (func (export "answer") (param i32 i32) (result i32 i32)
       (local.get 0)
       (local.get 1)
       (i32.add)
       (i32.const 666)
       )
-  `
+  `).exports
 
-  let buffer = compile(parse(src))
-  // console.log(wat(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {answer} = instance.exports
   is(answer(20,22), [42,666])
 })
 
 t('wat-compiler: named function named param', () => {
-  let src = `
+  let {dbl} = run(`
     (func $dbl (export "dbl") (param $a i32) (result i32)
       (i32.add (local.get $a) (local.get $a))
     )
-  `
+  `).exports
 
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {dbl} = instance.exports
   is(dbl(21), 42)
 })
 
 
 t('wat-compiler: call function direct', () => {
-  let src = `
+  let {call_function_direct} = run(`
   (func $dbl (param $a i32) (result i32)
     (i32.add (local.get $a) (local.get $a))
   )
   (func (export "call_function_direct") (param $a i32) (result i32)
     (call $dbl (local.get $a))
   )
-  `
-
-  let buffer = compile(parse(src))
-  // console.log(wat(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {call_function_direct} = instance.exports
+  `).exports
   is(call_function_direct(333), 666)
 })
 
 t('wat-compiler: function param + local', () => {
-  let src = `
+  let {add} = run(`
     (func (export "add") (param $a i32) (result i32)
       (local $b i32)
       (local.tee $b (i32.const 20))
       (i32.add (local.get $a))
     )
-  `
+  `).exports
 
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {add} = instance.exports
   is(add(22), 42)
 })
 
 t('wat-compiler: call function indirect (table)', () => {
-  let src = `
+  let {call_function_indirect} = run(`
     (type $return_i32 (func (result i32)))
     (table 2 funcref)
       (elem (i32.const 0) $f1 $f2)
@@ -138,23 +98,14 @@ t('wat-compiler: call function indirect (table)', () => {
     (func (export "call_function_indirect") (param $a i32) (result i32)
       (call_indirect (type $return_i32) (local.get $a))
     )
-  `
+  `).exports
 
-  console.time('watr build')
-  let buffer = compile(parse(src))
-  console.timeEnd('watr build')
-
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {call_function_indirect} = instance.exports
   is(call_function_indirect(0), 42)
   is(call_function_indirect(1), 13)
 })
 
 t('wat-compiler: call function indirect (table) non zero indexed ref types', () => {
-  let src = `
+  let {call_function_indirect} = run(`
     (type $return_i32 (func (result i32)))
     (type $return_i64 (func (result i64)))
     (table 2 funcref)
@@ -168,104 +119,69 @@ t('wat-compiler: call function indirect (table) non zero indexed ref types', () 
     (func (export "call_function_indirect") (param $a i32) (result i32)
       (call_indirect (type $return_i32) (local.get $a))
     )
-  `
+  `).exports
 
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {call_function_indirect} = instance.exports
   is(call_function_indirect(0), 42)
   is(call_function_indirect(1), 13)
 })
 
 t('wat-compiler: 1 global const (immutable)', () => {
-  let src = `
+  let {get} = run(`
     (global $answer i32 (i32.const 42))
     (func (export "get") (result i32)
       (global.get $answer)
     )
-  `
+  `).exports
 
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {get} = instance.exports
   is(get(), 42)
 })
 
 t('wat-compiler: 1 global var (mut)', () => {
-  let src = `
+  let {get} = run(`
     (global $answer (mut i32) (i32.const 42))
     (func (export "get") (result i32)
       (global.get $answer)
     )
-  `
+  `).exports
 
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {get} = instance.exports
   is(get(), 42)
 })
 
 t('wat-compiler: 1 global var (mut) + mutate', () => {
-  let src = `
+  let {get} = run(`
     (global $answer (mut i32) (i32.const 42))
     (func (export "get") (result i32)
       (global.set $answer (i32.const 777))
       (global.get $answer)
     )
-  `
+  `).exports
 
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
-
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {get} = instance.exports
   is(get(), 777)
 })
 
 t('wat-compiler: memory.grow', () => {
-  let src = `
+  run(`
     (memory 1)
     (func (export "main") (result i32)
       (memory.grow (i32.const 2))
     )
-  `
-
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
+  `)
 })
 
 t('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => {
-  let src = String.raw`
+  let {get} = run(String.raw`
     (memory 1)
     (data (i32.const 0) "\2a")
     (func (export "get") (result i32)
       (i32.load (i32.const 0))
     )
-  `
-  console.time('watr build')
-  let buffer = compile(parse(src))
-  console.timeEnd('watr build')
-  is(buffer, wat(src).buffer)
-  // let {buffer}=wat(src)
+  `).exports
 
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {get} = instance.exports
   is(get(), 42)
 })
 
 t('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
-  let src = String.raw`
+  let {get} = run(String.raw`
     (memory 1 2)
     (data (i32.const 0) "\2a")
     (func (export "get") (result i32)
@@ -276,67 +192,43 @@ t('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
       i32.const 0
       i32.load offset=0 align=4
     )
-  `
-  console.time('watr build')
-  let buffer = compile(parse(src))
-  console.timeEnd('watr build')
-  is(buffer, wat(src).buffer)
-  // let {buffer}=wat(src)
+  `).exports
 
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod)
-  let {get} = instance.exports
   is(get(), 42)
 })
 
 t('wat-compiler: import function', () => {
-  let src = `
+  let {call_imported_function} = run(`
     (import "math" "add" (func $add (param i32 i32) (result i32)))
     (func (export "call_imported_function") (result i32)
       (call $add (i32.const 20) (i32.const 22))
     )
-  `
-
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
-  // let {buffer}=wat(src)
-
-  const math = { add: (a, b) => a + b }
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod, {math})
-  let {call_imported_function} = instance.exports
+  `, {math:{ add: (a, b) => a + b }}).exports
 
   is(call_imported_function(), 42)
 })
 
 t('wat-compiler: import memory 1', () => {
-  let src = `
+  run(`
     (import "env" "mem" (memory 1))
-  `
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
+  `, {env: {mem: new WebAssembly.Memory({initial:1})}})
 })
 
 t('wat-compiler: import memory 1 2', () => {
-  let src = `
+  run(`
     (import "env" "mem" (memory 1 2))
-  `
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
+  `, {env: {mem: new WebAssembly.Memory({initial:1, maximum:1})}})
 })
 
 t('wat-compiler: import memory 1 2 shared', () => {
-  let src = `
+  run(`
     (import "env" "mem" (memory 1 2 shared))
-  `
-  let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
+  `, {env: {mem: new WebAssembly.Memory({initial:1, maximum:1, shared:1})}})
 })
 
-t.todo('wat-compiler: import memory $foo 1 2 shared', () => buffers(`
+t.only('wat-compiler: import memory $foo 1 2 shared', () => run(`
   (import "env" "mem" (memory $foo 1 2 shared))
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act)))
+`, {env:{mem: new WebAssembly.Memory({initial:1, maximum: 1, shared: 1})}}))
 
 t.todo('wat-compiler: set a start function', () => buffers(`
   (global $answer (mut i32) (i32.const 42))
