@@ -71,8 +71,7 @@ t('compile: export mem/func', t => {
   new WebAssembly.Module(buffer)
 })
 
-
-t.todo('compiler: reexport', () => {
+t('compiler: reexport', () => {
   let src = `
     (export "f0" (func 0))
     (export "f1" (func 1))
@@ -81,17 +80,10 @@ t.todo('compiler: reexport', () => {
       (i32.sub (local.get 0) (local.get 1))
     )
   `
-  console.log(wat(src))
-  // let buffer = compile(parse(src))
-  // is(buffer, wat(src).buffer)
-  let {buffer}=wat(src)
 
-  const math = { add: (a, b) => a + b }
-  const mod = new WebAssembly.Module(buffer)
-  const instance = new WebAssembly.Instance(mod, {math})
-  let {f0, f1} = instance.exports
-
-  console.log(f0(3,1), f1(3,1))
+  let {f0, f1} = run(src, {math:{add(a,b){return a+b}}}).exports
+  is(f0(3,1), 4)
+  is(f1(3,1), 2)
 })
 
 t('compiler: memory $foo (import "a" "b" ) 1 2 shared', () => {
@@ -347,7 +339,7 @@ t.todo('wat-compiler: if else', () => {
       )
     )
   `
-  wat(src)
+  console.log(wat(src))
   let {foo} = run(src).exports
   is(foo(0), 0)
   is(foo(1), 1)
@@ -900,26 +892,7 @@ e2e.forEach(name => {
 
 
 
-t.todo(`1 function
-      0 params, 1 results [i32]
-      0 locals
-      not exported`, () => buffers(`
-  (func (result i32)
-    (i32.const 42)
-  )
-`, mod => mod
-
-  .func('value', [], ['i32'],
-    [],
-    [...i32.const(42)],
-    )
-
-).then(([exp,act]) => hexAssertEqual(exp,act)))
-
-t.todo(`2 functions
-      a, b: 0 params, 1 results [i32]
-      a, b: 0 locals
-      a, b: exported`, () => buffers(`
+t.todo(`export 2 funcs`, () => buffers(`
   (func (export "value") (result i32)
     (i32.const 42)
   )
@@ -939,11 +912,7 @@ t.todo(`2 functions
 
 ).then(([exp,act]) => hexAssertEqual(exp,act)))
 
-t.todo(`2 functions
-      a, b: 0 params, 1 results [i32]
-      a, b: 0 locals
-      a: exported
-      b: not exported`, () => buffers(`
+t.todo(`exported & unexported function`, () => buffers(`
   (func (export "value") (result i32)
     (i32.const 42)
   )
@@ -963,52 +932,7 @@ t.todo(`2 functions
 
 ).then(([exp,act]) => hexAssertEqual(exp,act)))
 
-t.todo(`2 functions
-          a: 0 params, 1 results [i32],
-          b: 1 params [i32], 1 results [i32]
-      a, b: 0 locals
-      a, b: exported`, () => buffers(`
-  (func (export "value") (result i32)
-    (i32.const 42)
-  )
-  (func (export "another") (param i32) (result i32)
-    (i32.const 666)
-  )
-`, mod => mod
-
-  .func('value', [], ['i32'],
-    [],
-    [...i32.const(42)],
-    true)
-  .func('another', ['i32'], ['i32'],
-    [],
-    [...i32.const(666)],
-    true)
-
-).then(([exp,act]) => hexAssertEqual(exp,act)))
-
-
-t.todo(`1 function
-      0 params, 1 results [i32]
-      1 locals [i32]
-      exported`, () => buffers(`
-  (func (export "value") (result i32)
-    (local i32)
-    (i32.const 42)
-  )
-`, mod => mod
-
-  .func('value', [], ['i32'],
-    ['i32'],
-    [...i32.const(42)],
-    true)
-
-).then(([exp,act]) => hexAssertEqual(exp,act)))
-
-t.todo(`1 function
-      0 params, 1 results [i32]
-      2 locals [i32, i64] (different)
-      exported`, () => buffers(`
+t.todo(`2 different locals`, () => buffers(`
   (func (export "value") (result i32)
     (local i32)
     (local i64)
@@ -1023,10 +947,7 @@ t.todo(`1 function
 
 ).then(([exp,act]) => hexAssertEqual(exp,act)))
 
-t.todo(`1 function
-      0 params, 1 results [i32]
-      3 locals [i32, i64, i32] (disjointed)
-      exported`, () => buffers(`
+t.todo(`3 locals [i32, i64, i32] (disjointed)`, () => buffers(`
   (func (export "value") (result i32)
     (local i32)
     (local i64)
@@ -1042,10 +963,7 @@ t.todo(`1 function
 
 ).then(([exp,act]) => hexAssertEqual(exp,act)))
 
-t.todo(`1 function
-      0 params, 1 results [i32]
-      3 locals [i32, i32, i64] (joined)
-      exported`, () => buffers(`
+t.todo(`3 locals [i32, i32, i64] (joined)`, () => buffers(`
   (func (export "value") (result i32)
     (local i32)
     (local i32)
@@ -1061,8 +979,6 @@ t.todo(`1 function
 
 ).then(([exp,act]) => hexAssertEqual(exp,act)))
 
-
-//
 t.todo('call function indirect (table)', () => buffers(`
   (type $return_i32 (func (result i32)))
   (table 2 funcref)
@@ -1160,77 +1076,6 @@ t.todo('call function indirect (table) non zero indexed ref types', () => buffer
   expect((await wasm(act)).call_function_indirect(0)).to.equal(42)
   expect((await wasm(act)).call_function_indirect(1)).to.equal(13)
 }))
-
-
-
-//
-t.todo('import memory min 3', () => buffers(`
-  (import "env" "mem" (memory 3))
-`, mod => mod
-
-  .import('memory', 'env.mem', 'env', 'mem', [3])
-
-)
-.then(([exp,act]) => hexAssertEqual(exp,act)))
-
-//
-t.todo('import memory min 3 max 3', () => buffers(`
-  (import "env" "mem" (memory 3 3))
-`, mod => mod
-
-  .import('memory', 'env.mem', 'env', 'mem', [3,3])
-
-)
-.then(([exp,act]) => hexAssertEqual(exp,act)))
-
-t.todo('dummy function', () => buffers(`
-  (memory 1)
-  (func $dummy)
-  (func (export "store") (param i32)
-    (if (result i32) (local.get 0)
-      (then (call $dummy) (i32.const 1))
-      (else (call $dummy) (i32.const 0))
-    )
-    (i32.const 2)
-    (i32.store)
-  )
-`, mod => mod
-
-  .memory(null, 1)
-
-  .func('dummy')
-
-  .func('store', ['i32'], [],
-    [],
-    [
-      ...INSTR.if([INSTR.type.i32()], [local.get(0)]),
-        ...INSTR.call(mod.getFunc('dummy').idx),
-        ...i32.const(1),
-      ...INSTR.else(),
-        ...INSTR.call(mod.getFunc('dummy').idx),
-        ...i32.const(0),
-      ...INSTR.end(),
-
-      ...i32.const(2),
-      ...i32.store([2,0]),
-    ]
-    , true)
-
-)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).store()).to.equal(undefined)
-  expect((await wasm(act)).store()).to.equal(undefined)
-}))
-
-
-
-
-
-
-
-
-
 
 
 

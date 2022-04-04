@@ -216,6 +216,30 @@ const build = {
       // (memory.grow $idx?)
       else if (op === 'memory.grow') imm = [0]
 
+      //
+      // (if (result i32)? (local.get 0)
+      //   (then a b)
+      //   (else a b)?
+      // )
+      //
+      // i32.const 0
+      // (if
+      //   (then a b c )
+      //   (else a b c)?
+      // )
+      //
+      // (if (i32.const 1) (br $exit))
+      //
+      // i32.eq
+      // if (result i32 i64)?
+      //   i32.const 1
+      // else
+      //   $body
+      // end
+      else if (op === 'if') {
+        // let
+      }
+
       imm.unshift(OP[op])
 
       return imm
@@ -235,7 +259,7 @@ const build = {
         return [...args.flatMap(instr), ...imm]
       }
 
-      err('Unknown ' + op)
+      err(`Unknown instruction \`${op}\``)
     }
 
     let code = []
@@ -273,6 +297,7 @@ const build = {
   },
 
   // (table 1 2? funcref)
+  // (table $name 1 2? funcref)
   table([_, ...args], ctx) {
     let name = args[0][0]==='$' && args.shift()
     if (name) ctx.table[name] = ctx.table.length
@@ -284,7 +309,6 @@ const build = {
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
   elem([_, offset, ...elems], ctx) {
     const tableIdx = 0 // FIXME: table index can be defined
-
     ctx.elem.push([tableIdx, ...iinit(offset, ctx), elems.length, ...elems.map(el => el[0]==='$' ? ctx.func[el] : +el)])
   },
 
