@@ -47,6 +47,43 @@ double(108) // 216
 
 That can be useful as WASM API layer for hi-level languages. <!--, eg. [sonl](https://github.com/audio-lab/sonl). -->
 
+## Limitations
+
+Ambiguous syntax is intentionally prohibited.
+
+```wast
+;; ✘
+(func (result i32)
+  i32.const 1
+  drop
+  i32.const 0
+  i32.load offset=0 align=4
+)
+
+;; ✔
+(func (result i32)
+  (i32.const 1)
+  (drop)
+  (i32.const 0)
+  (i32.load offset=0 align=4)
+)
+```
+
+```wast
+;; ✘
+(local.get 0)
+if (result i32)
+  (i32.const 1)
+end
+
+;; ✘
+(local.get 0)
+(if (result i32) (i32.const 1))
+
+;; ✔
+(if (result i32) (local.get 0) (i32.const 1))
+```
+
 <!--
 Main goal is to get very fluent with wasm text.
 
