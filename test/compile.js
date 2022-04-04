@@ -330,7 +330,7 @@ t('wat-compiler: set a start function', () => {
 })
 
 t.todo('wat-compiler: if else', () => {
-  let src = `
+  let src1 = `
     (func $dummy)
     (func (export "foo") (param i32) (result i32)
       (if (result i32) (local.get 0)
@@ -338,8 +338,20 @@ t.todo('wat-compiler: if else', () => {
         (else (call $dummy) (i32.const 0))
       )
     )
+  `, src2 = `
+    (func $dummy)
+    (func (export "foo") (param i32) (result i32)
+      (local.get 0)
+      if (result i32)
+        (call $dummy)
+        (i32.const 1)
+      else
+        (call $dummy)
+        (i32.const 0)
+      end
+    )
   `
-  console.log(wat(src))
+  is(wat(src1).buffer, wat(src2).buffer)
   let {foo} = run(src).exports
   is(foo(0), 0)
   is(foo(1), 1)
@@ -1112,7 +1124,9 @@ function wat (code) {
 // run test case against wabt, return instance
 // FIXME: rename to something more meaningful? testCase?
 const run = (src, importObj) => {
+  console.time('watr')
   let buffer = compile(parse(src))
+  console.timeEnd('watr')
   is(buffer, wat(src).buffer)
   const mod = new WebAssembly.Module(buffer)
   return new WebAssembly.Instance(mod, importObj)

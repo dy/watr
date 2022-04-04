@@ -1,5 +1,5 @@
 // ref: https://github.com/stagas/wat-compiler/blob/main/lib/const.js
-const OP = Object.fromEntries([
+const OP = [
   'unreachable', 'nop', 'block', 'loop', 'if', 'else', ,,,,,
 
   'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', ,,,,,,,,
@@ -38,7 +38,7 @@ const OP = Object.fromEntries([
   'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
 
   'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64',
-].flatMap((key,i)=>key && [[key,i]])),
+],
 SECTION = {type:1, import:2, func:3, table:4, memory:5, global:6, export:7, start:8, elem:9, code:10, data:11},
 TYPE = {i32:0x7f, i64:0x7e, f32:0x7d, f64:0x7c, void:0x40, func:0x60, funcref:0x70},
 KIND = {func: 0, table: 1, memory: 2, global: 3},
@@ -70,9 +70,9 @@ ALIGN = {
   'i64.store8': 1,
   'i64.store16': 2,
   'i64.store32': 4,
-},
+}
 
-END = 0x0b
+OP.map((op,i)=>OP[op]=i) // init op names
 
 // convert wat tree to wasm binary
 export default (nodes) => {
@@ -96,7 +96,7 @@ export default (nodes) => {
     nodes = remaining
   }
 
-  console.log(sections)
+  // console.log(sections)
   // build binary sections
   for (let name in sections) {
     let items=sections[name], count=items.length
@@ -172,11 +172,12 @@ const build = {
     }
 
     // consume instruction with immediates
+    // FIXME: what if we unwrap groups into inline commands? Or the vv - make inline commands into groups
     const immediates = (args) => {
       let op = args.shift(), imm = []
 
       // FIXME: make faster lookup.
-      // FIXME: Maybe make use of iinit also
+      // FIXME: Maybe make use of iinit also?
       // i32.const 123
       if (op.endsWith('const')) imm = i32(args.shift())
 
@@ -216,19 +217,10 @@ const build = {
       // (memory.grow $idx?)
       else if (op === 'memory.grow') imm = [0]
 
-      //
       // (if (result i32)? (local.get 0)
       //   (then a b)
       //   (else a b)?
       // )
-      //
-      // i32.const 0
-      // (if
-      //   (then a b c )
-      //   (else a b c)?
-      // )
-      //
-      // (if (i32.const 1) (br $exit))
       //
       // i32.eq
       // if (result i32 i64)?
@@ -265,8 +257,13 @@ const build = {
     let code = []
     while (body.length) code.push(...instr(body))
 
+    // flat ops loop would look like
+    // for (i=0; i<body.length; i++) {
+    //   body[i]
+    // }
+
     // FIXME: smush local type defs
-    ctx.code.push([code.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...code, END])
+    ctx.code.push([code.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...code, OP.end])
   },
 
   // (memory min max shared)
@@ -354,7 +351,7 @@ const build = {
 
 // (i32.const 0) - instantiation time initializer
 const iinit = ([op, literal], ctx) =>
-  [OP[op], ...i32(literal[0] === '$' ? ctx.global[literal] : literal), END]
+  [OP[op], ...i32(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
 
 // build string binary
 const str = str => {
