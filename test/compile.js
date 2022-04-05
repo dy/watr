@@ -367,7 +367,7 @@ t('wat-compiler: if else', () => {
     )
   `
   // these are identical parts, but we restrict only lisp syntax src1
-  console.log(wat(src1))
+  // console.log(wat(src1))
   is(wat(src1).buffer, wat(src2).buffer)
   let {foo} = run(src1).exports
   is(foo(0), 0)
@@ -1166,9 +1166,10 @@ function wat (code, config) {
 // run test case against wabt, return instance
 // FIXME: rename to something more meaningful? testCase?
 const run = (src, importObj) => {
-  console.time('watr')
-  let buffer = compile(parse(src))
-  console.timeEnd('watr')
+  let tree = parse(src)
+  const freeze = node => Array.isArray(node) && (Object.freeze(node), node.forEach(freeze))
+  freeze(tree)
+  let buffer = compile(tree)
   is(buffer, wat(src).buffer)
   const mod = new WebAssembly.Module(buffer)
   return new WebAssembly.Instance(mod, importObj)

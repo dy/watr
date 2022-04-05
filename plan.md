@@ -8,12 +8,12 @@
 * [x] Avoid duplicating function signatures
 * [ ] Compilation samples from wat-compiler
 * [ ] Add all examples tests - stagas deleted failing table example, not sure if can reproduce it
-* [ ] Normalize tree in parser, not in compiler - keep compiler small & fast
+* [x] Normalize tree in parser, not in compiler - keep compiler small & fast
 * [ ] Basic parsing instructions from mdn & examples
-* [ ] Benchmark against wabt, wat-compiler
+* [x] Benchmark against wabt, wat-compiler
 * [x] Build script
-* [ ] Test: test case with all language features;
-  * [ ] make sure compiler doesn't modify tree
+* [x] Test: assert function;
+* [x] make sure compiler doesn't modify tree
 
 ## Backlog
 

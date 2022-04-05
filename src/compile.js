@@ -118,18 +118,18 @@ const build = {
   // FIXME: handle non-function types
   type([, typeName, decl], ctx) {
     if (typeName[0]!=='$') decl=typeName, typeName=null
-    let params = [], result = [], kind = decl.shift(), idx, bytes
+    let params = [], result = [], [kind,...sig] = decl, idx, bytes
 
     if (kind==='func') {
       // collect params
-      while (decl[0]?.[0] === 'param') {
-        let [, ...types] = decl.shift()
+      while (sig[0]?.[0] === 'param') {
+        let [, ...types] = sig.shift()
         if (types[0]?.[0] === '$') params[types.shift()] = params.length
         params.push(...types.map(t => TYPE[t]))
       }
 
       // collect result type
-      if (decl[0]?.[0] === 'result') result = decl.shift().slice(1).map(t => TYPE[t])
+      if (sig[0]?.[0] === 'result') result = sig.shift().slice(1).map(t => TYPE[t])
 
       // reuse existing type or register new one
       bytes = [TYPE.func, params.length, ...params, result.length, ...result]
