@@ -1,6 +1,8 @@
 # watr
 
-Light & fast bare minimum WAT compiler. See [REPL](https://audio-lab.github.io/watr/repl.html).
+Light & fast bare minimum WAT compiler.
+
+<!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
 &nbsp; | watr | wat-compiler | wabt
 ---|---|---|---
