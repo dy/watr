@@ -210,12 +210,11 @@ const build = {
           let [,type] = stack[0][0]==='result' ? stack.shift() : [,'void']
           imm=[TYPE[type]]
           argc = 0, args.push(...instr(stack.shift()))
-
           let body
           if (stack[0][0]==='then') [,...body] = stack.shift(); else body = stack
           while (body.length) imm.push(...instr(body.shift()))
 
-          if (stack[0][0]==='else') {
+          if (stack[0]?.[0]==='else') {
             [,...body] = stack.shift()
             imm.push(OP.else, ...body.flatMap(instr))
           }
@@ -223,8 +222,11 @@ const build = {
           imm.push(OP.end)
         }
 
-        // (drop arg), (return arg)
-        else if (opCode==0x1a || opCode==0x0f) { argc = 1 }
+        // (drop arg), (return arg), (end arg)
+        else if (opCode==0x1a || opCode==0x0f || opCode==0x0b) { argc = 1 }
+
+        // (select a b cond)
+        else if (opCode==0x1b) { argc = 3 }
 
         // (block ...), (loop ...)
         else if (opCode==2||opCode==3) {
@@ -240,7 +242,9 @@ const build = {
         // (br $label result?)
         // (br_if $label cond result?)
         else if (opCode==0x0c||opCode==0x0d) {
-          // br index points to depth level or indicates how many levels to pop out (same value)
+          // br index indicates how callstack items to skip
+          // FIXME: callstack must include if/else
+          console.log(depth, id)
           imm.push(id ? depth.value-1-depth[id] : +stack.shift())
           argc = (opCode==0x0d ? 1 + (stack.length > 1) : !!stack.length)
         }

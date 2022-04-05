@@ -374,7 +374,7 @@ t('wat-compiler: if else', () => {
   is(foo(1), 1)
 })
 
-t('bench: if', () => {
+t.skip('bench: if', () => {
   let src = `(func $dummy)
     (func (export "foo") (param i32) (result i32)
       (if (result i32) (local.get 0)
@@ -628,62 +628,59 @@ t('wat-compiler: while', () => {
   is(main(), 1)
 })
 
-t.todo('wat-compiler: select', () => buffers(`
-  (func (export "main") (result i32)
-    (select (loop (result i32) (i32.const 1)) (i32.const 2) (i32.const 3))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(1)
-  expect((await wasm(act)).main()).to.equal(1)
-}))
-
-t.todo('wat-compiler: select mid', () => buffers(`
-  (func (export "main") (result i32)
-    (select (i32.const 2) (loop (result i32) (i32.const 1)) (i32.const 3))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(2)
-  expect((await wasm(act)).main()).to.equal(2)
-}))
-
-t.todo('wat-compiler: block labels', () => buffers(`
-  (func (export "main") (result i32)
-    (block $exit (result i32)
-      (br $exit (i32.const 1))
-      (i32.const 0)
+t('wat-compiler: select', () => {
+  let src = `
+    (func (export "main") (result i32)
+      (select (loop (result i32) (i32.const 1)) (i32.const 2) (i32.const 3))
     )
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(1)
-  expect((await wasm(act)).main()).to.equal(1)
-}))
+  `
+  let {main} = run(src).exports
+  is(main(), 1)
+})
 
-t.todo('wat-compiler: loop labels', () => buffers(`
-  (func (export "main") (result i32)
-    (local $i i32)
-    (local.set $i (i32.const 0))
-    (block $exit (result i32)
-      (loop $cont (result i32)
-        (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (if (i32.eq (local.get $i) (i32.const 5))
-          (then (br $exit (local.get $i)))
-        )
-        (br $cont)
+t('wat-compiler: select mid', () => {
+  let src = `
+    (func (export "main") (result i32)
+      (select (i32.const 2) (loop (result i32) (i32.const 1)) (i32.const 3))
+    )
+  `
+  let {main} = run(src).exports
+  is(main(), 2)
+})
+
+t('wat-compiler: block labels', () => {
+  let src = `
+    (func (export "main") (result i32)
+      (block $exit (result i32)
+        (br $exit (i32.const 1))
+        (i32.const 0)
       )
     )
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(5)
-  expect((await wasm(act)).main()).to.equal(5)
-}))
+  `
+  let {main} = run(src).exports
+  is(main(), 1)
+})
+
+t.todo('wat-compiler: loop labels', () => {
+  let src = `
+    (func (export "main") (result i32)
+      (local $i i32)
+      (local.set $i (i32.const 0))
+      (block $exit (result i32)
+        (loop $cont (result i32)
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (if (i32.eq (local.get $i) (i32.const 5))
+            (then (br $exit (local.get $i)))
+          )
+          (br $cont)
+        )
+      )
+    )
+  `
+  console.log(wat(src))
+  let {main} = run(src).exports
+  is(main(), 5)
+})
 
 t.todo('wat-compiler: loop labels 2', () => buffers(`
   (func (export "main") (result i32)
