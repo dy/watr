@@ -398,13 +398,14 @@ t.skip('bench: if', () => {
   console.timeEnd('wabt')
 })
 
-t.todo('wat-compiler: block', () => {
-  let {answer} = run(`
+t('wat-compiler: block', () => {
+  let src = `
     (func (export "answer") (result i32)
       (block (nop))
       (block (result i32) (i32.const 42))
     )
-  `)
+  `
+  let {answer} = run(src).exports
   is(answer(), 42)
   is(answer(), 42)
 })

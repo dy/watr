@@ -1,6 +1,5 @@
 // ref: https://github.com/stagas/wat-compiler/blob/main/lib/const.js
 // NOTE: squashing into a string doesn't save up gzipped size
-// FIXME: reorganize by groups to better detect signature in func compiler
 const OP = [
   'unreachable', 'nop', 'block', 'loop', 'if', 'else', ,,,,,
   'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', ,,,,,,,,
@@ -141,6 +140,10 @@ const build = {
 
       let opCode = OP[op], argc=0, args=[], imm=[]
 
+      // NOTE: we could reorganize ops by groups and detect signature as `op in STORE`
+      // but numeric comparison is faster than generic hash lookup
+      // FIXME: we often use OP.end or alike: what if we had list of global constants?
+
       // (i32.store align=n offset=m at value)
       if (opCode>=40&&opCode<=62) {
         // FIXME: figure out point in Math.log2 aligns
@@ -199,13 +202,13 @@ const build = {
       //   (else a b)?
       // )
       else if (opCode==4) {
-        let [,type] = stack[0][0]==='result' ? stack.shift() : []
-        argc = 0, args.push(...instr(stack.shift()))
+        let [,type] = stack[0][0]==='result' ? stack.shift() : [,'void']
         imm=[TYPE[type]]
+        argc = 0, args.push(...instr(stack.shift()))
 
         let body
         if (stack[0][0]==='then') [,...body] = stack.shift(); else body = stack
-        imm.push(...body.flatMap(instr))
+        while (body.length) imm.push(...instr(body.shift()))
 
         if (stack[0][0]==='else') {
           [,...body] = stack.shift()
@@ -215,11 +218,23 @@ const build = {
         imm.push(OP.end)
       }
 
-      // (drop)
+      // (drop arg)
       else if (opCode==0x1a) { argc = 1 }
+
+      // (block ...)
+      else if (opCode==2) {
+        let label = stack[0]?.[0]==='$' && stack.shift()
+        let [,type] = stack[0]?.[0]==='result' ? stack.shift() : [,'void']
+        imm=[TYPE[type]]
+        while (stack.length) imm.push(...instr(stack.shift()))
+        imm.push(OP.end)
+      }
+
+      else if (opCode!=null);
 
       else err(`Unknown instruction \`${op}\``)
 
+      // consume arguments
       if (stack.length < argc) err(`Stack arguments are not supported at \`${op}\``)
       while (argc--) args.push(...instr(stack.shift()))
       if (stack.length) err(`Too many arguments for \`${op}\`.`)
