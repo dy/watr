@@ -223,11 +223,11 @@ const build = {
           imm.push(OP.end)
         }
 
-        // (drop arg)
-        else if (opCode==0x1a) { argc = 1 }
+        // (drop arg), (return arg)
+        else if (opCode==0x1a || opCode==0x0f) { argc = 1 }
 
-        // (block ...)
-        else if (opCode==2) {
+        // (block ...), (loop ...)
+        else if (opCode==2||opCode==3) {
           id && (depth[id] = depth.value)
           depth.value++ // push control flow stack
           let [,type] = stack[0]?.[0]==='result' ? stack.shift() : [,'void']
@@ -237,10 +237,19 @@ const build = {
           depth.value--
         }
 
-        // (br $label)
-        else if (opCode==0x0c) {
-          // FIXME: figure out if br index points to depth level or indicates how many levels to pop out
+        // (br $label result?)
+        // (br_if $label cond result?)
+        else if (opCode==0x0c||opCode==0x0d) {
+          // br index points to depth level or indicates how many levels to pop out (same value)
           imm.push(id ? depth.value-1-depth[id] : +stack.shift())
+          argc = (opCode==0x0d ? 1 + (stack.length > 1) : !!stack.length)
+        }
+        // (br_table 1 2 3 4  0  selector result?)
+        else if (opCode==0x0e) {
+          let table = []
+          while (!Array.isArray(stack[0])) table.push(+stack.shift())
+          imm = [table.length-1, ...table]
+          argc = 1 + (stack.length>1)
         }
 
         else if (opCode==null) err(`Unknown instruction \`${op}\``)

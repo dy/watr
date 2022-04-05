@@ -374,7 +374,7 @@ t('wat-compiler: if else', () => {
   is(foo(1), 1)
 })
 
-t.skip('bench: if', () => {
+t('bench: if', () => {
   let src = `(func $dummy)
     (func (export "foo") (param i32) (result i32)
       (if (result i32) (local.get 0)
@@ -464,14 +464,16 @@ t('wat-compiler: block named + br', () => {
       (global.set $answer (i32.const 666))
     )
     (func (export "main") (result i32)
-      (block $outerer ;; 2
-      (block $outer ;; 1
-        (block $inner ;; 0
-          (call $set)
-          (br $inner)
+      (block $outerer ;; 3
+        (block $outer ;; 2
+          (block $inner ;; 1
+            (block $innerer ;; 0
+              (call $set)
+              (br 1)
+            )
+          )
+          (global.set $answer (i32.const 0))
         )
-        (global.set $answer (i32.const 0))
-      )
       )
       (global.get $answer)
     )
@@ -510,128 +512,121 @@ t('wat-compiler: block named 2 + br', () => {
 
 })
 
-t.todo('wat-compiler: br_table', () => buffers(`
-  (func (export "main") (param i32) (result i32)
-    (block
+t('wat-compiler: br_table', () => {
+  let src = `
+    (func (export "main") (param i32) (result i32)
       (block
-        (br_table 1 0 (local.get 0))
-        (return (i32.const 21))
+        (block
+          (br_table 1 0 (local.get 0))
+          (return (i32.const 21))
+        )
+        (return (i32.const 20))
       )
-      (return (i32.const 20))
+      (i32.const 22)
     )
-    (i32.const 22)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main(0)).to.equal(22)
-  expect((await wasm(exp)).main(1)).to.equal(20)
-  expect((await wasm(act)).main(0)).to.equal(22)
-  expect((await wasm(act)).main(1)).to.equal(20)
-}))
+  `
+  // console.log(wat(src))
+  let {main} = run(src).exports
+  is(main(0), 22)
+  is(main(1), 20)
+})
 
-t.todo('wat-compiler: br_table multiple', () => buffers(`
-  (func (export "main") (param i32) (result i32)
-    (block
+t('wat-compiler: br_table multiple', () => {
+  let src = `
+    (func (export "main") (param i32) (result i32)
       (block
         (block
           (block
             (block
-              (br_table 3 2 1 0 4 (local.get 0))
-              (return (i32.const 99))
+              (block
+                (br_table 3 2 1 0 4 (local.get 0))
+                (return (i32.const 99))
+              )
+              (return (i32.const 100))
             )
-            (return (i32.const 100))
+            (return (i32.const 101))
           )
-          (return (i32.const 101))
+          (return (i32.const 102))
         )
-        (return (i32.const 102))
+        (return (i32.const 103))
       )
-      (return (i32.const 103))
+      (i32.const 104)
     )
-    (i32.const 104)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main(0)).to.equal(103)
-  expect((await wasm(exp)).main(1)).to.equal(102)
-  expect((await wasm(exp)).main(2)).to.equal(101)
-  expect((await wasm(exp)).main(3)).to.equal(100)
-  expect((await wasm(exp)).main(4)).to.equal(104)
-  expect((await wasm(act)).main(0)).to.equal(103)
-  expect((await wasm(act)).main(1)).to.equal(102)
-  expect((await wasm(act)).main(2)).to.equal(101)
-  expect((await wasm(act)).main(3)).to.equal(100)
-  expect((await wasm(act)).main(4)).to.equal(104)
-}))
+  `
+  let {main} = run(src).exports
 
-t.todo('wat-compiler: loop', () => buffers(`
-  (func (export "main") (result i32)
-    (loop (nop))
-    (loop (result i32) (i32.const 42))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(42)
-  expect((await wasm(act)).main()).to.equal(42)
-}))
+  is(main(0), 103)
+  is(main(1), 102)
+  is(main(2), 101)
+  is(main(3), 100)
+  is(main(4), 104)
+})
 
-t.todo('wat-compiler: break-value', () => buffers(`
-  (func (export "main") (result i32)
-    (block (result i32)
-      (loop (result i32) (br 1 (i32.const 18)) (br 0) (i32.const 19))
+t('wat-compiler: loop', () => {
+  let src = `
+    (func (export "main") (result i32)
+      (loop (nop))
+      (loop (result i32) (i32.const 42))
     )
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(18)
-  expect((await wasm(act)).main()).to.equal(18)
-}))
+  `
+  let {main} = run(src).exports
+  is(main(), 42)
+})
 
-t.todo('wat-compiler: br_if', () => buffers(`
-  (func (export "main") (result i32)
-    (block (result i32)
-      (loop (result i32)
-        (br 1 (i32.const 18))
-        (br 1 (i32.const 19))
-        (drop (br_if 1 (i32.const 20) (i32.const 0)))
-        (drop (br_if 1 (i32.const 20) (i32.const 1)))
-        (br 1 (i32.const 21))
-        (br_table 1 (i32.const 22) (i32.const 0))
-        (br_table 1 1 1 (i32.const 23) (i32.const 1))
-        (i32.const 21)
+t('wat-compiler: break-value', () => {
+  let src = `
+    (func (export "main") (result i32)
+      (block (result i32)
+        (loop (result i32) (br 1 (i32.const 18)) (br 0) (i32.const 19))
       )
     )
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(18)
-  expect((await wasm(act)).main()).to.equal(18)
-}))
+  `
+  // console.log(wat(src))
+  let {main} = run(src).exports
+  is(main(), 18)
+  is(main(), 18)
+})
 
-t.todo('wat-compiler: while', () => buffers(`
-  (func (export "main") (param i32) (result i32)
-    (local i32)
-    (local.set 1 (i32.const 1))
-    (block
-      (loop
-        (br_if 1 (i32.eqz (local.get 0)))
-        (local.set 1 (i32.mul (local.get 0) (local.get 1)))
-        (local.set 0 (i32.sub (local.get 0) (i32.const 1)))
-        (br 0)
+t('wat-compiler: br_if', () => {
+  let src = `
+    (func (export "main") (result i32)
+      (block (result i32)
+        (loop (result i32)
+          (br 1 (i32.const 18))
+          (br 1 (i32.const 19))
+          (drop (br_if 1 (i32.const 20) (i32.const 0)))
+          (drop (br_if 1 (i32.const 20) (i32.const 1)))
+          (br 1 (i32.const 21))
+          (br_table 1 (i32.const 22) (i32.const 0))
+          (br_table 1 1 1 (i32.const 23) (i32.const 1))
+          (i32.const 21)
+        )
       )
     )
-    (local.get 1)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(1)
-  expect((await wasm(act)).main()).to.equal(1)
-}))
+  `
+  let {main} = run(src).exports
+  is(main(), 18)
+})
+
+t('wat-compiler: while', () => {
+  let src = `
+    (func (export "main") (param i32) (result i32)
+      (local i32)
+      (local.set 1 (i32.const 1))
+      (block
+        (loop
+          (br_if 1 (i32.eqz (local.get 0)))
+          (local.set 1 (i32.mul (local.get 0) (local.get 1)))
+          (local.set 0 (i32.sub (local.get 0) (i32.const 1)))
+          (br 0)
+        )
+      )
+      (local.get 1)
+    )
+  `
+  let {main} = run(src).exports
+  is(main(), 1)
+})
 
 t.todo('wat-compiler: select', () => buffers(`
   (func (export "main") (result i32)
