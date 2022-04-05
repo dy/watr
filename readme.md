@@ -77,7 +77,7 @@ Each instruction has fixed prefix signature with parenthesized immediates and ar
 ```
 
 ```wast
-;; ✘ unscoped command
+;; ✘ inline instruction
 (local.get 0)
 if (result i32)
   (i32.const 1)
