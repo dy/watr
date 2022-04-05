@@ -62,8 +62,8 @@ double(108) // 216
 
 ## Limitations
 
-Ambiguous syntax is intentionally prohibited in favor of explicit lispy structure.
-Each instruction has fixed prefix signature with parenthesized immediates and arguments.
+Ambiguous syntax is intentionally prohibited in favor of explicit lispy structure.<br>
+Each instruction has prefix signature with parenthesized immediates and arguments.
 
 ```wast
 ;; ✘ open immediates, stack arguments
