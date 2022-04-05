@@ -85,13 +85,13 @@ if (result i32)   ;; ✘ inline instruction
   (i32.const 1)
 end
 
-(local.get 0)     ;; ✘ stack argument
+(local.get 0)     ;; ✘ stacked argument
 (if (result i32)
   (i32.const 1)
 )
 
-(if (result i32) (local.get 0)
-  (i32.const 1)   ;; ✔ explicit signature
+(if (result i32) (local.get 0)  ;; ✔ explicit signature
+  (i32.const 1)
 )
 ```
 
