@@ -110,7 +110,8 @@ const build = {
   // (func $name? ...params result ...body)
   func([,...body], ctx) {
     let idx=ctx.func.length, // fn index comes after impoted fns
-        locals=[] // list of local variables
+        locals=[], // list of local variables
+        callstack=[]
 
     // fn name
     if (body[0]?.[0] === '$') ctx.func[body.shift()] = idx
@@ -204,6 +205,7 @@ const build = {
 
         // (if (result i32)? (local.get 0) (then a b) (else a b)?)
         else if (opCode==4) {
+          callstack.push(opCode)
           let [,type] = nodes[0][0]==='result' ? nodes.shift() : [,'void']
           imm=[TYPE[type]]
           argc = 0, args.push(...instr(nodes.shift()))
@@ -211,11 +213,12 @@ const build = {
           if (nodes[0][0]==='then') [,...body] = nodes.shift(); else body = nodes
           while (body.length) imm.push(...instr(body.shift()))
 
+          callstack.pop(), callstack.push(OP.else)
           if (nodes[0]?.[0]==='else') {
             [,...body] = nodes.shift()
             imm.push(OP.else, ...body.flatMap(instr))
           }
-
+          callstack.pop()
           imm.push(OP.end)
         }
 
@@ -227,21 +230,20 @@ const build = {
 
         // (block ...), (loop ...)
         else if (opCode==2||opCode==3) {
-          id && (depth[id] = depth.value)
-          depth.value++ // push control flow stack
+          callstack.push(opCode)
+          id && (callstack[id] = callstack.length)
           let [,type] = nodes[0]?.[0]==='result' ? nodes.shift() : [,'void']
           imm=[TYPE[type]]
           while (nodes.length) imm.push(...instr(nodes.shift()))
           imm.push(OP.end)
-          depth.value--
+          callstack.pop()
         }
 
         // (br $label result?)
         // (br_if $label cond result?)
         else if (opCode==0x0c||opCode==0x0d) {
-          // br index indicates how callstack items to skip
-          // FIXME: callstack must include if/else
-          imm.push(id ? depth.value-1-depth[id] : +nodes.shift())
+          // br index indicates how callstack items to pop
+          imm.push(id ? callstack.length-callstack[id] : +nodes.shift())
           argc = (opCode==0x0d ? 1 + (nodes.length > 1) : !!nodes.length)
         }
         // (br_table 1 2 3 4  0  selector result?)
@@ -250,6 +252,14 @@ const build = {
           while (!Array.isArray(nodes[0])) table.push(+nodes.shift())
           imm = [table.length-1, ...table]
           argc = 1 + (nodes.length>1)
+
+          // TODO
+          // let label
+          // imm = [0]
+          // while (!Array.isArray(nodes[0])) label = nodes.shift(), imm.push(label[0]==='$'?callstack.length-callstack[label]:+label)
+          // console.log(imm)
+          // imm[0] = imm.length-1
+          // argc = 1 + (nodes.length>1)
         }
 
         else if (opCode==null) err(`Unknown instruction \`${op}\``)
