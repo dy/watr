@@ -1016,119 +1016,59 @@ t.todo(`3 locals [i32, i64, i32] (disjointed)`, () => buffers(`
 
 ).then(([exp,act]) => hexAssertEqual(exp,act)))
 
-t.todo(`3 locals [i32, i32, i64] (joined)`, () => buffers(`
-  (func (export "value") (result i32)
-    (local i32)
-    (local i32)
-    (local i64)
-    (i32.const 42)
-  )
-`, mod => mod
+t(`3 locals [i32, i32, i64] (joined)`, () => {
+  let src = `
+    (func (export "value") (result i32)
+      (local i32)
+      (local i32)
+      (local i64)
+      (i32.const 42)
+    )
+  `
+  let {value} = run(src).exports
+  is(value(), 42)
+})
 
-  .func('value', [], ['i32'],
-    ['i32','i32','i64'],
-    [...i32.const(42)],
-    true)
+t('call function indirect (table)', () => {
+  let src = `
+    (type $return_i32 (func (result i32)))
+    (table 2 funcref)
+      (elem (i32.const 0) $f1 $f2)
+      (func $f1 (result i32)
+        (i32.const 42))
+      (func $f2 (result i32)
+        (i32.const 13))
+    (func (export "call_function_indirect") (param $a i32) (result i32)
+      (call_indirect (type $return_i32) (local.get $a))
+    )
+  `
+  let {call_function_indirect} = run(src).exports
 
-).then(([exp,act]) => hexAssertEqual(exp,act)))
+  is(call_function_indirect(0), 42)
+  is(call_function_indirect(1), 13)
+})
 
-t.todo('call function indirect (table)', () => buffers(`
-  (type $return_i32 (func (result i32)))
-  (table 2 funcref)
-    (elem (i32.const 0) $f1 $f2)
-    (func $f1 (result i32)
-      i32.const 42)
-    (func $f2 (result i32)
-      i32.const 13)
-  (func (export "call_function_indirect") (param $a i32) (result i32)
-    (call_indirect (type $return_i32) (local.get $a))
-  )
-`, mod => mod
+t('call function indirect (table) non zero indexed ref types', () => {
+  let src = `
+    (type $return_i64 (func (result i64)))
+    (type $return_i32 (func (result i32)))
+    (table 2 funcref)
+      (elem (i32.const 0) $f1 $f2)
+      (func $xx (result i64)
+        (i64.const 42))
+      (func $f1 (result i32)
+        (i32.const 42))
+      (func $f2 (result i32)
+        (i32.const 13))
+    (func (export "call_function_indirect") (param $a i32) (result i32)
+      (call_indirect (type $return_i32) (local.get $a))
+    )
+  `
+  let {call_function_indirect} = run(src).exports
 
-    .type('return_i32', [], ['i32'])
-
-    .table('funcref', 2)
-
-    .elem([...i32.const(0)], ['f1','f2'])
-
-    .func('f1', [], ['i32'],
-      [],
-      [...i32.const(42)])
-
-    .func('f2', [], ['i32'],
-      [],
-      [...i32.const(13)])
-
-  .func('call_function_indirect', ['i32'], ['i32'],
-    [],
-    [
-      ...INSTR.call_indirect(
-        [mod.getType('return_i32'), 0],
-        [local.get(0)])
-    ],
-    true)
-
-)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).call_function_indirect(0)).to.equal(42)
-  expect((await wasm(exp)).call_function_indirect(1)).to.equal(13)
-  expect((await wasm(act)).call_function_indirect(0)).to.equal(42)
-  expect((await wasm(act)).call_function_indirect(1)).to.equal(13)
-}))
-
-//
-t.todo('call function indirect (table) non zero indexed ref types', () => buffers(`
-  (type $return_i64 (func (result i64)))
-  (type $return_i32 (func (result i32)))
-  (table 2 funcref)
-    (elem (i32.const 0) $f1 $f2)
-    (func $xx (result i64)
-      i64.const 42)
-    (func $f1 (result i32)
-      i32.const 42)
-    (func $f2 (result i32)
-      i32.const 13)
-  (func (export "call_function_indirect") (param $a i32) (result i32)
-    (call_indirect (type $return_i32) (local.get $a))
-  )
-`, mod => mod
-
-    .table('funcref', 2)
-
-    .elem([...i32.const(0)], ['f1','f2'])
-
-    .func('xx', [], ['i64'],
-      [],
-      [...i64.const(42)])
-
-    .func('f1', [], ['i32'],
-      [],
-      [...i32.const(42)])
-
-    .func('f2', [], ['i32'],
-      [],
-      [...i32.const(13)])
-
-  .func('call_function_indirect', ['i32'], ['i32'],
-    [],
-    [
-      ...INSTR.call_indirect(
-        // call_indirect takes 2 arguments: typeidx, tableidx
-        [mod.getFunc('f1').type_idx, 0],
-        // and a reference table element index from the stack
-        [local.get(0)])
-    ],
-    true)
-
-)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).call_function_indirect(0)).to.equal(42)
-  expect((await wasm(exp)).call_function_indirect(1)).to.equal(13)
-  expect((await wasm(act)).call_function_indirect(0)).to.equal(42)
-  expect((await wasm(act)).call_function_indirect(1)).to.equal(13)
-}))
+  is(call_function_indirect(0), 42)
+  is(call_function_indirect(1), 13)
+})
 
 
 

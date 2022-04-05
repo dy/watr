@@ -128,11 +128,11 @@ const build = {
 
     // collect locals
     while (body[0]?.[0] === 'local') {
-      let [, ...localTypes] = body.shift(), name
-      if (localTypes[0][0]==='$')
-        params[name=localTypes.shift()] ? err('Ambiguous name '+name) : name,
+      let [, ...types] = body.shift(), name
+      if (types[0][0]==='$')
+        params[name=types.shift()] ? err('Ambiguous name '+name) :
         locals[name] = params.length + locals.length
-      localTypes.forEach(t => locals.push(TYPE[t]))
+      locals.push(...types.map(t => TYPE[t]))
     }
 
     // map code instruction into bytes: [args, opCode, immediates]
@@ -140,7 +140,6 @@ const build = {
       if (op.length===1) err(`Inline instructions are not supported \`${op+stack.join('')}\``)
 
       let opCode = OP[op], argc=0, args=[], imm=[]
-      // FIXME: Maybe make use of iinit also?
 
       // (i32.store align=n offset=m at value)
       if (opCode>=40&&opCode<=62) {
@@ -230,8 +229,10 @@ const build = {
 
     let code = body.flatMap(instr)
 
-    // FIXME: smush local type defs
-    ctx.code.push([code.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...code, OP.end])
+    // squash local types
+    let locTypes = locals.reduce((a, type) => (type==a[a.length-1] ? a[a.length-2]++ : a.push(1,type), a), [])
+
+    ctx.code.push([code.length+2+locTypes.length, locTypes.length>>1, ...locTypes, ...code, OP.end])
   },
 
   // (memory min max shared)
