@@ -96,7 +96,7 @@ export default (nodes) => {
     nodes = remaining
   }
 
-  console.log(sections)
+  // console.log(sections)
   // build binary sections
   for (let name in sections) {
     let items=sections[name]

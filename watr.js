@@ -1,5 +1,5 @@
 // ref: https://github.com/stagas/wat-compiler/blob/main/lib/const.js
-const OP = Object.fromEntries([
+const OP = [
   'unreachable', 'nop', 'block', 'loop', 'if', 'else', ,,,,,
 
   'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', ,,,,,,,,
@@ -38,13 +38,10 @@ const OP = Object.fromEntries([
   'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
 
   'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64',
-].flatMap((key,i)=>key && [[key,i]])),
-
-RANGE = {min:0, minmax:1, shared:3},
+],
 SECTION = {type:1, import:2, func:3, table:4, memory:5, global:6, export:7, start:8, elem:9, code:10, data:11},
 TYPE = {i32:0x7f, i64:0x7e, f32:0x7d, f64:0x7c, void:0x40, func:0x60, funcref:0x70},
-ETYPE = {func: 0, table: 1, memory: 2, global: 3},
-
+KIND = {func: 0, table: 1, memory: 2, global: 3},
 ALIGN = {
   'i32.load': 4,
   'i64.load': 8,
@@ -75,8 +72,304 @@ ALIGN = {
   'i64.store32': 4,
 };
 
-// direct wiki examples https://en.wikipedia.org/wiki/LEB128#Signed_LEB128
+OP.map((op,i)=>OP[op]=i); // init op names
 
+// convert wat tree to wasm binary
+var compile = (nodes) => {
+  // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
+  let sections = {
+    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
+  },
+  binary = [
+    0x00, 0x61, 0x73, 0x6d, // magic
+    0x01, 0x00, 0x00, 0x00, // version
+  ];
+
+  // (func) → [(func)]
+  if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes];
+
+  // build nodes in order of sections, to properly initialize indexes/aliases
+  // must come separate from binary builder: func can define types etc.
+  for (let name in sections) {
+    let remaining = [];
+    for (let node of nodes) node[0] === name ? build[name](node, sections) : remaining.push(node);
+    nodes = remaining;
+  }
+
+  // console.log(sections)
+  // build binary sections
+  for (let name in sections) {
+    let items=sections[name];
+    if (items.importc) items = items.slice(items.importc); // discard imported functions
+    if (!items.length) continue
+    let sizePtr = binary.length+1;
+    binary.push(SECTION[name], 0);
+    if (binary[sizePtr-1]!==8) binary.push(items.length); // skip start section count
+    for (let item of items) binary.push(...item);
+    binary[sizePtr] = binary.length - sizePtr - 1;
+  }
+
+  return new Uint8Array(binary)
+};
+
+const build = {
+  // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
+  // signature part is identical to function
+  // FIXME: handle non-function types
+  type([, typeName, decl], ctx) {
+    if (typeName[0]!=='$') decl=typeName, typeName=null;
+    let params = [], result = [], kind = decl.shift(), idx, bytes;
+
+    if (kind==='func') {
+      // collect params
+      while (decl[0]?.[0] === 'param') {
+        let [, ...types] = decl.shift();
+        if (types[0]?.[0] === '$') params[types.shift()] = params.length;
+        params.push(...types.map(t => TYPE[t]));
+      }
+
+      // collect result type
+      if (decl[0]?.[0] === 'result') result = decl.shift().slice(1).map(t => TYPE[t]);
+
+      // reuse existing type or register new one
+      bytes = [TYPE.func, params.length, ...params, result.length, ...result];
+
+      idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]));
+      if (idx < 0) idx = ctx.type.push(bytes)-1;
+    }
+
+    if (typeName) ctx.type[typeName] = idx;
+
+    return [idx, params, result]
+  },
+
+  // (func $name? ...params result ...body)
+  func([,...body], ctx) {
+    let idx=ctx.func.length, // fn index comes after impoted fns
+        locals=[]; // list of local variables
+
+    // fn name
+    if (body[0]?.[0] === '$') ctx.func[body.shift()] = idx;
+
+    // export binding
+    if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', idx]], ctx);
+
+    // register type
+    let [typeIdx, params, result] = build.type([,['func',...body]], ctx);
+    // FIXME: try merging with build.type: it should be able to consume body
+    while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift();
+    ctx.func.push([typeIdx]);
+
+    // collect locals
+    while (body[0]?.[0] === 'local') {
+      let [, ...localTypes] = body.shift(), name;
+      if (localTypes[0][0]==='$')
+        params[name=localTypes.shift()] ? err('Ambiguous name '+name) : name,
+        locals[name] = params.length + locals.length;
+      localTypes.forEach(t => locals.push(TYPE[t]));
+    }
+
+    // map code instruction into bytes: [args, opCode, immediates]
+    const instr = ([op, ...stack]) => {
+      if (op.length===1) err(`Inline instructions are not supported \`${op+stack.join('')}\``);
+
+      let opCode = OP[op], argc=0, args=[], imm=[];
+      // FIXME: Maybe make use of iinit also?
+
+      // (i32.store align=n offset=m at value)
+      if (opCode>=40&&opCode<=62) {
+        // FIXME: figure out point in Math.log2 aligns
+        let o = {align: ALIGN[op], offset: 0}, p;
+        while (stack[0]?.[0] in o) p = stack.shift(), o[p[0]] = +p[1];
+        imm = [Math.log2(o.align), Math.log2(o.offset)];
+        argc = opCode >= 54 ? 2 : 1;
+      }
+
+      // (i32.const 123)
+      else if (opCode>=65&&opCode<=68) imm = i32(stack.shift());
+
+      // (local.get $id), (local.tee $id x)
+      else if (opCode>=32&&opCode<=34) {
+        let id = stack.shift();
+        imm = i32(id[0]==='$' ? params[id] || locals[id] : id);
+        if (opCode>32) argc = 1;
+      }
+
+      // (global.get id), (global.set id)
+      else if (opCode==35||opCode==36) {
+        let id = stack.shift();
+        imm = i32(id[0]==='$' ? ctx.global[id] : id);
+        if (opCode>35) argc = 1;
+      }
+
+      // (call id ...stack)
+      else if (opCode==16) {
+        let id = stack.shift();
+        imm = i32(id = id[0]==='$' ? ctx.func[id] : id);
+        // FIXME: how to get signature of imported function
+        [,argc] = ctx.type[ctx.func[id][0]];
+      }
+
+      // (call_indirect (type $typeName) (idx) ...stack)
+      else if (opCode==17) {
+        let typeId = stack.shift()[1];
+        [,argc] = ctx.type[typeId = typeId[0]==='$'?ctx.type[typeId]:typeId];
+        argc++;
+        imm = [+typeId, 0]; // extra immediate indicates table idx (reserved)
+      }
+
+      // (memory.grow $idx?)
+      else if (opCode==63||opCode==64) {
+        imm = [0];
+        argc = 1;
+      }
+
+      // (i32.add a b) - binary/unaries
+      else if (opCode>=106) {
+        argc = opCode>=167 || (opCode<=159 && opCode>=153) || (opCode<=145 && opCode>=139) || (opCode<=123 && opCode>=121) || (opCode<=105 && opCode>=103) ? 1 : 2;
+      }
+
+      // (if (result i32)? (local.get 0)
+      //   (then a b)
+      //   (else a b)?
+      // )
+      else if (opCode==4) {
+        let [,type] = stack[0][0]==='result' ? stack.shift() : [];
+        argc = 0, args.push(...instr(stack.shift()));
+        imm=[TYPE[type]];
+
+        let body;
+        if (stack[0][0]==='then') [,...body] = stack.shift(); else body = stack;
+        imm.push(...body.flatMap(instr));
+
+        if (stack[0][0]==='else') {
+          [,...body] = stack.shift();
+          imm.push(OP.else, ...body.flatMap(instr));
+        }
+
+        imm.push(OP.end);
+      }
+
+      // (drop)
+      else if (opCode==0x1a) { argc = 1; }
+
+      else err(`Unknown instruction \`${op}\``);
+
+      if (stack.length < argc) err(`Stack arguments are not supported at \`${op}\``);
+      while (argc--) args.push(...instr(stack.shift()));
+      if (stack.length) err(`Too many arguments for \`${op}\`.`);
+
+      return [...args, opCode, ...imm]
+    };
+
+    let code = body.flatMap(instr);
+
+    // FIXME: smush local type defs
+    ctx.code.push([code.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...code, OP.end]);
+  },
+
+  // (memory min max shared)
+  // (memory $name min max shared)
+  // (memory (import "js" "mem") min max shared)
+  memory([, ...parts], ctx) {
+    if (parts[0][0]==='$') ctx.memory[parts.shift()] = ctx.memory.length;
+    if (parts[0][0] === 'import') {
+      let [imp, ...limits] = parts;
+      // (import "js" "mem" (memory 1))
+      return build.import([...imp, ['memory', ...limits]], ctx)
+    }
+
+    ctx.memory.push(range(parts));
+  },
+
+  // (global i32 (i32.const 42))
+  // (global $id i32 (i32.const 42))
+  // (global $id (mut i32) (i32.const 42))
+  // FIXME (global $g1 (import "js" "g1") (mut i32))  ;; import from js
+  global([, ...args], ctx) {
+    let name = args[0][0]==='$' && args.shift();
+    if (name) ctx.global[name] = ctx.global.length;
+
+    let [type, init] = args, mut = type[0] === 'mut';
+
+    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...iinit(init)]);
+  },
+
+  // (table 1 2? funcref)
+  // (table $name 1 2? funcref)
+  table([, ...args], ctx) {
+    let name = args[0][0]==='$' && args.shift();
+    if (name) ctx.table[name] = ctx.table.length;
+
+    let lims = range(args);
+    ctx.table.push([TYPE[args.pop()], ...lims]);
+  },
+
+  // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
+  elem([, offset, ...elems], ctx) {
+    const tableIdx = 0; // FIXME: table index can be defined
+    ctx.elem.push([tableIdx, ...iinit(offset, ctx), elems.length, ...elems.map(el => el[0]==='$' ? ctx.func[el] : +el)]);
+  },
+
+  //  (export "name" (kind $name|idx))
+  export([, name, [kind, idx]], ctx) {
+    if (idx[0]==='$') idx = ctx[kind][idx];
+    ctx.export.push([...str(name), KIND[kind], +idx]);
+  },
+
+  // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
+  // (import "js" "mem" (memory 1))
+  // (import "js" "mem" (memory $name 1))
+  import([, mod, name, ref], ctx) {
+    // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
+    // build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
+
+    let details, [kind, ...parts] = ref;
+    if (kind==='func') {
+      // we track imported funcs in func section to share namespace, and skip them on final build
+      if (parts[0]?.[0]==='$') ctx.func[parts.shift()] = ctx.func.length;
+      let [typeIdx] = build.type([, ['func', ...parts]], ctx);
+      ctx.func.push(details = [typeIdx]);
+      ctx.func.importc = (ctx.func.importc||0)+1;
+    }
+    else if (kind==='memory') {
+      if (parts[0][0]==='$') ctx.memory[parts.shift()] = ctx.memory.length;
+      details = range(parts);
+    }
+
+    ctx.import.push([...str(mod), ...str(name), KIND[kind], ...details]);
+  },
+
+  // (data (i32.const 0) "\2a")
+  data([, offset, init], ctx) {
+    // FIXME: first is mem index
+    ctx.data.push([0, ...iinit(offset,ctx), ...str(init)]);
+  },
+
+  // (start $main)
+  start([, name],ctx) {
+    if (!ctx.start.length) ctx.start.push([name[0]==='$' ? ctx.func[name] : name]);
+  }
+};
+
+// (i32.const 0) - instantiation time initializer
+const iinit = ([op, literal], ctx) =>
+  [OP[op], ...i32(literal[0] === '$' ? ctx.global[literal] : literal), OP.end];
+
+// build string binary
+const str = str => {
+  str = str[0]==='"' ? str.slice(1,-1) : str;
+  let res = [0], i = 0, c, BSLASH=92;
+  // spec https://webassembly.github.io/spec/core/text/values.html#strings
+  for (; i < str.length;) c=str.charCodeAt(i++), res.push(c===BSLASH ? parseInt(str.slice(i,i+=2), 16) : c);
+  res[0]=res.length-1;
+  return res
+};
+
+// build range/limits sequence (non-consuming)
+const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, +min] : [shared==='shared'?3:1, +min, +max];
+
+// direct wiki example https://en.wikipedia.org/wiki/LEB128#Signed_LEB128
 const i32 = (value) => {
   value |= 0;
   const result = [];
@@ -94,226 +387,6 @@ const i32 = (value) => {
   }
 };
 
-// convert wat tree to wasm binary
-
-const END = 0x0b;
-
-var compile = (nodes) => {
-  // NOTE: alias is stored directly to section array by key, eg. section.func.$name = idx
-  let sections = {
-    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
-  },
-  binary = [
-    0x00, 0x61, 0x73, 0x6d, // magic
-    0x01, 0x00, 0x00, 0x00, // version
-  ];
-
-  // (func) → [(func)]
-  if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes];
-
-  // build nodes in order of sections, to properly initialize indexes/aliases
-  // must come separate from binary builder: func can define types etc.
-  // FIXME: alternatively iterables can be used instead that initialize aliases on the moment of binary building:
-  // that can make things faster; or find reason not to do that - maybe we need hoisting etc.
-  for (let name in sections)
-    for (let node of nodes)
-      if (node[0] === name) build[name](node, sections);
-
-  // build binary sectuibs
-  for (let name in sections) {
-    let items=sections[name], count=items.length;
-    if (!count) continue
-    let sizePtr = binary.length+1;
-    binary.push(SECTION[name], 0, count, ...items.flat());
-    binary[sizePtr] = binary.length - sizePtr - 1;
-  }
-
-  return new Uint8Array(binary)
-};
-
-const build = {
-  // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
-  // signature part is identical to function
-  // FIXME: handle non-function types
-  type([_, ...args], ctx) {
-    let name = args[0]?.[0]==='$' && args.shift(),
-        params = [],
-        result = [],
-        decl = args[0];
-
-    if (decl[0]==='func') {
-      decl.shift();
-
-      // collect params
-      while (decl[0]?.[0] === 'param') {
-        let [_, ...types] = decl.shift();
-        if (types[0]?.[0] === '$') params[types.shift()] = params.length;
-        params.push(...types.map(t => TYPE[t]));
-      }
-
-      // collect result type
-      if (decl[0]?.[0] === 'result') result = decl.shift().slice(1).map(t => TYPE[t]);
-
-      // reuse existing type or register new one
-      let bytes = [TYPE.func, params.length, ...params, result.length, ...result];
-
-      let idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]));
-      if (idx < 0) idx = ctx.type.push(bytes)-1;
-      if (name) ctx.type[name] = idx;
-
-      return [idx, params, result]
-    }
-    // TODO: handle non-func other types
-  },
-
-  // (func $name? ...params result ...body)
-  func([_,...body], ctx) {
-    let idx=ctx.func.length, // fn index
-        locals=[]; // list of local variables
-
-    // fn name
-    if (body[0]?.[0] === '$') ctx.func[body.shift()] = idx;
-
-    // export binding
-    if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', idx]], ctx);
-
-    // register type
-    let [typeIdx, params, result] = build.type([,['func',...body]], ctx);
-    while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift(); // FIXME: is there a way to generalize consuming?
-    ctx.func.push([typeIdx]);
-
-    // collect locals
-    while (body[0]?.[0] === 'local') {
-      let [_, ...localTypes] = body.shift(), name;
-      if (localTypes[0][0]==='$')
-        params[name=localTypes.shift()] ? err('Ambiguous name '+name) : name,
-        locals[name] = params.length + locals.length;
-      localTypes.forEach(t => locals.push(TYPE[t]));
-    }
-
-    // consume instruction with immediates
-    const immediates = (args) => {
-      let op = args.shift(), imm = [];
-
-      // i32.store align=n offset=m
-      if (op.endsWith('store')) {
-        let o = {align: [ALIGN[op]], offset: [0]}, p;
-        while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = i32(p[1]);
-        imm = [...o.align, ...o.offset];
-      }
-
-      // i32.const 123
-      else if (op.endsWith('const')) imm = i32(args.shift());
-
-      // (local.get id), (local.tee id)
-      else if (op.startsWith('local')) {
-        let id = args.shift();
-        imm = i32(id[0]==='$' ? params[id] || locals[id] : id);
-      }
-
-      // (call id)
-      else if (op === 'call') {
-        let id = args.shift();
-        imm = i32(id[0]==='$' ? ctx.func[id] : id);
-      }
-
-      // (call_indirect (type i32) idx)
-      else if (op === 'call_indirect') {
-        let type = args.shift(), [_,id] = type;
-        imm = i32(id[0]==='$' ? ctx.type[id] : id);
-        imm.push(0);
-      }
-
-      imm.unshift(OP[op]);
-
-      return imm
-    };
-
-    // consume instruction block
-    const instr = (args) => {
-      if (typeof args[0] === 'string') return immediates(args)
-
-      // (a b (c))
-      if (Array.isArray(args[0])) {
-        let op = args.shift();
-        let imm = immediates(op);
-        return [...op.flatMap(arg => instr(arg)), ...imm]
-      }
-
-      throw Error('Unknown ' + op)
-    };
-
-    let code = [];
-    while (body.length) code.push(...instr(body));
-
-    // FIXME: smush local type defs
-    ctx.code.push([code.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...code, END]);
-  },
-
-  // (memory min max shared)
-  memory([_, ...parts], ctx) {
-    let imp = false;
-    // (memory (import "js" "mem") 1) → (import "js" "mem" (memory 1))
-    if (parts[0][0] === 'import') imp = parts.shift();
-
-    let [min, max, shared] = parts, dfn = max ? [RANGE.minmax, +min, +max] : [RANGE.min, +min];
-
-    if (!imp) ctx.memory.push(dfn);
-    else {
-      let [_, mod, name] = imp;
-      ctx.import.push([mod.length, ...encoder.encode(mod), name.length, ...encoder.encode(name), ETYPE.memory, ...dfn]);
-    }
-  },
-
-  // mut
-  global([_, type, mutable], ctx) { ctx.global.push([]); },
-
-  // (table 1 2? funcref)
-  table([_, ...args], ctx) {
-    let name = args[0][0]==='$' && args.shift();
-
-    let [min, max, kind] = args,
-        dfn = kind ? [TYPE[kind], RANGE.minmax, +min, +max] : [TYPE[max], RANGE.min, +min];
-
-    if (name) ctx.table[name] = ctx.table.length;
-    ctx.table.push(dfn);
-  },
-
-  // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
-  elem([_, offset, ...elems], ctx) {
-    const tableIdx = 0;
-
-    // FIXME: offset calc can be generalized as instantiation-time initializer
-    let [op, ref] = offset;
-    if (op === 'global.get') ref = ref[0]==='$' ? ctx.global[ref] : ref;
-
-    ctx.elem.push([tableIdx, OP[op], ...i32(ref), END, elems.length, ...elems.map(el => el[0]==='$' ? ctx.func[el] : +el)]);
-  },
-
-  //  (export "name" ([type] $name|idx))
-  export([_, name, [kind, idx]], ctx) {
-    if (name[0]==='"') name = name.slice(1,-1);
-    if (idx[0]==='$') idx = ctx[kind][idx];
-    ctx.export.push([name.length, ...encoder.encode(name), ETYPE[kind], idx]);
-  },
-
-  // (import "mod" "name" ref)
-  import([_, mod, name, ref], ctx) {
-    // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
-    build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)]);
-  },
-
-  data() {
-
-  },
-
-  start() {
-
-  }
-};
-
-const encoder = new TextEncoder();
-
 const err = text => { throw Error(text) };
 
 const OPAREN=40, CPAREN=41, SPACE=32, SEMIC=59;
@@ -321,9 +394,8 @@ const OPAREN=40, CPAREN=41, SPACE=32, SEMIC=59;
 var parse = (str) => {
   let i = 0, level = [], buf='';
 
-  const commit = (k,v) => buf && (
-    [k, v] = buf.split('='),
-    level.push(v ? [k,v] : k),
+  const commit = () => buf && (
+    level.push(~buf.indexOf('=') ? buf.split('=') : buf),
     buf = ''
   );
 
@@ -336,7 +408,7 @@ var parse = (str) => {
       }
       else if (c === SEMIC) i=str.indexOf('\n', i)+1;  // ; ...
       else if (c <= SPACE) commit(), i++;
-      else if (c === CPAREN) return commit(), i++
+      else if (c === CPAREN) return commit(), i++//, Object.freeze(level) // FIXME: tree should be immutable
       else buf+=str[i++];
     }
 

@@ -2,6 +2,7 @@ import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import Wabt from '../lib/wabt.js'
+import watCompiler from '../lib/wat-compiler.js'
 
 // examples from https://ontouchstart.pages.dev/chapter_wasm_binary
 
@@ -371,6 +372,30 @@ t('wat-compiler: if else', () => {
   let {foo} = run(src1).exports
   is(foo(0), 0)
   is(foo(1), 1)
+})
+
+t.skip('bench: if', () => {
+  let src = `(func $dummy)
+    (func (export "foo") (param i32) (result i32)
+      (if (result i32) (local.get 0)
+        (then (call $dummy) (i32.const 1))
+        (else (call $dummy) (i32.const 0))
+      )
+    )`
+  is(compile(parse(src)), watCompiler(src))
+  let N = 5000
+
+  console.time('watr')
+  for (let i = 0; i < N; i++) compile(parse(src))
+  console.timeEnd('watr')
+
+  console.time('wat-compiler')
+  for (let i = 0; i < N; i++) watCompiler(src, {metrics: false})
+  console.timeEnd('wat-compiler')
+
+  console.time('wabt')
+  for (let i = 0; i < N; i++) wat(src, {metrics: false})
+  console.timeEnd('wabt')
 })
 
 t.todo('wat-compiler: block', () => buffers(`
@@ -1122,9 +1147,10 @@ const hex = (str, ...fields) =>
     .map(n => parseInt(n, 16))
   )
 
-function wat (code) {
+function wat (code, config) {
+  let metrics = config ? config.metrics : true
   const parsed = wabt.parseWat('inline', code, {})
-  console.time('wabt build')
+  metrics && console.time('wabt build')
   const binary = parsed.toBinary({
     log: true,
     canonicalize_lebs: true,
@@ -1132,7 +1158,7 @@ function wat (code) {
     write_debug_names: false,
   })
   parsed.destroy()
-  console.timeEnd('wabt build')
+  metrics && console.timeEnd('wabt build')
 
   return binary
 }

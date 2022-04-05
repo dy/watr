@@ -4,8 +4,8 @@ Light & fast bare minimum WAT compiler. See [REPL](https://audio-lab.github.io/w
 
 &nbsp; | watr | wat-compiler | wabt
 ---|---|---|---
-Size | | |
-Performance | | |
+Size (gzipped) | 2.8kb | 6kb | 300kb
+Performance (op/s) | 45000 | 2500 | 3100
 
 ## Usage
 
