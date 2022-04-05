@@ -134,8 +134,8 @@ const build = {
     }
 
     // map code instruction into bytes: [args, opCode, immediates]
-    const instr = ([op, ...stack]) => {
-      if (op.length===1) err(`Inline instructions are not supported \`${op+stack.join('')}\``)
+    const instr = ([op, ...nodes]) => {
+      if (op.length===1) err(`Inline instructions are not supported \`${op+nodes.join('')}\``)
 
       let opCode = OP[op], argc=0, args=[], imm=[]
 
@@ -155,42 +155,42 @@ const build = {
       // instruction
       else {
         // generalized guess: read label (FIXME: can cause side-effects)
-        let id = stack[0]?.[0] === '$' && stack.shift()
+        let id = nodes[0]?.[0] === '$' && nodes.shift()
 
         // (i32.store align=n offset=m at value)
         if (opCode>=40&&opCode<=62) {
           // FIXME: figure out point in Math.log2 aligns
           let o = {align: ALIGN[op], offset: 0}, p
-          while (stack[0]?.[0] in o) p = stack.shift(), o[p[0]] = +p[1]
+          while (nodes[0]?.[0] in o) p = nodes.shift(), o[p[0]] = +p[1]
           imm = [Math.log2(o.align), Math.log2(o.offset)]
           argc = opCode >= 54 ? 2 : 1
         }
 
         // (i32.const 123)
-        else if (opCode>=65&&opCode<=68) imm = i32(stack.shift())
+        else if (opCode>=65&&opCode<=68) imm = i32(nodes.shift())
 
         // (local.get $id), (local.tee $id x)
         else if (opCode>=32&&opCode<=34) {
-          imm = i32(id ? params[id] || locals[id] : stack.shift())
+          imm = i32(id ? params[id] || locals[id] : nodes.shift())
           if (opCode>32) argc = 1
         }
 
         // (global.get id), (global.set id)
         else if (opCode==35||opCode==36) {
-          imm = i32(id ? ctx.global[id] : stack.shift())
+          imm = i32(id ? ctx.global[id] : nodes.shift())
           if (opCode>35) argc = 1
         }
 
-        // (call id ...stack)
+        // (call id ...nodes)
         else if (opCode==16) {
-          imm = i32(id = id ? ctx.func[id] : stack.shift());
+          imm = i32(id = id ? ctx.func[id] : nodes.shift());
           // FIXME: how to get signature of imported function
           [,argc] = ctx.type[ctx.func[id][0]]
         }
 
-        // (call_indirect (type $typeName) (idx) ...stack)
+        // (call_indirect (type $typeName) (idx) ...nodes)
         else if (opCode==17) {
-          let typeId = stack.shift()[1];
+          let typeId = nodes.shift()[1];
           [,argc] = ctx.type[typeId = typeId[0]==='$'?ctx.type[typeId]:typeId]
           argc++
           imm = [+typeId, 0] // extra immediate indicates table idx (reserved)
@@ -202,20 +202,17 @@ const build = {
           argc = 1
         }
 
-        // (if (result i32)? (local.get 0)
-        //   (then a b)
-        //   (else a b)?
-        // )
+        // (if (result i32)? (local.get 0) (then a b) (else a b)?)
         else if (opCode==4) {
-          let [,type] = stack[0][0]==='result' ? stack.shift() : [,'void']
+          let [,type] = nodes[0][0]==='result' ? nodes.shift() : [,'void']
           imm=[TYPE[type]]
-          argc = 0, args.push(...instr(stack.shift()))
+          argc = 0, args.push(...instr(nodes.shift()))
           let body
-          if (stack[0][0]==='then') [,...body] = stack.shift(); else body = stack
+          if (nodes[0][0]==='then') [,...body] = nodes.shift(); else body = nodes
           while (body.length) imm.push(...instr(body.shift()))
 
-          if (stack[0]?.[0]==='else') {
-            [,...body] = stack.shift()
+          if (nodes[0]?.[0]==='else') {
+            [,...body] = nodes.shift()
             imm.push(OP.else, ...body.flatMap(instr))
           }
 
@@ -232,9 +229,9 @@ const build = {
         else if (opCode==2||opCode==3) {
           id && (depth[id] = depth.value)
           depth.value++ // push control flow stack
-          let [,type] = stack[0]?.[0]==='result' ? stack.shift() : [,'void']
+          let [,type] = nodes[0]?.[0]==='result' ? nodes.shift() : [,'void']
           imm=[TYPE[type]]
-          while (stack.length) imm.push(...instr(stack.shift()))
+          while (nodes.length) imm.push(...instr(nodes.shift()))
           imm.push(OP.end)
           depth.value--
         }
@@ -244,16 +241,15 @@ const build = {
         else if (opCode==0x0c||opCode==0x0d) {
           // br index indicates how callstack items to skip
           // FIXME: callstack must include if/else
-          console.log(depth, id)
-          imm.push(id ? depth.value-1-depth[id] : +stack.shift())
-          argc = (opCode==0x0d ? 1 + (stack.length > 1) : !!stack.length)
+          imm.push(id ? depth.value-1-depth[id] : +nodes.shift())
+          argc = (opCode==0x0d ? 1 + (nodes.length > 1) : !!nodes.length)
         }
         // (br_table 1 2 3 4  0  selector result?)
         else if (opCode==0x0e) {
           let table = []
-          while (!Array.isArray(stack[0])) table.push(+stack.shift())
+          while (!Array.isArray(nodes[0])) table.push(+nodes.shift())
           imm = [table.length-1, ...table]
-          argc = 1 + (stack.length>1)
+          argc = 1 + (nodes.length>1)
         }
 
         else if (opCode==null) err(`Unknown instruction \`${op}\``)
@@ -261,9 +257,9 @@ const build = {
 
 
       // consume arguments
-      if (stack.length < argc) err(`Stack arguments are not supported at \`${op}\``)
-      while (argc--) args.push(...instr(stack.shift()))
-      if (stack.length) err(`Too many arguments for \`${op}\`.`)
+      if (nodes.length < argc) err(`Stack arguments are not supported at \`${op}\``)
+      while (argc--) args.push(...instr(nodes.shift()))
+      if (nodes.length) err(`Too many arguments for \`${op}\`.`)
 
       return [...args, opCode, ...imm]
     }
