@@ -18,7 +18,7 @@ export default (str) => {
       }
       else if (c === SEMIC) i=str.indexOf('\n', i)+1  // ; ...
       else if (c <= SPACE) commit(), i++
-      else if (c === CPAREN) return commit(), i++//, Object.freeze(level) // to test immutability (slows down parser a bit)
+      else if (c === CPAREN) return commit(), i++
       else buf+=str[i++]
     }
 
