@@ -160,7 +160,7 @@ const build = {
           // FIXME: figure out point in Math.log2 aligns
           let o = {align: ALIGN[op], offset: 0}, p
           while (nodes[0]?.[0] in o) p = nodes.shift(), o[p[0]] = +p[1]
-          imm = [Math.log2(o.align), Math.log2(o.offset)]
+          imm = [Math.log2(o.align), o.offset]
           argc = opCode >= 54 ? 2 : 1
         }
 

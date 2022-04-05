@@ -738,55 +738,49 @@ t('wat-compiler: switch', () => {
   is(main(3), 3)
 })
 
-t.todo('wat-compiler: label redefinition', () => buffers(`
-  (func (export "main") (result i32)
-    (block $l1 (result i32)
-      (i32.add
-        (block $l1 (result i32) (i32.const 2))
-        (block $l1 (result i32) (br $l1 (i32.const 3)))
+t('wat-compiler: label redefinition', () => {
+  let src = `
+    (func (export "main") (result i32)
+      (block $l1 (result i32)
+        (i32.add
+          (block $l1 (result i32) (i32.const 2))
+          (block $l1 (result i32) (br $l1 (i32.const 3)))
+        )
       )
     )
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(5)
-  expect((await wasm(act)).main()).to.equal(5)
-}))
+  `
+  let {main} = run(src).exports
+  is(main(), 5)
+})
 
-t.todo('wat-compiler: address', () => buffers(`
-  (memory 1)
-  (data (i32.const 0) "abcdefghijklmnopqrstuvwxyz")
-  (func (export "a") (param $i i32) (result i32)
-    (i32.load8_u offset=0 (local.get $i))                   ;; 97 'a'
-  )
-  (func (export "b") (param $i i32) (result i32)
-    (i32.load8_u offset=1 align=1 (local.get $i))           ;; 98 'b'
-  )
-  (func (export "ab") (param $i i32) (result i32)
-    (i32.load16_s offset=0 (local.get $i))                  ;; 25185 'ab'
-  )
-  (func (export "cd") (param $i i32) (result i32)
-    (i32.load16_u offset=2 align=2 (local.get $i))          ;; 25699 'cd'
-  )
-  (func (export "z") (param $i i32) (result i32)
-    (i32.load8_s offset=25 align=1 (local.get $i))          ;; 122 'z'
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).a()).to.equal(97)
-  expect((await wasm(exp)).b()).to.equal(98)
-  expect((await wasm(exp)).ab()).to.equal(25185)
-  expect((await wasm(exp)).cd()).to.equal(25699)
-  expect((await wasm(exp)).z()).to.equal(122)
-
-  expect((await wasm(act)).a()).to.equal(97)
-  expect((await wasm(act)).b()).to.equal(98)
-  expect((await wasm(act)).ab()).to.equal(25185)
-  expect((await wasm(act)).cd()).to.equal(25699)
-  expect((await wasm(act)).z()).to.equal(122)
-}))
+t('wat-compiler: address', () => {
+  let src = `
+    (memory 1)
+    (data (i32.const 0) "abcdefghijklmnopqrstuvwxyz")
+    (func (export "a") (param $i i32) (result i32)
+      (i32.load8_u offset=0 (local.get $i))                   ;; 97 'a'
+    )
+    (func (export "b") (param $i i32) (result i32)
+      (i32.load8_u offset=1 align=1 (local.get $i))           ;; 98 'b'
+    )
+    (func (export "ab") (param $i i32) (result i32)
+      (i32.load16_s offset=0 (local.get $i))                  ;; 25185 'ab'
+    )
+    (func (export "cd") (param $i i32) (result i32)
+      (i32.load16_u offset=2 align=2 (local.get $i))          ;; 25699 'cd'
+    )
+    (func (export "z") (param $i i32) (result i32)
+      (i32.load8_s offset=25 align=1 (local.get $i))          ;; 122 'z'
+    )
+  `
+  // console.log(wat(src))
+  let {a,b,ab,cd,z}=run(src).exports
+  is(a(), 97)
+  is(b(), 98)
+  is(ab(), 25185)
+  is(cd(), 25699)
+  is(z(), 122)
+})
 
 t.todo('wat-compiler: int literals', () => buffers(`
   (func (export "i32.test") (result i32) (return (i32.const 0x0bAdD00D)))
