@@ -138,7 +138,7 @@ const build = {
     const instr = ([op, ...nodes]) => {
       if (op.length===1) err(`Inline instructions are not supported \`${op+nodes.join('')}\``)
 
-      let opCode = OP[op], argc=0, args=[], imm=[]
+      let opCode = OP[op], argc=0, args=[], imm=[], id
 
       // NOTE: we could reorganize ops by groups and detect signature as `op in STORE`
       // but numeric comparison is faster than generic hash lookup
@@ -155,9 +155,6 @@ const build = {
       }
       // instruction
       else {
-        // generalized guess: read label (FIXME: can cause side-effects)
-        let id = nodes[0]?.[0] === '$' && nodes.shift()
-
         // (i32.store align=n offset=m at value)
         if (opCode>=40&&opCode<=62) {
           // FIXME: figure out point in Math.log2 aligns
@@ -172,19 +169,19 @@ const build = {
 
         // (local.get $id), (local.tee $id x)
         else if (opCode>=32&&opCode<=34) {
-          imm = i32(id ? params[id] || locals[id] : nodes.shift())
+          imm = i32(nodes[0]?.[0]==='$' ? params[id=nodes.shift()] || locals[id] : nodes.shift())
           if (opCode>32) argc = 1
         }
 
         // (global.get id), (global.set id)
         else if (opCode==35||opCode==36) {
-          imm = i32(id ? ctx.global[id] : nodes.shift())
+          imm = i32(nodes[0]?.[0]==='$' ? ctx.global[nodes.shift()] : nodes.shift())
           if (opCode>35) argc = 1
         }
 
         // (call id ...nodes)
         else if (opCode==16) {
-          imm = i32(id = id ? ctx.func[id] : nodes.shift());
+          imm = i32(id = nodes[0]?.[0]==='$' ? ctx.func[nodes.shift()] : nodes.shift());
           // FIXME: how to get signature of imported function
           [,argc] = ctx.type[ctx.func[id][0]]
         }
@@ -231,7 +228,7 @@ const build = {
         // (block ...), (loop ...)
         else if (opCode==2||opCode==3) {
           callstack.push(opCode)
-          id && (callstack[id] = callstack.length)
+          if (nodes[0]?.[0]==='$') (callstack[nodes.shift()] = callstack.length)
           let [,type] = nodes[0]?.[0]==='result' ? nodes.shift() : [,'void']
           imm=[TYPE[type]]
           while (nodes.length) imm.push(...instr(nodes.shift()))
@@ -242,16 +239,18 @@ const build = {
         // (br $label result?)
         // (br_if $label cond result?)
         else if (opCode==0x0c||opCode==0x0d) {
-          // br index indicates how callstack items to pop
-          imm.push(id ? callstack.length-callstack[id] : +nodes.shift())
+          // br index indicates how many callstack items to pop
+          imm.push(nodes[0]?.[0]==='$' ? callstack.length-callstack[nodes.shift()] : +nodes.shift())
           argc = (opCode==0x0d ? 1 + (nodes.length > 1) : !!nodes.length)
         }
+
         // (br_table 1 2 3 4  0  selector result?)
         else if (opCode==0x0e) {
           imm = [0]
-          while (!Array.isArray(nodes[0])) id=nodes.shift(), imm.push(id[0]==='$'?callstack.length-callstack[id]:+id)
+          while (!Array.isArray(nodes[0])) id=nodes.shift(), imm.push(id[0][0]==='$'?callstack.length-callstack[id]:+id)
           imm[0] = imm.length-2
           argc = 1 + (nodes.length>1)
+          console.log(imm, argc)
         }
 
         else if (opCode==null) err(`Unknown instruction \`${op}\``)

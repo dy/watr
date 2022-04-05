@@ -706,7 +706,7 @@ t('wat-compiler: loop labels 2', () => {
   is(main(), 8)
 })
 
-t.todo('wat-compiler: switch', () => {
+t('wat-compiler: switch', () => {
   let src = `
     (func (export "main") (param i32) (result i32)
       (block $ret (result i32)
@@ -731,7 +731,7 @@ t.todo('wat-compiler: switch', () => {
       )
     )
   `
-  console.log(wat(src))
+  // console.log(wat(src))
   let {main} = run(src).exports
   is(main(0), 50)
   is(main(1), 20)
