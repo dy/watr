@@ -37,7 +37,6 @@ ALIGN = {
   'i64.store': 8, 'f32.store': 4, 'f64.store': 8,
   'i32.store8': 1, 'i32.store16': 2, 'i64.store8': 1, 'i64.store16': 2, 'i64.store32': 4,
 }
-
 OP.map((op,i)=>OP[op]=i) // init op names
 
 // convert wat tree to wasm binary
@@ -144,95 +143,109 @@ const build = {
       // but numeric comparison is faster than generic hash lookup
       // FIXME: we often use OP.end or alike: what if we had list of global constants?
 
-      // (i32.store align=n offset=m at value)
-      if (opCode>=40&&opCode<=62) {
-        // FIXME: figure out point in Math.log2 aligns
-        let o = {align: ALIGN[op], offset: 0}, p
-        while (stack[0]?.[0] in o) p = stack.shift(), o[p[0]] = +p[1]
-        imm = [Math.log2(o.align), Math.log2(o.offset)]
-        argc = opCode >= 54 ? 2 : 1
+      // binary/unary
+      if (opCode>=69) {
+          argc = opCode>=167 ||
+          (opCode<=159 && opCode>=153) ||
+          (opCode<=145 && opCode>=139) ||
+          (opCode<=123 && opCode>=121) ||
+          (opCode<=105 && opCode>=103) ||
+          opCode==80 || opCode==69 ? 1 : 2
       }
+      // instruction
+      else {
+        // generalized guess: read label (FIXME: can cause side-effects)
+        let id = stack[0]?.[0] === '$' && stack.shift()
 
-      // (i32.const 123)
-      else if (opCode>=65&&opCode<=68) imm = i32(stack.shift())
-
-      // (local.get $id), (local.tee $id x)
-      else if (opCode>=32&&opCode<=34) {
-        let id = stack.shift()
-        imm = i32(id[0]==='$' ? params[id] || locals[id] : id)
-        if (opCode>32) argc = 1
-      }
-
-      // (global.get id), (global.set id)
-      else if (opCode==35||opCode==36) {
-        let id = stack.shift()
-        imm = i32(id[0]==='$' ? ctx.global[id] : id)
-        if (opCode>35) argc = 1
-      }
-
-      // (call id ...stack)
-      else if (opCode==16) {
-        let id = stack.shift()
-        imm = i32(id = id[0]==='$' ? ctx.func[id] : id);
-        // FIXME: how to get signature of imported function
-        [,argc] = ctx.type[ctx.func[id][0]]
-      }
-
-      // (call_indirect (type $typeName) (idx) ...stack)
-      else if (opCode==17) {
-        let typeId = stack.shift()[1];
-        [,argc] = ctx.type[typeId = typeId[0]==='$'?ctx.type[typeId]:typeId]
-        argc++
-        imm = [+typeId, 0] // extra immediate indicates table idx (reserved)
-      }
-
-      // (memory.grow $idx?)
-      else if (opCode==63||opCode==64) {
-        imm = [0]
-        argc = 1
-      }
-
-      // (i32.add a b) - binary/unaries
-      else if (opCode>=106) {
-        argc = opCode>=167 || (opCode<=159 && opCode>=153) || (opCode<=145 && opCode>=139) || (opCode<=123 && opCode>=121) || (opCode<=105 && opCode>=103) ? 1 : 2
-      }
-
-      // (if (result i32)? (local.get 0)
-      //   (then a b)
-      //   (else a b)?
-      // )
-      else if (opCode==4) {
-        let [,type] = stack[0][0]==='result' ? stack.shift() : [,'void']
-        imm=[TYPE[type]]
-        argc = 0, args.push(...instr(stack.shift()))
-
-        let body
-        if (stack[0][0]==='then') [,...body] = stack.shift(); else body = stack
-        while (body.length) imm.push(...instr(body.shift()))
-
-        if (stack[0][0]==='else') {
-          [,...body] = stack.shift()
-          imm.push(OP.else, ...body.flatMap(instr))
+        // (i32.store align=n offset=m at value)
+        if (opCode>=40&&opCode<=62) {
+          // FIXME: figure out point in Math.log2 aligns
+          let o = {align: ALIGN[op], offset: 0}, p
+          while (stack[0]?.[0] in o) p = stack.shift(), o[p[0]] = +p[1]
+          imm = [Math.log2(o.align), Math.log2(o.offset)]
+          argc = opCode >= 54 ? 2 : 1
         }
 
-        imm.push(OP.end)
+        // (i32.const 123)
+        else if (opCode>=65&&opCode<=68) imm = i32(stack.shift())
+
+        // (local.get $id), (local.tee $id x)
+        else if (opCode>=32&&opCode<=34) {
+          imm = i32(id ? params[id] || locals[id] : stack.shift())
+          if (opCode>32) argc = 1
+        }
+
+        // (global.get id), (global.set id)
+        else if (opCode==35||opCode==36) {
+          imm = i32(id ? ctx.global[id] : stack.shift())
+          if (opCode>35) argc = 1
+        }
+
+        // (call id ...stack)
+        else if (opCode==16) {
+          imm = i32(id = id ? ctx.func[id] : stack.shift());
+          // FIXME: how to get signature of imported function
+          [,argc] = ctx.type[ctx.func[id][0]]
+        }
+
+        // (call_indirect (type $typeName) (idx) ...stack)
+        else if (opCode==17) {
+          let typeId = stack.shift()[1];
+          [,argc] = ctx.type[typeId = typeId[0]==='$'?ctx.type[typeId]:typeId]
+          argc++
+          imm = [+typeId, 0] // extra immediate indicates table idx (reserved)
+        }
+
+        // FIXME (memory.grow $idx?)
+        else if (opCode==63||opCode==64) {
+          imm = [0]
+          argc = 1
+        }
+
+        // (if (result i32)? (local.get 0)
+        //   (then a b)
+        //   (else a b)?
+        // )
+        else if (opCode==4) {
+          let [,type] = stack[0][0]==='result' ? stack.shift() : [,'void']
+          imm=[TYPE[type]]
+          argc = 0, args.push(...instr(stack.shift()))
+
+          let body
+          if (stack[0][0]==='then') [,...body] = stack.shift(); else body = stack
+          while (body.length) imm.push(...instr(body.shift()))
+
+          if (stack[0][0]==='else') {
+            [,...body] = stack.shift()
+            imm.push(OP.else, ...body.flatMap(instr))
+          }
+
+          imm.push(OP.end)
+        }
+
+        // (drop arg)
+        else if (opCode==0x1a) { argc = 1 }
+
+        // (block ...)
+        else if (opCode==2) {
+          id && (depth[id] = depth.value)
+          depth.value++ // push control flow stack
+          let [,type] = stack[0]?.[0]==='result' ? stack.shift() : [,'void']
+          imm=[TYPE[type]]
+          while (stack.length) imm.push(...instr(stack.shift()))
+          imm.push(OP.end)
+          depth.value--
+        }
+
+        // (br $label)
+        else if (opCode==0x0c) {
+          // FIXME: figure out if br index points to depth level or indicates how many levels to pop out
+          imm.push(id ? depth.value-1-depth[id] : +stack.shift())
+        }
+
+        else if (opCode==null) err(`Unknown instruction \`${op}\``)
       }
 
-      // (drop arg)
-      else if (opCode==0x1a) { argc = 1 }
-
-      // (block ...)
-      else if (opCode==2) {
-        let label = stack[0]?.[0]==='$' && stack.shift()
-        let [,type] = stack[0]?.[0]==='result' ? stack.shift() : [,'void']
-        imm=[TYPE[type]]
-        while (stack.length) imm.push(...instr(stack.shift()))
-        imm.push(OP.end)
-      }
-
-      else if (opCode!=null);
-
-      else err(`Unknown instruction \`${op}\``)
 
       // consume arguments
       if (stack.length < argc) err(`Stack arguments are not supported at \`${op}\``)
@@ -242,7 +255,7 @@ const build = {
       return [...args, opCode, ...imm]
     }
 
-    let code = body.flatMap(instr)
+    let depth = {value:0}, code = body.flatMap(instr)
 
     // squash local types
     let locTypes = locals.reduce((a, type) => (type==a[a.length-1] ? a[a.length-2]++ : a.push(1,type), a), [])

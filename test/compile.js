@@ -410,98 +410,105 @@ t('wat-compiler: block', () => {
   is(answer(), 42)
 })
 
-t.todo('wat-compiler: block multi', () => buffers(`
-  (func $dummy)
-  (func (export "multi") (result i32)
-    (block (call $dummy) (call $dummy) (call $dummy) (call $dummy))
-    (block (result i32) (call $dummy) (call $dummy) (call $dummy) (i32.const 8))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).multi()).to.equal(8)
-  expect((await wasm(act)).multi()).to.equal(8)
-}))
-
-t.todo('wat-compiler: br', () => buffers(`
-  (global $answer (mut i32) (i32.const 42))
-  (func $set
-    (global.set $answer (i32.const 666))
-  )
-  (func (export "main") (result i32)
-    (block (br 0) (call $set))
-    (global.get $answer)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(42)
-  expect((await wasm(act)).main()).to.equal(42)
-}))
-
-t.todo('wat-compiler: br mid', () => buffers(`
-  (global $answer (mut i32) (i32.const 42))
-  (func $set
-    (global.set $answer (i32.const 666))
-  )
-  (func (export "main") (result i32)
-    (block (call $set) (br 0) (global.set $answer (i32.const 0)))
-    (global.get $answer)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(666)
-  expect((await wasm(act)).main()).to.equal(666)
-}))
-
-t.todo('wat-compiler: block named + br', () => buffers(`
-  (global $answer (mut i32) (i32.const 42))
-  (func $set
-    (global.set $answer (i32.const 666))
-  )
-  (func (export "main") (result i32)
-    (block $outer
-      (block $inner
-        (call $set)
-        (br $inner)
-      )
-      (global.set $answer (i32.const 0))
+t('wat-compiler: block multi', () => {
+  let src = `
+    (func $dummy)
+    (func (export "multi") (result i32)
+      (block (call $dummy) (call $dummy) (call $dummy) (call $dummy))
+      (block (result i32) (call $dummy) (call $dummy) (call $dummy) (i32.const 8))
     )
-    (global.get $answer)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(0)
-  expect((await wasm(act)).main()).to.equal(0)
-}))
+  `
+  let {multi} = run(src).exports
+  is(multi(), 8)
+  is(multi(), 8)
 
-t.todo('wat-compiler: block named 2 + br', () => buffers(`
-  (global $answer (mut i32) (i32.const 42))
-  (func $set
-    (global.set $answer (i32.const 666))
-  )
-  (func (export "main") (result i32)
-    (block $outer
-      (block $inner
-        (call $set)
-        (br $inner)
-      )
-      (block $inner2
-        (global.set $answer (i32.const 444))
-        (br $inner2)
-      )
-      (global.set $answer (i32.const 0))
+})
+
+t('wat-compiler: br', () => {
+  let src = `
+    (global $answer (mut i32) (i32.const 42))
+    (func $set
+      (global.set $answer (i32.const 666))
     )
-    (global.get $answer)
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).main()).to.equal(0)
-  expect((await wasm(act)).main()).to.equal(0)
-}))
+    (func (export "main") (result i32)
+      (block (br 0) (call $set))
+      (global.get $answer)
+    )
+  `
+
+  let {main} = run(src).exports
+  is(main(), 42)
+  is(main(), 42)
+})
+
+t('wat-compiler: br mid', () => {
+  let src = `
+    (global $answer (mut i32) (i32.const 42))
+    (func $set
+      (global.set $answer (i32.const 666))
+    )
+    (func (export "main") (result i32)
+      (block (call $set) (br 0) (global.set $answer (i32.const 0)))
+      (global.get $answer)
+    )
+  `
+  let {main} = run(src).exports
+  is(main(), 666)
+  is(main(), 666)
+})
+
+t('wat-compiler: block named + br', () => {
+  let src = `
+    (global $answer (mut i32) (i32.const 42))
+    (func $set
+      (global.set $answer (i32.const 666))
+    )
+    (func (export "main") (result i32)
+      (block $outerer ;; 2
+      (block $outer ;; 1
+        (block $inner ;; 0
+          (call $set)
+          (br $inner)
+        )
+        (global.set $answer (i32.const 0))
+      )
+      )
+      (global.get $answer)
+    )
+  `
+  // console.log(wat(src))
+  let {main} = run(src).exports
+  is(main(), 0)
+  is(main(), 0)
+})
+
+t('wat-compiler: block named 2 + br', () => {
+  let src = `
+    (global $answer (mut i32) (i32.const 42))
+    (func $set
+      (global.set $answer (i32.const 666))
+    )
+    (func (export "main") (result i32)
+      (block $outer
+        (block $inner
+          (call $set)
+          (br $inner)
+        )
+        (block $inner2
+          (global.set $answer (i32.const 444))
+          (br $inner2)
+        )
+        (global.set $answer (i32.const 0))
+      )
+      (global.get $answer)
+    )
+  `
+  let {main} = run(src).exports
+
+  is(main(), 0)
+  is(main(), 0)
+
+})
 
 t.todo('wat-compiler: br_table', () => buffers(`
   (func (export "main") (param i32) (result i32)
