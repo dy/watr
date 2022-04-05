@@ -66,42 +66,33 @@ Ambiguous syntax is intentionally prohibited in favor of explicit lispy structur
 Each instruction has prefix signature with parenthesized immediates and arguments.
 
 ```wast
-;; ✘ open immediates, stack arguments
 (func (result i32)
-  i32.const 1
+  i32.const 1                 ;; ✘ stacked arguments
   drop
   i32.const 0
-  i32.load offset=0 align=4
+  i32.load offset=0 align=4   ;; ✘ ungrouped immediates
 )
 
-;; ✘ stack arguments
 (func (result i32)
-  (i32.const 1)
-  (drop)
-  (i32.const 0)
-  (i32.load offset=0 align=4)
-)
-
-;; ✔ grouped immediates, arguments
-(func (result i32)
-  (drop (i32.const 1))
-  (i32.load offset=0 align=4 (i32.const 0))
+  (drop (i32.const 1))                        ;; ✔ nested arguments
+  (i32.load offset=0 align=4 (i32.const 0))   ;; ✔ grouped immediates
 )
 ```
 
 ```wast
-;; ✘ inline instruction
 (local.get 0)
-if (result i32)
+if (result i32)   ;; ✘ inline instruction
   (i32.const 1)
 end
 
-;; ✘ stack argument
-(local.get 0)
-(if (result i32) (i32.const 1))
+(local.get 0)     ;; ✘ stack argument
+(if (result i32)
+  (i32.const 1)
+)
 
-;; ✔ explicit signature
-(if (result i32) (local.get 0) (i32.const 1))
+(if (result i32) (local.get 0)
+  (i32.const 1)   ;; ✔ explicit signature
+)
 ```
 
 <!--
