@@ -248,18 +248,10 @@ const build = {
         }
         // (br_table 1 2 3 4  0  selector result?)
         else if (opCode==0x0e) {
-          let table = []
-          while (!Array.isArray(nodes[0])) table.push(+nodes.shift())
-          imm = [table.length-1, ...table]
+          imm = [0]
+          while (!Array.isArray(nodes[0])) id=nodes.shift(), imm.push(id[0]==='$'?callstack.length-callstack[id]:+id)
+          imm[0] = imm.length-2
           argc = 1 + (nodes.length>1)
-
-          // TODO
-          // let label
-          // imm = [0]
-          // while (!Array.isArray(nodes[0])) label = nodes.shift(), imm.push(label[0]==='$'?callstack.length-callstack[label]:+label)
-          // console.log(imm)
-          // imm[0] = imm.length-1
-          // argc = 1 + (nodes.length>1)
         }
 
         else if (opCode==null) err(`Unknown instruction \`${op}\``)
