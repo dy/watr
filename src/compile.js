@@ -96,14 +96,15 @@ export default (nodes) => {
     nodes = remaining
   }
 
-  // console.log(sections)
+  console.log(sections)
   // build binary sections
   for (let name in sections) {
-    let items=sections[name], count=items.length
-    if (!count) continue
+    let items=sections[name]
+    if (items.importc) items = items.slice(items.importc) // discard imported functions
+    if (!items.length) continue
     let sizePtr = binary.length+1
     binary.push(SECTION[name], 0)
-    if (name !== 'start') binary.push(count)
+    if (binary[sizePtr-1]!==8) binary.push(items.length) // skip start section count
     for (let item of items) binary.push(...item)
     binary[sizePtr] = binary.length - sizePtr - 1
   }
@@ -115,17 +116,14 @@ const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
   // FIXME: handle non-function types
-  type([_, typeName, decl], ctx) {
+  type([, typeName, decl], ctx) {
     if (typeName[0]!=='$') decl=typeName, typeName=null
-    let params = [],
-        result = [],
-        kind = decl.shift(),
-        idx, bytes
+    let params = [], result = [], kind = decl.shift(), idx, bytes
 
     if (kind==='func') {
       // collect params
       while (decl[0]?.[0] === 'param') {
-        let [_, ...types] = decl.shift()
+        let [, ...types] = decl.shift()
         if (types[0]?.[0] === '$') params[types.shift()] = params.length
         params.push(...types.map(t => TYPE[t]))
       }
@@ -146,8 +144,8 @@ const build = {
   },
 
   // (func $name? ...params result ...body)
-  func([_,...body], ctx) {
-    let idx=(ctx.import.func||0) + ctx.func.length, // fn index comes after impoted fns
+  func([,...body], ctx) {
+    let idx=ctx.func.length, // fn index comes after impoted fns
         locals=[] // list of local variables
 
     // fn name
@@ -164,103 +162,107 @@ const build = {
 
     // collect locals
     while (body[0]?.[0] === 'local') {
-      let [_, ...localTypes] = body.shift(), name
+      let [, ...localTypes] = body.shift(), name
       if (localTypes[0][0]==='$')
         params[name=localTypes.shift()] ? err('Ambiguous name '+name) : name,
         locals[name] = params.length + locals.length
       localTypes.forEach(t => locals.push(TYPE[t]))
     }
 
-    // consume instruction with immediates
-    // FIXME: what if we unwrap groups into inline commands? Or the vv - make inline commands into groups
-    const immediates = (args) => {
-      let op = args.shift(), imm = []
+    // map code instruction into bytes: [args, opCode, immediates]
+    const instr = ([op, ...stack]) => {
+      if (op.length===1) err(`Inline instructions are not supported \`${op+stack.join('')}\``)
 
-      // FIXME: make faster lookup.
+      let opCode = OP[op], argc=0, args=[], imm=[]
       // FIXME: Maybe make use of iinit also?
-      // i32.const 123
-      if (op.endsWith('const')) imm = i32(args.shift())
 
-      // i32.store align=n offset=m
-      else if (ALIGN[op]) {
+      // (i32.store align=n offset=m at value)
+      if (opCode>=40&&opCode<=62) {
         // FIXME: figure out point in Math.log2 aligns
         let o = {align: ALIGN[op], offset: 0}, p
-        while (args[0]?.[0] in o) p = args.shift(), o[p[0]] = +p[1]
-        imm = [...i32(Math.log2(o.align)), ...i32(Math.log2(o.offset))]
+        while (stack[0]?.[0] in o) p = stack.shift(), o[p[0]] = +p[1]
+        imm = [Math.log2(o.align), Math.log2(o.offset)]
+        argc = opCode >= 54 ? 2 : 1
       }
 
-      // (local.get id), (local.tee id)
-      else if (op.startsWith('local')) {
-        let id = args.shift()
+      // (i32.const 123)
+      else if (opCode>=65&&opCode<=68) imm = i32(stack.shift())
+
+      // (local.get $id), (local.tee $id x)
+      else if (opCode>=32&&opCode<=34) {
+        let id = stack.shift()
         imm = i32(id[0]==='$' ? params[id] || locals[id] : id)
+        if (opCode>32) argc = 1
       }
 
       // (global.get id), (global.set id)
-      else if (op.startsWith('global')) {
-        let id = args.shift()
+      else if (opCode==35||opCode==36) {
+        let id = stack.shift()
         imm = i32(id[0]==='$' ? ctx.global[id] : id)
+        if (opCode>35) argc = 1
       }
 
-      // (call id)
-      else if (op === 'call') {
-        let id = args.shift()
-        imm = i32(id[0]==='$' ? ctx.func[id] : id)
+      // (call id ...stack)
+      else if (opCode==16) {
+        let id = stack.shift()
+        imm = i32(id = id[0]==='$' ? ctx.func[id] : id);
+        // FIXME: how to get signature of imported function
+        [,argc] = ctx.type[ctx.func[id][0]]
       }
 
-      // (call_indirect (type $typeName) idx)
-      else if (op === 'call_indirect') {
-        let type = args.shift(), [_,id] = type
-        imm = i32(id[0]==='$' ? ctx.type[id] : id)
-        imm.push(0)
+      // (call_indirect (type $typeName) (idx) ...stack)
+      else if (opCode==17) {
+        let typeId = stack.shift()[1];
+        [,argc] = ctx.type[typeId = typeId[0]==='$'?ctx.type[typeId]:typeId]
+        argc++
+        imm = [+typeId, 0] // extra immediate indicates table idx (reserved)
       }
 
       // (memory.grow $idx?)
-      else if (op === 'memory.grow') imm = [0]
+      else if (opCode==63||opCode==64) {
+        imm = [0]
+        argc = 1
+      }
+
+      // (i32.add a b) - binary/unaries
+      else if (opCode>=106) {
+        argc = opCode>=167 || (opCode<=159 && opCode>=153) || (opCode<=145 && opCode>=139) || (opCode<=123 && opCode>=121) || (opCode<=105 && opCode>=103) ? 1 : 2
+      }
 
       // (if (result i32)? (local.get 0)
       //   (then a b)
       //   (else a b)?
       // )
-      //
-      // i32.eq
-      // if (result i32 i64)?
-      //   i32.const 1
-      // else
-      //   $body
-      // end
-      else if (op === 'if') {
-        // let
+      else if (opCode==4) {
+        let [,type] = stack[0][0]==='result' ? stack.shift() : []
+        argc = 0, args.push(...instr(stack.shift()))
+        imm=[TYPE[type]]
+
+        let body
+        if (stack[0][0]==='then') [,...body] = stack.shift(); else body = stack
+        imm.push(...body.flatMap(instr))
+
+        if (stack[0][0]==='else') {
+          [,...body] = stack.shift()
+          imm.push(OP.else, ...body.flatMap(instr))
+        }
+
+        imm.push(OP.end)
       }
 
-      imm.unshift(OP[op])
+      // (drop)
+      else if (opCode==0x1a) { argc = 1 }
 
-      return imm
+      else err(`Unknown instruction \`${op}\``)
+
+      if (stack.length < argc) err(`Stack arguments are not supported at \`${op}\``)
+      while (argc--) args.push(...instr(stack.shift()))
+      if (stack.length) err(`Too many arguments for \`${op}\`.`)
+
+      return [...args, opCode, ...imm]
     }
 
-    // consume instruction block
-    const instr = (args) => {
-      let op = args[0]
-
-      // FIXME: risk of consuming non-inlinable instructions like (local.get id), (call id)
-      if (typeof op === 'string' && OP[op]) return immediates(args)
-
-      // (a b (c))
-      else if (Array.isArray(op)) {
-        [...args] = args.shift() // FIXME: this spread can be solved more elegantly somewhere
-        let imm = immediates(args)
-        return [...args.flatMap(instr), ...imm]
-      }
-
-      err(`Unknown instruction \`${op}\``)
-    }
-
-    let code = []
-    while (body.length) code.push(...instr(body))
-
-    // flat ops loop would look like
-    // for (i=0; i<body.length; i++) {
-    //   body[i]
-    // }
+    let code = body.flatMap(instr)
 
     // FIXME: smush local type defs
     ctx.code.push([code.length+2+locals.length*2, locals.length, ...locals.flatMap(type => [1, type]), ...code, OP.end])
@@ -269,7 +271,7 @@ const build = {
   // (memory min max shared)
   // (memory $name min max shared)
   // (memory (import "js" "mem") min max shared)
-  memory([_, ...parts], ctx) {
+  memory([, ...parts], ctx) {
     if (parts[0][0]==='$') ctx.memory[parts.shift()] = ctx.memory.length
     if (parts[0][0] === 'import') {
       let [imp, ...limits] = parts
@@ -284,7 +286,7 @@ const build = {
   // (global $id i32 (i32.const 42))
   // (global $id (mut i32) (i32.const 42))
   // FIXME (global $g1 (import "js" "g1") (mut i32))  ;; import from js
-  global([_, ...args], ctx) {
+  global([, ...args], ctx) {
     let name = args[0][0]==='$' && args.shift()
     if (name) ctx.global[name] = ctx.global.length
 
@@ -295,7 +297,7 @@ const build = {
 
   // (table 1 2? funcref)
   // (table $name 1 2? funcref)
-  table([_, ...args], ctx) {
+  table([, ...args], ctx) {
     let name = args[0][0]==='$' && args.shift()
     if (name) ctx.table[name] = ctx.table.length
 
@@ -304,30 +306,31 @@ const build = {
   },
 
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
-  elem([_, offset, ...elems], ctx) {
+  elem([, offset, ...elems], ctx) {
     const tableIdx = 0 // FIXME: table index can be defined
     ctx.elem.push([tableIdx, ...iinit(offset, ctx), elems.length, ...elems.map(el => el[0]==='$' ? ctx.func[el] : +el)])
   },
 
   //  (export "name" (kind $name|idx))
-  export([_, name, [kind, idx]], ctx) {
+  export([, name, [kind, idx]], ctx) {
     if (idx[0]==='$') idx = ctx[kind][idx]
-    ctx.export.push([...str(name), KIND[kind], idx])
+    ctx.export.push([...str(name), KIND[kind], +idx])
   },
 
   // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
   // (import "js" "mem" (memory 1))
   // (import "js" "mem" (memory $name 1))
-  import([_, mod, name, ref], ctx) {
+  import([, mod, name, ref], ctx) {
     // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
     // build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
 
     let details, [kind, ...parts] = ref
     if (kind==='func') {
-      if (parts[0]?.[0]==='$') ctx.func[parts.shift()] = ctx.import.func||=0
-      ctx.import.func++ // track imported fn count for proper fn indexing
+      // we track imported funcs in func section to share namespace, and skip them on final build
+      if (parts[0]?.[0]==='$') ctx.func[parts.shift()] = ctx.func.length
       let [typeIdx] = build.type([, ['func', ...parts]], ctx)
-      details = [typeIdx]
+      ctx.func.push(details = [typeIdx])
+      ctx.func.importc = (ctx.func.importc||0)+1
     }
     else if (kind==='memory') {
       if (parts[0][0]==='$') ctx.memory[parts.shift()] = ctx.memory.length
@@ -338,13 +341,13 @@ const build = {
   },
 
   // (data (i32.const 0) "\2a")
-  data([_, offset, init], ctx) {
+  data([, offset, init], ctx) {
     // FIXME: first is mem index
     ctx.data.push([0, ...iinit(offset,ctx), ...str(init)])
   },
 
   // (start $main)
-  start([_, name],ctx) {
+  start([, name],ctx) {
     if (!ctx.start.length) ctx.start.push([name[0]==='$' ? ctx.func[name] : name])
   }
 }

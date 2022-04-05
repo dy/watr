@@ -1,4 +1,4 @@
-import t, { is, ok, same } from 'tst'
+import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import Wabt from '../lib/wabt.js'
@@ -58,9 +58,10 @@ t('compile: export mem/func', t => {
   is(compile(['module',                                   // (module
     ['memory', 1],                                        //   (memory 1)
     ['func', ['param', 'i32', 'i32'], ['result', 'i32'],  //   (func (param i32 i32) (result i32)
-      ['local.get', 0],                                   //     local.get 0
-      ['local.get', 1],                                   //     local.get 1
-      ['i32.store', ['align','4']],                           //     i32.store
+      // ['local.get', 0],                                   //     local.get 0
+      // ['local.get', 1],                                   //     local.get 1
+      // ['i32.store', ['align','4']],                           //     i32.store
+      ['i32.store', ['align','4'], ['local.get', 0], ['local.get', 1]],
       ['local.get', 1]                                    //     local.get 1
     ],                                                    //   )
     ['export', '"m"', ['memory', 0]],                       //   (export "m" (memory 0 ))
@@ -91,6 +92,26 @@ t('compiler: memory $foo (import "a" "b" ) 1 2 shared', () => {
   run(src, {env:{mem: new WebAssembly.Memory({initial:1, maximum: 1, shared: 1})}})
 })
 
+t('compiler: stacked syntax should not be supported', () => {
+  throws(t => {
+    compile(parse(`
+      (func (export "answer") (param i32 i32) (result i32)
+        (local.get 0)
+        (local.get 1)
+        (i32.add)
+      )
+    `))
+  })
+})
+
+t('compiler: inline syntax is not supported', () => {
+  throws(t => {
+    compile(parse(`
+      (func $f1 (result i32)
+        i32.const 42)
+    `))
+  })
+})
 
 
 // wat-compiler
@@ -112,10 +133,8 @@ t('wat-compiler: function with 1 param', () => {
 t('wat-compiler: function with 2 params', () => {
   let {answer} = run(`
     (func (export "answer") (param i32 i32) (result i32)
-      (local.get 0)
-      (local.get 1)
-      (i32.add)
-      )
+      (i32.add (local.get 0) (local.get 1))
+    )
   `).exports
   is(answer(20,22), 42)
 })
@@ -123,11 +142,9 @@ t('wat-compiler: function with 2 params', () => {
 t('wat-compiler: function with 2 params 2 results', () => {
   let {answer} = run(`
     (func (export "answer") (param i32 i32) (result i32 i32)
-      (local.get 0)
-      (local.get 1)
-      (i32.add)
+      (i32.add (local.get 0) (local.get 1))
       (i32.const 666)
-      )
+    )
   `).exports
 
   is(answer(20,22), [42,666])
@@ -160,8 +177,7 @@ t('wat-compiler: function param + local', () => {
   let {add} = run(`
     (func (export "add") (param $a i32) (result i32)
       (local $b i32)
-      (local.tee $b (i32.const 20))
-      (i32.add (local.get $a))
+      (i32.add (local.get $a) (local.tee $b (i32.const 20)))
     )
   `).exports
 
@@ -174,9 +190,9 @@ t('wat-compiler: call function indirect (table)', () => {
     (table 2 funcref)
       (elem (i32.const 0) $f1 $f2)
       (func $f1 (result i32)
-        i32.const 42)
+        (i32.const 42))
       (func $f2 (result i32)
-        i32.const 13)
+        (i32.const 13))
     (func (export "call_function_indirect") (param $a i32) (result i32)
       (call_indirect (type $return_i32) (local.get $a))
     )
@@ -193,11 +209,11 @@ t('wat-compiler: call function indirect (table) non zero indexed ref types', () 
     (table 2 funcref)
       (elem (i32.const 0) $f1 $f2)
       (func $xx (result i32)
-        i32.const 42)
+        (i32.const 42))
       (func $f1 (result i32)
-        i32.const 42)
+        (i32.const 42))
       (func $f2 (result i32)
-        i32.const 13)
+        (i32.const 13))
     (func (export "call_function_indirect") (param $a i32) (result i32)
       (call_indirect (type $return_i32) (local.get $a))
     )
@@ -267,12 +283,9 @@ t('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
     (memory 1 2)
     (data (i32.const 0) "\2a")
     (func (export "get") (result i32)
-      i32.const 1
-      i32.const 2
-      drop
-      drop
-      i32.const 0
-      i32.load offset=0 align=4
+      (drop (i32.const 1))
+      (drop (i32.const 2))
+      (i32.load offset=0 align=4 (i32.const 0))
     )
   `).exports
 
@@ -280,12 +293,13 @@ t('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
 })
 
 t('wat-compiler: import function', () => {
-  let {call_imported_function} = run(`
+  let src = `
     (import "math" "add" (func $add (param i32 i32) (result i32)))
     (func (export "call_imported_function") (result i32)
       (call $add (i32.const 20) (i32.const 22))
     )
-  `, {math:{ add: (a, b) => a + b }}).exports
+  `
+  let {call_imported_function} = run(src, {math:{ add: (a, b) => a + b }}).exports
 
   is(call_imported_function(), 42)
 })
@@ -329,7 +343,7 @@ t('wat-compiler: set a start function', () => {
   is(get(), 666)
 })
 
-t.todo('wat-compiler: if else', () => {
+t('wat-compiler: if else', () => {
   let src1 = `
     (func $dummy)
     (func (export "foo") (param i32) (result i32)
@@ -351,8 +365,10 @@ t.todo('wat-compiler: if else', () => {
       end
     )
   `
+  // these are identical parts, but we restrict only lisp syntax src1
+  console.log(wat(src1))
   is(wat(src1).buffer, wat(src2).buffer)
-  let {foo} = run(src).exports
+  let {foo} = run(src1).exports
   is(foo(0), 0)
   is(foo(1), 1)
 })
