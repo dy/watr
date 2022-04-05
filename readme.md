@@ -1,13 +1,25 @@
 # watr
 
-Light & fast bare minimum WAT compiler.
+> Light & fast WAT compiler.
+
+Provides bare minimum WAT to WASM compilation without unnecessary syntax complexities (see [limitations](#limitations)).
+Can be useful where dynamic WASM recompilation is required, eg. as WASM API layer for hi-level languages in various REPLs.
+<!--, eg. [sonl](https://github.com/audio-lab/sonl). -->
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
+<!--
 &nbsp; | watr | wat-compiler | wabt
 ---|---|---|---
 Size (gzipped) | 2.8kb | 6kb | 300kb
 Performance (op/s) | 45000 | 2500 | 3100
+-->
+
+&nbsp; | Size (gzipped) | Performance (op/s)
+---|---|---
+watr | 2.8kb | 45,000
+wat-compiler | 6kb | 2,500
+wabt | 300kb | 3,100
 
 ## Usage
 
@@ -47,7 +59,6 @@ const {double} = instance.exports
 double(108) // 216
 ```
 
-That can be useful as WASM API layer for hi-level languages. <!--, eg. [sonl](https://github.com/audio-lab/sonl). -->
 
 ## Limitations
 
