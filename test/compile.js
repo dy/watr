@@ -398,17 +398,16 @@ t.skip('bench: if', () => {
   console.timeEnd('wabt')
 })
 
-t.todo('wat-compiler: block', () => buffers(`
-  (func (export "answer") (result i32)
-    (block (nop))
-    (block (result i32) (i32.const 42))
-  )
-`)
-.then(([exp,act]) => hexAssertEqual(exp,act))
-.then(async ([exp,act]) => {
-  expect((await wasm(exp)).answer()).to.equal(42)
-  expect((await wasm(act)).answer()).to.equal(42)
-}))
+t.todo('wat-compiler: block', () => {
+  let {answer} = run(`
+    (func (export "answer") (result i32)
+      (block (nop))
+      (block (result i32) (i32.const 42))
+    )
+  `)
+  is(answer(), 42)
+  is(answer(), 42)
+})
 
 t.todo('wat-compiler: block multi', () => buffers(`
   (func $dummy)
@@ -920,101 +919,50 @@ t.todo('wat-compiler: float literals', () => buffers(`
 `)
 .then(([exp,act]) => hexAssertEqual(exp,act)))
 
-// e2e
-const e2e = [
-  'malloc',
-  'brownian',
-  'containers',
-  'quine',
-  'fire',
-  'metaball',
-  'raytrace',
-  'snake',
-  'maze',
-  'dino',
-  'raycast',
-]
-
-e2e.forEach(name => {
-  t.todo('wat-compiler: e2e: '+name, () =>
-    fetch('/test/fixtures/e2e/'+name+'.wat')
-    .then(res => res.text())
-    .then(text => buffers(text))
-    .then(([exp,act]) => hexAssertEqual(exp,act)))
-})
-
-
-
-t.todo(`export 2 funcs`, () => buffers(`
+t(`export 2 funcs`, () => run(`
   (func (export "value") (result i32)
     (i32.const 42)
   )
   (func (export "another") (result i32)
     (i32.const 666)
   )
-`, mod => mod
+`))
 
-  .func('value', [], ['i32'],
-    [],
-    [...i32.const(42)],
-    true)
-  .func('another', [], ['i32'],
-    [],
-    [...i32.const(666)],
-    true)
-
-).then(([exp,act]) => hexAssertEqual(exp,act)))
-
-t.todo(`exported & unexported function`, () => buffers(`
-  (func (export "value") (result i32)
-    (i32.const 42)
-  )
-  (func (result i32)
-    (i32.const 666)
-  )
-`, mod => mod
-
-  .func('value', [], ['i32'],
-    [],
-    [...i32.const(42)],
-    true)
-  .func('another', [], ['i32'],
-    [],
-    [...i32.const(666)],
+t(`exported & unexported function`, () => {
+  run(`
+    (func (export "value") (result i32)
+      (i32.const 42)
     )
+    (func (result i32)
+      (i32.const 666)
+    )
+  `)
+})
 
-).then(([exp,act]) => hexAssertEqual(exp,act)))
+t(`2 different locals`, () => {
+  let src = `
+    (func (export "value") (result i32)
+      (local i32)
+      (local i64)
+      (i32.const 42)
+    )
+  `
+  let {value} = run(src).exports
+  is(value(), 42)
+})
 
-t.todo(`2 different locals`, () => buffers(`
-  (func (export "value") (result i32)
-    (local i32)
-    (local i64)
-    (i32.const 42)
-  )
-`, mod => mod
-
-  .func('value', [], ['i32'],
-    ['i32','i64'],
-    [...i32.const(42)],
-    true)
-
-).then(([exp,act]) => hexAssertEqual(exp,act)))
-
-t.todo(`3 locals [i32, i64, i32] (disjointed)`, () => buffers(`
-  (func (export "value") (result i32)
-    (local i32)
-    (local i64)
-    (local i32)
-    (i32.const 42)
-  )
-`, mod => mod
-
-  .func('value', [], ['i32'],
-    ['i32','i64','i32'],
-    [...i32.const(42)],
-    true)
-
-).then(([exp,act]) => hexAssertEqual(exp,act)))
+t(`3 locals [i32, i64, i32] (disjointed)`, () => {
+  let src = `
+    (func (export "value") (result i32)
+      (local i32)
+      (local i64)
+      (local i32)
+      (i32.const 42)
+    )
+  `
+  let {value} = run(src).exports
+  is(value(), 42)
+})
 
 t(`3 locals [i32, i32, i64] (joined)`, () => {
   let src = `
@@ -1071,6 +1019,30 @@ t('call function indirect (table) non zero indexed ref types', () => {
 })
 
 
+
+// e2e
+// TODO: examples
+const e2e = [
+  'malloc',
+  'brownian',
+  'containers',
+  'quine',
+  'fire',
+  'metaball',
+  'raytrace',
+  'snake',
+  'maze',
+  'dino',
+  'raycast',
+]
+
+e2e.forEach(name => {
+  t.todo('wat-compiler: e2e: '+name, () =>
+    fetch('/test/fixtures/e2e/'+name+'.wat')
+    .then(res => res.text())
+    .then(text => buffers(text))
+    .then(([exp,act]) => hexAssertEqual(exp,act)))
+})
 
 
 
