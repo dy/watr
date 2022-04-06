@@ -95,11 +95,7 @@ end
 )
 ```
 
-Numbers format limitations:
-
-* Int64 input format `0x7fffffffffffffff` is not supported (at the moment), only Int32.
-* Floating HEX `0x1.fffffep+127` is not supported.
-* Numeric placeholders `122_000.11_3_54E0_2_3` are not supported.
+Also: floating HEX format `0x1.fffffep+127` is not supported.
 
 It may also miss many edge cases detection and nice error messages. For good repl experience better use wabt.
 

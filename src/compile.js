@@ -182,7 +182,7 @@ const build = {
 
         // (i32.const 123)
         else if (opCode>=65&&opCode<=68) {
-          after = opCode < 67 ? leb(nodes.shift()) : (opCode==67 ? f32 : f64)(nodes.shift())
+          after = (opCode==65?leb:opCode==66?bigleb:opCode==67?f32:f64)(nodes.shift())
         }
 
         // (local.get $id), (local.tee $id x)
@@ -396,7 +396,7 @@ const build = {
 // (i32.const 0) - instantiation time initializer
 const iinit = ([op, literal], ctx) => op[0]==='f' ?
   [OP[op], ...(op[1]==='3'?f32:f64)(literal), OP.end] :
-  [OP[op], ...leb(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
+  [OP[op], ...(op[1]==='3'?leb:bigleb)(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
 
 // build string binary
 const str = str => {
@@ -414,23 +414,8 @@ const str = str => {
 // build range/limits sequence (non-consuming)
 const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared==='shared'?3:1, ...uleb(min), ...uleb(max)]
 
+
 // encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
-function leb (number, buffer=[]) {
-  if (typeof number === 'string') number = parseInt(number.replaceAll('_',''))
-
-  let byte = number & 0b01111111;
-  let signBit = byte & 0b01000000;
-  number = number >> 7;
-
-  if ((number === 0 && signBit === 0) || (number === -1 && signBit !== 0)) {
-    buffer.push(byte);
-    return buffer;
-  } else {
-    buffer.push(byte | 0b10000000);
-    return leb(number, buffer);
-  }
-}
-
 const uleb = (number, buffer=[]) => {
   if (typeof number === 'string') number = parseInt(number.replaceAll('_',''))
 
@@ -446,8 +431,43 @@ const uleb = (number, buffer=[]) => {
   }
 }
 
+function leb (n, buffer=[]) {
+  if (typeof n === 'string') n = parseInt(n.replaceAll('_',''))
+
+  while (true) {
+    const byte = Number(n & 0x7F)
+    n >>= 7
+    if ((n === 0 && (byte & 0x40) === 0) || (n === -1 && (byte & 0x40) !== 0)) {
+      buffer.push(byte)
+      break
+    }
+    buffer.push((byte | 0x80))
+  }
+  return buffer
+}
+
+function bigleb(n, buffer=[]) {
+  if (typeof n === 'string') {
+    n = n.replaceAll('_','')
+    n = n[0]==='-'?-BigInt(n.slice(1)):BigInt(n)
+    byteView.setBigInt64(0, n)
+    n = byteView.getBigInt64(0)
+  }
+
+  while (true) {
+    const byte = Number(n & 0x7Fn)
+    n >>= 7n
+    if ((n === 0n && (byte & 0x40) === 0) || (n === -1n && (byte & 0x40) !== 0)) {
+      buffer.push(byte)
+      break
+    }
+    buffer.push((byte | 0x80))
+  }
+  return buffer
+}
+
 // generalized float cases parser
-const parseFlt = input => input==='nan'||input==='+nan'?NaN:input==='-nan'?-NaN:
+const flt = input => input==='nan'||input==='+nan'?NaN:input==='-nan'?-NaN:
     input==='inf'||input==='+inf'?Infinity:input==='-inf'?-Infinity:parseFloat(input.replaceAll('_',''))
 
 const byteView = new DataView(new BigInt64Array(1).buffer)
@@ -461,7 +481,7 @@ function f32 (input, value, idx) {
     byteView.setInt32(0, value)
   }
   else {
-    value=typeof input === 'string' ? parseFlt(input) : input
+    value=typeof input === 'string' ? flt(input) : input
     byteView.setFloat32(0, value);
   }
 
@@ -482,7 +502,7 @@ function f64 (input, value, idx) {
     byteView.setBigInt64(0, value)
   }
   else {
-    value=typeof input === 'string' ? parseFlt(input) : input
+    value=typeof input === 'string' ? flt(input) : input
     byteView.setFloat64(0, value);
   }
 

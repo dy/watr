@@ -770,10 +770,10 @@ t('wat-compiler: int literals', () => {
     (func (export "i32.not_octal") (result i32) (return (i32.const 010)))
     (func (export "i32.plus_sign") (result i32) (return (i32.const +42)))
     (func (export "i32.unsigned_decimal") (result i32) (return (i32.const 4294967295)))
-    (func (export "i64.neg_zero") (result i64) (return (i64.const -0x0)))
     (func (export "i64.not_octal") (result i64) (return (i64.const 010)))
     (func (export "i64.plus_sign") (result i64) (return (i64.const +42)))
-    (;func (export "i64.test") (result i64) (return (i64.const 0x0CABBA6E0ba66a6e)))
+    (func (export "i64.test") (result i64) (return (i64.const 0x0CABBA6E0ba66a6e)))
+    (func (export "i64.neg_zero") (result i64) (return (i64.const -0x0)))
     (func (export "i64.umax") (result i64) (return (i64.const 0xffffffffffffffff)))
     (func (export "i32-dec-sep1") (result i32) (i32.const 1_000_000))
     (func (export "i32-dec-sep2") (result i32) (i32.const 1_0_0_0))
@@ -788,7 +788,7 @@ t('wat-compiler: int literals', () => {
     (func (export "i64.alt_smin") (result i64) (return (i64.const 0x8000000000000000)))
     (func (export "i64.inc_smin") (result i64) (return (i64.add (i64.const -0x8000000000000000) (i64.const 1))))
     (func (export "i64.unsigned_decimal") (result i64) (return (i64.const 18446744073709551615)))
-    (func (export "i64-hex-sep1") (result i64) (i64.const 0xa_f00f_0000_9999);)
+    (func (export "i64-hex-sep1") (result i64) (i64.const 0xa_f00f_0000_9999))
   `
   run(src)
 })
@@ -1036,7 +1036,7 @@ t('case: globals', () => {
 })
 
 // examples
-t.only('example: wat-compiler', () => {
+t.todo('example: wat-compiler', () => {
   // runExample('/test/example/malloc.wat')
   // runExample('/test/example/brownian.wat')
   // runExample('/test/example/fire.wat')
