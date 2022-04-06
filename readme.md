@@ -1,4 +1,4 @@
-# watr
+# watr [![Test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml)
 
 > Light & fast WAT compiler.
 
