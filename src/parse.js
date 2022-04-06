@@ -5,14 +5,15 @@ export default (str) => {
   let i = 0, level = [], buf=''
 
   const commit = () => buf && (
-    level.push(~buf.indexOf('=') ? buf.split('=') : buf),
+    level.push(buf[0]!=='"' && ~buf.indexOf('=') ? buf.split('=') : buf),
     buf = ''
   )
 
   const parseLevel = () => {
     for (let c, root; i < str.length; ) {
       c = str.charCodeAt(i)
-      if (c === OPAREN) {
+      if (c === DQUOTE) commit(), buf = str.slice(i++, i=str.indexOf('"', i)+1), commit()
+      else if (c === OPAREN) {
         if (str.charCodeAt(i+1) === SEMIC) i=str.indexOf(';)', i)+2 // (; ... ;)
         else commit(), i++, (root=level).push(level=[]), parseLevel(), level=root
       }

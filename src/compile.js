@@ -39,7 +39,7 @@ ALIGN = {
 },
 
 // some inlinable instructions
-INLINE = {loop: 1, if: 1, end: -1, return: -1}
+INLINE = {loop: 1, block: 1, if: 1, end: -1, return: -1}
 
 OP.map((op,i)=>OP[op]=i) // init op names
 
@@ -72,14 +72,20 @@ export default (nodes) => {
   })
 
   // 2. build IR. import must be initialized first, global before func, elem after func
-  let order = ['type', 'import', 'table', 'memory', 'global', 'func', 'export', 'start', 'elem', 'data']
+  let order = ['type', 'import', 'table', 'memory', 'global', 'func', 'export', 'start', 'elem', 'data'], postcall = []
+
   for (let name of order) {
     let remaining = []
-    for (let node of nodes) node[0] === name ? build[name](node, sections) : remaining.push(node)
+    for (let node of nodes) {
+      node[0] === name ? postcall.push(build[name](node, sections)) : remaining.push(node)
+    }
+
     nodes = remaining
   }
 
-  // console.log(sections)
+  // code must be compiled after all definitions
+  for (let cb of postcall) cb && cb.call && cb()
+
 
   // 3. build binary
   for (let name in sections) {
@@ -151,6 +157,9 @@ const build = {
         locals[name] = params.length + locals.length
       locals.push(...types.map(t => TYPE[t]))
     }
+
+    // squash local types
+    let locTypes = locals.reduce((a, type) => (type==a[a.length-1] ? a[a.length-2]++ : a.push(1,type), a), [])
 
     // map code instruction into bytes: [args, opCode, immediates]
     const instr = ([op, ...nodes]) => {
@@ -301,12 +310,11 @@ const build = {
       return result
     }
 
-    let code = consume(body)
-
-    // squash local types
-    let locTypes = locals.reduce((a, type) => (type==a[a.length-1] ? a[a.length-2]++ : a.push(1,type), a), [])
-
-    ctx.code.push([...uleb(code.length+2+locTypes.length), ...uleb(locTypes.length>>1), ...locTypes, ...code, OP.end])
+    // evaluates after all definitions
+    return () => {
+      let code = consume(body)
+      ctx.code.push([...uleb(code.length+2+locTypes.length), ...uleb(locTypes.length>>1), ...locTypes, ...code, OP.end])
+    }
   },
 
   // (memory min max shared)

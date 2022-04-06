@@ -56,6 +56,16 @@ t('compile: export mem/func', t => {
     07 09 02 01 6d 02 00 01 66 00 00              ; export
     0a 0d 01 0b 00 20 00 20 01 36 02 00 20 01 0b  ; code
   `
+  // let src = `
+  //   (module
+  //     (memory 1)
+  //     (func)
+  //     (export "m" (memory 0))
+  //     (export "f" (func 0))
+  //   )
+  // `
+  // console.log(wat(src))
+  // is(wat(src).buffer, compile(parse(src)))
   is(compile(['module',                                   // (module
     ['memory', 1],                                        //   (memory 1)
     ['func', ['param', 'i32', 'i32'], ['result', 'i32'],  //   (func (param i32 i32) (result i32)
@@ -1035,30 +1045,38 @@ t('case: globals', () => {
   is(compile(parse(src)), wat(src).buffer)
 })
 
-// examples
-t.only('example: wat-compiler', () => {
-  runExample('/test/example/malloc.wat')
-  runExample('/test/example/brownian.wat')
-  runExample('/test/example/fire.wat')
-  runExample('/test/example/quine.wat')
-  runExample('/test/example/metaball.wat')
-  runExample('/test/example/maze.wat')
-  // runExample('/test/example/raycast.wat')
-  // runExample('/test/example/dino.wat')
-  // runExample('/test/example/raytrace.wat')
-  // runExample('/test/example/snake.wat')
-  // runExample('/test/example/containers.wat')
+t('case: func hoist', () => {
+  let src = `
+    (func (call $a))
+    (func $a)
+  `
+  run(src)
 })
 
-t('example: legacy', () => {
-  runExample('/test/example/amp.wat')
-  runExample('/test/example/global.wat')
-  runExample('/test/example/loops.wat')
-  runExample('/test/example/memory.wat')
-  runExample('/test/example/multivar.wat')
-  runExample('/test/example/stack.wat')
-  // FIXME runExample('/test/example/table.wat')
-  // FIXME runExample('/test/example/types.wat')
+// examples
+t.todo('example: wat-compiler', async () => {
+  // await runExample('/test/example/malloc.wat')
+  // await runExample('/test/example/brownian.wat')
+  // await runExample('/test/example/fire.wat')
+  // await runExample('/test/example/quine.wat')
+  // await runExample('/test/example/metaball.wat')
+  // await runExample('/test/example/maze.wat')
+  await runExample('/test/example/raycast.wat')
+  // await runExample('/test/example/dino.wat')
+  // await runExample('/test/example/raytrace.wat')
+  // await runExample('/test/example/snake.wat')
+  // await runExample('/test/example/containers.wat')
+})
+
+t('example: legacy', async () => {
+  await runExample('/test/example/amp.wat')
+  await runExample('/test/example/global.wat')
+  await runExample('/test/example/loops.wat')
+  await runExample('/test/example/memory.wat')
+  await runExample('/test/example/multivar.wat')
+  await runExample('/test/example/stack.wat')
+  // FIXME await runExample('/test/example/table.wat')
+  // FIXME await runExample('/test/example/types.wat')
 
 })
 
@@ -1104,9 +1122,9 @@ async function runExample(path) {
 }
 
 // stub fetch for local purpose
-if (!global.fetch) {
+if (!globalThis.fetch) {
   let {readFileSync} = await import('fs')
-  global.fetch = async path => {
+  globalThis.fetch = async path => {
     path = `.${path}`
     const data = readFileSync(path, 'utf8')
     return {text(){return data}}

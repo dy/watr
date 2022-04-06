@@ -182,3 +182,11 @@ t('parse: elseif', () => {
   let tokens = parse('(if a(then)(else(if(b))))')
   is(tokens, ['if', 'a', ['then'], ['else', ['if', ['b']]]])
 })
+
+t('parse: data', () => {
+  let tokens = parse('(data (i32.const 4) "`.-,_:^!~;r+|()=>l?icv[]tzj7*f{}sYTJ1unyIFowe2h3Za4X%5P$mGAUbpK960#H&DRQ80WMB@N")')
+  is(tokens, [
+    'data', ['i32.const', '4'],
+    '"`.-,_:^!~;r+|()=>l?icv[]tzj7*f{}sYTJ1unyIFowe2h3Za4X%5P$mGAUbpK960#H&DRQ80WMB@N"'
+  ])
+})
