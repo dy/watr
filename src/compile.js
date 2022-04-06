@@ -66,11 +66,10 @@ export default (nodes) => {
     let items=sections[name]
     if (items.importc) items = items.slice(items.importc) // discard imported functions
     if (!items.length) continue
-    let sizePtr = binary.length+1
-    binary.push(SECTION[name], 0)
-    if (binary[sizePtr-1]!==8) binary.push(items.length) // skip start section count
-    for (let item of items) binary.push(...item)
-    binary[sizePtr] = binary.length - sizePtr - 1
+    let sectionCode = SECTION[name], bytes = []
+    if (sectionCode!==8) bytes.push(items.length) // skip start section count
+    for (let item of items) bytes.push(...item)
+    binary.push(sectionCode, ...uint(bytes.length), ...bytes)
   }
 
   return new Uint8Array(binary)

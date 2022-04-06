@@ -782,7 +782,7 @@ t('wat-compiler: address', () => {
   is(z(), 122)
 })
 
-t.todo('wat-compiler: int literals', () => {
+t.only('wat-compiler: int literals', () => {
   let src = `
     (func (export "i32.test") (result i32) (return (i32.const 0x0bAdD00D)))
     (func (export "i32.umax") (result i32) (return (i32.const 0xffffffff)))
@@ -792,7 +792,6 @@ t.todo('wat-compiler: int literals', () => {
     (func (export "i32.alt_smin") (result i32) (return (i32.const 0x80000000)))
     (func (export "i32.inc_smin") (result i32) (return (i32.add (i32.const -0x80000000) (i32.const 1))))
     (func (export "i32.neg_zero") (result i32) (return (i32.const -0x0)))
-    (func (export "i32.not_octal") (result i32) (return (i32.const 010)))
     (func (export "i32.not_octal") (result i32) (return (i32.const 010)))
     (func (export "i32.plus_sign") (result i32) (return (i32.const +42)))
     (;func (export "i64.test") (result i64) (return (i64.const 0x0CABBA6E0ba66a6e)))
