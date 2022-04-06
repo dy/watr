@@ -11,7 +11,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dy/watr.git"
+    "url": "git+https://github.com/audio-lab/watr.git"
   },
   "files": [
     "watr.js",
@@ -25,9 +25,9 @@
   "author": "Dmitry Iv",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/dy/watr/issues"
+    "url": "https://github.com/audio-lab/watr/issues"
   },
-  "homepage": "https://github.com/dy/watr#readme",
+  "homepage": "https://github.com/audio-lab/watr#readme",
   "devDependencies": {
     "rollup": "^2.70.1",
     "terser": "^5.12.1",
