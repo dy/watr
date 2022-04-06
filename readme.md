@@ -1,4 +1,4 @@
-# watr
+# watr [![Test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml)
 
 > Light & fast WAT compiler.
 
@@ -63,7 +63,7 @@ double(108) // 216
 ## Limitations
 
 Ambiguous syntax is intentionally prohibited in favor of explicit lispy structure.<br>
-Each instruction has prefix signature with parenthesized immediates and arguments.
+Each instruction must have prefix signature with parenthesized immediates and arguments.
 
 ```wast
 (func (result i32)
@@ -95,11 +95,13 @@ end
 )
 ```
 
-Numbers format limitation:
+Numbers format limitations:
 
 * Int64 input format `0x7fffffffffffffff` is not supported (at the moment), only Int32.
-* Floating HEX like `0x1.fffffep+127` format is not supported.
+* Floating HEX `0x1.fffffep+127` is not supported.
 * Numeric placeholders `122_000.11_3_54E0_2_3` are not supported.
+
+It may also miss many edge cases detection and nice error messages. For good repl experience better use wabt.
 
 <!--
 Main goal is to get very fluent with wasm text.
