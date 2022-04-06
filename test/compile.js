@@ -4,6 +4,7 @@ import parse from '../src/parse.js'
 import Wabt from '../lib/wabt.js'
 import watCompiler from '../lib/wat-compiler.js'
 
+
 // examples from https://ontouchstart.pages.dev/chapter_wasm_binary
 
 t('compile: empty', t => {

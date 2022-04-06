@@ -1,7 +1,7 @@
 {
   "name": "watr",
   "version": "1.0.0",
-  "description": "To be updated",
+  "description": "Ligth & fast WAT compiler",
   "main": "watr.js",
   "type": "module",
   "scripts": {
@@ -28,6 +28,7 @@
     "rollup": "^2.70.1",
     "terser": "^5.12.1",
     "tst": "^7.1.1",
-    "wabt": "^1.0.26"
+    "wabt": "^1.0.28",
+    "wat-compiler": "^1.0.0"
   }
 }
