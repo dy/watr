@@ -994,17 +994,25 @@ t('wat-compiler: call function indirect (table) non zero indexed ref types', () 
 })
 
 
+// found cases
+t('case: global (import)', async () => {
+  let src = `(global $blockSize (import "js" "blockSize") (mut i32))`
+  run(src, {js:{blockSize: new WebAssembly.Global({value:'i32',mutable:true}, 1)}})
+})
+
+
 // bench
-t.skip('bench: if', () => {
-  let src = `(func $dummy)
-    (func (export "foo") (param i32) (result i32)
-      (if (result i32) (local.get 0)
-        (then (call $dummy) (i32.const 1))
-        (else (call $dummy) (i32.const 0))
-      )
-    )`
+t.skip('bench: if', async () => {
+  let src = await file('/test/example/brownian.wat')
+  // let src = `(func $dummy)
+  //   (func (export "foo") (param i32) (result i32)
+  //     (if (result i32) (local.get 0)
+  //       (then (call $dummy) (i32.const 1))
+  //       (else (call $dummy) (i32.const 0))
+  //     )
+  //   )`
   is(compile(parse(src)), watCompiler(src))
-  let N = 5000
+  let N = 500
 
   console.time('watr')
   for (let i = 0; i < N; i++) compile(parse(src))
@@ -1020,39 +1028,45 @@ t.skip('bench: if', () => {
 })
 
 
-// found cases
-t('case: global (import)', async () => {
-  let src = `(global $blockSize (import "js" "blockSize") (mut i32))`
-  run(src, {js:{blockSize: new WebAssembly.Global({value:'i32',mutable:true}, 1)}})
+// examples
+t('example: wat-compiler', () => {
+  runExample('/test/example/malloc.wat')
+  runExample('/test/example/brownian.wat')
+  // runExample('/test/example/containers.wat')
+  // runExample('/test/example/quine.wat')
+  // runExample('/test/example/fire.wat')
+  // runExample('/test/example/metaball.wat')
+  // runExample('/test/example/raytrace.wat')
+  // runExample('/test/example/snake.wat')
+  // runExample('/test/example/maze.wat')
+  // runExample('/test/example/dino.wat')
+  // runExample('/test/example/raycast.wat')
 })
 
-// examples from fixtures
-// const e2e = [
-//   'malloc',
-//   'brownian',
-//   'containers',
-//   'quine',
-//   'fire',
-//   'metaball',
-//   'raytrace',
-//   'snake',
-//   'maze',
-//   'dino',
-//   'raycast',
-// ]
-t('example: amp.wat', async () => {
-  let res = await fetch('/test/example/amp.wat')
+t('example: legacy', () => {
+  runExample('/test/example/amp.wat')
+  runExample('/test/example/global.wat')
+  runExample('/test/example/loops.wat')
+  runExample('/test/example/memory.wat')
+  runExample('/test/example/multivar.wat')
+  runExample('/test/example/stack.wat')
+  // FIXME runExample('/test/example/table.wat')
+  // FIXME runExample('/test/example/types.wat')
+
+})
+
+async function file(path) {
+  let res = await fetch(path)
   let src = await res.text()
-  // console.log(wat(src))
-  run(src, {
-    js:{
-      blockSize: new WebAssembly.Global({value:'i32',mutable:true}, 1),
-      mem: new WebAssembly.Memory({initial: 1})
-    },
-    console:{log:console.log}
-  })
-})
+  return src
+}
 
+async function runExample(path) {
+  let src = await file(path)
+  let buffer = compile(parse(src))
+  is(buffer, wat(src).buffer)
+  const mod = new WebAssembly.Module(buffer)
+}
 
 // stub fetch for local purpose
 if (!global.fetch) {

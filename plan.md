@@ -15,6 +15,12 @@
 * [x] Test: assert function;
 * [x] make sure compiler doesn't modify tree
 * [ ] Recognize all number formats
+* [ ] Externref types;
+* [ ] Named/multiple memory;
+* [ ] Named/multiple tables;
+* [ ] Relax no-inline limitation?
+  ~ many examples use loop ... end, br 0 and other simple inliners
+  ~ from code point things coming in loop/block node are not arguments, they're immediates-ish, or "body"
 
 ## Backlog
 

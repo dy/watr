@@ -165,11 +165,10 @@
 
     ;; loop through all blocks
     (local.set $ptr (i32.const 0))
-    loop $search
+    (loop $search
       ;; we reached the end of heap and haven't found anything, return NULL
       (if (i32.lt_u (local.get $ptr) (global.get $max_addr))(then)(else
-        (i32.const 0)
-        return
+        (return (i32.const 0))
       ))
 
       ;; read info about current block
@@ -220,8 +219,7 @@
             (local.get $rest)
           )
 
-          (local.get $pay_ptr)
-          return
+          (return (local.get $pay_ptr))
 
         )(else
           ;; the block is free, but not large enough to be split into two blocks
@@ -230,15 +228,15 @@
           (call $hdr_set_free (i32.add (i32.add (local.get $ptr) (local.get $size)) (i32.const 4))
             (i32.const 0)
           )
-          (local.get $pay_ptr)
-          return
+
+          (return (local.get $pay_ptr))
         ))))
       )(else
         ;; the block is not free, we move on to the next block
         (local.set $ptr (i32.add (local.get $ptr) (i32.add (local.get $size) (i32.const 8))))
         (br $search)
       ))
-    end
+    )
 
     ;; theoratically we will not reach here
     ;; return NULL
@@ -362,13 +360,13 @@
     (local $data i32)
     (local.set $offset (i32.const 0))
 
-    loop $cpy
+    (loop $cpy
       (local.set $data (i32.load8_u (i32.add (local.get $src) (local.get $offset))))
       (i32.store8 (i32.add (local.get $dst) (local.get $offset)) (local.get $data))
 
       (local.set $offset (i32.add (local.get $offset) (i32.const 1)))
       (br_if $cpy (i32.lt_u (local.get $offset) (local.get $n_bytes)))
-    end
+    )
   )
 
   ;; reallocate memory to new size
@@ -389,8 +387,7 @@
     (local.set $size (call $hdr_get_size (local.get $hdr)))
 
     (if (i32.gt_u (local.get $n_bytes) (local.get $size)) (then) (else
-      (local.get $ptr)
-      return
+      (return (local.get $ptr))
     ))
 
     ;; payload size is aligned to multiple of 4
@@ -427,8 +424,7 @@
           (call $hdr_set_size (local.get $next_ftr) (local.get $rest_size))
           (call $hdr_set_free (local.get $next_ftr) (i32.const 1))
 
-          (local.get $ptr)
-          return
+          (return (local.get $ptr))
 
         ;; next block is not big enough to be split, but is
         ;; big enough to merge with the current one into one
@@ -439,8 +435,7 @@
           (call $hdr_set_size (local.get $next_ftr) (local.get $size))
           (call $hdr_set_free (local.get $next_ftr) (i32.const 0))
 
-          (local.get $ptr)
-          return
+          (return (local.get $ptr))
         ))))
 
       ))

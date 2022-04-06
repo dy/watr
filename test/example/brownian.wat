@@ -59,12 +59,12 @@
     (local.set $x (i32.rem_u (call $shr3) (local.get $w)))
     (local.set $y (i32.rem_u (call $shr3) (local.get $h)))
 
-    loop
+    (loop
       ;; boundry conditions: exit
-      (if (i32.eqz (local.get $x))                                        (then br 2 ))
-      (if (i32.eqz (local.get $y))                                        (then br 2 ))
-      (if (i32.eq  (local.get $x) (i32.sub (local.get $w) (i32.const 1))) (then br 2 ))
-      (if (i32.eq  (local.get $y) (i32.sub (local.get $h) (i32.const 1))) (then br 2 ))
+      (if (i32.eqz (local.get $x))                                        (then (br 2) ))
+      (if (i32.eqz (local.get $y))                                        (then (br 2) ))
+      (if (i32.eq  (local.get $x) (i32.sub (local.get $w) (i32.const 1))) (then (br 2) ))
+      (if (i32.eq  (local.get $y) (i32.sub (local.get $h) (i32.const 1))) (then (br 2) ))
 
       ;; pixel's Moore (8-connected) neighborhood:
 
@@ -112,7 +112,7 @@
         (i32.or (local.get $p8) (local.get $p9)))
       (then
         (call $set_pixel (local.get $w) (local.get $x) (local.get $y) (i32.const 1))
-        br 2
+        (br 2)
       ))
 
       ;; generate random number in interval [0,8)
@@ -150,7 +150,7 @@
         (local.set $y (i32.add (local.get $y) (i32.const 1)))
       ))))))))))))))
       (br 0)
-    end
+    )
 
   )
 
@@ -159,11 +159,11 @@
   ;; w: width, h: height, n: number of particles
   (func $bt_batch (param $w i32) (param $h i32) (param $n i32)
     (local $i i32)
-    loop $l0
+    (loop $l0
       (call $bt_iteration (local.get $w) (local.get $h))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br_if $l0 (i32.lt_u (local.get $i) (local.get $n)))
-    end
+    )
   )
 
   ;; exported API's

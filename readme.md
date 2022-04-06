@@ -17,9 +17,9 @@ Performance (op/s) | 45000 | 2500 | 3100
 
 &nbsp; | Size (gzipped) | Performance (op/s)
 ---|---|---
-watr | 3.3 kb | 45,000
-wat-compiler | 6 kb | 2,500
-wabt | 300 kb | 3,100
+watr | 3.3 kb | 1900
+wat-compiler | 6 kb | 135
+wabt | 300 kb | 250
 
 ## Usage
 

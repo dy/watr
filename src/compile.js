@@ -223,6 +223,7 @@ const build = {
           callstack.push(opCode)
           let [,type] = nodes[0][0]==='result' ? nodes.shift() : [,'void']
           imm=[TYPE[type]]
+
           argc = 0, args.push(...instr(nodes.shift()))
           let body
           if (nodes[0][0]==='then') [,...body] = nodes.shift(); else body = nodes
