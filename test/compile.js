@@ -793,8 +793,9 @@ t.todo('wat-compiler: int literals', () => {
     (func (export "i32.inc_smin") (result i32) (return (i32.add (i32.const -0x80000000) (i32.const 1))))
     (func (export "i32.neg_zero") (result i32) (return (i32.const -0x0)))
     (func (export "i32.not_octal") (result i32) (return (i32.const 010)))
-    (;func (export "i32.plus_sign") (result i32) (return (i32.const +42)))
-    (func (export "i64.test") (result i64) (return (i64.const 0x0CABBA6E0ba66a6e)))
+    (func (export "i32.not_octal") (result i32) (return (i32.const 010)))
+    (func (export "i32.plus_sign") (result i32) (return (i32.const +42)))
+    (;func (export "i64.test") (result i64) (return (i64.const 0x0CABBA6E0ba66a6e)))
     (func (export "i32.unsigned_decimal") (result i32) (return (i32.const 4294967295)))
     (func (export "i64.umax") (result i64) (return (i64.const 0xffffffffffffffff)))
     (func (export "i64.smax") (result i64) (return (i64.const 0x7fffffffffffffff)))
@@ -815,6 +816,7 @@ t.todo('wat-compiler: int literals', () => {
     (func (export "i64-hex-sep1") (result i64) (i64.const 0xa_f00f_0000_9999))
     (func (export "i64-hex-sep2") (result i64) (i64.const 0x1_a_A_0_f);)
   `
+  console.log(wat(src))
   run(src)
 })
 
