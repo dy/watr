@@ -95,7 +95,13 @@ end
 )
 ```
 
-Also: floating HEX format `0x1.fffffep+127` is not supported.
+```wast
+(f32.const 0x1.fffffep+127)  ;; ✘ floating HEX (not supported)
+```
+
+```wast
+(global.set $pc (;(i32.const <new-pc>);)) ✘ default arguments must be explicit
+```
 
 It may also miss many edge cases detection and nice error messages. For good repl experience better use wabt.
 

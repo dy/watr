@@ -208,7 +208,8 @@ const build = {
 
         // (call id ...nodes)
         else if (opCode==16) {
-          after = uleb(id = nodes[0]?.[0]==='$' ? ctx.func[nodes.shift()] : nodes.shift());
+          let fnName = nodes.shift()
+          after = uleb(id = fnName[0]==='$' ? ctx.func[fnName] ?? err('Unknown function `' + fnName + '`') : fnName);
           // FIXME: how to get signature of imported function
           [,argc] = ctx.type[ctx.func[id][0]]
         }

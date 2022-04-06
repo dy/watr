@@ -441,19 +441,19 @@
     )
     ;; $skip
     (br $setpc
-      (i32.add (i32.shl (i32.const 1) (;(i32.const <skip>);)) (local.get $nextpc)))
+      (i32.add (i32.shl (i32.const 1) (i32.const 0)) (local.get $nextpc)))
 
     )
     ;; $set-vf-vx
     ;; update vf
-    (local.set $vf (;(i32.const <new-vf>);))
+    (local.set $vf (i32.const 0))
     (i32.store8 offset=0xf (i32.const 0) (local.get $vf))
     (local.get $vx)
     ;; fallthrough
 
     )
     ;; $set-vx
-    (local.set $vx (;(i32.const <new-vx>);))
+    (local.set $vx (i32.const 0))
     (i32.store8 (local.get $x) (local.get $vx))
     ;; fallthrough.
 
@@ -464,7 +464,7 @@
 
     )
     ;; $setpc
-    (global.set $pc (;(i32.const <new-pc>);))
+    (global.set $pc (i32.const 0))
 
     (br_if $cycle
       (local.tee $cycles (i32.sub (local.get $cycles) (i32.const 1)))))

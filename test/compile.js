@@ -1061,11 +1061,11 @@ t.todo('example: wat-compiler', async () => {
   // await runExample('/test/example/quine.wat')
   // await runExample('/test/example/metaball.wat')
   // await runExample('/test/example/maze.wat')
-  await runExample('/test/example/raycast.wat')
-  // await runExample('/test/example/dino.wat')
   // await runExample('/test/example/raytrace.wat')
   // await runExample('/test/example/snake.wat')
-  // await runExample('/test/example/containers.wat')
+  // await runExample('/test/example/dino.wat')
+  await runExample('/test/example/containers.wat')
+  // await runExample('/test/example/raycast.wat')
 })
 
 t('example: legacy', async () => {
@@ -1118,7 +1118,7 @@ async function runExample(path) {
   let src = await file(path)
   let buffer = compile(parse(src))
   is(buffer, wat(src).buffer)
-  const mod = new WebAssembly.Module(buffer)
+  // const mod = new WebAssembly.Module(buffer)
 }
 
 // stub fetch for local purpose
