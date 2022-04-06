@@ -15,14 +15,13 @@
   ;; − this is short way, reminds lispy syntax (operator a b)
 
   (func (export "getG0") (result i32)
-    global.get $g0
+    (global.get $g0)
   )
 
   (func $getG1 (export "getG1") (result i32)
-    global.get $g1
+    (global.get $g1)
   )
   (func $setG1 (export "setG1") (param i32)
-    local.get 0
-    global.set $g1
+    (global.set $g1 (local.get 0))
   )
 )

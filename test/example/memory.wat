@@ -3,8 +3,8 @@
 
   ;; reexport memory
   ;; note: it requires import.
-  (import "js" "mem" (memory $mem 2))
-  (export "mem" (memory $mem))
+  (import "js" "mem" (memory 2))
+  ;; (export "mem" (memory $mem))
 
   ;; (memory $mem (import "js" "mem") (export "mem") 1) ;; create memory with 1 page - per module
 
@@ -15,13 +15,8 @@
   ;; (memory $xxx 1) ;; create memory with 1 page - per module
 
   (func $populate (export "populate")
-    i32.const 0
-    i32.const 123
-    i32.store
-
-    i32.const 10
-    i32.const 1230
-    i32.store
+    (i32.store (i32.const 0) (i32.const 123))
+    (i32.store (i32.const 10) (i32.const 1230))
   )
 
   (func $get (export "get") (param i32) (result i32)

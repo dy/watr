@@ -1,9 +1,8 @@
 ;; test multiple values & stack
 (module
-
   (global $g0 i32 (i32.const 12))
 
-  (func i32.const 0 return) ;; TF?
+  (func (return (i32.const 0)))
 
   (func $get (export "get") (result i32 i32)
     ;; note: you cannot push more items to stack than needed for the next op
@@ -13,10 +12,9 @@
     ;; in case of returning multiple values js receives an array
 
     ;; equivalend notation is this
-    (global.get $g0) (global.get $g0) (i32.add)
+    (i32.add (global.get $g0) (global.get $g0))
     (global.get $g0)
   )
-
 
   (func $mul (export "mul") (param i32 i32) (result i32) (i32.mul (local.get 1) (local.get 0)))
 

@@ -16,14 +16,10 @@
     (loop $my_loop
 
       ;; add one to $i
-      local.get $i
-      i32.const 1
-      i32.add
-      local.set $i
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
 
       ;; log the current value of $i
-      local.get $i
-      call $log
+      (call $log (local.get $i))
 
       ;; if $i is less than 10 branch to loop
       (br_if $my_loop (i32.lt_s (local.get $i) (i32.const 10)))
