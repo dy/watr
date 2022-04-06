@@ -13,6 +13,7 @@
     "type": "git",
     "url": "git+https://github.com/dy/watr.git"
   },
+  "files": ["watr.js", "watr.min.js"],
   "keywords": [
     "wat",
     "compiler",
