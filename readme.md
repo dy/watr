@@ -97,8 +97,9 @@ end
 
 Numbers format limitation:
 
-* Int64 numbers like `0x7fffffffffffffff` are not supported (at the moment).
-* Floats support only JS format and nans; hex floats
+* Int64 input format `0x7fffffffffffffff` is not supported (at the moment), only Int32.
+* Floating HEX like `0x1.fffffep+127` format is not supported.
+* Numeric placeholders `122_000.11_3_54E0_2_3` are not supported.
 
 <!--
 Main goal is to get very fluent with wasm text.

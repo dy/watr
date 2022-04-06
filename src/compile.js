@@ -407,10 +407,19 @@ const uleb = (number, buffer) => {
 
 const byteView = new DataView(new BigInt64Array(1).buffer)
 
-function f32 (value) {
-  if (~value.indexOf('nan')) return nanbox32(value)
-  value=parseFloat(value)
-  byteView.setFloat32(0, value);
+const F32_SIGN = 0x80000000, F32_NAN  = 0x7f800000
+function f32 (input, value, idx) {
+  if (~(idx=input.indexOf('nan:'))) {
+    value = parseInt(input.slice(idx+4))
+    value |= F32_NAN
+    if (input[0] === '-') value |= F32_SIGN
+    byteView.setInt32(0, value)
+  }
+  else {
+    value=input==='nan'||input==='+nan'?NaN:input==='-nan'?-NaN:input==='inf'||input==='+inf'?Infinity:input==='-inf'?-Infinity:parseFloat(input)
+    byteView.setFloat32(0, value);
+  }
+
   return [
     byteView.getUint8(3),
     byteView.getUint8(2),
@@ -419,49 +428,18 @@ function f32 (value) {
   ];
 }
 
-function f64 (value) {
-  if (~value.indexOf('nan')) return nanbox64(value)
-  value=parseFloat(value)
-  byteView.setFloat64(0, value);
-  return [
-    byteView.getUint8(7),
-    byteView.getUint8(6),
-    byteView.getUint8(5),
-    byteView.getUint8(4),
-    byteView.getUint8(3),
-    byteView.getUint8(2),
-    byteView.getUint8(1),
-    byteView.getUint8(0)
-  ];
-}
-
-const F32_SIGN = 0x80000000
-const F32_NAN  = 0x7f800000
-
-function nanbox32 (input) {
-  let value = parseInt(input.split('nan:')[1])
-  value |= F32_NAN
-  if (input[0] === '-') value |= F32_SIGN
-
-  byteView.setInt32(0, value)
-
-  return[
-    byteView.getUint8(3),
-    byteView.getUint8(2),
-    byteView.getUint8(1),
-    byteView.getUint8(0)
-  ]
-}
-
-const F64_SIGN = 0x8000000000000000n
-const F64_NAN  = 0x7ff0000000000000n
-
-function nanbox64 (input) {
-  let value = BigInt(input.split('nan:')[1])
-  value |= F64_NAN
-  if (input[0] === '-') value |= F64_SIGN
-
-  byteView.setBigInt64(0, value)
+const F64_SIGN = 0x8000000000000000n, F64_NAN  = 0x7ff0000000000000n
+function f64 (input, value, idx) {
+  if (~(idx=input.indexOf('nan:'))) {
+    value = BigInt(input.slice(idx+4))
+    value |= F64_NAN
+    if (input[0] === '-') value |= F64_SIGN
+    byteView.setBigInt64(0, value)
+  }
+  else {
+    value=input==='nan'||input==='+nan'?NaN:input==='-nan'?-NaN:input==='inf'||input==='+inf'?Infinity:input==='-inf'?-Infinity:parseFloat(input)
+    byteView.setFloat64(0, value);
+  }
 
   return [
     byteView.getUint8(7),
