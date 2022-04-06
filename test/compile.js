@@ -3,10 +3,10 @@ import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import Wabt from '../lib/wabt.js'
 import watCompiler from '../lib/wat-compiler.js'
+// import fetch from 'node-fetch'
 
 
 // examples from https://ontouchstart.pages.dev/chapter_wasm_binary
-
 t('compile: empty', t => {
   is(compile(['module']), hex`00 61 73 6d 01 00 00 00`)
 })
@@ -161,7 +161,6 @@ t('wat-compiler: named function named param', () => {
 
   is(dbl(21), 42)
 })
-
 
 t('wat-compiler: call function direct', () => {
   let {call_function_direct} = run(`
@@ -328,7 +327,6 @@ t('wat-compiler: import memory $foo 1 2 shared', () => run(`
   (import "env" "mem" (memory $foo 1 2 shared))
 `, {env:{mem: new WebAssembly.Memory({initial:1, maximum: 1, shared: 1})}}))
 
-
 t('wat-compiler: set a start function', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))
@@ -373,30 +371,6 @@ t('wat-compiler: if else', () => {
   let {foo} = run(src1).exports
   is(foo(0), 0)
   is(foo(1), 1)
-})
-
-t.skip('bench: if', () => {
-  let src = `(func $dummy)
-    (func (export "foo") (param i32) (result i32)
-      (if (result i32) (local.get 0)
-        (then (call $dummy) (i32.const 1))
-        (else (call $dummy) (i32.const 0))
-      )
-    )`
-  is(compile(parse(src)), watCompiler(src))
-  let N = 5000
-
-  console.time('watr')
-  for (let i = 0; i < N; i++) compile(parse(src))
-  console.timeEnd('watr')
-
-  console.time('wat-compiler')
-  for (let i = 0; i < N; i++) watCompiler(src, {metrics: false})
-  console.timeEnd('wat-compiler')
-
-  console.time('wabt')
-  for (let i = 0; i < N; i++) wat(src, {metrics: false})
-  console.timeEnd('wabt')
 })
 
 t('wat-compiler: block', () => {
@@ -921,7 +895,7 @@ t('wat-compiler: float literals', () => {
     run(special)
 })
 
-t(`export 2 funcs`, () => run(`
+t(`wat-compiler: export 2 funcs`, () => run(`
   (func (export "value") (result i32)
     (i32.const 42)
   )
@@ -930,7 +904,7 @@ t(`export 2 funcs`, () => run(`
   )
 `))
 
-t(`exported & unexported function`, () => {
+t(`wat-compiler: exported & unexported function`, () => {
   run(`
     (func (export "value") (result i32)
       (i32.const 42)
@@ -941,7 +915,7 @@ t(`exported & unexported function`, () => {
   `)
 })
 
-t(`2 different locals`, () => {
+t(`wat-compiler: 2 different locals`, () => {
   let src = `
     (func (export "value") (result i32)
       (local i32)
@@ -953,7 +927,7 @@ t(`2 different locals`, () => {
   is(value(), 42)
 })
 
-t(`3 locals [i32, i64, i32] (disjointed)`, () => {
+t(`wat-compiler: 3 locals [i32, i64, i32] (disjointed)`, () => {
   let src = `
     (func (export "value") (result i32)
       (local i32)
@@ -966,7 +940,7 @@ t(`3 locals [i32, i64, i32] (disjointed)`, () => {
   is(value(), 42)
 })
 
-t(`3 locals [i32, i32, i64] (joined)`, () => {
+t(`wat-compiler: 3 locals [i32, i32, i64] (joined)`, () => {
   let src = `
     (func (export "value") (result i32)
       (local i32)
@@ -979,7 +953,7 @@ t(`3 locals [i32, i32, i64] (joined)`, () => {
   is(value(), 42)
 })
 
-t('call function indirect (table)', () => {
+t('wat-compiler: call function indirect (table)', () => {
   let src = `
     (type $return_i32 (func (result i32)))
     (table 2 funcref)
@@ -998,7 +972,7 @@ t('call function indirect (table)', () => {
   is(call_function_indirect(1), 13)
 })
 
-t('call function indirect (table) non zero indexed ref types', () => {
+t('wat-compiler: call function indirect (table) non zero indexed ref types', () => {
   let src = `
     (type $return_i64 (func (result i64)))
     (type $return_i32 (func (result i32)))
@@ -1021,32 +995,67 @@ t('call function indirect (table) non zero indexed ref types', () => {
 })
 
 
+// bench
+t.skip('bench: if', () => {
+  let src = `(func $dummy)
+    (func (export "foo") (param i32) (result i32)
+      (if (result i32) (local.get 0)
+        (then (call $dummy) (i32.const 1))
+        (else (call $dummy) (i32.const 0))
+      )
+    )`
+  is(compile(parse(src)), watCompiler(src))
+  let N = 5000
 
-// e2e
-// TODO: examples
-const e2e = [
-  'malloc',
-  'brownian',
-  'containers',
-  'quine',
-  'fire',
-  'metaball',
-  'raytrace',
-  'snake',
-  'maze',
-  'dino',
-  'raycast',
-]
+  console.time('watr')
+  for (let i = 0; i < N; i++) compile(parse(src))
+  console.timeEnd('watr')
 
-e2e.forEach(name => {
-  t.todo('wat-compiler: e2e: '+name, () =>
-    fetch('/test/fixtures/e2e/'+name+'.wat')
-    .then(res => res.text())
-    .then(text => buffers(text))
-    .then(([exp,act]) => hexAssertEqual(exp,act)))
+  console.time('wat-compiler')
+  for (let i = 0; i < N; i++) watCompiler(src, {metrics: false})
+  console.timeEnd('wat-compiler')
+
+  console.time('wabt')
+  for (let i = 0; i < N; i++) wat(src, {metrics: false})
+  console.timeEnd('wabt')
 })
 
 
+// found cases
+t.only('case: global (import)', async () => {
+  let src = `(global $blockSize (import "js" "blockSize") (mut i32))`
+  run(src, {js:{blockSize: new WebAssembly.Global({value:'i32',mutable:true}, 1)}})
+})
+
+// examples from fixtures
+// const e2e = [
+//   'malloc',
+//   'brownian',
+//   'containers',
+//   'quine',
+//   'fire',
+//   'metaball',
+//   'raytrace',
+//   'snake',
+//   'maze',
+//   'dino',
+//   'raycast',
+// ]
+t.todo('example: amp.wat', async () => {
+  let res = await fetch('/test/example/amp.wat')
+  let src = await res.text()
+  console.log(wat(src))
+  run(src)
+})
+
+
+
+console.hex = (d) => console.log((Object(d).buffer instanceof ArrayBuffer ? new Uint8Array(d.buffer) :
+typeof d === 'string' ? (new TextEncoder('utf-8')).encode(d) :
+new Uint8ClampedArray(d)).reduce((p, c, i, a) => p + (i % 16 === 0 ? i.toString(16).padStart(6, 0) + '  ' : ' ') +
+c.toString(16).padStart(2, 0) + (i === a.length - 1 || i % 16 === 15 ?
+' '.repeat((15 - i % 16) * 3) + Array.from(a).splice(i - i % 16, 16).reduce((r, v) =>
+r + (v > 31 && v < 127 || v > 159 ? String.fromCharCode(v) : '.'), '  ') + '\n' : ''), ''));
 
 
 let wabt = await Wabt()

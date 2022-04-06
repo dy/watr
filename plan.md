@@ -14,6 +14,7 @@
 * [x] Build script
 * [x] Test: assert function;
 * [x] make sure compiler doesn't modify tree
+* [ ] Recognize all number formats
 
 ## Backlog
 
