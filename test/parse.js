@@ -177,3 +177,8 @@ t('parse: multiple functions', () => {
   let tokens = parse('(func $a) (func $b)')
   is(tokens, [['func','$a'],['func','$b']])
 })
+
+t('parse: elseif', () => {
+  let tokens = parse('(if a(then)(else(if(b))))')
+  is(tokens, ['if', 'a', ['then'], ['else', ['if', ['b']]]])
+})
