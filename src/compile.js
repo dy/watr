@@ -278,8 +278,19 @@ const build = {
     const consume = nodes => {
       let result = []
       while (nodes.length) {
-        let node = nodes.shift()
-        result.push(...instr(node))
+        let node = nodes.shift(), c
+
+        if (typeof node === 'string') {
+          // permit some inline instructions: loop $label ... end,  br $label,   arg return
+          if (c=INLINE[node]) {
+            node = [node]
+            if (c>0) nodes[0]?.[0]==='$' && node.push(nodes.shift())
+          }
+          else
+          err(`Inline instruction \`${node}\` is not supported`)
+        }
+
+        node && result.push(...instr(node))
       }
       return result
     }

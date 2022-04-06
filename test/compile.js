@@ -364,7 +364,7 @@ t('wat-compiler: if else', () => {
       end
     )
   `
-  // these are identical parts, but we restrict only lisp syntax src1
+  // these are identical parts, but we restrict to lisp syntax src1
   // console.log(wat(src1))
   is(wat(src1).buffer, wat(src2).buffer)
   let {foo} = run(src1).exports
@@ -1000,9 +1000,63 @@ t('case: global (import)', async () => {
   run(src, {js:{blockSize: new WebAssembly.Global({value:'i32',mutable:true}, 1)}})
 })
 
+t('case: 0-args return', () => {
+  run(`(func (result i32) (i32.const 0) (return))`)
+})
+
+t('case: (memory (export))', () => {
+  let src = `
+  (import "" "rand" (func $random (result f64)))
+  (memory (export "mem") 5)`
+  is(wat(src).buffer, compile(parse(src)))
+})
+
+t('case: offset', () => {
+  let src = `(func (local $i i32) (i32.store8 offset=53439 (local.get $i) (i32.const 36)))`
+  is(compile(parse(src)), wat(src).buffer)
+})
+
+t('case: multiple datas', () => {
+  let src=String.raw`
+  (memory 5)
+  (data (i32.const 268800)
+  "\07\07"
+  "\FF\FF")`
+  is(compile(parse(src)), wat(src).buffer)
+  // new WebAssembly.Module()
+})
+
+// examples
+t.only('example: wat-compiler', () => {
+  runExample('/test/example/malloc.wat')
+  runExample('/test/example/brownian.wat')
+  runExample('/test/example/fire.wat')
+  runExample('/test/example/quine.wat')
+  runExample('/test/example/metaball.wat')
+  runExample('/test/example/maze.wat')
+  // runExample('/test/example/snake.wat')
+  // runExample('/test/example/raytrace.wat')
+  // runExample('/test/example/containers.wat')
+  // runExample('/test/example/dino.wat')
+  // runExample('/test/example/raycast.wat')
+})
+
+t('example: legacy', () => {
+  runExample('/test/example/amp.wat')
+  runExample('/test/example/global.wat')
+  runExample('/test/example/loops.wat')
+  runExample('/test/example/memory.wat')
+  runExample('/test/example/multivar.wat')
+  runExample('/test/example/stack.wat')
+  // FIXME runExample('/test/example/table.wat')
+  // FIXME runExample('/test/example/types.wat')
+
+})
+
+
 
 // bench
-t.skip('bench: if', async () => {
+t.skip('bench: brownian', async () => {
   let src = await file('/test/example/brownian.wat')
   // let src = `(func $dummy)
   //   (func (export "foo") (param i32) (result i32)
@@ -1025,34 +1079,6 @@ t.skip('bench: if', async () => {
   console.time('wabt')
   for (let i = 0; i < N; i++) wat(src, {metrics: false})
   console.timeEnd('wabt')
-})
-
-
-// examples
-t('example: wat-compiler', () => {
-  runExample('/test/example/malloc.wat')
-  runExample('/test/example/brownian.wat')
-  // runExample('/test/example/containers.wat')
-  // runExample('/test/example/quine.wat')
-  // runExample('/test/example/fire.wat')
-  // runExample('/test/example/metaball.wat')
-  // runExample('/test/example/raytrace.wat')
-  // runExample('/test/example/snake.wat')
-  // runExample('/test/example/maze.wat')
-  // runExample('/test/example/dino.wat')
-  // runExample('/test/example/raycast.wat')
-})
-
-t('example: legacy', () => {
-  runExample('/test/example/amp.wat')
-  runExample('/test/example/global.wat')
-  runExample('/test/example/loops.wat')
-  runExample('/test/example/memory.wat')
-  runExample('/test/example/multivar.wat')
-  runExample('/test/example/stack.wat')
-  // FIXME runExample('/test/example/table.wat')
-  // FIXME runExample('/test/example/types.wat')
-
 })
 
 async function file(path) {

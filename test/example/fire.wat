@@ -36,7 +36,7 @@
 ;; Run setup at start.
 (start $setup)
 
-(;func (export "run")
+(func (export "run")
   (local $i i32)
   (local $pixel i32)
   (local $randIdx i32)
@@ -104,4 +104,4 @@
           (i32.const 2))))
 
     ;; loop if i != 0
-    (br_if 0 (local.get $i)));)
+    (br_if 0 (local.get $i))))
