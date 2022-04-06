@@ -287,14 +287,18 @@ const build = {
   // (global i32 (i32.const 42))
   // (global $id i32 (i32.const 42))
   // (global $id (mut i32) (i32.const 42))
-  // FIXME (global $g1 (import "js" "g1") (mut i32))  ;; import from js
+  // (global $g1 (import "js" "g1") (mut i32))  ;; import from js
   global([, ...args], ctx) {
     let name = args[0][0]==='$' && args.shift()
-    if (name) ctx.global[name] = ctx.global.length
-
-    let [type, init] = args, mut = type[0] === 'mut'
-
-    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...iinit(init)])
+    if (args[0][0]==='import') {
+      let [,mod,field] = args.shift()
+      build.import([,mod,field,['global',name,...args]], ctx)
+    }
+    else {
+      if (name) ctx.global[name] = ctx.global.length
+      let [type, init] = args, mut = type[0] === 'mut' ? 1 : 0
+      ctx.global.push([TYPE[mut ? type[1] : type], mut, ...iinit(init)])
+    }
   },
 
   // (table 1 2? funcref)
@@ -322,24 +326,30 @@ const build = {
   // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
   // (import "js" "mem" (memory 1))
   // (import "js" "mem" (memory $name 1))
-  import([, mod, name, ref], ctx) {
-    // FIXME: forward here from particular nodes instead: definition for import is same, we should DRY import code
-    // build[ref[0]]([ref[0], ['import', mod, name], ...ref.slice(1)])
+  // (import "js" "v" (global $name (mut f64)))
+  import([, mod, field, ref], ctx) {
+    let details, [kind, ...parts] = ref,
+        name = parts[0]?.[0]==='$' && parts.shift();
 
-    let details, [kind, ...parts] = ref
     if (kind==='func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
-      if (parts[0]?.[0]==='$') ctx.func[parts.shift()] = ctx.func.length
+      if (name) ctx.func[name] = ctx.func.length
       let [typeIdx] = build.type([, ['func', ...parts]], ctx)
       ctx.func.push(details = uleb(typeIdx))
       ctx.func.importc = (ctx.func.importc||0)+1
     }
     else if (kind==='memory') {
-      if (parts[0][0]==='$') ctx.memory[parts.shift()] = ctx.memory.length
+      if (name) ctx.memory[name] = ctx.memory.length
       details = range(parts)
     }
+    else if (kind==='global') {
+      if (name) ctx.global[name] = ctx.global.length
+      let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
+      details = [TYPE[mut ? type[1] : type], mut]
+    }
+    else throw Error('Unimplemented ' + kind)
 
-    ctx.import.push([...str(mod), ...str(name), KIND[kind], ...details])
+    ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
   },
 
   // (data (i32.const 0) "\2a")
