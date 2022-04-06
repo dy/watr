@@ -165,23 +165,23 @@ const build = {
         }
 
         // (i32.const 123)
-        else if (opCode>=65&&opCode<=68) imm = i32(nodes.shift())
+        else if (opCode>=65&&opCode<=68) imm = opCode <= 67 ? si32(nodes.shift()) : f32(nodes.shift())
 
         // (local.get $id), (local.tee $id x)
         else if (opCode>=32&&opCode<=34) {
-          imm = i32(nodes[0]?.[0]==='$' ? params[id=nodes.shift()] || locals[id] : nodes.shift())
+          imm = ui32(nodes[0]?.[0]==='$' ? params[id=nodes.shift()] || locals[id] : nodes.shift())
           if (opCode>32) argc = 1
         }
 
         // (global.get id), (global.set id)
         else if (opCode==35||opCode==36) {
-          imm = i32(nodes[0]?.[0]==='$' ? ctx.global[nodes.shift()] : nodes.shift())
+          imm = ui32(nodes[0]?.[0]==='$' ? ctx.global[nodes.shift()] : nodes.shift())
           if (opCode>35) argc = 1
         }
 
         // (call id ...nodes)
         else if (opCode==16) {
-          imm = i32(id = nodes[0]?.[0]==='$' ? ctx.func[nodes.shift()] : nodes.shift());
+          imm = ui32(id = nodes[0]?.[0]==='$' ? ctx.func[nodes.shift()] : nodes.shift());
           // FIXME: how to get signature of imported function
           [,argc] = ctx.type[ctx.func[id][0]]
         }
@@ -191,7 +191,7 @@ const build = {
           let typeId = nodes.shift()[1];
           [,argc] = ctx.type[typeId = typeId[0]==='$'?ctx.type[typeId]:typeId]
           argc++
-          imm = [+typeId, 0] // extra immediate indicates table idx (reserved)
+          imm = ui32(typeId), imm.push(0) // extra immediate indicates table idx (reserved)
         }
 
         // FIXME (memory.grow $idx?)
@@ -240,22 +240,20 @@ const build = {
         // (br_if $label cond result?)
         else if (opCode==0x0c||opCode==0x0d) {
           // br index indicates how many callstack items to pop
-          imm.push(nodes[0]?.[0]==='$' ? callstack.length-callstack[nodes.shift()] : +nodes.shift())
+          imm = ui32(nodes[0]?.[0]==='$' ? callstack.length-callstack[nodes.shift()] : nodes.shift())
           argc = (opCode==0x0d ? 1 + (nodes.length > 1) : !!nodes.length)
         }
 
         // (br_table 1 2 3 4  0  selector result?)
         else if (opCode==0x0e) {
           imm = [0]
-          while (!Array.isArray(nodes[0])) id=nodes.shift(), imm.push(id[0][0]==='$'?callstack.length-callstack[id]:+id)
+          while (!Array.isArray(nodes[0])) id=nodes.shift(), imm.push(...ui32(id[0][0]==='$'?callstack.length-callstack[id]:id))
           imm[0] = imm.length-2
           argc = 1 + (nodes.length>1)
-          console.log(imm, argc)
         }
 
         else if (opCode==null) err(`Unknown instruction \`${op}\``)
       }
-
 
       // consume arguments
       if (nodes.length < argc) err(`Stack arguments are not supported at \`${op}\``)
@@ -265,7 +263,7 @@ const build = {
       return [...args, opCode, ...imm]
     }
 
-    let depth = {value:0}, code = body.flatMap(instr)
+    let code = body.flatMap(instr)
 
     // squash local types
     let locTypes = locals.reduce((a, type) => (type==a[a.length-1] ? a[a.length-2]++ : a.push(1,type), a), [])
@@ -313,13 +311,13 @@ const build = {
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
   elem([, offset, ...elems], ctx) {
     const tableIdx = 0 // FIXME: table index can be defined
-    ctx.elem.push([tableIdx, ...iinit(offset, ctx), elems.length, ...elems.map(el => el[0]==='$' ? ctx.func[el] : +el)])
+    ctx.elem.push([tableIdx, ...iinit(offset, ctx), elems.length, ...elems.flatMap(el => ui32(el[0]==='$' ? ctx.func[el] : el))])
   },
 
   //  (export "name" (kind $name|idx))
   export([, name, [kind, idx]], ctx) {
     if (idx[0]==='$') idx = ctx[kind][idx]
-    ctx.export.push([...str(name), KIND[kind], +idx])
+    ctx.export.push([...str(name), KIND[kind], ...ui32(idx)])
   },
 
   // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
@@ -334,7 +332,7 @@ const build = {
       // we track imported funcs in func section to share namespace, and skip them on final build
       if (parts[0]?.[0]==='$') ctx.func[parts.shift()] = ctx.func.length
       let [typeIdx] = build.type([, ['func', ...parts]], ctx)
-      ctx.func.push(details = [typeIdx])
+      ctx.func.push(details = ui32(typeIdx))
       ctx.func.importc = (ctx.func.importc||0)+1
     }
     else if (kind==='memory') {
@@ -358,8 +356,9 @@ const build = {
 }
 
 // (i32.const 0) - instantiation time initializer
-const iinit = ([op, literal], ctx) =>
-  [OP[op], ...i32(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
+const iinit = ([op, literal], ctx) => op[0]==='f' ?
+  [OP[op], ...f32(literal), OP.end] :
+  [OP[op], ...si32(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
 
 // build string binary
 const str = str => {
@@ -375,8 +374,9 @@ const str = str => {
 const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, +min] : [shared==='shared'?3:1, +min, +max]
 
 // direct wiki example https://en.wikipedia.org/wiki/LEB128#Signed_LEB128
-const i32 = (value) => {
-  value |= 0;
+const si32 = (value) => {
+  value = parseInt(value)
+  // value |= 0;
   const result = [];
   while (true) {
     const byte_ = value & 0x7f;
@@ -390,6 +390,32 @@ const i32 = (value) => {
     }
     result.push(byte_ | 0x80);
   }
+}
+
+const ui32 = (n) => {
+  n = parseInt(n)
+  const buffer = [];
+  do {
+    let byte = n & 0x7f;
+    n >>>= 7;
+    if (n !== 0) {
+      byte |= 0x80;
+    }
+    buffer.push(byte);
+  } while (n !== 0);
+  return buffer;
+}
+
+const byteView = new DataView(new BigInt64Array(1).buffer)
+
+function f32 (value, res=[]) {
+  byteView.setFloat32(0, value)
+  for (let i = 4; i--;) res.push(byteView.getUint8(i))
+}
+
+function f64 (value, res=[]) {
+  byteView.setFloat64(0, value)
+  for (let i = 8; i--;) res.push(byteView.getUint8(i))
 }
 
 const err = text => { throw Error(text) }
