@@ -154,7 +154,7 @@ const build = {
     const instr = ([op, ...nodes]) => {
       if (op.length===1) err(`Inline instructions are not supported \`${op+nodes.join('')}\``)
 
-      let opCode = OP[op], argc=0, args=[], imm=[], id
+      let opCode = OP[op], argc=0, before=[], after=[], id
 
       // NOTE: we could reorganize ops by groups and detect signature as `op in STORE`
       // but numeric comparison is faster than generic hash lookup
@@ -176,30 +176,30 @@ const build = {
           // FIXME: figure out point in Math.log2 aligns
           let o = {align: ALIGN[op], offset: 0}, p
           while (nodes[0]?.[0] in o) p = nodes.shift(), o[p[0]] = +p[1]
-          imm = [Math.log2(o.align), o.offset]
+          after = [Math.log2(o.align), o.offset]
           argc = opCode >= 54 ? 2 : 1
         }
 
         // (i32.const 123)
         else if (opCode>=65&&opCode<=68) {
-          imm = opCode < 67 ? leb(nodes.shift()) : (opCode==67 ? f32 : f64)(nodes.shift())
+          after = opCode < 67 ? leb(nodes.shift()) : (opCode==67 ? f32 : f64)(nodes.shift())
         }
 
         // (local.get $id), (local.tee $id x)
         else if (opCode>=32&&opCode<=34) {
-          imm = uleb(nodes[0]?.[0]==='$' ? params[id=nodes.shift()] || locals[id] : nodes.shift())
+          after = uleb(nodes[0]?.[0]==='$' ? params[id=nodes.shift()] || locals[id] : nodes.shift())
           if (opCode>32) argc = 1
         }
 
         // (global.get id), (global.set id)
         else if (opCode==35||opCode==36) {
-          imm = uleb(nodes[0]?.[0]==='$' ? ctx.global[nodes.shift()] : nodes.shift())
+          after = uleb(nodes[0]?.[0]==='$' ? ctx.global[nodes.shift()] : nodes.shift())
           if (opCode>35) argc = 1
         }
 
         // (call id ...nodes)
         else if (opCode==16) {
-          imm = uleb(id = nodes[0]?.[0]==='$' ? ctx.func[nodes.shift()] : nodes.shift());
+          after = uleb(id = nodes[0]?.[0]==='$' ? ctx.func[nodes.shift()] : nodes.shift());
           // FIXME: how to get signature of imported function
           [,argc] = ctx.type[ctx.func[id][0]]
         }
@@ -209,12 +209,12 @@ const build = {
           let typeId = nodes.shift()[1];
           [,argc] = ctx.type[typeId = typeId[0]==='$'?ctx.type[typeId]:typeId]
           argc++
-          imm = uleb(typeId), imm.push(0) // extra immediate indicates table idx (reserved)
+          after = uleb(typeId), after.push(0) // extra afterediate indicates table idx (reserved)
         }
 
         // FIXME (memory.grow $idx?)
         else if (opCode==63||opCode==64) {
-          imm = [0]
+          after = [0]
           argc = 1
         }
 
@@ -222,24 +222,24 @@ const build = {
         else if (opCode==4) {
           callstack.push(opCode)
           let [,type] = nodes[0][0]==='result' ? nodes.shift() : [,'void']
-          imm=[TYPE[type]]
+          after=[TYPE[type]]
 
-          argc = 0, args.push(...instr(nodes.shift()))
+          argc = 0, before.push(...instr(nodes.shift()))
           let body
           if (nodes[0][0]==='then') [,...body] = nodes.shift(); else body = nodes
-          while (body.length) imm.push(...instr(body.shift()))
+          after.push(...consume(body))
 
           callstack.pop(), callstack.push(OP.else)
           if (nodes[0]?.[0]==='else') {
             [,...body] = nodes.shift()
-            imm.push(OP.else, ...body.flatMap(instr))
+            after.push(OP.else,...consume(body))
           }
           callstack.pop()
-          imm.push(OP.end)
+          after.push(OP.end)
         }
 
-        // (drop arg), (return arg), (end arg)
-        else if (opCode==0x1a || opCode==0x0f || opCode==0x0b) { argc = 1 }
+        // (drop arg), (return arg)
+        else if (opCode==0x1a || opCode==0x0f) { argc = 1 }
 
         // (select a b cond)
         else if (opCode==0x1b) { argc = 3 }
@@ -249,9 +249,7 @@ const build = {
           callstack.push(opCode)
           if (nodes[0]?.[0]==='$') (callstack[nodes.shift()] = callstack.length)
           let [,type] = nodes[0]?.[0]==='result' ? nodes.shift() : [,'void']
-          imm=[TYPE[type]]
-          while (nodes.length) imm.push(...instr(nodes.shift()))
-          imm.push(OP.end)
+          after=[TYPE[type], ...consume(nodes), OP.end]
           callstack.pop()
         }
 
@@ -259,15 +257,15 @@ const build = {
         // (br_if $label cond result?)
         else if (opCode==0x0c||opCode==0x0d) {
           // br index indicates how many callstack items to pop
-          imm = uleb(nodes[0]?.[0]==='$' ? callstack.length-callstack[nodes.shift()] : nodes.shift())
+          after = uleb(nodes[0]?.[0]==='$' ? callstack.length-callstack[nodes.shift()] : nodes.shift())
           argc = (opCode==0x0d ? 1 + (nodes.length > 1) : !!nodes.length)
         }
 
         // (br_table 1 2 3 4  0  selector result?)
         else if (opCode==0x0e) {
-          imm = []
-          while (!Array.isArray(nodes[0])) id=nodes.shift(), imm.push(...uleb(id[0][0]==='$'?callstack.length-callstack[id]:id))
-          imm.unshift(...uleb(imm.length-1))
+          after = []
+          while (!Array.isArray(nodes[0])) id=nodes.shift(), after.push(...uleb(id[0][0]==='$'?callstack.length-callstack[id]:id))
+          after.unshift(...uleb(after.length-1))
           argc = 1 + (nodes.length>1)
         }
 
@@ -276,13 +274,23 @@ const build = {
 
       // consume arguments
       if (nodes.length < argc) err(`Stack arguments are not supported at \`${op}\``)
-      while (argc--) args.push(...instr(nodes.shift()))
+      while (argc--) before.push(...instr(nodes.shift()))
       if (nodes.length) err(`Too many arguments for \`${op}\`.`)
 
-      return [...args, opCode, ...imm]
+      return [...before, opCode, ...after]
     }
 
-    let code = body.flatMap(instr)
+    // consume sequence of nodes
+    const consume = nodes => {
+      let result = []
+      while (nodes.length) {
+        let node = nodes.shift()
+        result.push(...instr(node))
+      }
+      return result
+    }
+
+    let code = consume(body)
 
     // squash local types
     let locTypes = locals.reduce((a, type) => (type==a[a.length-1] ? a[a.length-2]++ : a.push(1,type), a), [])
@@ -389,7 +397,6 @@ const str = str => {
 
 // build range/limits sequence (non-consuming)
 const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared==='shared'?3:1, ...uleb(min), ...uleb(max)]
-
 
 // encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
 function leb (number, buffer) {
