@@ -162,7 +162,8 @@ const build = {
     let locTypes = locals.reduce((a, type) => (type==a[a.length-1] ? a[a.length-2]++ : a.push(1,type), a), [])
 
     // map code instruction into bytes: [args, opCode, immediates]
-    const instr = ([op, ...nodes]) => {
+    const instr = (group) => {
+      let [op, ...nodes] = group
       let opCode = OP[op], argc=0, before=[], after=[], id
 
       // NOTE: we could reorganize ops by groups and detect signature as `op in STORE`
@@ -236,13 +237,13 @@ const build = {
 
           argc = 0, before.push(...instr(nodes.shift()))
           let body
-          if (nodes[0][0]==='then') [,...body] = nodes.shift(); else body = nodes
+          if (nodes[0]?.[0]==='then') [,...body] = nodes.shift(); else body = nodes
           after.push(...consume(body))
 
           callstack.pop(), callstack.push(OP.else)
           if (nodes[0]?.[0]==='else') {
             [,...body] = nodes.shift()
-            after.push(OP.else,...consume(body))
+            if (body.length) after.push(OP.else,...consume(body))
           }
           callstack.pop()
           after.push(OP.end)
@@ -259,9 +260,13 @@ const build = {
           callstack.push(opCode)
           if (nodes[0]?.[0]==='$') (callstack[nodes.shift()] = callstack.length)
           let [,type] = nodes[0]?.[0]==='result' ? nodes.shift() : [,'void']
-          after=[TYPE[type], ...consume(nodes), OP.end]
-          callstack.pop()
+          after=[TYPE[type], ...consume(nodes)]
+
+          if (!group.inline) callstack.pop(), after.push(OP.end) // inline loop/block expects end to be separately provided
         }
+
+        // (end)
+        else if (opCode==0x0b) callstack.pop()
 
         // (br $label result?)
         // (br_if $label cond result?)
@@ -297,13 +302,12 @@ const build = {
         let node = nodes.shift(), c
 
         if (typeof node === 'string') {
-          // permit some inline instructions: loop $label ... end,  br $label,   arg return
+          // permit some inline instructions: loop $label ... end,  br $label,  arg return
           if (c=INLINE[node]) {
-            node = [node]
+            node = [node], node.inline = true
             if (c>0) nodes[0]?.[0]==='$' && node.push(nodes.shift())
           }
-          else
-          err(`Inline instruction \`${node}\` is not supported`)
+          else err(`Inline instruction \`${node}\` is not supported`)
         }
 
         node && result.push(...instr(node))

@@ -1053,17 +1053,67 @@ t('case: func hoist', () => {
   run(src)
 })
 
+t('case: inline loop', () => {
+  let src = `(func $find
+    loop $search
+    end
+  )
+  `
+  run(src)
+})
+
+t('case: if then else', () => {
+  let src = `
+  (func $find (param $n_bytes i32) (result i32)
+
+    (if (i32.eq (i32.const 1) (i32.const 1))
+      (then)(else)
+    )
+
+    (i32.const 0)
+  )
+  `
+  // console.log(wat(src))
+  run(src)
+})
+
+t('case: label within inline loop', () => {
+  let src = `(func
+    loop $search
+      (if (i32.const 1)(then
+        (if (i32.const 1) (then
+          (br $search)
+        ))
+      ))
+    end
+  )`
+
+  run(src)
+})
+
+t('case: double inline block', () => {
+  let src = `(func
+    loop $a
+      loop $b
+        (if (i32.const 1)(then (br $a)))
+      end
+    end
+  )`
+
+  run(src)
+})
+
 // examples
-t.todo('example: wat-compiler', async () => {
-  // await runExample('/test/example/malloc.wat')
-  // await runExample('/test/example/brownian.wat')
-  // await runExample('/test/example/fire.wat')
-  // await runExample('/test/example/quine.wat')
-  // await runExample('/test/example/metaball.wat')
-  // await runExample('/test/example/maze.wat')
-  // await runExample('/test/example/raytrace.wat')
-  // await runExample('/test/example/snake.wat')
-  // await runExample('/test/example/dino.wat')
+t('example: wat-compiler', async () => {
+  await runExample('/test/example/malloc.wat')
+  await runExample('/test/example/brownian.wat')
+  await runExample('/test/example/fire.wat')
+  await runExample('/test/example/quine.wat')
+  await runExample('/test/example/metaball.wat')
+  await runExample('/test/example/maze.wat')
+  await runExample('/test/example/raytrace.wat')
+  await runExample('/test/example/snake.wat')
+  await runExample('/test/example/dino.wat')
   await runExample('/test/example/containers.wat')
   // await runExample('/test/example/raycast.wat')
 })
