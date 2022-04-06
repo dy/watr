@@ -95,6 +95,11 @@ end
 )
 ```
 
+Numbers format limitation:
+
+* Int64 numbers like `0x7fffffffffffffff` are not supported (at the moment).
+* Floats support only JS format and nans; hex floats
+
 <!--
 Main goal is to get very fluent with wasm text.
 

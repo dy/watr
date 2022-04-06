@@ -69,7 +69,7 @@ export default (nodes) => {
     let sectionCode = SECTION[name], bytes = []
     if (sectionCode!==8) bytes.push(items.length) // skip start section count
     for (let item of items) bytes.push(...item)
-    binary.push(sectionCode, ...uint(bytes.length), ...bytes)
+    binary.push(sectionCode, ...uleb(bytes.length), ...bytes)
   }
 
   return new Uint8Array(binary)
@@ -95,7 +95,7 @@ const build = {
       if (sig[0]?.[0] === 'result') result = sig.shift().slice(1).map(t => TYPE[t])
 
       // reuse existing type or register new one
-      bytes = [TYPE.func, ...uint(params.length), ...params, ...uint(result.length), ...result]
+      bytes = [TYPE.func, ...uleb(params.length), ...params, ...uleb(result.length), ...result]
 
       idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]))
       if (idx < 0) idx = ctx.type.push(bytes)-1
@@ -164,23 +164,23 @@ const build = {
         }
 
         // (i32.const 123)
-        else if (opCode>=65&&opCode<=68) imm = opCode <= 67 ? sint(nodes.shift()) : f32(nodes.shift())
+        else if (opCode>=65&&opCode<=68) imm = opCode < 67 ? leb(nodes.shift()) : (opCode==67 ? f32 : f64)(nodes.shift())
 
         // (local.get $id), (local.tee $id x)
         else if (opCode>=32&&opCode<=34) {
-          imm = uint(nodes[0]?.[0]==='$' ? params[id=nodes.shift()] || locals[id] : nodes.shift())
+          imm = uleb(nodes[0]?.[0]==='$' ? params[id=nodes.shift()] || locals[id] : nodes.shift())
           if (opCode>32) argc = 1
         }
 
         // (global.get id), (global.set id)
         else if (opCode==35||opCode==36) {
-          imm = uint(nodes[0]?.[0]==='$' ? ctx.global[nodes.shift()] : nodes.shift())
+          imm = uleb(nodes[0]?.[0]==='$' ? ctx.global[nodes.shift()] : nodes.shift())
           if (opCode>35) argc = 1
         }
 
         // (call id ...nodes)
         else if (opCode==16) {
-          imm = uint(id = nodes[0]?.[0]==='$' ? ctx.func[nodes.shift()] : nodes.shift());
+          imm = uleb(id = nodes[0]?.[0]==='$' ? ctx.func[nodes.shift()] : nodes.shift());
           // FIXME: how to get signature of imported function
           [,argc] = ctx.type[ctx.func[id][0]]
         }
@@ -190,7 +190,7 @@ const build = {
           let typeId = nodes.shift()[1];
           [,argc] = ctx.type[typeId = typeId[0]==='$'?ctx.type[typeId]:typeId]
           argc++
-          imm = uint(typeId), imm.push(0) // extra immediate indicates table idx (reserved)
+          imm = uleb(typeId), imm.push(0) // extra immediate indicates table idx (reserved)
         }
 
         // FIXME (memory.grow $idx?)
@@ -239,15 +239,15 @@ const build = {
         // (br_if $label cond result?)
         else if (opCode==0x0c||opCode==0x0d) {
           // br index indicates how many callstack items to pop
-          imm = uint(nodes[0]?.[0]==='$' ? callstack.length-callstack[nodes.shift()] : nodes.shift())
+          imm = uleb(nodes[0]?.[0]==='$' ? callstack.length-callstack[nodes.shift()] : nodes.shift())
           argc = (opCode==0x0d ? 1 + (nodes.length > 1) : !!nodes.length)
         }
 
         // (br_table 1 2 3 4  0  selector result?)
         else if (opCode==0x0e) {
           imm = []
-          while (!Array.isArray(nodes[0])) id=nodes.shift(), imm.push(...uint(id[0][0]==='$'?callstack.length-callstack[id]:id))
-          imm.unshift(...uint(imm.length-1))
+          while (!Array.isArray(nodes[0])) id=nodes.shift(), imm.push(...uleb(id[0][0]==='$'?callstack.length-callstack[id]:id))
+          imm.unshift(...uleb(imm.length-1))
           argc = 1 + (nodes.length>1)
         }
 
@@ -267,7 +267,7 @@ const build = {
     // squash local types
     let locTypes = locals.reduce((a, type) => (type==a[a.length-1] ? a[a.length-2]++ : a.push(1,type), a), [])
 
-    ctx.code.push([...uint(code.length+2+locTypes.length), ...uint(locTypes.length>>1), ...locTypes, ...code, OP.end])
+    ctx.code.push([...uleb(code.length+2+locTypes.length), ...uleb(locTypes.length>>1), ...locTypes, ...code, OP.end])
   },
 
   // (memory min max shared)
@@ -310,13 +310,13 @@ const build = {
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
   elem([, offset, ...elems], ctx) {
     const tableIdx = 0 // FIXME: table index can be defined
-    ctx.elem.push([tableIdx, ...iinit(offset, ctx), ...uint(elems.length), ...elems.flatMap(el => uint(el[0]==='$' ? ctx.func[el] : el))])
+    ctx.elem.push([tableIdx, ...iinit(offset, ctx), ...uleb(elems.length), ...elems.flatMap(el => uleb(el[0]==='$' ? ctx.func[el] : el))])
   },
 
   //  (export "name" (kind $name|idx))
   export([, name, [kind, idx]], ctx) {
     if (idx[0]==='$') idx = ctx[kind][idx]
-    ctx.export.push([...str(name), KIND[kind], ...uint(idx)])
+    ctx.export.push([...str(name), KIND[kind], ...uleb(idx)])
   },
 
   // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
@@ -331,7 +331,7 @@ const build = {
       // we track imported funcs in func section to share namespace, and skip them on final build
       if (parts[0]?.[0]==='$') ctx.func[parts.shift()] = ctx.func.length
       let [typeIdx] = build.type([, ['func', ...parts]], ctx)
-      ctx.func.push(details = uint(typeIdx))
+      ctx.func.push(details = uleb(typeIdx))
       ctx.func.importc = (ctx.func.importc||0)+1
     }
     else if (kind==='memory') {
@@ -356,65 +356,123 @@ const build = {
 
 // (i32.const 0) - instantiation time initializer
 const iinit = ([op, literal], ctx) => op[0]==='f' ?
-  [OP[op], ...f32(literal), OP.end] :
-  [OP[op], ...sint(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
+  [OP[op], ...(op=='f32'?f32:f64)(literal), OP.end] :
+  [OP[op], ...leb(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
 
 // build string binary
 const str = str => {
   str = str[0]==='"' ? str.slice(1,-1) : str
   let res = [], i = 0, c, BSLASH=92
   // spec https://webassembly.github.io/spec/core/text/values.html#strings
-  for (;i < str.length;) c=str.charCodeAt(i++), res.push(...uint(c===BSLASH ? parseInt(str.slice(i,i+=2), 16) : c))
-  res.unshift(...uint(res.length))
+  for (;i < str.length;) c=str.charCodeAt(i++), res.push(...uleb(c===BSLASH ? parseInt(str.slice(i,i+=2), 16) : c))
+  res.unshift(...uleb(res.length))
   return res
 }
 
 // build range/limits sequence (non-consuming)
-const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uint(min)] : [shared==='shared'?3:1, ...uint(min), ...uint(max)]
+const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared==='shared'?3:1, ...uleb(min), ...uleb(max)]
 
-// direct wiki example https://en.wikipedia.org/wiki/LEB128#Signed_LEB128
-const sint = (value) => {
-  value = parseInt(value)
-  // value |= 0;
-  const result = [];
-  while (true) {
-    const byte_ = value & 0x7f;
-    value >>= 7;
-    if (
-      (value === 0 && (byte_ & 0x40) === 0) ||
-      (value === -1 && (byte_ & 0x40) !== 0)
-    ) {
-      result.push(byte_);
-      return result;
-    }
-    result.push(byte_ | 0x80);
+
+// encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
+function leb (number, buffer) {
+  if (!buffer) buffer = [], number = parseInt(number)
+
+  let byte = number & 0b01111111;
+  let signBit = byte & 0b01000000;
+  number = number >> 7;
+
+  if ((number === 0 && signBit === 0) || (number === -1 && signBit !== 0)) {
+    buffer.push(byte);
+    return buffer;
+  } else {
+    buffer.push(byte | 0b10000000);
+    return leb(number, buffer);
   }
 }
 
-const uint = (n) => {
-  n = parseInt(n)
-  const buffer = [];
-  do {
-    let byte = n & 0x7f;
-    n >>>= 7;
-    if (n !== 0) {
-      byte |= 0x80;
-    }
+const uleb = (number, buffer) => {
+  if (!buffer) buffer = [], number = parseInt(number)
+
+  let byte = number & 0b01111111;
+  number = number >>> 7;
+
+  if (number === 0) {
     buffer.push(byte);
-  } while (n !== 0);
-  return buffer;
+    return buffer;
+  } else {
+    buffer.push(byte | 0b10000000);
+    return uleb(number, buffer);
+  }
 }
 
 const byteView = new DataView(new BigInt64Array(1).buffer)
 
-function f32 (value, res=[]) {
-  byteView.setFloat32(0, value)
-  for (let i = 4; i--;) res.push(byteView.getUint8(i))
+function f32 (value) {
+  if (~value.indexOf('nan')) return nanbox32(value)
+  value=parseFloat(value)
+  byteView.setFloat32(0, value);
+  return [
+    byteView.getUint8(3),
+    byteView.getUint8(2),
+    byteView.getUint8(1),
+    byteView.getUint8(0)
+  ];
 }
 
-function f64 (value, res=[]) {
-  byteView.setFloat64(0, value)
-  for (let i = 8; i--;) res.push(byteView.getUint8(i))
+function f64 (value) {
+  if (~value.indexOf('nan')) return nanbox64(value)
+  value=parseFloat(value)
+  byteView.setFloat64(0, value);
+  return [
+    byteView.getUint8(7),
+    byteView.getUint8(6),
+    byteView.getUint8(5),
+    byteView.getUint8(4),
+    byteView.getUint8(3),
+    byteView.getUint8(2),
+    byteView.getUint8(1),
+    byteView.getUint8(0)
+  ];
+}
+
+const F32_SIGN = 0x80000000
+const F32_NAN  = 0x7f800000
+
+function nanbox32 (input) {
+  let value = parseInt(input.split('nan:')[1])
+  value |= F32_NAN
+  if (input[0] === '-') value |= F32_SIGN
+
+  byteView.setInt32(0, value)
+
+  return[
+    byteView.getUint8(3),
+    byteView.getUint8(2),
+    byteView.getUint8(1),
+    byteView.getUint8(0)
+  ]
+}
+
+const F64_SIGN = 0x8000000000000000n
+const F64_NAN  = 0x7ff0000000000000n
+
+function nanbox64 (input) {
+  let value = BigInt(input.split('nan:')[1])
+  value |= F64_NAN
+  if (input[0] === '-') value |= F64_SIGN
+
+  byteView.setBigInt64(0, value)
+
+  return [
+    byteView.getUint8(7),
+    byteView.getUint8(6),
+    byteView.getUint8(5),
+    byteView.getUint8(4),
+    byteView.getUint8(3),
+    byteView.getUint8(2),
+    byteView.getUint8(1),
+    byteView.getUint8(0)
+  ];
 }
 
 const err = text => { throw Error(text) }
