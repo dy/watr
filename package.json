@@ -29,7 +29,6 @@
   },
   "homepage": "https://github.com/audio-lab/watr#readme",
   "devDependencies": {
-    "node-fetch": "^3.2.3",
     "rollup": "^2.70.1",
     "terser": "^5.12.1",
     "tst": "^7.1.1",

@@ -52,9 +52,23 @@ export default (nodes) => {
   // (func) → [(func)]
   if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes]
 
-  // build nodes in order of sections, to properly initialize indexes/aliases
-  // must come separate from binary builder: func can define types etc.
-  for (let name in sections) {
+  // (global $a (import "a" "b") (mut i32)) → (import "a" "b" (global $a (mut i32)))
+  // (memory (import "a" "b") min max shared) → (import "a" "b" (memory min max shared))
+  nodes = nodes.map(node => {
+    if (node[2]?.[0]==='import') {
+      let [kind, name, imp, ...args] = node
+      return [...imp, [kind, name, ...args]]
+    }
+    else if (node[1]?.[0]==='import') {
+      let [kind, imp, ...args] = node
+      return [...imp, [kind, ...args]]
+    }
+    return node
+  })
+
+  // import must be initialized first, global before func, elem after func
+  let order = ['type', 'import', 'table', 'memory', 'global', 'func', 'export', 'start', 'elem', 'data']
+  for (let name of order) {
     let remaining = []
     for (let node of nodes) node[0] === name ? build[name](node, sections) : remaining.push(node)
     nodes = remaining
@@ -64,7 +78,7 @@ export default (nodes) => {
   // build binary sections
   for (let name in sections) {
     let items=sections[name]
-    if (items.importc) items = items.slice(items.importc) // discard imported functions
+    if (items.importc) items = items.slice(items.importc) // discard imported functions/globals
     if (!items.length) continue
     let sectionCode = SECTION[name], bytes = []
     if (sectionCode!==8) bytes.push(items.length) // skip start section count
@@ -164,7 +178,9 @@ const build = {
         }
 
         // (i32.const 123)
-        else if (opCode>=65&&opCode<=68) imm = opCode < 67 ? leb(nodes.shift()) : (opCode==67 ? f32 : f64)(nodes.shift())
+        else if (opCode>=65&&opCode<=68) {
+          imm = opCode < 67 ? leb(nodes.shift()) : (opCode==67 ? f32 : f64)(nodes.shift())
+        }
 
         // (local.get $id), (local.tee $id x)
         else if (opCode>=32&&opCode<=34) {
@@ -272,33 +288,19 @@ const build = {
 
   // (memory min max shared)
   // (memory $name min max shared)
-  // (memory (import "js" "mem") min max shared)
   memory([, ...parts], ctx) {
     if (parts[0][0]==='$') ctx.memory[parts.shift()] = ctx.memory.length
-    if (parts[0][0] === 'import') {
-      let [imp, ...limits] = parts
-      // (import "js" "mem" (memory 1))
-      return build.import([...imp, ['memory', ...limits]], ctx)
-    }
-
     ctx.memory.push(range(parts))
   },
 
   // (global i32 (i32.const 42))
   // (global $id i32 (i32.const 42))
   // (global $id (mut i32) (i32.const 42))
-  // (global $g1 (import "js" "g1") (mut i32))  ;; import from js
   global([, ...args], ctx) {
     let name = args[0][0]==='$' && args.shift()
-    if (args[0][0]==='import') {
-      let [,mod,field] = args.shift()
-      build.import([,mod,field,['global',name,...args]], ctx)
-    }
-    else {
-      if (name) ctx.global[name] = ctx.global.length
-      let [type, init] = args, mut = type[0] === 'mut' ? 1 : 0
-      ctx.global.push([TYPE[mut ? type[1] : type], mut, ...iinit(init)])
-    }
+    if (name) ctx.global[name] = ctx.global.length
+    let [type, init] = args, mut = type[0] === 'mut' ? 1 : 0
+    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...iinit(init)])
   },
 
   // (table 1 2? funcref)
@@ -306,7 +308,6 @@ const build = {
   table([, ...args], ctx) {
     let name = args[0][0]==='$' && args.shift()
     if (name) ctx.table[name] = ctx.table.length
-
     let lims = range(args)
     ctx.table.push([TYPE[args.pop()], ...lims])
   },
@@ -343,9 +344,12 @@ const build = {
       details = range(parts)
     }
     else if (kind==='global') {
+      // imported globals share namespace with internal globals - we skip them in final build
       if (name) ctx.global[name] = ctx.global.length
       let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
       details = [TYPE[mut ? type[1] : type], mut]
+      ctx.global.push(details)
+      ctx.global.importc = (ctx.global.importc||0)+1
     }
     else throw Error('Unimplemented ' + kind)
 
