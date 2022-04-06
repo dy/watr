@@ -364,10 +364,10 @@ const build = {
     ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
   },
 
-  // (data (i32.const 0) "\2a")
-  data([, offset, init], ctx) {
+  // (data (i32.const 0) "\aa" "\bb"?)
+  data([, offset, ...inits], ctx) {
     // FIXME: first is mem index
-    ctx.data.push([0, ...iinit(offset,ctx), ...str(init)])
+    ctx.data.push([0, ...iinit(offset,ctx), ...str(inits.map(i=>i[0]==='"'?i.slice(1,-1):i).join(''))])
   },
 
   // (start $main)
