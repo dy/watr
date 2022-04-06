@@ -1,6 +1,6 @@
 {
   "name": "watr",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Ligth & fast WAT compiler",
   "main": "watr.js",
   "type": "module",
@@ -13,7 +13,10 @@
     "type": "git",
     "url": "git+https://github.com/dy/watr.git"
   },
-  "files": ["watr.js", "watr.min.js"],
+  "files": [
+    "watr.js",
+    "watr.min.js"
+  ],
   "keywords": [
     "wat",
     "compiler",
