@@ -415,8 +415,8 @@ const str = str => {
 const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared==='shared'?3:1, ...uleb(min), ...uleb(max)]
 
 // encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
-function leb (number, buffer) {
-  if (!buffer) buffer = [], number = parseInt(number)
+function leb (number, buffer=[]) {
+  if (typeof number === 'string') number = parseInt(number.replaceAll('_',''))
 
   let byte = number & 0b01111111;
   let signBit = byte & 0b01000000;
@@ -431,8 +431,8 @@ function leb (number, buffer) {
   }
 }
 
-const uleb = (number, buffer) => {
-  if (!buffer) buffer = [], number = parseInt(number)
+const uleb = (number, buffer=[]) => {
+  if (typeof number === 'string') number = parseInt(number.replaceAll('_',''))
 
   let byte = number & 0b01111111;
   number = number >>> 7;
@@ -446,6 +446,10 @@ const uleb = (number, buffer) => {
   }
 }
 
+// generalized float cases parser
+const parseFlt = input => input==='nan'||input==='+nan'?NaN:input==='-nan'?-NaN:
+    input==='inf'||input==='+inf'?Infinity:input==='-inf'?-Infinity:parseFloat(input.replaceAll('_',''))
+
 const byteView = new DataView(new BigInt64Array(1).buffer)
 
 const F32_SIGN = 0x80000000, F32_NAN  = 0x7f800000
@@ -457,7 +461,7 @@ function f32 (input, value, idx) {
     byteView.setInt32(0, value)
   }
   else {
-    value=input==='nan'||input==='+nan'?NaN:input==='-nan'?-NaN:input==='inf'||input==='+inf'?Infinity:input==='-inf'?-Infinity:parseFloat(input)
+    value=typeof input === 'string' ? parseFlt(input) : input
     byteView.setFloat32(0, value);
   }
 
@@ -478,7 +482,7 @@ function f64 (input, value, idx) {
     byteView.setBigInt64(0, value)
   }
   else {
-    value=input==='nan'||input==='+nan'?NaN:input==='-nan'?-NaN:input==='inf'||input==='+inf'?Infinity:input==='-inf'?-Infinity:parseFloat(input)
+    value=typeof input === 'string' ? parseFlt(input) : input
     byteView.setFloat64(0, value);
   }
 
