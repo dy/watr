@@ -36,7 +36,11 @@ ALIGN = {
   'i64.load8_s': 1, 'i64.load8_u': 1, 'i64.load16_s': 2, 'i64.load16_u': 2, 'i64.load32_s': 4, 'i64.load32_u': 4,  'i32.store': 4,
   'i64.store': 8, 'f32.store': 4, 'f64.store': 8,
   'i32.store8': 1, 'i32.store16': 2, 'i64.store8': 1, 'i64.store16': 2, 'i64.store32': 4,
-}
+},
+
+// some inlinable instructions
+INLINE = {loop: 1, if: 1, end: -1, return: -1}
+
 OP.map((op,i)=>OP[op]=i) // init op names
 
 // convert wat tree to wasm binary
@@ -74,6 +78,8 @@ export default (nodes) => {
     for (let node of nodes) node[0] === name ? build[name](node, sections) : remaining.push(node)
     nodes = remaining
   }
+
+  // console.log(sections)
 
   // 3. build binary
   for (let name in sections) {
@@ -397,7 +403,10 @@ const str = str => {
   str = str[0]==='"' ? str.slice(1,-1) : str
   let res = [], i = 0, c, BSLASH=92
   // spec https://webassembly.github.io/spec/core/text/values.html#strings
-  for (;i < str.length;) c=str.charCodeAt(i++), res.push(...uleb(c===BSLASH ? parseInt(str.slice(i,i+=2), 16) : c))
+  for (;i < str.length;) {
+    c=str.charCodeAt(i++)
+    res.push(c===BSLASH ? (parseInt(str.slice(i,i+=2), 16)) : c)
+  }
   res.unshift(...uleb(res.length))
   return res
 }
