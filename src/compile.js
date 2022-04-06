@@ -67,9 +67,6 @@ export default (nodes) => {
     return node
   })
 
-  // FIXME: what if it detects inline/stacked args here?
-
-
   // 2. build IR. import must be initialized first, global before func, elem after func
   let order = ['type', 'import', 'table', 'memory', 'global', 'func', 'export', 'start', 'elem', 'data']
   for (let name of order) {
@@ -125,15 +122,14 @@ const build = {
 
   // (func $name? ...params result ...body)
   func([,...body], ctx) {
-    let idx=ctx.func.length, // fn index comes after impoted fns
-        locals=[], // list of local variables
+    let locals=[], // list of local variables
         callstack=[]
 
     // fn name
-    if (body[0]?.[0] === '$') ctx.func[body.shift()] = idx
+    if (body[0]?.[0] === '$') ctx.func[body.shift()] = ctx.func.length
 
     // export binding
-    if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', idx]], ctx)
+    if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', ctx.func.length]], ctx)
 
     // register type
     let [typeIdx, params, result] = build.type([,['func',...body]], ctx)
@@ -152,8 +148,6 @@ const build = {
 
     // map code instruction into bytes: [args, opCode, immediates]
     const instr = ([op, ...nodes]) => {
-      if (op.length===1) err(`Inline instructions are not supported \`${op+nodes.join('')}\``)
-
       let opCode = OP[op], argc=0, before=[], after=[], id
 
       // NOTE: we could reorganize ops by groups and detect signature as `op in STORE`
@@ -176,7 +170,7 @@ const build = {
           // FIXME: figure out point in Math.log2 aligns
           let o = {align: ALIGN[op], offset: 0}, p
           while (nodes[0]?.[0] in o) p = nodes.shift(), o[p[0]] = +p[1]
-          after = [Math.log2(o.align), o.offset]
+          after = [Math.log2(o.align), ...uleb(o.offset)]
           argc = opCode >= 54 ? 2 : 1
         }
 
@@ -238,8 +232,8 @@ const build = {
           after.push(OP.end)
         }
 
-        // (drop arg), (return arg)
-        else if (opCode==0x1a || opCode==0x0f) { argc = 1 }
+        // (drop arg?), (return arg?)
+        else if (opCode==0x1a || opCode==0x0f) { argc = nodes.length?1:0 }
 
         // (select a b cond)
         else if (opCode==0x1b) { argc = 3 }
@@ -300,8 +294,10 @@ const build = {
 
   // (memory min max shared)
   // (memory $name min max shared)
+  // (memory (export "mem") 5)
   memory([, ...parts], ctx) {
     if (parts[0][0]==='$') ctx.memory[parts.shift()] = ctx.memory.length
+    if (parts[0][0] === 'export') build.export([...parts.shift(), ['memory', ctx.memory.length]], ctx)
     ctx.memory.push(range(parts))
   },
 

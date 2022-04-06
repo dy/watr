@@ -446,13 +446,13 @@
     (local $data i32)
     (local.set $offset (i32.const 0))
 
-    (loop $cpy
+    loop $cpy
       (local.set $data (i32.load8_u (i32.add (local.get $src) (local.get $offset))))
       (i32.store8 (i32.add (local.get $dst) (local.get $offset)) (local.get $data))
 
       (local.set $offset (i32.add (local.get $offset) (i32.const 1)))
       (br_if $cpy (i32.lt_u (local.get $offset) (local.get $n_bytes)))
-    )
+    end
   )
 
   ;; reallocate memory to new size
@@ -546,23 +546,23 @@
 
     (if (i32.gt_u (local.get $dst) (local.get $src)) (then
       (local.set $offset (i32.sub (local.get $n_bytes) (i32.const 1)))
-      (loop $cpy_rev
+      loop $cpy_rev
         (local.set $data (i32.load8_u (i32.add (local.get $src) (local.get $offset))))
         (i32.store8 (i32.add (local.get $dst) (local.get $offset)) (local.get $data))
 
         (local.set $offset (i32.sub (local.get $offset) (i32.const 1)))
         (br_if $cpy_rev (i32.gt_s (local.get $offset) (i32.const -1)))
-      )
+      end
 
     )(else
       (local.set $offset (i32.const 0))
-      (loop $cpy
+      loop $cpy
         (local.set $data (i32.load8_u (i32.add (local.get $src) (local.get $offset))))
         (i32.store8 (i32.add (local.get $dst) (local.get $offset)) (local.get $data))
 
         (local.set $offset (i32.add (local.get $offset) (i32.const 1)))
         (br_if $cpy (i32.lt_u (local.get $offset) (local.get $n_bytes)))
-      )
+      end
     ))
   )
 
@@ -847,7 +847,7 @@
 
     (local.set $tmp (call $malloc (local.get $elem_size)))
 
-    (loop $loop_arr_rev
+    loop $loop_arr_rev
       (if (i32.lt_u (local.get $stt) (local.get $end)) (then
 
         (call $memcpy (local.get $tmp) (local.get $stt) (local.get $elem_size))
@@ -859,7 +859,7 @@
 
       (br $loop_arr_rev)
       ))
-    )
+    end
 
     (call $free (local.get $tmp))
 
@@ -1128,14 +1128,14 @@
     (local $node i32)
     (local $next i32)
     (local.set $node (call $_list_get_head (local.get $l)))
-    (loop $loop_list_clear
+    loop $loop_list_clear
       (if (i32.eqz (local.get $node))(then)(else
         (local.set $next (call $_listnode_get_next (local.get $node)))
         (call $free (local.get $node))
         (local.set $node (local.get $next))
         (br $loop_list_clear)
       ))
-    )
+    end
     (call $_list_set_head (local.get $l) (i32.const 0))
     (call $_list_set_tail (local.get $l) (i32.const 0))
     (call $_list_set_length (local.get $l) (i32.const 0))
@@ -1157,7 +1157,7 @@
     (call $_list_set_head (local.get $l) (call $_list_get_tail (local.get $l)))
     (call $_list_set_tail (local.get $l) (local.get $node))
 
-    (loop $loop_list_reverse
+    loop $loop_list_reverse
       (if (i32.eqz (local.get $node))(then)(else
         (local.set $temp (call $_listnode_get_prev (local.get $node)))
         (call $_listnode_set_prev (local.get $node) (call $_listnode_get_next (local.get $node)) )
@@ -1165,7 +1165,7 @@
         (local.set $node (call $_listnode_get_prev (local.get $node)))
         (br $loop_list_reverse)
       ))
-    )
+    end
   )
 
   ;;------------------------------------------------------------------------------------
@@ -1265,14 +1265,14 @@
     (local $ptr i32)
     (local $i i32)
     (local.set $ptr (call $_mapnode_get_key_ptr (local.get $m)))
-    (loop $loop_mapnode_set_key_h
+    loop $loop_mapnode_set_key_h
       (i32.store8
         (i32.add (local.get $ptr) (local.get $i))
         (i32.load8_u (i32.add (local.get $key_ptr) (local.get $i)))
       )
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br_if $loop_mapnode_set_key_h (i32.lt_u (local.get $i) (local.get $key_size) ))
-    )
+    end
   )
   (func $_mapnode_set_key_i (param $m i32) (param $key i32)
     (i32.store
