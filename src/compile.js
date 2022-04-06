@@ -49,6 +49,7 @@ export default (nodes) => {
     0x01, 0x00, 0x00, 0x00, // version
   ]
 
+  // 1. transform tree
   // (func) → [(func)]
   if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes]
 
@@ -66,7 +67,10 @@ export default (nodes) => {
     return node
   })
 
-  // import must be initialized first, global before func, elem after func
+  // FIXME: what if it detects inline/stacked args here?
+
+
+  // 2. build IR. import must be initialized first, global before func, elem after func
   let order = ['type', 'import', 'table', 'memory', 'global', 'func', 'export', 'start', 'elem', 'data']
   for (let name of order) {
     let remaining = []
@@ -74,8 +78,7 @@ export default (nodes) => {
     nodes = remaining
   }
 
-  // console.log(sections)
-  // build binary sections
+  // 3. build binary
   for (let name in sections) {
     let items=sections[name]
     if (items.importc) items = items.slice(items.importc) // discard imported functions/globals
