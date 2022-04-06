@@ -1026,6 +1026,14 @@ t('case: multiple datas', () => {
   // new WebAssembly.Module()
 })
 
+t('case: globals', () => {
+  let src = `
+  (global $Px (mut f32) (f32.const 21))
+  (global $Py (mut f32) (f32.const 21))
+  (global $angle (mut f32) (f32.const 0.7853981633974483))`
+  is(compile(parse(src)), wat(src).buffer)
+})
+
 // examples
 t.only('example: wat-compiler', () => {
   runExample('/test/example/malloc.wat')

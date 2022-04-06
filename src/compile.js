@@ -395,7 +395,7 @@ const build = {
 
 // (i32.const 0) - instantiation time initializer
 const iinit = ([op, literal], ctx) => op[0]==='f' ?
-  [OP[op], ...(op=='f32'?f32:f64)(literal), OP.end] :
+  [OP[op], ...(op[1]==='3'?f32:f64)(literal), OP.end] :
   [OP[op], ...leb(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
 
 // build string binary
