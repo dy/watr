@@ -1036,18 +1036,18 @@ t('case: globals', () => {
 })
 
 // examples
-t.todo('example: wat-compiler', () => {
-  // runExample('/test/example/malloc.wat')
-  // runExample('/test/example/brownian.wat')
-  // runExample('/test/example/fire.wat')
-  // runExample('/test/example/quine.wat')
-  // runExample('/test/example/metaball.wat')
+t.only('example: wat-compiler', () => {
+  runExample('/test/example/malloc.wat')
+  runExample('/test/example/brownian.wat')
+  runExample('/test/example/fire.wat')
+  runExample('/test/example/quine.wat')
+  runExample('/test/example/metaball.wat')
   runExample('/test/example/maze.wat')
-  // runExample('/test/example/snake.wat')
-  // runExample('/test/example/raytrace.wat')
-  // runExample('/test/example/containers.wat')
-  // runExample('/test/example/dino.wat')
   // runExample('/test/example/raycast.wat')
+  // runExample('/test/example/dino.wat')
+  // runExample('/test/example/raytrace.wat')
+  // runExample('/test/example/snake.wat')
+  // runExample('/test/example/containers.wat')
 })
 
 t('example: legacy', () => {
