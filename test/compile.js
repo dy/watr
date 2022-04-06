@@ -3,7 +3,6 @@ import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import Wabt from '../lib/wabt.js'
 import watCompiler from '../lib/wat-compiler.js'
-// import fetch from 'node-fetch'
 
 
 // examples from https://ontouchstart.pages.dev/chapter_wasm_binary
@@ -1022,7 +1021,7 @@ t.skip('bench: if', () => {
 
 
 // found cases
-t.only('case: global (import)', async () => {
+t('case: global (import)', async () => {
   let src = `(global $blockSize (import "js" "blockSize") (mut i32))`
   run(src, {js:{blockSize: new WebAssembly.Global({value:'i32',mutable:true}, 1)}})
 })
@@ -1041,14 +1040,29 @@ t.only('case: global (import)', async () => {
 //   'dino',
 //   'raycast',
 // ]
-t.todo('example: amp.wat', async () => {
+t('example: amp.wat', async () => {
   let res = await fetch('/test/example/amp.wat')
   let src = await res.text()
-  console.log(wat(src))
-  run(src)
+  // console.log(wat(src))
+  run(src, {
+    js:{
+      blockSize: new WebAssembly.Global({value:'i32',mutable:true}, 1),
+      mem: new WebAssembly.Memory({initial: 1})
+    },
+    console:{log:console.log}
+  })
 })
 
 
+// stub fetch for local purpose
+if (!global.fetch) {
+  let {readFileSync} = await import('fs')
+  global.fetch = async path => {
+    path = `.${path}`
+    const data = readFileSync(path, 'utf8')
+    return {text(){return data}}
+  }
+}
 
 console.hex = (d) => console.log((Object(d).buffer instanceof ArrayBuffer ? new Uint8Array(d.buffer) :
 typeof d === 'string' ? (new TextEncoder('utf-8')).encode(d) :
