@@ -100,7 +100,7 @@ end
 
 Inline style is supported for compatibility, but discrouraged.
 It may also miss some edge cases and nice error messages.
-For good REPL experience better use wabt.
+For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt.js).
 
 
 ## Useful links
