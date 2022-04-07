@@ -97,11 +97,12 @@ end
 ```
 
 ```wast
-(f32.const 0x1.fffffep+127)  ;; ✘ floating HEX (not supported)
+(f32.const 0x1.fffffep+127)  ;; ✘ floating HEX - not supported
 ```
 
 ```wast
-(global.set $pc (;(i32.const <new-pc>);)) ✘ default arguments must be explicit
+(global.set $pc (;(i32.const <new-pc>);)) ;; ✘ fallthrough arguments
+(global.set $pc (i32.const 0))            ;; ✔ explicit arguments
 ```
 
 It may also miss some edge cases and nice error messages.
