@@ -373,7 +373,7 @@ const iinit = ([op, literal], ctx) => op[0]==='f' ?
   [OP[op], ...(op[1]==='3'?f32:f64)(literal), OP.end] :
   [OP[op], ...(op[1]==='3'?leb:bigleb)(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
 
-const escape = {n:10, r:13, t:9, b:8, f:12, v:1}
+const escape = {n:10, r:13, t:9, v:1}
 
 // build string binary
 const str = str => {

@@ -62,8 +62,9 @@ double(108) // 216
 
 ## Limitations
 
-Ambiguous syntax is intentionally prohibited in favor of explicit lispy structure.<br>
-Each instruction must have prefix signature with parenthesized immediates and arguments.
+Ambiguous syntax is prohibited in favor of explicit lispy structure.<br>
+Each instruction must have prefix signature with parenthesized immediates and arguments.<br>
+It may be supported, but discouraged.
 
 ```wast
 (func (result i32)
@@ -103,7 +104,8 @@ end
 (global.set $pc (;(i32.const <new-pc>);)) ✘ default arguments must be explicit
 ```
 
-It may also miss many edge cases detection and nice error messages. For good repl experience better use wabt.
+It may also miss some edge cases and nice error messages.
+For good REPL experience better use wabt.
 
 <!--
 Main goal is to get very fluent with wasm text.

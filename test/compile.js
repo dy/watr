@@ -1031,6 +1031,12 @@ t('case: multiple datas', () => {
   let src=String.raw`
   (memory 5)
   (data (i32.const 268800)
+
+  "\00\00\48\43" ;; 200   x range
+  "\00\00\48\42" ;; 50    x addend
+  "\cd\cc\cc\3e" ;; 0.4   dx range
+  "\cd\cc\4c\be" ;; -0.2  dx adde
+
   "\07\07"
   "\FF\FF")`
   is(compile(parse(src)), wat(src).buffer)
@@ -1121,7 +1127,7 @@ t('example: wat-compiler', async () => {
   await runExample('/test/example/snake.wat')
   await runExample('/test/example/dino.wat')
   await runExample('/test/example/containers.wat')
-  // await runExample('/test/example/raycast.wat')
+  await runExample('/test/example/raycast.wat')
 })
 
 t('example: legacy', async () => {
