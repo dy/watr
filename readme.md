@@ -3,7 +3,7 @@
 > Light & fast WAT compiler.
 
 Provides bare minimum WAT to WASM compilation without unnecessary syntax complexities (see [limitations](#limitations)).<br/>
-Useful as WASM API layer, eg. for hi-level languages or for dynamic (in-browser?) WASM compilation.
+Useful as WASM API layer, eg. for hi-level languages or for dynamic (in-browser?) compilation.
 <!--, eg. [sonl](https://github.com/audio-lab/sonl). -->
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
