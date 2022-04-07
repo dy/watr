@@ -62,9 +62,7 @@ double(108) // 216
 
 ## Limitations
 
-Ambiguous syntax is prohibited in favor of explicit lispy structure.<br>
-Each instruction must have prefix signature with parenthesized immediates and arguments.<br>
-It may be supported, but discouraged.
+Ambiguous syntax is prohibited in favor of explicit lispy notation. Each instruction must have prefix signature with parenthesized immediates and arguments. Inline style is discouraged, although may be supported for compatibility.
 
 ```wast
 (func (result i32)
