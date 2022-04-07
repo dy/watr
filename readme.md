@@ -79,15 +79,10 @@ Ambiguous syntax is prohibited in favor of explicit lispy notation. Each instruc
 ```
 
 ```wast
-(local.get 0)
+(local.get 0)     ;; ✘ stacked argument
 if (result i32)   ;; ✘ inline instruction
   (i32.const 1)
 end
-
-(local.get 0)     ;; ✘ stacked argument
-(if (result i32)
-  (i32.const 1)
-)
 
 (if (result i32) (local.get 0)  ;; ✔ explicit signature
   (i32.const 1)
