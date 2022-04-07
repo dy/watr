@@ -62,7 +62,7 @@ double(108) // 216
 
 ## Limitations
 
-Ambiguous syntax is prohibited in favor of explicit lispy notation. Each instruction must have prefix signature with parenthesized immediates and arguments. Inline style is discouraged, although may be supported for compatibility.
+Ambiguous syntax is prohibited in favor of explicit lispy notation. Each instruction must have prefix signature with parenthesized immediates and arguments.
 
 ```wast
 (func (result i32)
@@ -103,6 +103,7 @@ end
 (global.set $pc (i32.const 0))            ;; ✔ explicit arguments
 ```
 
+Inline style is supported for compatibility, but discrouraged.
 It may also miss some edge cases and nice error messages.
 For good REPL experience better use wabt.
 
