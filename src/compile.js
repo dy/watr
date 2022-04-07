@@ -1,47 +1,9 @@
-// ref: https://github.com/stagas/wat-compiler/blob/main/lib/const.js
-// NOTE: squashing into a string doesn't save up gzipped size
-const OP = [
-  'unreachable', 'nop', 'block', 'loop', 'if', 'else', ,,,,,
-  'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', ,,,,,,,,
-  'drop', 'select', ,,,,
-  'local.get', 'local.set', 'local.tee', 'global.get', 'global.set', ,,,
-  'i32.load', 'i64.load', 'f32.load', 'f64.load',
-  'i32.load8_s', 'i32.load8_u', 'i32.load16_s', 'i32.load16_u',
-  'i64.load8_s', 'i64.load8_u', 'i64.load16_s', 'i64.load16_u', 'i64.load32_s', 'i64.load32_u',
-  'i32.store', 'i64.store', 'f32.store', 'f64.store',
-  'i32.store8', 'i32.store16', 'i64.store8', 'i64.store16', 'i64.store32',
-  'memory.size', 'memory.grow',
-  'i32.const', 'i64.const', 'f32.const', 'f64.const',
-  'i32.eqz', 'i32.eq', 'i32.ne', 'i32.lt_s', 'i32.lt_u', 'i32.gt_s', 'i32.gt_u', 'i32.le_s', 'i32.le_u', 'i32.ge_s', 'i32.ge_u',
-  'i64.eqz', 'i64.eq', 'i64.ne', 'i64.lt_s', 'i64.lt_u', 'i64.gt_s', 'i64.gt_u', 'i64.le_s', 'i64.le_u', 'i64.ge_s', 'i64.ge_u',
-             'f32.eq', 'f32.ne', 'f32.lt',               'f32.gt',               'f32.le',               'f32.ge',
-             'f64.eq', 'f64.ne', 'f64.lt',               'f64.gt',               'f64.le',               'f64.ge',
-  'i32.clz', 'i32.ctz', 'i32.popcnt', 'i32.add', 'i32.sub', 'i32.mul', 'i32.div_s', 'i32.div_u', 'i32.rem_s', 'i32.rem_u', 'i32.and', 'i32.or', 'i32.xor', 'i32.shl', 'i32.shr_s', 'i32.shr_u', 'i32.rotl', 'i32.rotr',
-  'i64.clz', 'i64.ctz', 'i64.popcnt', 'i64.add', 'i64.sub', 'i64.mul', 'i64.div_s', 'i64.div_u', 'i64.rem_s', 'i64.rem_u', 'i64.and', 'i64.or', 'i64.xor', 'i64.shl', 'i64.shr_s', 'i64.shr_u', 'i64.rotl', 'i64.rotr',
-  'f32.abs', 'f32.neg', 'f32.ceil', 'f32.floor', 'f32.trunc', 'f32.nearest', 'f32.sqrt', 'f32.add', 'f32.sub', 'f32.mul', 'f32.div', 'f32.min', 'f32.max', 'f32.copysign',
-  'f64.abs', 'f64.neg', 'f64.ceil', 'f64.floor', 'f64.trunc', 'f64.nearest', 'f64.sqrt', 'f64.add', 'f64.sub', 'f64.mul', 'f64.div', 'f64.min', 'f64.max', 'f64.copysign',
-  'i32.wrap_i64',
-  'i32.trunc_f32_s', 'i32.trunc_f32_u', 'i32.trunc_f64_s', 'i32.trunc_f64_u', 'i64.extend_i32_s', 'i64.extend_i32_u',
-  'i64.trunc_f32_s', 'i64.trunc_f32_u', 'i64.trunc_f64_s', 'i64.trunc_f64_u',
-  'f32.convert_i32_s', 'f32.convert_i32_u', 'f32.convert_i64_s', 'f32.convert_i64_u', 'f32.demote_f64',
-  'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
-  'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64',
-],
-SECTION = { type:1, import:2, func:3, table:4, memory:5, global:6, export:7, start:8, elem:9, code:10, data:11 },
-TYPE = { i32:0x7f, i64:0x7e, f32:0x7d, f64:0x7c, void:0x40, func:0x60, funcref:0x70 },
-KIND = { func: 0, table: 1, memory: 2, global: 3 },
-ALIGN = {
-  'i32.load': 4, 'i64.load': 8, 'f32.load': 4, 'f64.load': 8,
-  'i32.load8_s': 1, 'i32.load8_u': 1, 'i32.load16_s': 2, 'i32.load16_u': 2,
-  'i64.load8_s': 1, 'i64.load8_u': 1, 'i64.load16_s': 2, 'i64.load16_u': 2, 'i64.load32_s': 4, 'i64.load32_u': 4,  'i32.store': 4,
-  'i64.store': 8, 'f32.store': 4, 'f64.store': 8,
-  'i32.store8': 1, 'i32.store16': 2, 'i64.store8': 1, 'i64.store16': 2, 'i64.store32': 4,
-},
+import {uleb, leb, bigleb, f64, f32} from './util.js'
+import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
+
 
 // some inlinable instructions
-INLINE = {loop: 1, block: 1, if: 1, end: -1, return: -1}
-
-OP.map((op,i)=>OP[op]=i) // init op names
+const INLINE = {loop: 1, block: 1, if: 1, end: -1, return: -1}
 
 // convert wat tree to wasm binary
 export default (nodes) => {
@@ -411,6 +373,8 @@ const iinit = ([op, literal], ctx) => op[0]==='f' ?
   [OP[op], ...(op[1]==='3'?f32:f64)(literal), OP.end] :
   [OP[op], ...(op[1]==='3'?leb:bigleb)(literal[0] === '$' ? ctx.global[literal] : literal), OP.end]
 
+const escape = {n:10, r:13, t:9, b:8, f:12, v:1}
+
 // build string binary
 const str = str => {
   str = str[0]==='"' ? str.slice(1,-1) : str
@@ -418,117 +382,14 @@ const str = str => {
   // spec https://webassembly.github.io/spec/core/text/values.html#strings
   for (;i < str.length;) {
     c=str.charCodeAt(i++)
-    res.push(c===BSLASH ? (parseInt(str.slice(i,i+=2), 16)) : c)
+    res.push(c===BSLASH ? escape[str[i++]] || parseInt(str.slice(i-1,++i), 16) : c)
   }
+
   res.unshift(...uleb(res.length))
   return res
 }
 
 // build range/limits sequence (non-consuming)
 const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared==='shared'?3:1, ...uleb(min), ...uleb(max)]
-
-
-// encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
-const uleb = (number, buffer=[]) => {
-  if (typeof number === 'string') number = parseInt(number.replaceAll('_',''))
-
-  let byte = number & 0b01111111;
-  number = number >>> 7;
-
-  if (number === 0) {
-    buffer.push(byte);
-    return buffer;
-  } else {
-    buffer.push(byte | 0b10000000);
-    return uleb(number, buffer);
-  }
-}
-
-function leb (n, buffer=[]) {
-  if (typeof n === 'string') n = parseInt(n.replaceAll('_',''))
-
-  while (true) {
-    const byte = Number(n & 0x7F)
-    n >>= 7
-    if ((n === 0 && (byte & 0x40) === 0) || (n === -1 && (byte & 0x40) !== 0)) {
-      buffer.push(byte)
-      break
-    }
-    buffer.push((byte | 0x80))
-  }
-  return buffer
-}
-
-function bigleb(n, buffer=[]) {
-  if (typeof n === 'string') {
-    n = n.replaceAll('_','')
-    n = n[0]==='-'?-BigInt(n.slice(1)):BigInt(n)
-    byteView.setBigInt64(0, n)
-    n = byteView.getBigInt64(0)
-  }
-
-  while (true) {
-    const byte = Number(n & 0x7Fn)
-    n >>= 7n
-    if ((n === 0n && (byte & 0x40) === 0) || (n === -1n && (byte & 0x40) !== 0)) {
-      buffer.push(byte)
-      break
-    }
-    buffer.push((byte | 0x80))
-  }
-  return buffer
-}
-
-// generalized float cases parser
-const flt = input => input==='nan'||input==='+nan'?NaN:input==='-nan'?-NaN:
-    input==='inf'||input==='+inf'?Infinity:input==='-inf'?-Infinity:parseFloat(input.replaceAll('_',''))
-
-const byteView = new DataView(new BigInt64Array(1).buffer)
-
-const F32_SIGN = 0x80000000, F32_NAN  = 0x7f800000
-function f32 (input, value, idx) {
-  if (~(idx=input.indexOf('nan:'))) {
-    value = parseInt(input.slice(idx+4))
-    value |= F32_NAN
-    if (input[0] === '-') value |= F32_SIGN
-    byteView.setInt32(0, value)
-  }
-  else {
-    value=typeof input === 'string' ? flt(input) : input
-    byteView.setFloat32(0, value);
-  }
-
-  return [
-    byteView.getUint8(3),
-    byteView.getUint8(2),
-    byteView.getUint8(1),
-    byteView.getUint8(0)
-  ];
-}
-
-const F64_SIGN = 0x8000000000000000n, F64_NAN  = 0x7ff0000000000000n
-function f64 (input, value, idx) {
-  if (~(idx=input.indexOf('nan:'))) {
-    value = BigInt(input.slice(idx+4))
-    value |= F64_NAN
-    if (input[0] === '-') value |= F64_SIGN
-    byteView.setBigInt64(0, value)
-  }
-  else {
-    value=typeof input === 'string' ? flt(input) : input
-    byteView.setFloat64(0, value);
-  }
-
-  return [
-    byteView.getUint8(7),
-    byteView.getUint8(6),
-    byteView.getUint8(5),
-    byteView.getUint8(4),
-    byteView.getUint8(3),
-    byteView.getUint8(2),
-    byteView.getUint8(1),
-    byteView.getUint8(0)
-  ];
-}
 
 const err = text => { throw Error(text) }

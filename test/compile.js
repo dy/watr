@@ -1037,6 +1037,14 @@ t('case: multiple datas', () => {
   // new WebAssembly.Module()
 })
 
+t('case: non-hex data', () => {
+  let src=String.raw`
+  (memory 5)
+  (data (i32.const 268800) "\n")`
+  is(compile(parse(src)), wat(src).buffer)
+  // new WebAssembly.Module()
+})
+
 t('case: globals', () => {
   let src = `
   (global $Px (mut f32) (f32.const 21))
@@ -1065,11 +1073,9 @@ t('case: inline loop', () => {
 t('case: if then else', () => {
   let src = `
   (func $find (param $n_bytes i32) (result i32)
-
     (if (i32.eq (i32.const 1) (i32.const 1))
       (then)(else)
     )
-
     (i32.const 0)
   )
   `
