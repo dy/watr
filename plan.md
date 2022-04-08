@@ -22,6 +22,7 @@
   ~ many examples use loop ... end, br 0 and other simple inliners
   ~ from code point things coming in loop/block node are not arguments, they're immediates-ish, or "body"
 * [ ] make repl support switch of compiler
+* [ ] better errors: it should safe to type anything
 
 ## Backlog
 
