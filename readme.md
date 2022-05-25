@@ -138,10 +138,12 @@ Experiments:
 * [leb128a](https://github.com/minhducsun2002/leb128/blob/master/src/index.ts)
 * [leb128b](https://github.com/shmishtopher/wasm-LEB128/tree/master/esm)
 
+-->
+
 ## Alternatives
 
 * [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web, industry standard.
-* [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT, limited support.
--->
+* [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT, older brother of _watr_.
+
 
 <p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>
