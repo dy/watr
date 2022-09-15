@@ -1213,6 +1213,7 @@ const hex = (str, ...fields) =>
     .map(n => parseInt(n, 16))
   )
 
+// convert wast code to binary
 function wat (code, config) {
   let metrics = config ? config.metrics : true
   const parsed = wabt.parseWat('inline', code, {})
