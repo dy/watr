@@ -144,6 +144,6 @@ Experiments:
 
 * [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web, industry standard.
 * [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT, older brother of _watr_.
-
+* [web49](https://github.com/FastVM/Web49)
 
 <p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>
