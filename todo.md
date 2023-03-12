@@ -25,6 +25,7 @@
 * [ ] better errors: should be safe to type in anything
 * [ ] numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
 * [ ] extended-const (polyfill?) https://github.com/WebAssembly/extended-const
+* [ ] official test suite https://github.com/WebAssembly/testsuite
 
 ## Backlog
 
