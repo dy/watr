@@ -15,9 +15,13 @@
 * [x] Test: assert function;
 * [x] make sure compiler doesn't modify tree
 * [x] Recognize all number formats
-* [ ] Externref types;
-* [ ] Named/multiple memory;
-* [ ] Named/multiple tables;
+* [ ] Format function
+* [ ] Recognize flat instructions
+* [ ] Floating hex
+* [ ] official test suite https://github.com/WebAssembly/testsuite
+* [ ] Compiler: Externref types;
+* [ ] Compiler: Named/multiple memory;
+* [ ] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
   ~ many examples use loop ... end, br 0 and other simple inliners
   ~ from code point things coming in loop/block node are not arguments, they're immediates-ish, or "body"
@@ -25,7 +29,6 @@
 * [ ] better errors: should be safe to type in anything
 * [ ] numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
 * [ ] extended-const (polyfill?) https://github.com/WebAssembly/extended-const
-* [ ] official test suite https://github.com/WebAssembly/testsuite
 
 ## Backlog
 

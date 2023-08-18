@@ -2,7 +2,7 @@
 
 > Light & fast WAT compiler.
 
-Provides bare minimum WAT to WASM compilation without unnecessary syntax complexities (see [limitations](#limitations)).<br/>
+Provides bare minimum WAT to WASM compilation.<br/>
 Useful as WASM API layer, eg. for hi-level languages or for dynamic (in-browser?) compilation.
 <!--, eg. [sonl](https://github.com/audio-lab/sonl). -->
 
@@ -41,9 +41,26 @@ const {double} = instance.exports
 double(108) // 216
 ```
 
-## Compiler
+## API
 
-WAT tree can be compiled directly, bypassing text parsing:
+### Parse
+
+Parser converts input Wasm text string to syntax tree.
+
+```js
+import { parse } from 'watr
+
+parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))`)
+
+// [
+//   'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
+//   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
+// ]
+```
+
+### Compile
+
+Compiles Wasm tree or text into wasm binary. Lightweight alternative to [wabt/wat2wasm](https://github.com/WebAssembly/wabt).
 
 ```js
 import { compile } from 'watr'
@@ -59,7 +76,42 @@ const {double} = instance.exports
 double(108) // 216
 ```
 
+### Print (in progress)
 
+Format input Wasm text string or tree into pretty or minified form (depending on config).
+
+```js
+import { print } from 'watr'
+
+const tree = [
+  'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
+  ['f64.mul', ['local.get', 0], ['f64.const', 2]]
+]
+
+// pretty-print
+const str = print(tree, {
+  indent: '  ',   // indentation characters
+  newline: '\n',  // new line charactes
+  pad: 1,         // pad start of each line
+  comments: true  // keep comments
+})
+// (func (export "double")
+//   (param f64) (result f64)
+//     (f64.mul
+//       (local.get 0)
+//       (f64.const 2)))
+
+// minify
+const str = print(tree, {
+  indent: false,
+  newline: false,
+  pad: 0,
+  comments: false
+})
+// (func (export "double")(param f64)(result f64)(f64.mul (local.get 0)(f64.const 2)))
+```
+
+<!--
 ## Limitations
 
 Ambiguous syntax is prohibited in favor of explicit lispy notation. Each instruction must have prefix signature with parenthesized immediates and arguments.
@@ -92,11 +144,7 @@ end
 ```wast
 (f32.const 0x1.fffffep+127)  ;; ✘ floating HEX - not supported
 ```
-
-```wast
-(global.set $pc (;(i32.const <new-pc>);)) ;; ✘ fallthrough arguments
-(global.set $pc (i32.const 0))            ;; ✔ explicit arguments
-```
+-->
 
 Inline style is supported for compatibility, but discrouraged.
 It may also miss some edge cases and nice error messages.
@@ -110,19 +158,6 @@ For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt
 * [WASM binary encoding](https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md)
 
 <!--
-Main goal is to get very fluent with wasm text.
-
-Experiments:
-
-* [x] global read/write use in function
-* [x] scopes: refer, goto
-* [x] stack: understanding named and full references
-* [x] memory: reading/writing global memory
-* [x] memory: creating arrays on the go
-* [x] memory: passing pointer to a function
-* [x] benchmark array setting agains js loop
-  → it's faster almost twice
-
 ## Refs
 
 * [mdn wasm text format](https://developer.mozilla.org/en-US/docs/WebAssembly/Understanding_the_text_format)
@@ -142,7 +177,7 @@ Experiments:
 
 ## Alternatives
 
-* [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web, industry standard.
+* [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web, de-facto standard.
 * [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT, older brother of _watr_.
 * [web49](https://github.com/FastVM/Web49)
 

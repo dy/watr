@@ -32,7 +32,7 @@ t('compile: (module (memory 1) (func))', t => {
   `
   new WebAssembly.Module(buffer)
 
-  is(compile(['module', ['memory', 1], ['func']]), buffer )
+  is(compile(['module', ['memory', 1], ['func']]), buffer)
 })
 
 t('compile: (module (memory (import "js" "mem") 1) (func))', t => {
@@ -64,21 +64,21 @@ t('compile: export mem/func', t => {
   //     (export "f" (func 0))
   //   )
   // `
-  // console.log(wat(src))
-  // is(wat(src).buffer, compile(parse(src)))
+  // console.log(wat2wasm(src))
+  // is(wat2wasm(src).buffer, compile(parse(src)))
   is(compile(['module',                                   // (module
     ['memory', 1],                                        //   (memory 1)
     ['func', ['param', 'i32', 'i32'], ['result', 'i32'],  //   (func (param i32 i32) (result i32)
       // ['local.get', 0],                                   //     local.get 0
       // ['local.get', 1],                                   //     local.get 1
       // ['i32.store', ['align','4']],                           //     i32.store
-      ['i32.store', ['align','4'], ['local.get', 0], ['local.get', 1]],
+      ['i32.store', ['align', '4'], ['local.get', 0], ['local.get', 1]],
       ['local.get', 1]                                    //     local.get 1
     ],                                                    //   )
     ['export', '"m"', ['memory', 0]],                       //   (export "m" (memory 0 ))
     ['export', '"f"', ['func', 0]],                         //   (export "f" (func 0 ))
   ]),                                                     // )
-  buffer)
+    buffer)
 
   new WebAssembly.Module(buffer)
 })
@@ -93,14 +93,14 @@ t('compiler: reexport', () => {
     )
   `
 
-  let {f0, f1} = run(src, {math:{add(a,b){return a+b}}}).exports
-  is(f0(3,1), 4)
-  is(f1(3,1), 2)
+  let { f0, f1 } = run(src, { math: { add(a, b) { return a + b } } }).exports
+  is(f0(3, 1), 4)
+  is(f1(3, 1), 2)
 })
 
 t('compiler: memory $foo (import "a" "b" ) 1 2 shared', () => {
   let src = `(memory $foo (import "env" "mem") 1 2 shared)`
-  run(src, {env:{mem: new WebAssembly.Memory({initial:1, maximum: 1, shared: 1})}})
+  run(src, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: 1 }) } })
 })
 
 t('compiler: stacked syntax should not be supported', () => {
@@ -135,34 +135,34 @@ t('wat-compiler: function with 1 param', t => {
 })
 
 t('wat-compiler: function with 1 param', () => {
-  let {answer} = run(`
+  let { answer } = run(`
     (func (export "answer") (param i32) (result i32) (local.get 0))
   `).exports
   is(answer(42), 42)
 })
 
 t('wat-compiler: function with 2 params', () => {
-  let {answer} = run(`
+  let { answer } = run(`
     (func (export "answer") (param i32 i32) (result i32)
       (i32.add (local.get 0) (local.get 1))
     )
   `).exports
-  is(answer(20,22), 42)
+  is(answer(20, 22), 42)
 })
 
 t('wat-compiler: function with 2 params 2 results', () => {
-  let {answer} = run(`
+  let { answer } = run(`
     (func (export "answer") (param i32 i32) (result i32 i32)
       (i32.add (local.get 0) (local.get 1))
       (i32.const 666)
     )
   `).exports
 
-  is(answer(20,22), [42,666])
+  is(answer(20, 22), [42, 666])
 })
 
 t('wat-compiler: named function named param', () => {
-  let {dbl} = run(`
+  let { dbl } = run(`
     (func $dbl (export "dbl") (param $a i32) (result i32)
       (i32.add (local.get $a) (local.get $a))
     )
@@ -172,7 +172,7 @@ t('wat-compiler: named function named param', () => {
 })
 
 t('wat-compiler: call function direct', () => {
-  let {call_function_direct} = run(`
+  let { call_function_direct } = run(`
   (func $dbl (param $a i32) (result i32)
     (i32.add (local.get $a) (local.get $a))
   )
@@ -184,7 +184,7 @@ t('wat-compiler: call function direct', () => {
 })
 
 t('wat-compiler: function param + local', () => {
-  let {add} = run(`
+  let { add } = run(`
     (func (export "add") (param $a i32) (result i32)
       (local $b i32)
       (i32.add (local.get $a) (local.tee $b (i32.const 20)))
@@ -195,7 +195,7 @@ t('wat-compiler: function param + local', () => {
 })
 
 t('wat-compiler: call function indirect (table)', () => {
-  let {call_function_indirect} = run(`
+  let { call_function_indirect } = run(`
     (type $return_i32 (func (result i32)))
     (table 2 funcref)
       (elem (i32.const 0) $f1 $f2)
@@ -213,7 +213,7 @@ t('wat-compiler: call function indirect (table)', () => {
 })
 
 t('wat-compiler: call function indirect (table) non zero indexed ref types', () => {
-  let {call_function_indirect} = run(`
+  let { call_function_indirect } = run(`
     (type $return_i32 (func (result i32)))
     (type $return_i64 (func (result i64)))
     (table 2 funcref)
@@ -234,7 +234,7 @@ t('wat-compiler: call function indirect (table) non zero indexed ref types', () 
 })
 
 t('wat-compiler: 1 global const (immutable)', () => {
-  let {get} = run(`
+  let { get } = run(`
     (global $answer i32 (i32.const 42))
     (func (export "get") (result i32)
       (global.get $answer)
@@ -245,7 +245,7 @@ t('wat-compiler: 1 global const (immutable)', () => {
 })
 
 t('wat-compiler: 1 global var (mut)', () => {
-  let {get} = run(`
+  let { get } = run(`
     (global $answer (mut i32) (i32.const 42))
     (func (export "get") (result i32)
       (global.get $answer)
@@ -256,7 +256,7 @@ t('wat-compiler: 1 global var (mut)', () => {
 })
 
 t('wat-compiler: 1 global var (mut) + mutate', () => {
-  let {get} = run(`
+  let { get } = run(`
     (global $answer (mut i32) (i32.const 42))
     (func (export "get") (result i32)
       (global.set $answer (i32.const 777))
@@ -277,7 +277,7 @@ t('wat-compiler: memory.grow', () => {
 })
 
 t('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => {
-  let {get} = run(String.raw`
+  let { get } = run(String.raw`
     (memory 1)
     (data (i32.const 0) "\2a")
     (func (export "get") (result i32)
@@ -289,7 +289,7 @@ t('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => {
 })
 
 t('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
-  let {get} = run(String.raw`
+  let { get } = run(String.raw`
     (memory 1 2)
     (data (i32.const 0) "\2a")
     (func (export "get") (result i32)
@@ -309,7 +309,7 @@ t('wat-compiler: import function', () => {
       (call $add (i32.const 20) (i32.const 22))
     )
   `
-  let {call_imported_function} = run(src, {math:{ add: (a, b) => a + b }}).exports
+  let { call_imported_function } = run(src, { math: { add: (a, b) => a + b } }).exports
 
   is(call_imported_function(), 42)
 })
@@ -317,24 +317,24 @@ t('wat-compiler: import function', () => {
 t('wat-compiler: import memory 1', () => {
   run(`
     (import "env" "mem" (memory 1))
-  `, {env: {mem: new WebAssembly.Memory({initial:1})}})
+  `, { env: { mem: new WebAssembly.Memory({ initial: 1 }) } })
 })
 
 t('wat-compiler: import memory 1 2', () => {
   run(`
     (import "env" "mem" (memory 1 2))
-  `, {env: {mem: new WebAssembly.Memory({initial:1, maximum:1})}})
+  `, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1 }) } })
 })
 
 t('wat-compiler: import memory 1 2 shared', () => {
   run(`
     (import "env" "mem" (memory 1 2 shared))
-  `, {env: {mem: new WebAssembly.Memory({initial:1, maximum:1, shared:1})}})
+  `, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: 1 }) } })
 })
 
 t('wat-compiler: import memory $foo 1 2 shared', () => run(`
   (import "env" "mem" (memory $foo 1 2 shared))
-`, {env:{mem: new WebAssembly.Memory({initial:1, maximum: 1, shared: 1})}}))
+`, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: 1 }) } }))
 
 t('wat-compiler: set a start function', () => {
   let src = `
@@ -347,7 +347,7 @@ t('wat-compiler: set a start function', () => {
       (global.get $answer)
     )
   `
-  let {get} = run(src).exports
+  let { get } = run(src).exports
 
   is(get(), 666)
 })
@@ -375,9 +375,9 @@ t('wat-compiler: if else', () => {
     )
   `
   // these are identical parts, but we restrict to lisp syntax src1
-  // console.log(wat(src1))
-  is(wat(src1).buffer, wat(src2).buffer)
-  let {foo} = run(src1).exports
+  // console.log(wat2wasm(src1))
+  is(wat2wasm(src1).buffer, wat2wasm(src2).buffer)
+  let { foo } = run(src1).exports
   is(foo(0), 0)
   is(foo(1), 1)
 })
@@ -389,7 +389,7 @@ t('wat-compiler: block', () => {
       (block (result i32) (i32.const 42))
     )
   `
-  let {answer} = run(src).exports
+  let { answer } = run(src).exports
   is(answer(), 42)
   is(answer(), 42)
 })
@@ -402,7 +402,7 @@ t('wat-compiler: block multi', () => {
       (block (result i32) (call $dummy) (call $dummy) (call $dummy) (i32.const 8))
     )
   `
-  let {multi} = run(src).exports
+  let { multi } = run(src).exports
   is(multi(), 8)
   is(multi(), 8)
 
@@ -420,7 +420,7 @@ t('wat-compiler: br', () => {
     )
   `
 
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 42)
   is(main(), 42)
 })
@@ -436,7 +436,7 @@ t('wat-compiler: br mid', () => {
       (global.get $answer)
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 666)
   is(main(), 666)
 })
@@ -462,8 +462,8 @@ t('wat-compiler: block named + br', () => {
       (global.get $answer)
     )
   `
-  // console.log(wat(src))
-  let {main} = run(src).exports
+  // console.log(wat2wasm(src))
+  let { main } = run(src).exports
   is(main(), 0)
   is(main(), 0)
 })
@@ -489,7 +489,7 @@ t('wat-compiler: block named 2 + br', () => {
       (global.get $answer)
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
 
   is(main(), 0)
   is(main(), 0)
@@ -509,8 +509,8 @@ t('wat-compiler: br_table', () => {
       (i32.const 22)
     )
   `
-  // console.log(wat(src))
-  let {main} = run(src).exports
+  // console.log(wat2wasm(src))
+  let { main } = run(src).exports
   is(main(0), 22)
   is(main(1), 20)
 })
@@ -537,7 +537,7 @@ t('wat-compiler: br_table multiple', () => {
       (i32.const 104)
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
 
   is(main(0), 103)
   is(main(1), 102)
@@ -553,7 +553,7 @@ t('wat-compiler: loop', () => {
       (loop (result i32) (i32.const 42))
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 42)
 })
 
@@ -565,8 +565,8 @@ t('wat-compiler: break-value', () => {
       )
     )
   `
-  // console.log(wat(src))
-  let {main} = run(src).exports
+  // console.log(wat2wasm(src))
+  let { main } = run(src).exports
   is(main(), 18)
   is(main(), 18)
 })
@@ -588,7 +588,7 @@ t('wat-compiler: br_if', () => {
       )
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 18)
 })
 
@@ -608,7 +608,7 @@ t('wat-compiler: while', () => {
       (local.get 1)
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 1)
 })
 
@@ -618,7 +618,7 @@ t('wat-compiler: select', () => {
       (select (loop (result i32) (i32.const 1)) (i32.const 2) (i32.const 3))
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 1)
 })
 
@@ -628,7 +628,7 @@ t('wat-compiler: select mid', () => {
       (select (i32.const 2) (loop (result i32) (i32.const 1)) (i32.const 3))
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 2)
 })
 
@@ -641,7 +641,7 @@ t('wat-compiler: block labels', () => {
       )
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 1)
 })
 
@@ -661,8 +661,8 @@ t('wat-compiler: loop labels', () => {
       )
     )
   `
-  // console.log(wat(src))
-  let {main} = run(src).exports
+  // console.log(wat2wasm(src))
+  let { main } = run(src).exports
   is(main(), 5)
 })
 
@@ -686,7 +686,7 @@ t('wat-compiler: loop labels 2', () => {
       )
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 8)
 })
 
@@ -715,8 +715,8 @@ t('wat-compiler: switch', () => {
       )
     )
   `
-  // console.log(wat(src))
-  let {main} = run(src).exports
+  // console.log(wat2wasm(src))
+  let { main } = run(src).exports
   is(main(0), 50)
   is(main(1), 20)
   is(main(3), 3)
@@ -733,7 +733,7 @@ t('wat-compiler: label redefinition', () => {
       )
     )
   `
-  let {main} = run(src).exports
+  let { main } = run(src).exports
   is(main(), 5)
 })
 
@@ -757,8 +757,8 @@ t('wat-compiler: address', () => {
       (i32.load8_s offset=25 align=1 (local.get $i))          ;; 122 'z'
     )
   `
-  // console.log(wat(src))
-  let {a,b,ab,cd,z}=run(src).exports
+  // console.log(wat2wasm(src))
+  let { a, b, ab, cd, z } = run(src).exports
   is(a(), 97)
   is(b(), 98)
   is(ab(), 25185)
@@ -902,7 +902,7 @@ t('wat-compiler: float literals', () => {
     (func (export "f64-hex-sep4") (result f64) (f64.const 0xf0P+1_3))
     (func (export "f64-hex-sep5") (result f64) (f64.const 0x2a_f00a.1f_3_eep2_3);)`
 
-    run(special)
+  run(special)
 })
 
 t(`wat-compiler: export 2 funcs`, () => run(`
@@ -933,7 +933,7 @@ t(`wat-compiler: 2 different locals`, () => {
       (i32.const 42)
     )
   `
-  let {value} = run(src).exports
+  let { value } = run(src).exports
   is(value(), 42)
 })
 
@@ -946,7 +946,7 @@ t(`wat-compiler: 3 locals [i32, i64, i32] (disjointed)`, () => {
       (i32.const 42)
     )
   `
-  let {value} = run(src).exports
+  let { value } = run(src).exports
   is(value(), 42)
 })
 
@@ -959,7 +959,7 @@ t(`wat-compiler: 3 locals [i32, i32, i64] (joined)`, () => {
       (i32.const 42)
     )
   `
-  let {value} = run(src).exports
+  let { value } = run(src).exports
   is(value(), 42)
 })
 
@@ -976,7 +976,7 @@ t('wat-compiler: call function indirect (table)', () => {
       (call_indirect (type $return_i32) (local.get $a))
     )
   `
-  let {call_function_indirect} = run(src).exports
+  let { call_function_indirect } = run(src).exports
 
   is(call_function_indirect(0), 42)
   is(call_function_indirect(1), 13)
@@ -998,7 +998,7 @@ t('wat-compiler: call function indirect (table) non zero indexed ref types', () 
       (call_indirect (type $return_i32) (local.get $a))
     )
   `
-  let {call_function_indirect} = run(src).exports
+  let { call_function_indirect } = run(src).exports
 
   is(call_function_indirect(0), 42)
   is(call_function_indirect(1), 13)
@@ -1008,7 +1008,7 @@ t('wat-compiler: call function indirect (table) non zero indexed ref types', () 
 // found cases
 t('case: global (import)', async () => {
   let src = `(global $blockSize (import "js" "blockSize") (mut i32))`
-  run(src, {js:{blockSize: new WebAssembly.Global({value:'i32',mutable:true}, 1)}})
+  run(src, { js: { blockSize: new WebAssembly.Global({ value: 'i32', mutable: true }, 1) } })
 })
 
 t('case: 0-args return', () => {
@@ -1019,16 +1019,16 @@ t('case: (memory (export))', () => {
   let src = `
   (import "" "rand" (func $random (result f64)))
   (memory (export "mem") 5)`
-  is(wat(src).buffer, compile(parse(src)))
+  is(wat2wasm(src).buffer, compile(parse(src)))
 })
 
 t('case: offset', () => {
   let src = `(func (local $i i32) (i32.store8 offset=53439 (local.get $i) (i32.const 36)))`
-  is(compile(parse(src)), wat(src).buffer)
+  is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
 t('case: multiple datas', () => {
-  let src=String.raw`
+  let src = String.raw`
   (memory 5)
   (data (i32.const 268800)
 
@@ -1039,15 +1039,15 @@ t('case: multiple datas', () => {
 
   "\07\07"
   "\FF\FF")`
-  is(compile(parse(src)), wat(src).buffer)
+  is(compile(parse(src)), wat2wasm(src).buffer)
   // new WebAssembly.Module()
 })
 
 t('case: non-hex data', () => {
-  let src=String.raw`
+  let src = String.raw`
   (memory 5)
   (data (i32.const 268800) "\n")`
-  is(compile(parse(src)), wat(src).buffer)
+  is(compile(parse(src)), wat2wasm(src).buffer)
   // new WebAssembly.Module()
 })
 
@@ -1056,7 +1056,7 @@ t('case: globals', () => {
   (global $Px (mut f32) (f32.const 21))
   (global $Py (mut f32) (f32.const 21))
   (global $angle (mut f32) (f32.const 0.7853981633974483))`
-  is(compile(parse(src)), wat(src).buffer)
+  is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
 t('case: func hoist', () => {
@@ -1085,7 +1085,7 @@ t('case: if then else', () => {
     (i32.const 0)
   )
   `
-  // console.log(wat(src))
+  // console.log(wat2wasm(src))
   run(src)
 })
 
@@ -1162,11 +1162,11 @@ t.skip('bench: brownian', async () => {
   console.timeEnd('watr')
 
   console.time('wat-compiler')
-  for (let i = 0; i < N; i++) watCompiler(src, {metrics: false})
+  for (let i = 0; i < N; i++) watCompiler(src, { metrics: false })
   console.timeEnd('wat-compiler')
 
   console.time('wabt')
-  for (let i = 0; i < N; i++) wat(src, {metrics: false})
+  for (let i = 0; i < N; i++) wat2wasm(src, { metrics: false })
   console.timeEnd('wabt')
 })
 
@@ -1179,26 +1179,27 @@ async function file(path) {
 async function runExample(path) {
   let src = await file(path)
   let buffer = compile(parse(src))
-  is(buffer, wat(src).buffer)
+  is(buffer, wat2wasm(src).buffer)
   // const mod = new WebAssembly.Module(buffer)
 }
 
 // stub fetch for local purpose
-if (!globalThis.fetch) {
-  let {readFileSync} = await import('fs')
+const isNode = typeof global !== 'undefined' && globalThis === global
+if (isNode) {
+  let { readFileSync } = await import('fs')
   globalThis.fetch = async path => {
     path = `.${path}`
     const data = readFileSync(path, 'utf8')
-    return {text(){return data}}
+    return { text() { return data } }
   }
 }
 
 console.hex = (d) => console.log((Object(d).buffer instanceof ArrayBuffer ? new Uint8Array(d.buffer) :
-typeof d === 'string' ? (new TextEncoder('utf-8')).encode(d) :
-new Uint8ClampedArray(d)).reduce((p, c, i, a) => p + (i % 16 === 0 ? i.toString(16).padStart(6, 0) + '  ' : ' ') +
-c.toString(16).padStart(2, 0) + (i === a.length - 1 || i % 16 === 15 ?
-' '.repeat((15 - i % 16) * 3) + Array.from(a).splice(i - i % 16, 16).reduce((r, v) =>
-r + (v > 31 && v < 127 || v > 159 ? String.fromCharCode(v) : '.'), '  ') + '\n' : ''), ''));
+  typeof d === 'string' ? (new TextEncoder('utf-8')).encode(d) :
+    new Uint8ClampedArray(d)).reduce((p, c, i, a) => p + (i % 16 === 0 ? i.toString(16).padStart(6, 0) + '  ' : ' ') +
+      c.toString(16).padStart(2, 0) + (i === a.length - 1 || i % 16 === 15 ?
+        ' '.repeat((15 - i % 16) * 3) + Array.from(a).splice(i - i % 16, 16).reduce((r, v) =>
+          r + (v > 31 && v < 127 || v > 159 ? String.fromCharCode(v) : '.'), '  ') + '\n' : ''), ''));
 
 
 let wabt = await Wabt()
@@ -1206,15 +1207,15 @@ let wabt = await Wabt()
 const hex = (str, ...fields) =>
   new Uint8Array(
     String.raw.call(null, str, fields)
-    .trim()
-    .replace(/;[^\n]*/g,'')
-    .split(/[\s\n]+/)
-    .filter(n => n !== '')
-    .map(n => parseInt(n, 16))
+      .trim()
+      .replace(/;[^\n]*/g, '')
+      .split(/[\s\n]+/)
+      .filter(n => n !== '')
+      .map(n => parseInt(n, 16))
   )
 
-// convert wast code to binary
-function wat (code, config) {
+// convert wast code to binary via Wabt
+function wat2wasm(code, config) {
   let metrics = config ? config.metrics : true
   const parsed = wabt.parseWat('inline', code, {})
   metrics && console.time('wabt build')
@@ -1234,10 +1235,11 @@ function wat (code, config) {
 // FIXME: rename to something more meaningful? testCase?
 const run = (src, importObj) => {
   let tree = parse(src)
+  // in order to make sure tree is not messed up we freeze it
   const freeze = node => Array.isArray(node) && (Object.freeze(node), node.forEach(freeze))
   freeze(tree)
   let buffer = compile(tree)
-  is(buffer, wat(src).buffer)
+  is(buffer, wat2wasm(src).buffer)
   const mod = new WebAssembly.Module(buffer)
   return new WebAssembly.Instance(mod, importObj)
 }
