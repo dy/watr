@@ -92,7 +92,7 @@ const tree = [
 const str = print(tree, {
   indent: '  ',   // indentation characters
   newline: '\n',  // new line charactes
-  pad: 1,         // pad start of each line
+  pad: '',        // pad start of each line with a string
   comments: true  // keep comments
 })
 // (func (export "double")

@@ -1170,7 +1170,7 @@ t.skip('bench: brownian', async () => {
   console.timeEnd('wabt')
 })
 
-async function file(path) {
+export async function file(path) {
   let res = await fetch(path)
   let src = await res.text()
   return src
@@ -1181,17 +1181,6 @@ async function runExample(path) {
   let buffer = compile(parse(src))
   is(buffer, wat2wasm(src).buffer)
   // const mod = new WebAssembly.Module(buffer)
-}
-
-// stub fetch for local purpose
-const isNode = typeof global !== 'undefined' && globalThis === global
-if (isNode) {
-  let { readFileSync } = await import('fs')
-  globalThis.fetch = async path => {
-    path = `.${path}`
-    const data = readFileSync(path, 'utf8')
-    return { text() { return data } }
-  }
 }
 
 console.hex = (d) => console.log((Object(d).buffer instanceof ArrayBuffer ? new Uint8Array(d.buffer) :
@@ -1215,7 +1204,7 @@ const hex = (str, ...fields) =>
   )
 
 // convert wast code to binary via Wabt
-function wat2wasm(code, config) {
+export function wat2wasm(code, config) {
   let metrics = config ? config.metrics : true
   const parsed = wabt.parseWat('inline', code, {})
   metrics && console.time('wabt build')
