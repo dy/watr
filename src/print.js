@@ -8,9 +8,7 @@ export default function print(tree, options = {}) {
   ({ indent='  ', newline='\n' } = options);
   indent ||= '', newline ||= '';
 
-  let out = typeof tree[0] === 'string' ? printNode(tree) : tree.map(node => printNode(node)).join(newline)
-  console.log(out)
-  return out
+  return typeof tree[0] === 'string' ? printNode(tree) : tree.map(node => printNode(node)).join(newline)
 }
 
 const INLINE = [
