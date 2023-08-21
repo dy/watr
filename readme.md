@@ -42,7 +42,7 @@ double(108) // 216
 Parser converts input Wasm text string to syntax tree.
 
 ```js
-import { parse } from 'watr
+import { parse } from 'watr'
 
 parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))`)
 
