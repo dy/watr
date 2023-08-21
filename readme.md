@@ -2,9 +2,9 @@
 
 > WAT parser, compiler and printer.
 
-Light & fast alternative for [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).
-Provides bare minimum WAT to WASM compilation & parsing/formatting.<br/>
-Useful for eg. hi-level languages or dynamic (in-browser?) compilation (see [lino](https://github.com/audio-lab/lino)).
+Light & fast alternative for [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).<br/>
+Provides bare minimum WAT to WASM compiler, parser and formatter.<br/>
+Useful for hi-level languages or dynamic (in-browser?) compilation (see [lino](https://github.com/audio-lab/lino)).
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
