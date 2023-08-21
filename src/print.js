@@ -1,21 +1,33 @@
 import parse from './parse.js';
 
-let indent = '', newline = '\n', pad = '', comments = false, _i = 0
+let indent = '', newline = '\n'
 
 export default function print(tree, options = {}) {
   if (typeof tree === 'string') tree = parse(tree);
 
-  ({ indent, newline, pad, comments } = options);
-  newline ||= ''
-  pad ||= ''
-  indent ||= ''
+  ({ indent='  ', newline='\n' } = options);
+  indent ||= '', newline ||= '';
 
   let out = typeof tree[0] === 'string' ? printNode(tree) : tree.map(node => printNode(node)).join(newline)
-
+  console.log(out)
   return out
 }
 
-const flats = ['param', 'local', 'global', 'result', 'export']
+const INLINE = [
+  'param',
+  'drop',
+  'f32.const',
+  'f64.const',
+  'i32.const',
+  'i64.const',
+  'local.get',
+  'global.get',
+  'memory.size',
+  'result',
+  'export',
+  'unreachable',
+  'nop'
+]
 
 function printNode(node, level = 0) {
   if (!Array.isArray(node)) return node + ''
@@ -27,9 +39,10 @@ function printNode(node, level = 0) {
     if (Array.isArray(node[i])) {
       // inline nodes like (param x)(param y)
       // (func (export "xxx")..., but not (func (export "a")(param "b")...
+
       if (
-        flats.includes(node[i][0]) &&
-        (!Array.isArray(node[i - 1]) || node[i][0] === node[i - 1][0])
+        INLINE.includes(node[i][0]) &&
+        (!Array.isArray(node[i - 1]) || INLINE.includes(node[i - 1][0]))
       ) {
         if (!Array.isArray(node[i - 1])) content += ` `
       } else {

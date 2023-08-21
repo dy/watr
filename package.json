@@ -5,17 +5,14 @@
   "main": "watr.js",
   "type": "module",
   "scripts": {
-    "test": "node test",
-    "build": "rollup src/watr.js --file watr.js --format esm --name \"Watr\"",
-    "min": "terser watr.js -o watr.min.js --module -c passes=3 -m"
+    "test": "node test"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/audio-lab/watr.git"
   },
   "files": [
-    "watr.js",
-    "watr.min.js"
+    "src"
   ],
   "keywords": [
     "wat",
@@ -29,8 +26,6 @@
   },
   "homepage": "https://github.com/audio-lab/watr#readme",
   "devDependencies": {
-    "rollup": "^2.70.1",
-    "terser": "^5.12.1",
     "tst": "^7.1.1",
     "wabt": "^1.0.28",
     "wat-compiler": "^1.0.0"

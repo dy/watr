@@ -11,31 +11,33 @@ t('print: basics', () => {
   // minify
   const min = print(tree, {
     indent: false,
-    newline: false,
-    pad: false
+    newline: false
   })
   wat2wasm(min)
-  is(min, `(func (export "double")(param f64 f32)(param $x i32)(result f64)(f64.mul(local.get 0)(f64.const 2)))`)
+  is(min, `(func (export "double")(param f64 f32)(param $x i32)(result f64)(f64.mul (local.get 0)(f64.const 2)))`)
 
   // pretty-print
   const pretty = print(tree, {
     indent: '  ',   // indentation characters
     newline: '\n',  // new line charactes
-    pad: ''        // pad start of each line with a string
   })
   wat2wasm(pretty)
   is(pretty,
-    `(func (export "double")
-  (param f64 f32)(param $x i32)
-  (result f64)
-  (f64.mul
-    (local.get 0)
-    (f64.const 2)))`)
+    `(func (export "double")(param f64 f32)(param $x i32)(result f64)
+  (f64.mul (local.get 0)(f64.const 2)))`)
 
   is(
-    print(`(import "Math" "random" (func $random (result f32)))`),
+    print(`(import "Math" "random" (func $random (result f32)))`, { newline: '', indent: '' }),
     `(import \"Math\" \"random\"(func $random (result f32)))`
   )
+})
+
+t('print: nice inlines', t => {
+  is(print(`(local.set 3
+  (i64.const 0))`, {
+    indent: '  ',
+    newline: '\n'
+  }), `(local.set 3 (i64.const 0))`)
 })
 
 t('print: doesnt break samples', async t => {

@@ -88,25 +88,23 @@ const tree = [
   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
 ]
 
-// minify (default)
+// pretty-print (default)
 const str = print(tree, {
-  indent: false,
-  newline: false,
-  pad: false
-})
-// (func (export "double")(param f64)(result f64)(f64.mul (local.get 0)(f64.const 2)))
-
-// pretty-print
-const str = print(tree, {
-  indent: '  ',   // indentation step
-  newline: '\n',  // new line
-  pad: '',        // pad each newline with chars
+  indent: '  ',   // indentation chars
+  newline: '\n',  // new line chars
 })
 // (func (export "double")
 //   (param f64) (result f64)
 //     (f64.mul
 //       (local.get 0)
 //       (f64.const 2)))
+
+// minify
+const str = print(tree, {
+  indent: false,
+  newline: false
+})
+// (func (export "double")(param f64)(result f64)(f64.mul (local.get 0)(f64.const 2)))
 ```
 
 <!--
