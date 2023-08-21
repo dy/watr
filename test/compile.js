@@ -72,7 +72,7 @@ t('compile: export mem/func', t => {
       // ['local.get', 0],                                   //     local.get 0
       // ['local.get', 1],                                   //     local.get 1
       // ['i32.store', ['align','4']],                           //     i32.store
-      ['i32.store', ['align', '4'], ['local.get', 0], ['local.get', 1]],
+      ['i32.store', 'align=4', ['local.get', 0], ['local.get', 1]],
       ['local.get', 1]                                    //     local.get 1
     ],                                                    //   )
     ['export', '"m"', ['memory', 0]],                       //   (export "m" (memory 0 ))

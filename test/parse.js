@@ -38,7 +38,7 @@ t('parser: s-expr number params + named params', () => {
 
 t('parser: s-expr named params with = value', () => {
   const tree = parse('(i32.load offset=0 align=4)')
-  is(tree, ['i32.load', ['offset','0'], ['align','4']])
+  is(tree, ['i32.load', 'offset=0', 'align=4'])
 })
 
 t('parser: stack instruction', () => {
@@ -79,7 +79,7 @@ t('parse: instr', () => {
 
 t('parse: param', () => {
   const tokens = parse('align=4')
-  is(tokens, ['align', '4'])
+  is(tokens, 'align=4')
 })
 
 t('parse: label', () => {
@@ -144,17 +144,17 @@ t('parse: number', t => {
     is(tokens, n)
   })
 
-  ;[
-    '-0xf2',
-    '+0xf2',
-    '0xf2.ef',
-    '0xf2.ePf',
-    '0xf2.P-f',
-    'nan:0xff',
-  ].forEach(n => {
-    const tokens = parse(n)
-    is(tokens, n)
-  })
+    ;[
+      '-0xf2',
+      '+0xf2',
+      '0xf2.ef',
+      '0xf2.ePf',
+      '0xf2.P-f',
+      'nan:0xff',
+    ].forEach(n => {
+      const tokens = parse(n)
+      is(tokens, n)
+    })
 })
 
 
@@ -175,7 +175,7 @@ t('parse: minimal function', () => {
 
 t('parse: multiple functions', () => {
   let tokens = parse('(func $a) (func $b)')
-  is(tokens, [['func','$a'],['func','$b']])
+  is(tokens, [['func', '$a'], ['func', '$b']])
 })
 
 t('parse: elseif', () => {

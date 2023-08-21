@@ -15,7 +15,7 @@
 * [x] Test: assert function;
 * [x] make sure compiler doesn't modify tree
 * [x] Recognize all number formats
-* [ ] Format function
+* [x] Format function
 * [ ] Recognize flat instructions
 * [ ] Floating hex
 * [ ] official test suite https://github.com/WebAssembly/testsuite

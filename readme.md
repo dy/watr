@@ -76,9 +76,9 @@ const {double} = instance.exports
 double(108) // 216
 ```
 
-### Print (in progress)
+### Print
 
-Format input Wasm text string or tree into pretty or minified form (depending on config).
+Format input Wasm text string or tree into minified or pretty form.
 
 ```js
 import { print } from 'watr'
@@ -88,27 +88,25 @@ const tree = [
   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
 ]
 
+// minify (default)
+const str = print(tree, {
+  indent: false,
+  newline: false,
+  pad: false
+})
+// (func (export "double")(param f64)(result f64)(f64.mul (local.get 0)(f64.const 2)))
+
 // pretty-print
 const str = print(tree, {
-  indent: '  ',   // indentation characters
-  newline: '\n',  // new line charactes
-  pad: '',        // pad start of each line with a string
-  comments: true  // keep comments
+  indent: '  ',   // indentation step
+  newline: '\n',  // new line
+  pad: '',        // pad each newline with chars
 })
 // (func (export "double")
 //   (param f64) (result f64)
 //     (f64.mul
 //       (local.get 0)
 //       (f64.const 2)))
-
-// minify
-const str = print(tree, {
-  indent: false,
-  newline: false,
-  pad: 0,
-  comments: false
-})
-// (func (export "double")(param f64)(result f64)(f64.mul (local.get 0)(f64.const 2)))
 ```
 
 <!--

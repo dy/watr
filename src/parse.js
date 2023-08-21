@@ -1,26 +1,26 @@
-const OPAREN=40, CPAREN=41, OBRACK=91, CBRACK=93, SPACE=32, DQUOTE=34, PERIOD=46,
-_0=48, _9=57, SEMIC=59, NEWLINE=32, PLUS=43, MINUS=45, COLON=58
+const OPAREN = 40, CPAREN = 41, OBRACK = 91, CBRACK = 93, SPACE = 32, DQUOTE = 34, PERIOD = 46,
+  _0 = 48, _9 = 57, SEMIC = 59, NEWLINE = 32, PLUS = 43, MINUS = 45, COLON = 58
 
 export default (str) => {
-  let i = 0, level = [], buf=''
+  let i = 0, level = [], buf = ''
 
   const commit = () => buf && (
-    level.push(buf[0]!=='"' && ~buf.indexOf('=') ? buf.split('=') : buf),
+    level.push(buf),
     buf = ''
   )
 
   const parseLevel = () => {
-    for (let c, root; i < str.length; ) {
+    for (let c, root; i < str.length;) {
       c = str.charCodeAt(i)
-      if (c === DQUOTE) commit(), buf = str.slice(i++, i=str.indexOf('"', i)+1), commit()
+      if (c === DQUOTE) commit(), buf = str.slice(i++, i = str.indexOf('"', i) + 1), commit()
       else if (c === OPAREN) {
-        if (str.charCodeAt(i+1) === SEMIC) i=str.indexOf(';)', i)+2 // (; ... ;)
-        else commit(), i++, (root=level).push(level=[]), parseLevel(), level=root
+        if (str.charCodeAt(i + 1) === SEMIC) i = str.indexOf(';)', i) + 2 // (; ... ;)
+        else commit(), i++, (root = level).push(level = []), parseLevel(), level = root
       }
-      else if (c === SEMIC) i=str.indexOf('\n', i)+1  // ; ...
+      else if (c === SEMIC) i = str.indexOf('\n', i) + 1  // ; ...
       else if (c <= SPACE) commit(), i++
       else if (c === CPAREN) return commit(), i++
-      else buf+=str[i++]
+      else buf += str[i++]
     }
 
     commit()
@@ -28,5 +28,5 @@ export default (str) => {
 
   parseLevel()
 
-  return level.length>1 ? level : level[0]
+  return level.length > 1 ? level : level[0]
 }
