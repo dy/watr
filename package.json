@@ -3,6 +3,12 @@
   "version": "1.4.1",
   "description": "Ligth & fast WAT compiler",
   "main": "watr.js",
+  "exports": {
+    ".": "./watr.js",
+    "./parse": "./src/parse.js",
+    "./print": "./src/print.js",
+    "./compile": "./src/compile.js"
+  },
   "type": "module",
   "scripts": {
     "test": "node test"
@@ -17,10 +23,14 @@
   "keywords": [
     "wat",
     "compiler",
-    "wabt"
+    "wabt",
+    "pretty-print",
+    "webassembly",
+    "wasm",
+    "wasm-text"
   ],
   "author": "Dmitry Iv",
-  "license": "ISC",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/audio-lab/watr/issues"
   },
