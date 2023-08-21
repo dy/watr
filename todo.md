@@ -16,9 +16,9 @@
 * [x] make sure compiler doesn't modify tree
 * [x] Recognize all number formats
 * [x] Format function
-* [ ] Recognize flat instructions
+* [ ] Flat instructions
 * [ ] Floating hex
-* [ ] official test suite https://github.com/WebAssembly/testsuite
+* [ ] Official test suite https://github.com/WebAssembly/testsuite
 * [ ] Compiler: Externref types;
 * [ ] Compiler: Named/multiple memory;
 * [ ] Compiler: Named/multiple tables;
