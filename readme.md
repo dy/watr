@@ -1,19 +1,13 @@
 # watr [![Test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml)
 
-> Light & fast WAT compiler.
+> WAT parser, compiler and printer.
 
-Provides bare minimum WAT to WASM compilation.<br/>
-Useful as WASM API layer, eg. for hi-level languages or for dynamic (in-browser?) compilation.
-<!--, eg. [sonl](https://github.com/audio-lab/sonl). -->
+Light & fast alternative for [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).
+Provides bare minimum WAT to WASM compilation & parsing/formatting.<br/>
+Useful for eg. hi-level languages or dynamic (in-browser?) compilation (see [lino](https://github.com/audio-lab/lino)).
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
-<!--
-&nbsp; | watr | wat-compiler | wabt
----|---|---|---
-Size (gzipped) | 2.8kb | 6kb | 300kb
-Performance (op/s) | 45000 | 2500 | 3100
--->
 
 &nbsp; | Size (gzipped) | Performance (op/s)
 ---|---|---
@@ -60,7 +54,7 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 
 ### Compile
 
-Compiles Wasm tree or text into wasm binary. Lightweight alternative to [wabt/wat2wasm](https://github.com/WebAssembly/wabt).
+Compiles Wasm tree or string into wasm binary.
 
 ```js
 import { compile } from 'watr'
