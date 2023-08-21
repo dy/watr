@@ -112,6 +112,10 @@ const str = print(tree, {
 <!--
 ## Limitations
 
+It may miss some edge cases and nice error messages.
+For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt.js).
+
+
 Ambiguous syntax is prohibited in favor of explicit lispy notation. Each instruction must have prefix signature with parenthesized immediates and arguments.
 
 ```wast
@@ -144,9 +148,6 @@ end
 ```
 -->
 
-Inline style is supported for compatibility, but discrouraged.
-It may also miss some edge cases and nice error messages.
-For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt.js).
 
 
 ## Useful links
