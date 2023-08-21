@@ -2,7 +2,7 @@ import t, { is, ok, same } from 'tst'
 import print from '../src/print.js'
 import { wat2wasm, file } from './compile.js'
 
-t.only('print: basics', () => {
+t('print: basics', () => {
   const tree = [
     'func', ['export', '"double"'], ['param', 'f64', 'f32'], ['param', '$x', 'i32'], ['result', 'f64'],
     ['f64.mul', ['local.get', 0], ['f64.const', 2]]
@@ -38,7 +38,7 @@ t.only('print: basics', () => {
   )
 })
 
-t.only('print: doesnt break samples', async t => {
+t('print: doesnt break samples', async t => {
   const files = ['/test/example/malloc.wat',
     '/test/example/brownian.wat',
     '/test/example/fire.wat',

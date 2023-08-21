@@ -1,12 +1,14 @@
 import { uleb, leb, bigleb, f64, f32 } from './util.js'
 import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
-
+import parse from './parse.js'
 
 // some inlinable instructions
 const INLINE = { loop: 1, block: 1, if: 1, end: -1, return: -1 }
 
 // convert wat tree to wasm binary
 export default (nodes) => {
+  if (typeof nodes === 'string') nodes = parse(nodes);
+
   // IR. Alias is stored directly to section array by key, eg. section.func.$name = idx
   let sections = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
