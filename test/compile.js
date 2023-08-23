@@ -103,31 +103,37 @@ t('compiler: memory $foo (import "a" "b" ) 1 2 shared', () => {
   run(src, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: 1 }) } })
 })
 
-t('compiler: stacked syntax should not be supported', () => {
-  throws(t => {
-    compile(parse(`
-      (func (export "answer") (param i32 i32) (result i32)
-        (local.get 0)
-        (local.get 1)
-        (i32.add)
-      )
-    `))
-  })
+t('compiler: stacked syntax is supported', () => {
+  let src = `
+    (func (export "add") (param i32 i32) (result i32)
+      (local.get 0)
+      (local.get 1)
+      (i32.add)
+    )
+  `
+
+  let { add } = run(src).exports
+  is(add(3, 1), 4)
 })
 
-t('compiler: inline syntax is not supported', () => {
-  throws(t => {
-    compile(parse(`
-      (func $f1 (result i32)
-        i32.const 42)
-    `))
-  })
+t('compiler: inline syntax is supported', () => {
+  let src = `
+    (func (export "add") (param i32 i32) (result i32)
+      local.get 0
+      local.get 1
+      i32.add
+    )
+  `
+
+  let { add } = run(src).exports
+  is(add(5, 2), 7)
 })
 
 
 // wat-compiler
 t('wat-compiler: minimal function', t => {
-  run('(module (func (export "answer") (result i32) (i32.const 42)))')
+  run('(module (func (export "answer") (param i32)(result i32) (i32.add (i32.const 42) (local.get 0))))')
+  // run(`(module (func (export "x") (param i32)(result i32) local.get 0 i32.const 42 i32.add))`)
 })
 
 t('wat-compiler: function with 1 param', t => {

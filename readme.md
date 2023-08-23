@@ -39,7 +39,7 @@ double(108) // 216
 
 ### Parse
 
-Parser converts input Wasm text string to syntax tree.
+Parse input Wasm text string into syntax tree.
 
 ```js
 import { parse } from 'watr'
@@ -156,7 +156,6 @@ end
 * [wabt source search](https://github.com/WebAssembly/wabt/search?p=5&q=then)
 * [wat control flow](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/Control_flow)
 * [ontouchstart wasm book](https://ontouchstart.pages.dev/chapter_wasm_binary)
-* [wat-compiler](https://github.com/stagas/wat-compiler/)
 * [hackernoon](https://web.archive.org/web/20210215171830/https://hackernoon.com/webassembly-binary-format-explained-part-2-hj1t33yp?source=rss)
 * [webassemblyjs](https://github.com/xtuc/webassemblyjs)
 * [chasm](https://github.com/ColinEberhardt/chasm/blob/master/src/encoding.ts)
@@ -171,5 +170,6 @@ end
 * [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web, de-facto standard.
 * [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT, older brother of _watr_.
 * [web49](https://github.com/FastVM/Web49)
+* [wassemble](https://github.com/wingo/wassemble)
 
 <p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>

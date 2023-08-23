@@ -16,7 +16,7 @@
 * [x] make sure compiler doesn't modify tree
 * [x] Recognize all number formats
 * [x] Format function
-* [ ] Flat instructions
+* [ ] Refactor for flat instructions: consume into stack, rather than fixed signatures
 * [ ] Floating hex
 * [ ] Official test suite https://github.com/WebAssembly/testsuite
 * [ ] Compiler: Externref types;

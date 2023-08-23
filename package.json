@@ -22,11 +22,12 @@
   ],
   "keywords": [
     "wat",
+    "wasm",
+    "wat2wasm",
     "compiler",
     "wabt",
     "pretty-print",
     "webassembly",
-    "wasm",
     "wasm-text"
   ],
   "author": "Dmitry Iv",
