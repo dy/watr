@@ -140,7 +140,6 @@ const build = {
       }
       else opCode = OP.indexOf(op)
 
-
       // NOTE: we could reorganize ops by groups and detect signature as `op in STORE`
       // but numeric comparison is faster than generic hash lookup
       // FIXME: we often use OP_END or alike: what if we had list of global constants?
@@ -194,6 +193,7 @@ const build = {
       // (call_indirect (type $typeName) (idx) ...nodes)
       else if (opCode == 17) {
         let typeId = immeds.shift()[1];
+        typeId = typeId[0] === '$' ? ctx.type[typeId] : typeId
         // [, argc] = ctx.type[typeId = typeId[0] === '$' ? ctx.type[typeId] : typeId]
         // argc++
         args = uleb(typeId), args.push(0) // extra argsediate indicates table idx (reserved)
@@ -240,8 +240,8 @@ const build = {
       // (block ...), (loop ...)
       else if (opCode == 2 || opCode == 3) {
         block = blocks.push(opCode)
-        if (nodes[0]?.[0] === '$') (blocks[nodes.shift()] = blocks.length)
-        let [, type] = nodes[0]?.[0] === 'result' ? nodes.shift() : [, 'void']
+        if (immeds[0]?.[0] === '$') (blocks[immeds.shift()] = blocks.length)
+        let [, type] = immeds[0]?.[0] === 'result' ? immeds.shift() : [, 'void']
         args = [TYPE[type]]
         // blocks.pop()
         // if (!group.inline) blocks.pop(), args.push(OP_END) // inline loop/block expects end code to be separately provided
@@ -266,16 +266,20 @@ const build = {
         // argc = 1 + (nodes.length > 1)
       }
 
-      else err(`Unknown instruction \`${op}\``)
+      // NOTE: then and other fake instructions do nothing
+      // else if (opCode < 0) err(`Unknown instruction \`${op}\``)
+
 
       // if group (cmd im1 im2 arg1 arg2) - insert any remaining args first: arg1 arg2
       // because inline case has them in stack already
       if (Array.isArray(op)) {
         while (immeds.length) consume(immeds, out)
-        if (block) consume([OP_END], out) // (block ...) -> block ... end
+        if (block) consume(['end'], out) // (block ...) -> block ... end
       }
 
-      out.push(opCode, ...args)
+      // ignore (then) and other absent instructions
+      if (opCode >= 0) out.push(opCode)
+      if (args) out.push(...args)
 
       // tail-call if nodes have any remaining (inline) instructions
       return consume(nodes, out)
@@ -284,6 +288,7 @@ const build = {
     // evaluates after all definitions (need globals, elements, data etc.)
     // FIXME: get rid of this postcall
     return () => {
+      console.log(...body)
       const bytes = consume(body)
       ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, OP_END])
     }
