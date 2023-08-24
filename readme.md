@@ -91,7 +91,6 @@ Parse input wasm text into syntax tree.
 import { parse } from 'watr'
 
 parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))`)
-
 // [
 //   'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
 //   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
