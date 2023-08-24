@@ -2,7 +2,7 @@
 
 > Bare minimum wasm text compiler & formatter.
 
-Alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js), useful for hi-level languages or dynamic (in-browser?) compilation.<br>
+Light & fast alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js), useful for hi-level languages or dynamic (in-browser?) compilation.<br>
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
