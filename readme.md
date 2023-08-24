@@ -2,7 +2,7 @@
 
 > Bare minimum wasm text compiler & formatter.
 
-Light & fast alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js), useful for hi-level languages or dynamic (in-browser?) compilation.<br>
+Light & fast alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js), useful for hi-level languages or dynamic (in-browser) compilation.<br>
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
@@ -34,6 +34,55 @@ double(108) // 216
 
 ## API
 
+### Compile
+
+Compiles wasm text or syntax tree into wasm binary.
+
+```js
+import { compile } from 'watr'
+
+const buffer = compile(`(func (export "double")
+  (param f64) (result f64)
+  (f64.mul (local.get 0) (f64.const 2))
+)`)
+const module = new WebAssembly.Module(buffer)
+const instance = new WebAssembly.Instance(module)
+const {double} = instance.exports
+
+double(108) // 216
+```
+
+### Print
+
+Format input wasm text or syntax tree into minified or pretty form.
+
+```js
+import { print } from 'watr'
+
+const src = `(func (export "double")
+  (param f64) (result f64)
+  (f64.mul (local.get 0) (f64.const 2))
+)`
+
+// pretty-print (default)
+print(src, {
+  indent: '  ',
+  newline: '\n',
+})
+// (func (export "double")
+//   (param f64) (result f64)
+//     (f64.mul
+//       (local.get 0)
+//       (f64.const 2)))
+
+// minify
+print(src, {
+  indent: false,
+  newline: false
+})
+// (func (export "double")(param f64)(result f64)(f64.mul (local.get 0)(f64.const 2)))
+```
+
 ### Parse
 
 Parse input wasm text into syntax tree.
@@ -47,55 +96,6 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 //   'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
 //   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
 // ]
-```
-
-### Compile
-
-Compiles wasm text or tree into wasm binary.
-
-```js
-import { compile } from 'watr'
-
-const buffer = compile([
-  'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
-  ['f64.mul', ['local.get', 0], ['f64.const', 2]]
-])
-const module = new WebAssembly.Module(buffer)
-const instance = new WebAssembly.Instance(module)
-const {double} = instance.exports
-
-double(108) // 216
-```
-
-### Print
-
-Format input wasm text or tree into minified or pretty form.
-
-```js
-import { print } from 'watr'
-
-const tree = [
-  'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
-  ['f64.mul', ['local.get', 0], ['f64.const', 2]]
-]
-
-// pretty-print (default)
-const str = print(tree, {
-  indent: '  ',
-  newline: '\n',
-})
-// (func (export "double")
-//   (param f64) (result f64)
-//     (f64.mul
-//       (local.get 0)
-//       (f64.const 2)))
-
-// minify
-const str = print(tree, {
-  indent: false,
-  newline: false
-})
-// (func (export "double")(param f64)(result f64)(f64.mul (local.get 0)(f64.const 2)))
 ```
 
 ## Limitations
