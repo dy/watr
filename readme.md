@@ -100,8 +100,7 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 
 ## Limitations
 
-It may miss some edge cases and nice error messages. For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt.js).<br>
-Also: no floating HEX support, eg. `(f32.const 0x1.fffffep+127)` for now.
+No floating HEX support, eg. `(f32.const 0x1.fffffep+127)`.
 
 ## Projects using watr
 
