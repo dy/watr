@@ -40,6 +40,3 @@ export const OP = [
   BLOCK = {
     loop: 1, block: 1, if: 1, end: -1, return: -1
   }
-
-// FIXME: remove
-OP.map((op, i) => OP[op] = i) // init op name:code

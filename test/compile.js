@@ -380,12 +380,15 @@ t('wat-compiler: if else', () => {
       end
     )
   `
-  // these are identical parts, but we restrict to lisp syntax src1
+  // these are identical parts
   // console.log(wat2wasm(src1))
-  is(wat2wasm(src1).buffer, wat2wasm(src2).buffer)
+  // is(wat2wasm(src1).buffer, wat2wasm(src2).buffer)
   let { foo } = run(src1).exports
   is(foo(0), 0)
   is(foo(1), 1)
+  let { foo: foo2 } = run(src2).exports
+  is(foo2(0), 0)
+  is(foo2(1), 1)
 })
 
 t('wat-compiler: block', () => {
@@ -1151,7 +1154,7 @@ t('example: legacy', async () => {
 
 
 // bench
-t.skip('bench: brownian', async () => {
+t.only('bench: brownian', async () => {
   let src = await file('/test/example/brownian.wat')
   // let src = `(func $dummy)
   //   (func (export "foo") (param i32) (result i32)
@@ -1213,7 +1216,7 @@ const hex = (str, ...fields) =>
 export function wat2wasm(code, config) {
   let metrics = config ? config.metrics : true
   const parsed = wabt.parseWat('inline', code, {})
-  metrics && console.time('wabt build')
+  // metrics && console.time('wabt build')
   const binary = parsed.toBinary({
     log: true,
     canonicalize_lebs: true,
@@ -1221,7 +1224,7 @@ export function wat2wasm(code, config) {
     write_debug_names: false,
   })
   parsed.destroy()
-  metrics && console.timeEnd('wabt build')
+  // metrics && console.timeEnd('wabt build')
 
   return binary
 }
@@ -1234,6 +1237,10 @@ const run = (src, importObj) => {
   const freeze = node => Array.isArray(node) && (Object.freeze(node), node.forEach(freeze))
   freeze(tree)
   let buffer = compile(tree)
+  // console.log('wabt:')
+  // console.log(...wat2wasm(src).buffer)
+  // console.log('watr:')
+  // console.log(...buffer)
   is(buffer, wat2wasm(src).buffer)
   const mod = new WebAssembly.Module(buffer)
   return new WebAssembly.Instance(mod, importObj)

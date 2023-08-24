@@ -1,4 +1,4 @@
-# watr [![Test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml)
+# watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr)
 
 > WAT parser, compiler and printer.
 
@@ -8,12 +8,11 @@ Useful for hi-level languages or dynamic (in-browser?) compilation (see [lino](h
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
-
 &nbsp; | Size (gzipped) | Performance (op/s)
 ---|---|---
-watr | 3.8 kb | 1900
-[wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 135
-[wabt](https://github.com/AssemblyScript/wabt.js) | 300 kb | 250
+watr | 3.8 kb | 5950
+[wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 348
+[wabt](https://github.com/AssemblyScript/wabt.js) | 300 kb | 574
 
 ## Usage
 
@@ -101,46 +100,11 @@ const str = print(tree, {
 // (func (export "double")(param f64)(result f64)(f64.mul (local.get 0)(f64.const 2)))
 ```
 
-<!--
 ## Limitations
 
-It may miss some edge cases and nice error messages.
-For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt.js).
-
-
-Ambiguous syntax is prohibited in favor of explicit lispy notation. Each instruction must have prefix signature with parenthesized immediates and arguments.
-
-```wast
-(func (result i32)
-  i32.const 1                 ;; ✘ stacked arguments
-  drop
-  i32.const 0
-  i32.load offset=0 align=4   ;; ✘ ungrouped immediates
-)
-
-(func (result i32)
-  (drop (i32.const 1))                        ;; ✔ nested arguments
-  (i32.load offset=0 align=4 (i32.const 0))   ;; ✔ grouped immediates
-)
-```
-
-```wast
-(local.get 0)     ;; ✘ stacked argument
-if (result i32)   ;; ✘ inline instruction
-  (i32.const 1)
-end
-
-(if (result i32) (local.get 0)  ;; ✔ explicit signature
-  (i32.const 1)
-)
-```
-
-```wast
-(f32.const 0x1.fffffep+127)  ;; ✘ floating HEX - not supported
-```
--->
-
-
+It may miss some edge cases and nice error messages.<br>
+For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt.js).<br>
+Also floating HEX, eg. `(f32.const 0x1.fffffep+127)` is not supported.<br>
 
 ## Useful links
 
@@ -162,14 +126,13 @@ end
 * [WebBS](https://github.com/j-s-n/WebBS)
 * [leb128a](https://github.com/minhducsun2002/leb128/blob/master/src/index.ts)
 * [leb128b](https://github.com/shmishtopher/wasm-LEB128/tree/master/esm)
-
 -->
 
 ## Alternatives
 
 * [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web, de-facto standard.
 * [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT, older brother of _watr_.
-* [web49](https://github.com/FastVM/Web49)
 * [wassemble](https://github.com/wingo/wassemble)
+* [web49](https://github.com/FastVM/Web49)
 
 <p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>

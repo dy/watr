@@ -2,7 +2,7 @@ import { uleb, leb, bigleb, f64, f32 } from './util.js'
 import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
 import parse from './parse.js'
 
-const OP_ELSE = 0x5, OP_END = 0xb, OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44
+const OP_END = 0xb, OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44
 
 // convert wat tree to wasm binary
 export default (nodes) => {
@@ -47,7 +47,6 @@ export default (nodes) => {
 
   // code must be compiled after all definitions
   for (let cb of postcall) cb && cb.call && cb()
-
 
   // 3. build binary
   for (let name in sections) {
@@ -139,14 +138,7 @@ const build = {
       // NOTE: numeric comparison is faster than generic hash lookup
 
       // binary/unary - just consume immed
-      if (opCode >= 69) {
-        // argc = opCode >= 167 ||
-        //   (opCode <= 159 && opCode >= 153) ||
-        //   (opCode <= 145 && opCode >= 139) ||
-        //   (opCode <= 123 && opCode >= 121) ||
-        //   (opCode <= 105 && opCode >= 103) ||
-        //   opCode == 80 || opCode == 69 ? 1 : 2
-      }
+      if (opCode >= 69) { }
 
       // (i32.store align=n offset=m at value)
       else if (opCode >= 40 && opCode <= 62) {
@@ -196,38 +188,20 @@ const build = {
         let [, type] = args[0][0] === 'result' ? args.shift() : [, 'void']
         immed = [TYPE[type]] // FIXME: what if that's multiple values return?
 
-
-        // we inline (if ... (then) (else)) as `... if ... else ... end`
+        // (if ... (then) (else)) -> `... if ... else ... end`
         if (group) {
           nodes.unshift('end')
           if (args[args.length - 1][0] === 'else') nodes.unshift(args.pop())
           if (args[args.length - 1][0] === 'then') nodes.unshift(args.pop())
         }
-
-        // FIXME: it can be (if (a)(b)(c) (then)(else))
-        // before.push(...consume(nodes.shift()))
-        // let body
-        // if (args[0]?.[0] === 'then') [, ...body] = args.shift(); else body = args
-        // immed.push(...consume(body))
-
-        // blocks.pop(), blocks.push(OP_ELSE)
-        // if (args[0]?.[0] === 'else') {
-        //   [, ...body] = args.shift()
-        //   if (body.length) immed.push(OP.else, ...consume(body))
-        // }
-        // blocks.pop()
       }
       // (else)
       else if (opCode === 5) {
+        // ignore empty else
+        if (!args.length && nodes[0] === 'end') return
         // (else xxx) -> else xxx
-        if (group) immed = consume(args)
+        if (group) while (args.length) nodes.unshift(args.pop())
       }
-
-      // (drop arg?), (return arg?)
-      // else if (opCode == 0x1a || opCode == 0x0f) { argc = nodes.length ? 1 : 0 }
-
-      // (select a b cond)
-      // else if (opCode == 0x1b) { argc = 3 }
 
       // (block ...), (loop ...)
       else if (opCode == 2 || opCode == 3) {
@@ -235,7 +209,11 @@ const build = {
         if (args[0]?.[0] === '$') (blocks[args.shift()] = blocks.length)
         let [, type] = args[0]?.[0] === 'result' ? args.shift() : [, 'void']
         immed = [TYPE[type]]
-        if (group) nodes.unshift('end')
+        // (block xxx) -> block xxx end
+        if (group) {
+          nodes.unshift('end')
+          while (args.length) nodes.unshift(args.pop())
+        }
       }
 
       // (end)
@@ -250,13 +228,10 @@ const build = {
 
       // (br_table 1 2 3 4  0  selector result?)
       else if (opCode == 0x0e) {
+        immed = []
         while (!Array.isArray(args[0])) id = args.shift(), immed.push(...uleb(id[0][0] === '$' ? blocks.length - blocks[id] : id))
         immed.unshift(...uleb(immed.length - 1))
       }
-
-      // NOTE: then and other fake instructions do nothing
-      // else if (opCode < 0) err(`Unknown instruction \`${op}\``)
-
 
       // if group (cmd im1 im2 arg1 arg2) - insert any remaining args first: arg1 arg2
       // because inline case has them in stack already
@@ -267,17 +242,13 @@ const build = {
       // ignore (then) and other unknown instructions
       if (opCode >= 0) out.push(opCode)
       if (immed) out.push(...immed)
-
-      // tail-call if nodes have any remaining (inline) instructions
-      return consume(nodes, out)
     }
 
     // evaluates after all definitions (need globals, elements, data etc.)
     // FIXME: get rid of this postcall
     return () => {
-      // console.log(...body)
-      const bytes = consume(body)
-      // console.log(bytes)
+      const bytes = []
+      while (body.length) consume(body, bytes)
       ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, OP_END])
     }
   },

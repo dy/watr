@@ -1,8 +1,8 @@
 import fs from 'fs'
 import t from 'tst'
 
-t.only('table', () => {
-  var buffer = fs.readFileSync('./table.wasm');
+t('table', () => {
+  var buffer = fs.readFileSync('./example/table.wasm');
   const mod = new WebAssembly.Module(buffer)
   const instance = new WebAssembly.Instance(mod)
 
@@ -11,7 +11,7 @@ t.only('table', () => {
   // console.timeEnd('instantiate')
   // 290ms to instantiate 30k modules
 
-  const {callByIndex, getByIndex} = instance.exports
+  const { callByIndex, getByIndex } = instance.exports
 
   console.log(callByIndex(0)) // => 42
   console.log(callByIndex(1)) // => 13
@@ -22,18 +22,18 @@ t.only('table', () => {
 })
 
 t('global', () => {
-  var buf = fs.readFileSync('./global.wasm')
+  var buf = fs.readFileSync('./example/global.wasm')
   const mod = new WebAssembly.Module(buf)
   const importObj = {
     "js": {
-      "log": arg=>console.log(arg),
-      "g1": new WebAssembly.Global({value: 'i32', mutable: true}, 123)
+      "log": arg => console.log(arg),
+      "g1": new WebAssembly.Global({ value: 'i32', mutable: true }, 123)
     }
   }
 
   console.log(importObj.js.g1)
   const instance = new WebAssembly.Instance(mod, importObj)
-  const {getG1, setG1, getG0} = instance.exports
+  const { getG1, setG1, getG0 } = instance.exports
 
   // console.log(getG0())
   console.log(getG1())
@@ -43,29 +43,29 @@ t('global', () => {
 
 
 t('stack', () => {
-  var buf = fs.readFileSync('./stack.wasm')
+  var buf = fs.readFileSync('./example/stack.wasm')
   const mod = new WebAssembly.Module(buf)
-  const importObj = {"js": {}}
+  const importObj = { "js": {} }
   const instance = new WebAssembly.Instance(mod, importObj)
-  const {get, swap, mul} = instance.exports
-  console.log(mul(12,13))
+  const { get, swap, mul } = instance.exports
+  console.log(mul(12, 13))
   // console.log(swap(1,2,3,4))
   // console.log(get())
 })
 
 t('memory', () => {
-  var buf = fs.readFileSync('./memory.wasm')
+  var buf = fs.readFileSync('./example/memory.wasm')
   const mod = new WebAssembly.Module(buf)
   const mem = new WebAssembly.Memory({ initial: 1 })
 
   const importObj = {
-    js: { log: arg=>console.log(arg) }
+    js: { log: arg => console.log(arg) }
   }
   const instance = new WebAssembly.Instance(mod, importObj)
   const api = instance.exports
 
   console.log(mem.buffer)
-// console.log(api.mem, api.g)
+  // console.log(api.mem, api.g)
 
   // api.populate()
   // let view = new DataView(mem.buffer)
@@ -73,7 +73,7 @@ t('memory', () => {
   let i32 = new Int32Array(mem.buffer)
   i32[1] = 123
   console.log(api.get(4))
-  api.set(4,2)
+  api.set(4, 2)
   console.log(api.get(4))
 
   // grow by one page
@@ -83,11 +83,11 @@ t('memory', () => {
 
 
 t('loop', () => {
-  var buf = fs.readFileSync('./loops.wasm')
+  var buf = fs.readFileSync('./example/loops.wasm')
   const mod = new WebAssembly.Module(buf)
   // const mem = new WebAssembly.Memory({ initial:1 })
   // const f32mem = new Float32Array(mem.buffer)
-  const importObj = {console: {log:(arg)=>console.log(arg)}}
+  const importObj = { console: { log: (arg) => console.log(arg) } }
   const instance = new WebAssembly.Instance(mod, importObj)
 
 })
@@ -95,19 +95,17 @@ t('loop', () => {
 
 t('amp bench', () => {
   const BLOCK = 1024
-  var buf = fs.readFileSync('./array.wasm')
+  var buf = fs.readFileSync('./example/array.wasm')
   const mod = new WebAssembly.Module(buf)
-  const mem = new WebAssembly.Memory({ initial:1 })
-  const blockSize = new WebAssembly.Global({value: 'i32', mutable: true}, BLOCK)
+  const mem = new WebAssembly.Memory({ initial: 1 })
+  const blockSize = new WebAssembly.Global({ value: 'i32', mutable: true }, BLOCK)
   // blockSize.value
   const f32mem = new Float32Array(mem.buffer)
-  const importObj = {js: {mem, blockSize}, console:{log(a,b){console.log(a,b)}}}
+  const importObj = { js: { mem, blockSize }, console: { log(a, b) { console.log(a, b) } } }
   const instance = new WebAssembly.Instance(mod, importObj)
-  const {amp, ampMulti, ampShort} = instance.exports
+  const { amp, ampMulti, ampShort } = instance.exports
 
-
-  let src = Array.from({length:BLOCK}, (a,i)=>i)
-
+  let src = Array.from({ length: BLOCK }, (a, i) => i)
 
   f32mem.set(src)
   amp('2')
@@ -136,20 +134,20 @@ t('amp bench', () => {
 
 
   console.time('js amp')
-  for (let i = 0; i < MAX; i++) for (let j = 0; j < src.length; j++) src[j]*=.5
+  for (let i = 0; i < MAX; i++) for (let j = 0; j < src.length; j++) src[j] *= .5
   console.timeEnd('js amp')
 })
 
 
 
 t('types', () => {
-  var buf = fs.readFileSync('./types.wasm')
+  var buf = fs.readFileSync('./example/types.wasm')
   const mod = new WebAssembly.Module(buf)
   // const mem = new WebAssembly.Memory({ initial:1 })
   // const f32mem = new Float32Array(mem.buffer)
-  const importObj = {console: {log:(...abc)=>console.log(...abc)}}
+  const importObj = { console: { log: (...abc) => console.log(...abc) } }
   const instance = new WebAssembly.Instance(mod, importObj)
-  const {run} = instance.exports
+  const { run } = instance.exports
 
   console.log(run(123, 13.3, 'abc'))
 })
