@@ -1,10 +1,10 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr)
 
-> WAT parser, compiler and printer.
+> Bare minimum wasm text parser, compiler, formatter.
 
-Light & fast alternative for [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).<br/>
-Provides bare minimum WAT to WASM compiler, parser and formatter (to pretty-print or minify).<br/>
-Useful for hi-level languages or dynamic (in-browser?) compilation (see [lino](https://github.com/audio-lab/lino)).
+Compiler is useful for hi-level languages ([auro](https://github.com/audio-lab/auro)) or dynamic (in-browser?) compilation. It's
+light & fast alternative for [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).<br>
+Formatter is useful to pretty-print or minify WAT code.
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
@@ -38,7 +38,7 @@ double(108) // 216
 
 ### Parse
 
-Parse input Wasm text string into syntax tree.
+Parse input wasm text into syntax tree.
 
 ```js
 import { parse } from 'watr'
@@ -53,7 +53,7 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 
 ### Compile
 
-Compiles Wasm tree or string into wasm binary.
+Compiles wasm text or tree into wasm binary.
 
 ```js
 import { compile } from 'watr'
@@ -71,7 +71,7 @@ double(108) // 216
 
 ### Print
 
-Format input Wasm text string or tree into minified or pretty form.
+Format input wasm text or tree into minified or pretty form.
 
 ```js
 import { print } from 'watr'
@@ -83,8 +83,8 @@ const tree = [
 
 // pretty-print (default)
 const str = print(tree, {
-  indent: '  ',   // indentation chars
-  newline: '\n',  // new line chars
+  indent: '  ',
+  newline: '\n',
 })
 // (func (export "double")
 //   (param f64) (result f64)
@@ -102,9 +102,7 @@ const str = print(tree, {
 
 ## Limitations
 
-It may miss some edge cases and nice error messages.<br>
-For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt.js).<br>
-Also floating HEX, eg. `(f32.const 0x1.fffffep+127)` is not supported.<br>
+It may miss some edge cases and nice error messages. For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt.js). Also: no floating HEX support, eg. `(f32.const 0x1.fffffep+127)` for now.
 
 ## Useful links
 
