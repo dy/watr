@@ -84,9 +84,7 @@ const build = {
     if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', ctx.func.length]], ctx)
 
     // register/consume type info
-    let [typeIdx, params, result] = parseType([...body], ctx)
-    // FIXME: try merging with build.type: it should be able to consume body
-    while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift()
+    let [typeIdx, params, result] = parseType(body, ctx)
 
     // register new function
     ctx.func.push([typeIdx])
@@ -291,7 +289,7 @@ const build = {
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
       if (name) ctx.func[name] = ctx.func.length
-      let [typeIdx] = parseType([...parts], ctx)
+      let [typeIdx] = parseType(parts, ctx)
       ctx.func.push(details = uleb(typeIdx))
       ctx.func.importc = (ctx.func.importc || 0) + 1
     }
