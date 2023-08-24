@@ -2,8 +2,7 @@
 
 > Bare minimum wasm text parser, compiler, formatter.
 
-Compiler is alternative for [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js), useful for hi-level languages (eg. [auro](https://github.com/audio-lab/auro)) or dynamic (in-browser?) compilation.<br>
-Formatter is useful to pretty-print or minify WAT code.
+Alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js), useful for hi-level languages or dynamic (in-browser?) compilation.<br>
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
@@ -103,6 +102,10 @@ const str = print(tree, {
 
 It may miss some edge cases and nice error messages. For better REPL/dev experience use [wabt](https://github.com/AssemblyScript/wabt.js).<br>
 Also: no floating HEX support, eg. `(f32.const 0x1.fffffep+127)` for now.
+
+## Projects using watr
+
+* [auro](https://github.com/audio-lab/auro) – audio processing language
 
 ## Useful links
 
