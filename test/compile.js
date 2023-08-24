@@ -1135,7 +1135,7 @@ t('case: inline if', () => {
 })
 
 t.todo('feature: multiple results', () => {
-  let src = `(func (if (result i32) (i32.const 1) (i32.const 2) (i32.const 3)))`
+  let src = `(func (block (result i32 i32) (i32.const 1) (i32.const 2)))`
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
@@ -1252,12 +1252,12 @@ const run = (src, importObj) => {
   // in order to make sure tree is not messed up we freeze it
   const freeze = node => Array.isArray(node) && (Object.freeze(node), node.forEach(freeze))
   freeze(tree)
-  let buffer = compile(tree)
+  let wabtBuffer = wat2wasm(src).buffer, watrBuffer = compile(tree)
   // console.log('wabt:')
   // console.log(...wat2wasm(src).buffer)
   // console.log('watr:')
   // console.log(...buffer)
-  is(buffer, wat2wasm(src).buffer)
-  const mod = new WebAssembly.Module(buffer)
+  is(watrBuffer, wabtBuffer)
+  const mod = new WebAssembly.Module(watrBuffer)
   return new WebAssembly.Instance(mod, importObj)
 }

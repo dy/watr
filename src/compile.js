@@ -46,7 +46,7 @@ export default (nodes) => {
   }
 
   // code must be compiled after all definitions
-  for (let cb of postcall) cb && cb.call && cb()
+  for (let cb of postcall) cb?.()
 
   // 3. build binary
   for (let name in sections) {
@@ -67,30 +67,8 @@ const build = {
   // signature part is identical to function
   // FIXME: handle non-function types
   type([, typeName, decl], ctx) {
-    if (typeName[0] !== '$') decl = typeName, typeName = null
-    let params = [], result = [], [kind, ...sig] = decl, idx, bytes
-
-    if (kind === 'func') {
-      // collect params
-      while (sig[0]?.[0] === 'param') {
-        let [, ...types] = sig.shift()
-        if (types[0]?.[0] === '$') params[types.shift()] = params.length
-        params.push(...types.map(t => TYPE[t]))
-      }
-
-      // collect result type
-      if (sig[0]?.[0] === 'result') result = sig.shift().slice(1).map(t => TYPE[t])
-
-      // reuse existing type or register new one
-      bytes = [TYPE.func, ...uleb(params.length), ...params, ...uleb(result.length), ...result]
-
-      idx = ctx.type.findIndex((prevType) => prevType.every((byte, i) => byte === bytes[i]))
-      if (idx < 0) idx = ctx.type.push(bytes) - 1
-    }
-
+    const [idx] = parseType(decl.slice(), ctx)
     if (typeName) ctx.type[typeName] = idx
-
-    return [idx, params, result]
   },
 
   // (func $name? ...params result ...body)
@@ -105,7 +83,7 @@ const build = {
     if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', ctx.func.length]], ctx)
 
     // register type
-    let [typeIdx, params, result] = build.type([, ['func', ...body]], ctx)
+    let [typeIdx, params, result] = parseType(['func', ...body], ctx)
     // FIXME: try merging with build.type: it should be able to consume body
     while (body[0]?.[0] === 'param' || body[0]?.[0] === 'result') body.shift()
     ctx.func.push([typeIdx])
@@ -310,7 +288,7 @@ const build = {
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
       if (name) ctx.func[name] = ctx.func.length
-      let [typeIdx] = build.type([, ['func', ...parts]], ctx)
+      let [typeIdx] = parseType(['func', ...parts], ctx)
       ctx.func.push(details = uleb(typeIdx))
       ctx.func.importc = (ctx.func.importc || 0) + 1
     }
@@ -364,8 +342,36 @@ const str = str => {
   return res
 }
 
-
 // build range/limits sequence (non-consuming)
 const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]
+
+// get type info from type declation (consumes declaration)
+// returns registered (reused) type idx, params bytes, result bytes
+// eg. (type $return_i32 (func (result i32)))
+const parseType = (decl, ctx) => {
+  let params = [], result = [], kind = decl.shift(), sig = decl, idx, bytes
+
+  if (kind === 'func') {
+    // collect params
+    while (sig[0]?.[0] === 'param') {
+      let [, ...types] = sig.shift()
+      if (types[0]?.[0] === '$') params[types.shift()] = params.length
+      params.push(...types.map(t => TYPE[t]))
+    }
+
+    // collect result type
+    if (sig[0]?.[0] === 'result') result = sig.shift().slice(1).map(t => TYPE[t])
+
+    // reuse existing type or register new one
+    bytes = [TYPE.func, ...uleb(params.length), ...params, ...uleb(result.length), ...result]
+    idx = ctx.type.findIndex((t) => t.every((byte, i) => byte === bytes[i]))
+
+    // register new type, if not found
+    if (idx < 0) idx = ctx.type.push(bytes) - 1
+  }
+  else err(`Unknown type kind '${kind}'`)
+
+  return [idx, params, result]
+}
 
 const err = text => { throw Error(text) }
