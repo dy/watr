@@ -8,7 +8,7 @@ Light & fast alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.j
 
 &nbsp; | Size (gzipped) | Performance (op/s)
 ---|---|---
-watr | 3.8 kb | 5950
+watr | 3.8 kb | 6250
 [wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 348
 [wabt](https://github.com/AssemblyScript/wabt.js) | 300 kb | 574
 
