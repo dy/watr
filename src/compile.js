@@ -2,7 +2,7 @@ import { uleb, leb, bigleb, f64, f32 } from './util.js'
 import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
 import parse from './parse.js'
 
-const OP_ELSE = 0x5, OP_END = 0xb
+const OP_ELSE = 0x5, OP_END = 0xb, OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44
 
 // convert wat tree to wasm binary
 export default (nodes) => {
@@ -127,26 +127,18 @@ const build = {
     const consume = (nodes, out = []) => {
       if (!nodes?.length) return out
 
-      let op = nodes.shift(), opCode, immeds = nodes, args = [], id, block
+      let op = nodes.shift(), opCode, args = nodes, immed, id, group
 
       // groups are flattened, eg. (cmd z w) -> z w cmd
-      if (Array.isArray(op)) {
-        immeds = [...op] // op is immutable
-        opCode = OP.indexOf(immeds.shift())
-
-        // stub if, block, loop with end
-        // FIXME
-        // if (opCode == 4 || opCode == 3 || opCode == 2) op.unshift(OP_END)
+      if (group = Array.isArray(op)) {
+        args = [...op] // op is immutable
+        opCode = OP.indexOf(op = args.shift())
       }
       else opCode = OP.indexOf(op)
 
-      // NOTE: we could reorganize ops by groups and detect signature as `op in STORE`
-      // but numeric comparison is faster than generic hash lookup
-      // FIXME: we often use OP_END or alike: what if we had list of global constants?
+      // NOTE: numeric comparison is faster than generic hash lookup
 
-      // FIXME: this must consume sequences into stack rather than accept some hardcoded signature
-
-      // binary/unary - just consume args
+      // binary/unary - just consume immed
       if (opCode >= 69) {
         // argc = opCode >= 167 ||
         //   (opCode <= 159 && opCode >= 153) ||
@@ -160,76 +152,76 @@ const build = {
       else if (opCode >= 40 && opCode <= 62) {
         // FIXME: figure out point in Math.log2 aligns
         let o = { align: ALIGN[op], offset: 0 }, param
-        while (immeds[0]?.includes('=')) param = immeds.shift().split('='), o[param[0]] = Number(param[1])
-        args = [Math.log2(o.align), ...uleb(o.offset)]
-        // argc = opCode >= 54 ? 2 : 1
+        while (args[0]?.includes('=')) param = args.shift().split('='), o[param[0]] = Number(param[1])
+        immed = [Math.log2(o.align), ...uleb(o.offset)]
       }
 
       // (i32.const 123)
       else if (opCode >= 65 && opCode <= 68) {
-        args = (opCode == 65 ? leb : opCode == 66 ? bigleb : opCode == 67 ? f32 : f64)(immeds.shift())
+        immed = (opCode == 65 ? leb : opCode == 66 ? bigleb : opCode == 67 ? f32 : f64)(args.shift())
       }
 
       // (local.get $id), (local.tee $id x)
       else if (opCode >= 32 && opCode <= 34) {
-        args = uleb(immeds[0]?.[0] === '$' ? params[id = immeds.shift()] || locals[id] : immeds.shift())
-        // if (opCode > 32) argc = 1
+        immed = uleb(args[0]?.[0] === '$' ? params[id = args.shift()] || locals[id] : args.shift())
       }
 
       // (global.get id), (global.set id)
       else if (opCode == 35 || opCode == 36) {
-        args = uleb(immeds[0]?.[0] === '$' ? ctx.global[immeds.shift()] : immeds.shift())
-        // if (opCode > 35) argc = 1
+        immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] : args.shift())
       }
 
       // (call id ...nodes)
       else if (opCode == 16) {
-        let fnName = immeds.shift()
-        args = uleb(id = fnName[0] === '$' ? ctx.func[fnName] ?? err('Unknown function `' + fnName + '`') : fnName);
+        let fnName = args.shift()
+        immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] ?? err('Unknown function `' + fnName + '`') : fnName);
         // FIXME: how to get signature of imported function
-        // [, argc] = ctx.type[ctx.func[id][0]]
       }
 
       // (call_indirect (type $typeName) (idx) ...nodes)
       else if (opCode == 17) {
-        let typeId = immeds.shift()[1];
+        let typeId = args.shift()[1];
         typeId = typeId[0] === '$' ? ctx.type[typeId] : typeId
-        // [, argc] = ctx.type[typeId = typeId[0] === '$' ? ctx.type[typeId] : typeId]
-        // argc++
-        args = uleb(typeId), args.push(0) // extra argsediate indicates table idx (reserved)
+        immed = uleb(typeId), immed.push(0) // extra immediate indicates table idx (reserved)
       }
 
       // FIXME (memory.grow $idx?)
       else if (opCode == 63 || opCode == 64) {
-        args = [0]
-        // argc = 1
+        immed = [0]
       }
 
-      // (if (result i32)? (local.get 0) (then a b) (else a b)?)
+      // (if (result i32)? (local.get 0) (then a b) (argse a b)?)
       else if (opCode == 4) {
-        block = blocks.push(opCode)
-        let [, type] = immeds[0][0] === 'result' ? immeds.shift() : [, 'void']
-        args = [TYPE[type]] // FIXME: what if that's multiple values return?
+        blocks.push(opCode)
+        let [, type] = args[0][0] === 'result' ? args.shift() : [, 'void']
+        immed = [TYPE[type]] // FIXME: what if that's multiple values return?
 
-        // FIXME: we have to inline (if ... (then) (else)) as `... if ... else ... end`
 
-        // argc = 0
+        // we inline (if ... (then) (else)) as `... if ... else ... end`
+        if (group) {
+          nodes.unshift('end')
+          if (args[args.length - 1][0] === 'else') nodes.unshift(args.pop())
+          if (args[args.length - 1][0] === 'then') nodes.unshift(args.pop())
+        }
+
         // FIXME: it can be (if (a)(b)(c) (then)(else))
         // before.push(...consume(nodes.shift()))
         // let body
-        // if (immeds[0]?.[0] === 'then') [, ...body] = immeds.shift(); else body = immeds
-        // args.push(...consume(body))
+        // if (args[0]?.[0] === 'then') [, ...body] = args.shift(); else body = args
+        // immed.push(...consume(body))
 
         // blocks.pop(), blocks.push(OP_ELSE)
-        // if (immeds[0]?.[0] === 'else') {
-        //   [, ...body] = immeds.shift()
-        //   if (body.length) args.push(OP.else, ...consume(body))
+        // if (args[0]?.[0] === 'else') {
+        //   [, ...body] = args.shift()
+        //   if (body.length) immed.push(OP.else, ...consume(body))
         // }
         // blocks.pop()
       }
       // (else)
-      // else if (opCode === 5) {
-      // }
+      else if (opCode === 5) {
+        // (else xxx) -> else xxx
+        if (group) immed = consume(args)
+      }
 
       // (drop arg?), (return arg?)
       // else if (opCode == 0x1a || opCode == 0x0f) { argc = nodes.length ? 1 : 0 }
@@ -239,12 +231,11 @@ const build = {
 
       // (block ...), (loop ...)
       else if (opCode == 2 || opCode == 3) {
-        block = blocks.push(opCode)
-        if (immeds[0]?.[0] === '$') (blocks[immeds.shift()] = blocks.length)
-        let [, type] = immeds[0]?.[0] === 'result' ? immeds.shift() : [, 'void']
-        args = [TYPE[type]]
-        // blocks.pop()
-        // if (!group.inline) blocks.pop(), args.push(OP_END) // inline loop/block expects end code to be separately provided
+        blocks.push(opCode)
+        if (args[0]?.[0] === '$') (blocks[args.shift()] = blocks.length)
+        let [, type] = args[0]?.[0] === 'result' ? args.shift() : [, 'void']
+        immed = [TYPE[type]]
+        if (group) nodes.unshift('end')
       }
 
       // (end)
@@ -254,16 +245,13 @@ const build = {
       // (br_if $label cond result?)
       else if (opCode == 0x0c || opCode == 0x0d) {
         // br index indicates how many block items to pop
-        args = uleb(immeds[0]?.[0] === '$' ? blocks.length - blocks[immeds.shift()] : immeds.shift())
-        // argc = (opCode == 0x0d ? 1 + (nodes.length > 1) : !!nodes.length)
+        immed = uleb(args[0]?.[0] === '$' ? blocks.length - blocks[args.shift()] : args.shift())
       }
 
       // (br_table 1 2 3 4  0  selector result?)
       else if (opCode == 0x0e) {
-        args = []
-        while (!Array.isArray(immeds[0])) id = immeds.shift(), args.push(...uleb(id[0][0] === '$' ? blocks.length - blocks[id] : id))
-        args.unshift(...uleb(args.length - 1))
-        // argc = 1 + (nodes.length > 1)
+        while (!Array.isArray(args[0])) id = args.shift(), immed.push(...uleb(id[0][0] === '$' ? blocks.length - blocks[id] : id))
+        immed.unshift(...uleb(immed.length - 1))
       }
 
       // NOTE: then and other fake instructions do nothing
@@ -272,14 +260,13 @@ const build = {
 
       // if group (cmd im1 im2 arg1 arg2) - insert any remaining args first: arg1 arg2
       // because inline case has them in stack already
-      if (Array.isArray(op)) {
-        while (immeds.length) consume(immeds, out)
-        if (block) consume(['end'], out) // (block ...) -> block ... end
+      if (group) {
+        while (args.length) consume(args, out)
       }
 
-      // ignore (then) and other absent instructions
+      // ignore (then) and other unknown instructions
       if (opCode >= 0) out.push(opCode)
-      if (args) out.push(...args)
+      if (immed) out.push(...immed)
 
       // tail-call if nodes have any remaining (inline) instructions
       return consume(nodes, out)
@@ -288,8 +275,9 @@ const build = {
     // evaluates after all definitions (need globals, elements, data etc.)
     // FIXME: get rid of this postcall
     return () => {
-      console.log(...body)
+      // console.log(...body)
       const bytes = consume(body)
+      // console.log(bytes)
       ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, OP_END])
     }
   },
@@ -380,8 +368,8 @@ const build = {
 
 // (i32.const 0) - instantiation time initializer
 const iinit = ([op, literal], ctx) => op[0] === 'f' ?
-  [OP[op], ...(op[1] === '3' ? f32 : f64)(literal), OP_END] :
-  [OP[op], ...(op[1] === '3' ? leb : bigleb)(literal[0] === '$' ? ctx.global[literal] : literal), OP_END]
+  [op[1] === '3' ? OP_F32_CONST : OP_F64_CONST, ...(op[1] === '3' ? f32 : f64)(literal), OP_END] :
+  [op[1] === '3' ? OP_I32_CONST : OP_I64_CONST, ...(op[1] === '3' ? leb : bigleb)(literal[0] === '$' ? ctx.global[literal] : literal), OP_END]
 
 const escape = { n: 10, r: 13, t: 9, v: 1 }
 
