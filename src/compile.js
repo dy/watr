@@ -188,17 +188,23 @@ const build = {
         let [, type] = args[0][0] === 'result' ? args.shift() : [, 'void']
         immed = [TYPE[type]] // FIXME: what if that's multiple values return?
 
-        // (if ... (then) (else)) -> `... if ... else ... end`
         if (group) {
           nodes.unshift('end')
-          if (args[args.length - 1][0] === 'else') nodes.unshift(args.pop())
-          if (args[args.length - 1][0] === 'then') nodes.unshift(args.pop())
+          // (if cond a) -> cond if a end
+          if (args.length < 3) nodes.unshift(args.pop())
+          // (if cond (then a) (else b)) -> `cond if a else b end`
+          else {
+            nodes.unshift(args.pop())
+            // (if cond a b) -> (if cond a else b)
+            if (nodes[0][0] !== 'else') nodes.unshift('else')
+            // (if a b (else)) -> (if a b)
+            else if (nodes[0].length < 2) nodes.shift()
+            nodes.unshift(args.pop())
+          }
         }
       }
       // (else)
       else if (opCode === 5) {
-        // ignore empty else
-        if (!args.length && nodes[0] === 'end') return
         // (else xxx) -> else xxx
         if (group) while (args.length) nodes.unshift(args.pop())
       }

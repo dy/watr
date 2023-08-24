@@ -1124,6 +1124,21 @@ t('case: double inline block', () => {
   run(src)
 })
 
+t('case: inline if', () => {
+  // equiv to (if (result x) a (then b))
+  let src2 = `(func (if (result i32) (i32.const 1) (i32.const 2)))`
+  is(compile(parse(src2)), wat2wasm(src2).buffer)
+
+  // equiv to (if (result x) a (then b)(else c))
+  let src = `(func (if (result i32) (i32.const 1) (i32.const 2) (i32.const 3)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t.todo('feature: multiple results', () => {
+  let src = `(func (if (result i32) (i32.const 1) (i32.const 2) (i32.const 3)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
 // examples
 t('example: wat-compiler', async () => {
   await runExample('/test/example/malloc.wat')
@@ -1154,7 +1169,8 @@ t('example: legacy', async () => {
 
 
 // bench
-t.only('bench: brownian', async () => {
+t.skip('bench: brownian', async () => {
+  // example.ts
   let src = await file('/test/example/brownian.wat')
   // let src = `(func $dummy)
   //   (func (export "foo") (param i32) (result i32)
