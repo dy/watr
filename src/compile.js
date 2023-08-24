@@ -68,7 +68,7 @@ const build = {
   // FIXME: handle non-function types
   type([, typeName, [kind, ...sig]], ctx) {
     if (kind !== 'func') err(`Unknown type kind '${kind}'`)
-    const [idx] = parseType(sig, ctx)
+    const [idx] = consumeType(sig, ctx)
     if (typeName) ctx.type[typeName] = idx
   },
 
@@ -84,7 +84,7 @@ const build = {
     if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', ctx.func.length]], ctx)
 
     // register/consume type info
-    let [typeIdx, params, result] = parseType(body, ctx)
+    let [typeIdx, params, result] = consumeType(body, ctx)
 
     // register new function
     ctx.func.push([typeIdx])
@@ -161,16 +161,36 @@ const build = {
         immed = [0]
       }
 
-      // (if (result i32)? (local.get 0) (then a b) (argse a b)?)
-      else if (opCode == 4) {
+      // (if ...), (block ...), (loop ...)
+      else if (opCode > 1 && opCode < 5) {
         blocks.push(opCode)
-        let [, type] = args[0][0] === 'result' ? args.shift() : [, 'void']
-        immed = [TYPE[type]] // FIXME: what if that's multiple values return?
+
+        // (block $x) (loop $y)
+        if (opCode < 4 && args[0]?.[0] === '$') (blocks[args.shift()] = blocks.length)
+
+        // get type
+        // (result i32)
+        if (args[0]?.[0] === 'result') {
+          if (args[0].length < 3) {
+            let [, type] = args.shift()
+            immed = [TYPE[type]]
+          }
+          // (result i32 i32)
+          else {
+            let [typeId] = consumeType(args, ctx)
+            immed = [typeId]
+          }
+        }
+        else immed = [TYPE.void]
 
         if (group) {
           nodes.unshift('end')
+
+          // (block xxx) -> block xxx end
+          if (opCode < 4) while (args.length) nodes.unshift(args.pop())
+
           // (if cond a) -> cond if a end
-          if (args.length < 3) nodes.unshift(args.pop())
+          else if (args.length < 3) nodes.unshift(args.pop())
           // (if cond (then a) (else b)) -> `cond if a else b end`
           else {
             nodes.unshift(args.pop())
@@ -182,23 +202,11 @@ const build = {
           }
         }
       }
+
       // (else)
       else if (opCode === 5) {
         // (else xxx) -> else xxx
         if (group) while (args.length) nodes.unshift(args.pop())
-      }
-
-      // (block ...), (loop ...)
-      else if (opCode == 2 || opCode == 3) {
-        blocks.push(opCode)
-        if (args[0]?.[0] === '$') (blocks[args.shift()] = blocks.length)
-        let [, type] = args[0]?.[0] === 'result' ? args.shift() : [, 'void']
-        immed = [TYPE[type]]
-        // (block xxx) -> block xxx end
-        if (group) {
-          nodes.unshift('end')
-          while (args.length) nodes.unshift(args.pop())
-        }
       }
 
       // (end)
@@ -289,7 +297,7 @@ const build = {
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
       if (name) ctx.func[name] = ctx.func.length
-      let [typeIdx] = parseType(parts, ctx)
+      let [typeIdx] = consumeType(parts, ctx)
       ctx.func.push(details = uleb(typeIdx))
       ctx.func.importc = (ctx.func.importc || 0) + 1
     }
@@ -349,7 +357,7 @@ const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] :
 // get type info from (params) (result) nodes sequence (consumes nodes)
 // returns registered (reused) type idx, params bytes, result bytes
 // eg. (type $return_i32 (func (result i32)))
-const parseType = (nodes, ctx) => {
+const consumeType = (nodes, ctx) => {
   let params = [], result = [], idx, bytes
 
   // collect params

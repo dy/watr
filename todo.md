@@ -17,6 +17,8 @@
 * [x] Recognize all number formats
 * [x] Format function
 * [x] Refactor for flat instructions: consume into stack, rather than fixed signatures
+* [x] Multiple results: block, if, loop, func
+* [ ] Multiple params
 * [ ] Floating hex
 * [ ] Official test suite https://github.com/WebAssembly/testsuite
 * [ ] Compiler: Externref types;
