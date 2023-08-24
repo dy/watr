@@ -2,8 +2,7 @@
 
 > Bare minimum wasm text parser, compiler, formatter.
 
-Compiler is useful for hi-level languages ([auro](https://github.com/audio-lab/auro)) or dynamic (in-browser?) compilation. It's
-light & fast alternative for [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).<br>
+Compiler is alternative for [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js), useful for hi-level languages (eg. [auro](https://github.com/audio-lab/auro)) or dynamic (in-browser?) compilation.<br>
 Formatter is useful to pretty-print or minify WAT code.
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
