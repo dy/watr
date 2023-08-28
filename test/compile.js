@@ -1134,6 +1134,17 @@ t('case: inline if', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
+t('case: block/loop params', () => {
+  let src = `(func (block (param i32) (i32.const 1)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  let src2 = `(func (block (param i32 i32) (result i32 i32) (i32.const 1)))`
+  is(compile(parse(src2)), wat2wasm(src2).buffer)
+
+  let src3 = `(func (loop (param i32 i32) (result i32 i32) (i32.const 1)))`
+  is(compile(parse(src3)), wat2wasm(src3).buffer)
+})
+
 t('feature: multiple results', () => {
   let src = `(func (block (result i32 i32) (i32.const 1) (i32.const 2)))`
   is(compile(parse(src)), wat2wasm(src).buffer)
@@ -1149,14 +1160,6 @@ t('feature: multiple results', () => {
 
   let src5 = `(func (if (result i32 i32 i32) (i32.const 0)(i32.const 1)(i32.const 2)))`
   is(compile(parse(src5)), wat2wasm(src5).buffer)
-})
-
-t.todo('feature: multiple block params', () => {
-  let src = `(func (block (result i32 i32) (i32.const 1) (i32.const 2)))`
-  is(compile(parse(src)), wat2wasm(src).buffer)
-
-  let src2 = `(func (block (result f32 f64) (i32.const 1) (i32.const 2)))`
-  is(compile(parse(src2)), wat2wasm(src2).buffer)
 })
 
 

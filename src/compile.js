@@ -161,32 +161,32 @@ const build = {
         immed = [0]
       }
 
-      // (if ...), (block ...), (loop ...)
-      else if (opCode > 1 && opCode < 5) {
+      // (block ...), (loop ...), (if ...)
+      else if (opCode === 2 || opCode === 3 || opCode === 4) {
         blocks.push(opCode)
 
         // (block $x) (loop $y)
         if (opCode < 4 && args[0]?.[0] === '$') (blocks[args.shift()] = blocks.length)
 
         // get type
-        // (result i32)
-        if (args[0]?.[0] === 'result') {
-          if (args[0].length < 3) {
-            let [, type] = args.shift()
-            immed = [TYPE[type]]
-          }
-          // (result i32 i32)
-          else {
-            let [typeId] = consumeType(args, ctx)
-            immed = [typeId]
-          }
+        // (result i32) - doesn't require registering type
+        if (args[0]?.[0] === 'result' && args[0].length < 3) {
+          let [, type] = args.shift()
+          immed = [TYPE[type]]
         }
-        else immed = [TYPE.void]
+        // (result i32 i32)
+        else if (args[0]?.[0] === 'result' || args[0]?.[0] === 'param') {
+          let [typeId] = consumeType(args, ctx)
+          immed = [typeId]
+        }
+        else {
+          immed = [TYPE.void]
+        }
 
         if (group) {
+          // (block xxx) -> block xxx end
           nodes.unshift('end')
 
-          // (block xxx) -> block xxx end
           if (opCode < 4) while (args.length) nodes.unshift(args.pop())
 
           // (if cond a) -> cond if a end
