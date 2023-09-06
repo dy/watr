@@ -1,8 +1,6 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr)
 
-> Bare minimum wasm text compiler & formatter.
-
-Light & fast alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js), useful for hi-level languages or dynamic (in-browser) compilation.<br>
+Bare minimum wasm text compiler & formatter. Light & fast alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js). Useful for hi-level languages or dynamic (in-browser) compilation.<br>
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
@@ -101,12 +99,15 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 
 No floating HEX support, eg. `(f32.const 0x1.fffffep+127)`.
 
+<!--
 ## Projects using watr
 
 * [auro](https://github.com/audio-lab/auro) – audio processing language
+-->
 
 ## Useful links
 
+* [watlings](https://github.com/EmNudge/watlings) – learn Wasm text by examples.
 * [MDN: control flow](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/Control_flow)
 * [WASM reference manual](https://github.com/sunfishcode/wasm-reference-manual/blob/master/WebAssembly.md#loop)
 * [WASM binary encoding](https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md)
