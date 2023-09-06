@@ -18,7 +18,8 @@
 * [x] Format function
 * [x] Refactor for flat instructions: consume into stack, rather than fixed signatures
 * [x] Multiple results: block, if, loop, func
-* [ ] Multiple params
+* [x] Multiple params
+* [ ] Tests: https://github.com/EmNudge/watlings
 * [ ] Floating hex
 * [ ] Official test suite https://github.com/WebAssembly/testsuite
 * [ ] Compiler: Externref types;
