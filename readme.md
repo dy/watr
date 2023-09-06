@@ -1,6 +1,7 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr)
 
-Bare minimum wasm text compiler & formatter. Light & fast alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js). Useful for hi-level languages or dynamic (in-browser) compilation.<br>
+Bare minimum wasm text compiler & formatter, light & fast alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js).<br/>
+Useful for hi-level languages or dynamic (in-browser) compilation.<br>
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
