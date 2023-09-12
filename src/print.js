@@ -2,6 +2,15 @@ import parse from './parse.js';
 
 let indent = '', newline = '\n'
 
+/**
+ * Formats a tree or a WAT string.
+ *
+ * @param {string | Array} tree - The code to print. If a string is provided, it will be parsed first.
+ * @param {Object} [options] - Printing options.
+ * @param {string} [options.indent='  '] - The string used for one level of indentation.
+ * @param {string} [options.newline='\n'] - The string used for line breaks.
+ * @returns {string} The formatted WAT string.
+ */
 export default function print(tree, options = {}) {
   if (typeof tree === 'string') tree = parse(tree);
 

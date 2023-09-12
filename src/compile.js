@@ -4,7 +4,12 @@ import parse from './parse.js'
 
 const OP_END = 0xb, OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44
 
-// convert wat tree to wasm binary
+/**
+ * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (Wasm).
+ *
+ * @param {string|Array} nodes - The WAT tree or string to be compiled to Wasm binary.
+ * @returns {Uint8Array} The compiled Wasm binary data.
+ */
 export default (nodes) => {
   if (typeof nodes === 'string') nodes = parse(nodes);
 
