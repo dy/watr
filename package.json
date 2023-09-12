@@ -18,7 +18,9 @@
     "url": "git+https://github.com/audio-lab/watr.git"
   },
   "files": [
-    "src"
+    "src",
+    "watr.js",
+    "watr.d.ts"
   ],
   "keywords": [
     "wat",
