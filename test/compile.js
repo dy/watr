@@ -889,6 +889,7 @@ t('wat-compiler: float literals', () => {
     (func (export "f64.max_subnormal") (result i64) (i64.reinterpret_f64 (f64.const 0x0.fffffffffffffp-1022)))
     (func (export "f64.max_finite") (result i64) (i64.reinterpret_f64 (f64.const 0x1.fffffffffffffp+1023)))
     (func (export "f64.trailing_dot") (result i64) (i64.reinterpret_f64 (f64.const 0x1.p100)))
+    (func (export "f64.minus") (result i64) (i64.reinterpret_f64 (f64.const -0x1.7f00a2d80faabp-35)))
 
     (func (export "f32-dec-sep1") (result f32) (f32.const 1_000_000))
     (func (export "f32-dec-sep2") (result f32) (f32.const 1_0_0_0))
@@ -1151,7 +1152,7 @@ t('case: data content', () => {
 })
 
 t('case: float hex', () => {
-  let src = `(func (f64.const 0x1p+0))`
+  let src = `(func (f64.const 0x1p+0) (f64.const -0x1.7f00a2d80faabp-35))`
 
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
