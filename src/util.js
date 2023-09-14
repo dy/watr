@@ -57,10 +57,9 @@ const flt = input => {
   input = input.replaceAll('_', '')
 
   // 0x1.5p3
-  if (/^[+-]?0x/.test(input)) {
-    let sign = input[0] === '-' ? (input = input.slice(1), -1) : 1,
-      [sig, exp] = input.split(/p/i), [dec, fract] = sig.split('.')
-    sig = parseInt(dec) + (fract ? parseInt(fract, 16) / (16 ** fract.length) : 0)
+  if (input.includes('0x')) {
+    let [sig, exp] = input.split(/p/i), [dec, fract] = sig.split('.'), sign = dec[0] === '-' ? -1 : 1
+    sig = parseInt(dec) * sign + (fract ? parseInt(fract, 16) / (16 ** fract.length) : 0)
     return sign * (exp ? sig * 2 ** parseInt(exp, 10) : sig);
   }
 
