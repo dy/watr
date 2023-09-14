@@ -1145,6 +1145,14 @@ t('case: block/loop params', () => {
   is(compile(parse(src3)), wat2wasm(src3).buffer)
 })
 
+t('case: data content', () => {
+  let src = `
+    (data (i32.const 0) "\\\\")
+  `
+
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
 t('feature: multiple results', () => {
   let src = `(func (block (result i32 i32) (i32.const 1) (i32.const 2)))`
   is(compile(parse(src)), wat2wasm(src).buffer)
