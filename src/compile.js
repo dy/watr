@@ -122,7 +122,7 @@ const build = {
       // NOTE: numeric comparison is faster than generic hash lookup
 
       // binary/unary - just consume immed
-      if (opCode >= 69) { }
+      if (opCode >= 69 && opCode <= 252) { }
 
       // (i32.store align=n offset=m at value)
       else if (opCode >= 40 && opCode <= 62) {
@@ -237,8 +237,20 @@ const build = {
         while (args.length) consume(args, out)
       }
 
-      // ignore (then) and other unknown instructions
-      if (opCode >= 0) out.push(opCode)
+      // ignore (then) and other unknown (-1) instructions
+      if (opCode >= 0) {
+        // bulk memory: (memory.init) (memory.copy) etc
+        // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
+        if (opCode >= 252) {
+          opCode %= 252
+          out.push(0xfc)
+          immed = [0]
+          // even opCodes (memory.init, memory.copy, table.init, table.copy) have 2 immediates
+          if (!(opCode % 2)) immed.push(0)
+        }
+
+        out.push(opCode)
+      }
       if (immed) out.push(...immed)
     }
 

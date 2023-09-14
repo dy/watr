@@ -96,9 +96,15 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 // ]
 ```
 
-## Limitations
+## Status
 
-No floating HEX support, eg. `(f32.const 0x1.fffffep+127)`.
+* [x] wasm core
+* [ ] floating HEX support, eg. `(f32.const 0x1.fffffep+127)`.
+* [x] multiple values
+* [x] bulk memory ops (0 index)
+* [ ] func/ref types
+* [ ] multiple memories
+
 
 <!--
 ## Projects using watr

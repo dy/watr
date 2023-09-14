@@ -1162,6 +1162,15 @@ t('feature: multiple results', () => {
   is(compile(parse(src5)), wat2wasm(src5).buffer)
 })
 
+t('feature: bulk memory', () => {
+  let src = `(func $x (result f64)
+    (memory.copy (local.get 0)(i32.const 0)(i32.const 16))
+    (memory.fill (local.get 0)(i32.const 0)(i32.const 16))
+    (memory.init 0 (local.get 0)(i32.const 0)(i32.const 16))
+  )`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
 
 // examples
 t('example: wat-compiler', async () => {
@@ -1255,13 +1264,15 @@ const hex = (str, ...fields) =>
 // convert wast code to binary via Wabt
 export function wat2wasm(code, config) {
   let metrics = config ? config.metrics : true
-  const parsed = wabt.parseWat('inline', code, {})
+  const parsed = wabt.parseWat('inline', code, {
+    bulk_memory: true
+  })
   // metrics && console.time('wabt build')
   const binary = parsed.toBinary({
     log: true,
     canonicalize_lebs: true,
     relocatable: false,
-    write_debug_names: false,
+    write_debug_names: false
   })
   parsed.destroy()
   // metrics && console.timeEnd('wabt build')
