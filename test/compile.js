@@ -812,7 +812,7 @@ t('wat-compiler: int literals', () => {
   run(src)
 })
 
-t('wat-compiler: float literals', () => {
+t.only('wat-compiler: float literals', () => {
   let src = `
     ;; f32 in decimal format
     (func (export "f32_dec.zero") (result i32) (i32.reinterpret_f32 (f32.const 0.0e0)))
@@ -856,7 +856,7 @@ t('wat-compiler: float literals', () => {
     (func (export "f32.positive_infinity") (result i32) (i32.reinterpret_f32 (f32.const +inf)))
     (func (export "f32.negative_infinity") (result i32) (i32.reinterpret_f32 (f32.const -inf)))
     ;; f32 numbers
-    (;func (export "f32.zero") (result i32) (i32.reinterpret_f32 (f32.const 0x0.0p0)))
+    (func (export "f32.zero") (result i32) (i32.reinterpret_f32 (f32.const 0x0.0p0)))
     (func (export "f32.positive_zero") (result i32) (i32.reinterpret_f32 (f32.const +0x0.0p0)))
     (func (export "f32.negative_zero") (result i32) (i32.reinterpret_f32 (f32.const -0x0.0p0)))
     (func (export "f32.misc") (result i32) (i32.reinterpret_f32 (f32.const 0x1.921fb6p+2)))
@@ -864,7 +864,7 @@ t('wat-compiler: float literals', () => {
     (func (export "f32.min_normal") (result i32) (i32.reinterpret_f32 (f32.const 0x1p-126)))
     (func (export "f32.max_finite") (result i32) (i32.reinterpret_f32 (f32.const 0x1.fffffep+127)))
     (func (export "f32.max_subnormal") (result i32) (i32.reinterpret_f32 (f32.const 0x1.fffffcp-127)))
-    (func (export "f32.trailing_dot") (result i32) (i32.reinterpret_f32 (f32.const 0x1.p10));)
+    (func (export "f32.trailing_dot") (result i32) (i32.reinterpret_f32 (f32.const 0x1.p10)))
 
     ;; f64 special values
     (func (export "f64.nan") (result i64) (i64.reinterpret_f64 (f64.const nan)))
@@ -880,7 +880,7 @@ t('wat-compiler: float literals', () => {
     (func (export "f64.positive_infinity") (result i64) (i64.reinterpret_f64 (f64.const +inf)))
     (func (export "f64.negative_infinity") (result i64) (i64.reinterpret_f64 (f64.const -inf)))
     ;; f64 numbers
-    (;func (export "f64.zero") (result i64) (i64.reinterpret_f64 (f64.const 0x0.0p0)))
+    (func (export "f64.zero") (result i64) (i64.reinterpret_f64 (f64.const 0x0.0p0)))
     (func (export "f64.positive_zero") (result i64) (i64.reinterpret_f64 (f64.const +0x0.0p0)))
     (func (export "f64.negative_zero") (result i64) (i64.reinterpret_f64 (f64.const -0x0.0p0)))
     (func (export "f64.misc") (result i64) (i64.reinterpret_f64 (f64.const 0x1.921fb54442d18p+2)))
@@ -888,7 +888,7 @@ t('wat-compiler: float literals', () => {
     (func (export "f64.min_normal") (result i64) (i64.reinterpret_f64 (f64.const 0x1p-1022)))
     (func (export "f64.max_subnormal") (result i64) (i64.reinterpret_f64 (f64.const 0x0.fffffffffffffp-1022)))
     (func (export "f64.max_finite") (result i64) (i64.reinterpret_f64 (f64.const 0x1.fffffffffffffp+1023)))
-    (func (export "f64.trailing_dot") (result i64) (i64.reinterpret_f64 (f64.const 0x1.p100));)
+    (func (export "f64.trailing_dot") (result i64) (i64.reinterpret_f64 (f64.const 0x1.p100)))
 
     (func (export "f32-dec-sep1") (result f32) (f32.const 1_000_000))
     (func (export "f32-dec-sep2") (result f32) (f32.const 1_0_0_0))
@@ -1146,9 +1146,12 @@ t('case: block/loop params', () => {
 })
 
 t('case: data content', () => {
-  let src = `
-    (data (i32.const 0) "\\\\")
-  `
+  let src = `(data (i32.const 0) "\\00\\n\\\\")`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t('case: float hex', () => {
+  let src = `(func (f64.const 0x1p+0))`
 
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
