@@ -1,16 +1,16 @@
 // encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
-export const uleb = (number, buffer = []) => {
-  if (typeof number === 'string') number = parseInt(number.replaceAll('_', ''))
+export const uleb = (n, buffer = []) => {
+  if (typeof n === 'string') n = parseInt(n.replaceAll('_', ''))
 
-  let byte = number & 0b01111111;
-  number = number >>> 7;
+  let byte = n & 0b01111111;
+  n = n >>> 7;
 
-  if (number === 0) {
+  if (n === 0) {
     buffer.push(byte);
     return buffer;
   } else {
     buffer.push(byte | 0b10000000);
-    return uleb(number, buffer);
+    return uleb(n, buffer);
   }
 }
 
@@ -54,17 +54,16 @@ const flt = input => {
   if (input.includes('nan')) return input[0] === '-' ? -NaN : NaN;
   if (input.includes('inf')) return input[0] === '-' ? -Infinity : Infinity;
 
+  input = input.replaceAll('_', '')
+
   // 0x1.5p3
   if (input.startsWith('0x')) {
-    const [sig, exp] = input.split('p'), parts = sig.split('.');
-    return (
-      parts.length > 1 ?
-        parseInt(parts[0], 16) + parseInt(parts[1] ||= '0', 16) / (16 ** parts[1].length) :
-        parseInt(parts[0], 16)
-    ) * 2 ** parseInt(exp, 10);
+    let [sig, exp] = input.split(/p/i), [dec, fract] = sig.split('.');
+    sig = parseInt(dec) + (fract ? parseInt(fract, 16) / (16 ** fract.length) : 0)
+    return exp ? sig * 2 ** parseInt(exp, 10) : sig;
   }
 
-  return parseFloat(input.replaceAll('_', ''))
+  return parseFloat(input)
 }
 
 

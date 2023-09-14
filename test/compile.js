@@ -812,7 +812,7 @@ t('wat-compiler: int literals', () => {
   run(src)
 })
 
-t.only('wat-compiler: float literals', () => {
+t('wat-compiler: float literals', () => {
   let src = `
     ;; f32 in decimal format
     (func (export "f32_dec.zero") (result i32) (i32.reinterpret_f32 (f32.const 0.0e0)))
@@ -900,7 +900,7 @@ t.only('wat-compiler: float literals', () => {
     (func (export "f64-dec-sep3") (result f64) (f64.const 100_3.141_592))
     (func (export "f64-dec-sep4") (result f64) (f64.const 99e-1_23))
     (func (export "f64-dec-sep5") (result f64) (f64.const 122_000.11_3_54e0_2_3))
-    (;func (export "f32-hex-sep1") (result f32) (f32.const 0xa_0f_00_99))
+    (func (export "f32-hex-sep1") (result f32) (f32.const 0xa_0f_00_99))
     (func (export "f32-hex-sep2") (result f32) (f32.const 0x1_a_A_0_f))
     (func (export "f32-hex-sep3") (result f32) (f32.const 0xa0_ff.f141_a59a))
     (func (export "f32-hex-sep4") (result f32) (f32.const 0xf0P+1_3))
@@ -909,7 +909,7 @@ t.only('wat-compiler: float literals', () => {
     (func (export "f64-hex-sep2") (result f64) (f64.const 0x1_a_A_0_f))
     (func (export "f64-hex-sep3") (result f64) (f64.const 0xa0_ff.f141_a59a))
     (func (export "f64-hex-sep4") (result f64) (f64.const 0xf0P+1_3))
-    (func (export "f64-hex-sep5") (result f64) (f64.const 0x2a_f00a.1f_3_eep2_3);)`
+    (func (export "f64-hex-sep5") (result f64) (f64.const 0x2a_f00a.1f_3_eep2_3))`
 
   run(special)
 })

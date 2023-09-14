@@ -7,7 +7,7 @@ Useful for hi-level languages or dynamic (in-browser) compilation.<br>
 
 &nbsp; | Size (gzipped) | Performance (op/s)
 ---|---|---
-watr | 3.8 kb | 6250
+watr | 3.8 kb | 6000
 [wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 348
 [wabt](https://github.com/AssemblyScript/wabt.js) | 300 kb | 574
 
