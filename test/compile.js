@@ -1157,6 +1157,18 @@ t('case: float hex', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
+t('case: i32.shr', () => {
+  let src = `(func (i32.shl (i32.const 0) (i32.const 1)))`
+
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t('case: error on unknown instruction', () => {
+  throws(() => {
+    compile(parse(`(func (i32.shr (i32.const 0) (i32.const 1)) (xxx))`))
+  }, /i32.shr/)
+})
+
 t('feature: multiple results', () => {
   let src = `(func (block (result i32 i32) (i32.const 1) (i32.const 2)))`
   is(compile(parse(src)), wat2wasm(src).buffer)

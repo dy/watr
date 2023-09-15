@@ -1,7 +1,7 @@
 // ref: https://github.com/stagas/wat-compiler/blob/main/lib/const.js
 // NOTE: squashing into a string doesn't save up gzipped size
 export const OP = [
-  'unreachable', 'nop', 'block', 'loop', 'if', 'else', , , , , ,
+  'unreachable', 'nop', 'block', 'loop', 'if', 'else', 'then', , , , ,
   'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', , , , , , , , ,
   'drop', 'select', , , , ,
   'local.get', 'local.set', 'local.tee', 'global.get', 'global.set', , , ,
@@ -25,7 +25,8 @@ export const OP = [
   'i64.trunc_f32_s', 'i64.trunc_f32_u', 'i64.trunc_f64_s', 'i64.trunc_f64_u',
   'f32.convert_i32_s', 'f32.convert_i32_u', 'f32.convert_i64_s', 'f32.convert_i64_u', 'f32.demote_f64',
   'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
-  'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64', , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , 'memory.init', 'data.drop', 'memory.copy', 'memory.fill', 'table.init', 'elem.drop', 'table.copy'
+  'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64', , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
+  'memory.init', 'data.drop', 'memory.copy', 'memory.fill', 'table.init', 'elem.drop', 'table.copy'
 ],
   SECTION = { type: 1, import: 2, func: 3, table: 4, memory: 5, global: 6, export: 7, start: 8, elem: 9, code: 10, data: 11 },
   TYPE = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, func: 0x60, funcref: 0x70 },

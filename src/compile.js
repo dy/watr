@@ -2,7 +2,7 @@ import { uleb, leb, bigleb, f64, f32 } from './util.js'
 import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
 import parse from './parse.js'
 
-const OP_END = 0xb, OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44
+const OP_END = 0xb, OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44, OP_SKIP = 0x6
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (Wasm).
@@ -121,8 +121,21 @@ const build = {
 
       // NOTE: numeric comparison is faster than generic hash lookup
 
+
+      // bulk memory: (memory.init) (memory.copy) etc
+      // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
+      if (opCode >= 252) {
+        immed = [0xfc, opCode %= 252]
+        // memory.init idx, memory.drop idx, table.init idx, table.drop idx
+        if (!(opCode & 0b10)) immed.push(...uleb(args.shift()))
+        else immed.push(0)
+        // even opCodes (memory.init, memory.copy, table.init, table.copy) have 2nd predefined immediate
+        if (!(opCode & 0b1)) immed.push(0)
+        opCode = null // ignore opcode
+      }
+
       // binary/unary - just consume immed
-      if (opCode >= 69 && opCode <= 252) { }
+      else if (opCode >= 69) { }
 
       // (i32.store align=n offset=m at value)
       else if (opCode >= 40 && opCode <= 62) {
@@ -161,7 +174,7 @@ const build = {
         immed = uleb(typeId), immed.push(0) // extra immediate indicates table idx (reserved)
       }
 
-      // FIXME (memory.grow $idx?)
+      // FIXME multiple memory (memory.grow $idx?)
       else if (opCode == 63 || opCode == 64) {
         immed = [0]
       }
@@ -213,6 +226,10 @@ const build = {
         // (else xxx) -> else xxx
         if (group) while (args.length) nodes.unshift(args.pop())
       }
+      // (then)
+      else if (opCode === 6) {
+        opCode = null // ignore opcode
+      }
 
       // (end)
       else if (opCode == 0x0b) blocks.pop()
@@ -230,6 +247,7 @@ const build = {
         while (!Array.isArray(args[0])) id = args.shift(), immed.push(...uleb(id[0][0] === '$' ? blocks.length - blocks[id] : id))
         immed.unshift(...uleb(immed.length - 1))
       }
+      else if (opCode < 0) err(`Unknown instruction \`${op}\``)
 
       // if group (cmd im1 im2 arg1 arg2) - insert any remaining args first: arg1 arg2
       // because inline case has them in stack already
@@ -237,20 +255,7 @@ const build = {
         while (args.length) consume(args, out)
       }
 
-      // ignore (then) and other unknown (-1) instructions
-      if (opCode >= 0) {
-        // bulk memory: (memory.init) (memory.copy) etc
-        // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
-        if (opCode >= 252) {
-          opCode %= 252
-          out.push(0xfc)
-          immed = [0]
-          // even opCodes (memory.init, memory.copy, table.init, table.copy) have 2 immediates
-          if (!(opCode % 2)) immed.push(0)
-        }
-
-        out.push(opCode)
-      }
+      if (opCode) out.push(opCode)
       if (immed) out.push(...immed)
     }
 
