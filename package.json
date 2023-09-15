@@ -1,6 +1,6 @@
 {
   "name": "watr",
-  "version": "2.2.4",
+  "version": "2.2.5",
   "description": "Ligth & fast WAT compiler",
   "main": "watr.js",
   "exports": {
