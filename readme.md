@@ -102,8 +102,9 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 * [x] wasm core
 * [x] multiple values
 * [x] bulk memory ops (0 index)
-* [ ] func/ref types
+* [ ] simd
 * [ ] multiple memories
+* [ ] func/ref types
 
 
 <!--

@@ -2,7 +2,7 @@ import { uleb, leb, bigleb, f64, f32 } from './util.js'
 import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
 import parse from './parse.js'
 
-const OP_END = 0xb, OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44, OP_SKIP = 0x6
+const OP_END = 0xb, OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44, OP_SKIP = 0x6, OP_GLOBAL_GET = 35, OP_GLOBAL_SET = 36
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (Wasm).
@@ -156,7 +156,7 @@ const build = {
       }
 
       // (global.get id), (global.set id)
-      else if (opCode == 35 || opCode == 36) {
+      else if (opCode == OP_GLOBAL_GET || opCode == OP_GLOBAL_SET) {
         immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] : args.shift())
       }
 
@@ -341,8 +341,17 @@ const build = {
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
-  data([, offset, ...inits], ctx) {
-    if (offset[0] === 'offset') [, offset] = offset
+  // (data (offset (i32.const 0)) (memory ref) "\aa" "\bb"?)
+  // (data (global.get $x) "\aa" "\bb"?)
+  data([, ...inits], ctx) {
+    let offset, mem
+
+    if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
+    if (inits[0]?.[0] === 'memory') [, mem] = inits.shift()
+    if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
+    if (!offset && !mem) offset = inits.shift()
+    if (!offset) offset = ['i32.const', 0]
+
     ctx.data.push([0, ...iinit(offset, ctx), ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
   },
 
@@ -352,13 +361,14 @@ const build = {
   }
 }
 
-// (i32.const 0) - instantiation time initializer
+// (i32.const 0), (global.get idx) - instantiation time initializer
 const iinit = ([op, literal], ctx) =>
   op === 'f32.const' ? [OP_F32_CONST, ...f32(literal), OP_END] :
     op === 'f64.const' ? [OP_F64_CONST, ...f64(literal), OP_END] :
-      op === 'i32.const' ? [OP_I32_CONST, ...leb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
-        op === 'i64.const' ? [OP_I64_CONST, ...bigleb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
-          err(`Unknown init ${op} ${literal}`)
+      op === 'i32.const' ? [OP_I32_CONST, ...leb(literal), OP_END] :
+        op === 'i64.const' ? [OP_I64_CONST, ...bigleb(literal), OP_END] :
+          op === 'global.get' ? [OP_GLOBAL_GET, ...uleb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
+            err(`Unknown init ${op} ${literal}`)
 
 const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
 

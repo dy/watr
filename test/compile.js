@@ -1156,6 +1156,43 @@ t('case: data offset', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
+t('case: data full cases', () => {
+  // ref: https://github.com/WebAssembly/simd/blob/master/test/core/data.wast
+  let src = `
+  (global $a i32 (i32.const 1))
+  (global $b i32 (i32.const 1))
+  (data (i32.const 0))
+  (data (i32.const 1) "a" "" "bcd")
+  (data (i32.const 0x1_0000) "")
+  (data (offset (i32.const 0)))
+  (data (offset (i32.const 0)) "" "a" "bc" "")
+  (data (global.get $a) "a")
+  (data (global.get 1) "bc")
+  ;; (data (memory 0) (i32.const 0))
+  ;; (data (memory 0x0) (i32.const 1) "a" "" "bcd")
+  ;; (data (memory 0x000) (offset (i32.const 0)))
+  ;; (data (memory 0) (offset (i32.const 0)) "" "a" "bc" "")
+  ;; (data (memory $m) (i32.const 0))
+  ;; (data (memory $m) (i32.const 1) "a" "" "bcd")
+  ;; (data (memory $m) (offset (i32.const 0)))
+  ;; (data (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
+  ;; (data $d1 (i32.const 0))
+  ;; (data $d2 (i32.const 1) "a" "" "bcd")
+  ;; (data $d3 (offset (i32.const 0)))
+  ;; (data $d4 (offset (i32.const 0)) "" "a" "bc" "")
+  ;; (data $d5 (memory 0) (i32.const 0))
+  ;; (data $d6 (memory 0x0) (i32.const 1) "a" "" "bcd")
+  ;; (data $d7 (memory 0x000) (offset (i32.const 0)))
+  ;; (data $d8 (memory 0) (offset (i32.const 0)) "" "a" "bc" "")
+  ;; (data $d9 (memory $m) (i32.const 0))
+  ;; (data $d10 (memory $m) (i32.const 1) "a" "" "bcd")
+  ;; (data $d11 (memory $m) (offset (i32.const 0)))
+  ;; (data $d12 (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
+  `
+
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
 t('case: float hex', () => {
   let src = `(func (f64.const 0x1p+0) (f64.const -0x1.7f00a2d80faabp-35))`
 
