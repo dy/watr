@@ -1151,7 +1151,7 @@ t('case: data content', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t.todo('case: data offset', () => {
+t('case: data offset', () => {
   let src = `(data (offset (i32.const 65505)) "\\16\\17\\18\\19\\20\\21\\22\\23\\24\\25\\26\\27\\28\\29\\30\\31")`
   is(compile(parse(src)), wat2wasm(src).buffer)
 })

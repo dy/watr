@@ -342,7 +342,7 @@ const build = {
 
   // (data (i32.const 0) "\aa" "\bb"?)
   data([, offset, ...inits], ctx) {
-    // FIXME: first is mem index
+    if (offset[0] === 'offset') [, offset] = offset
     ctx.data.push([0, ...iinit(offset, ctx), ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
   },
 
@@ -354,11 +354,11 @@ const build = {
 
 // (i32.const 0) - instantiation time initializer
 const iinit = ([op, literal], ctx) =>
-  op.startsWith('f32') ? [OP_F32_CONST, ...f32(literal), OP_END] :
-    op.startsWith('f64') ? [OP_F64_CONST, ...f64(literal), OP_END] :
-      op.startsWith('i32') ? [OP_I32_CONST, ...leb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
-        op.startsWith('i64') ? [OP_I64_CONST, ...bigleb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
-          err('Unknown init')
+  op === 'f32.const' ? [OP_F32_CONST, ...f32(literal), OP_END] :
+    op === 'f64.const' ? [OP_F64_CONST, ...f64(literal), OP_END] :
+      op === 'i32.const' ? [OP_I32_CONST, ...leb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
+        op === 'i64.const' ? [OP_I64_CONST, ...bigleb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
+          err(`Unknown init ${op} ${literal}`)
 
 const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
 
