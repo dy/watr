@@ -83,7 +83,7 @@ t('compile: export mem/func', t => {
   new WebAssembly.Module(buffer)
 })
 
-t('compiler: reexport', () => {
+t('compile: reexport', () => {
   let src = `
     (export "f0" (func 0))
     (export "f1" (func 1))
@@ -98,12 +98,12 @@ t('compiler: reexport', () => {
   is(f1(3, 1), 2)
 })
 
-t('compiler: memory $foo (import "a" "b" ) 1 2 shared', () => {
+t('compile: memory $foo (import "a" "b" ) 1 2 shared', () => {
   let src = `(memory $foo (import "env" "mem") 1 2 shared)`
   run(src, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: 1 }) } })
 })
 
-t('compiler: stacked syntax is supported', () => {
+t('compile: stacked syntax is supported', () => {
   let src = `
     (func (export "add") (param i32 i32) (result i32)
       (local.get 0)
@@ -116,7 +116,7 @@ t('compiler: stacked syntax is supported', () => {
   is(add(3, 1), 4)
 })
 
-t('compiler: inline syntax is supported', () => {
+t('compile: inline syntax is supported', () => {
   let src = `
     (func (export "add") (param i32 i32) (result i32)
       local.get 0
@@ -131,23 +131,23 @@ t('compiler: inline syntax is supported', () => {
 
 
 // wat-compiler
-t('wat-compiler: minimal function', t => {
+t('compile: minimal function', t => {
   run('(module (func (export "answer") (param i32)(result i32) (i32.add (i32.const 42) (local.get 0))))')
   // run(`(module (func (export "x") (param i32)(result i32) local.get 0 i32.const 42 i32.add))`)
 })
 
-t('wat-compiler: function with 1 param', t => {
+t('compile: function with 1 param', t => {
   run('(func (export "answer") (param i32) (result i32) (local.get 0))')
 })
 
-t('wat-compiler: function with 1 param', () => {
+t('compile: function with 1 param', () => {
   let { answer } = run(`
     (func (export "answer") (param i32) (result i32) (local.get 0))
   `).exports
   is(answer(42), 42)
 })
 
-t('wat-compiler: function with 2 params', () => {
+t('compile: function with 2 params', () => {
   let { answer } = run(`
     (func (export "answer") (param i32 i32) (result i32)
       (i32.add (local.get 0) (local.get 1))
@@ -156,7 +156,7 @@ t('wat-compiler: function with 2 params', () => {
   is(answer(20, 22), 42)
 })
 
-t('wat-compiler: function with 2 params 2 results', () => {
+t('compile: function with 2 params 2 results', () => {
   let { answer } = run(`
     (func (export "answer") (param i32 i32) (result i32 i32)
       (i32.add (local.get 0) (local.get 1))
@@ -167,7 +167,7 @@ t('wat-compiler: function with 2 params 2 results', () => {
   is(answer(20, 22), [42, 666])
 })
 
-t('wat-compiler: named function named param', () => {
+t('compile: named function named param', () => {
   let { dbl } = run(`
     (func $dbl (export "dbl") (param $a i32) (result i32)
       (i32.add (local.get $a) (local.get $a))
@@ -177,7 +177,7 @@ t('wat-compiler: named function named param', () => {
   is(dbl(21), 42)
 })
 
-t('wat-compiler: call function direct', () => {
+t('compile: call function direct', () => {
   let { call_function_direct } = run(`
   (func $dbl (param $a i32) (result i32)
     (i32.add (local.get $a) (local.get $a))
@@ -189,7 +189,7 @@ t('wat-compiler: call function direct', () => {
   is(call_function_direct(333), 666)
 })
 
-t('wat-compiler: function param + local', () => {
+t('compile: function param + local', () => {
   let { add } = run(`
     (func (export "add") (param $a i32) (result i32)
       (local $b i32)
@@ -200,7 +200,7 @@ t('wat-compiler: function param + local', () => {
   is(add(22), 42)
 })
 
-t('wat-compiler: call function indirect (table)', () => {
+t('compile: call function indirect (table)', () => {
   let { call_function_indirect } = run(`
     (type $return_i32 (func (result i32)))
     (table 2 funcref)
@@ -218,7 +218,7 @@ t('wat-compiler: call function indirect (table)', () => {
   is(call_function_indirect(1), 13)
 })
 
-t('wat-compiler: call function indirect (table) non zero indexed ref types', () => {
+t('compile: call function indirect (table) non zero indexed ref types', () => {
   let { call_function_indirect } = run(`
     (type $return_i32 (func (result i32)))
     (type $return_i64 (func (result i64)))
@@ -239,7 +239,7 @@ t('wat-compiler: call function indirect (table) non zero indexed ref types', () 
   is(call_function_indirect(1), 13)
 })
 
-t('wat-compiler: 1 global const (immutable)', () => {
+t('compile: 1 global const (immutable)', () => {
   let { get } = run(`
     (global $answer i32 (i32.const 42))
     (func (export "get") (result i32)
@@ -250,7 +250,7 @@ t('wat-compiler: 1 global const (immutable)', () => {
   is(get(), 42)
 })
 
-t('wat-compiler: 1 global var (mut)', () => {
+t('compile: 1 global var (mut)', () => {
   let { get } = run(`
     (global $answer (mut i32) (i32.const 42))
     (func (export "get") (result i32)
@@ -261,7 +261,7 @@ t('wat-compiler: 1 global var (mut)', () => {
   is(get(), 42)
 })
 
-t('wat-compiler: 1 global var (mut) + mutate', () => {
+t('compile: 1 global var (mut) + mutate', () => {
   let { get } = run(`
     (global $answer (mut i32) (i32.const 42))
     (func (export "get") (result i32)
@@ -273,7 +273,7 @@ t('wat-compiler: 1 global var (mut) + mutate', () => {
   is(get(), 777)
 })
 
-t('wat-compiler: memory.grow', () => {
+t('compile: memory.grow', () => {
   run(`
     (memory 1)
     (func (export "main") (result i32)
@@ -282,7 +282,7 @@ t('wat-compiler: memory.grow', () => {
   `)
 })
 
-t('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => {
+t('compile: local memory page min 1 - data 1 offset 0 i32', () => {
   let { get } = run(String.raw`
     (memory 1)
     (data (i32.const 0) "\2a")
@@ -294,7 +294,7 @@ t('wat-compiler: local memory page min 1 - data 1 offset 0 i32', () => {
   is(get(), 42)
 })
 
-t('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
+t('compile: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
   let { get } = run(String.raw`
     (memory 1 2)
     (data (i32.const 0) "\2a")
@@ -308,7 +308,7 @@ t('wat-compiler: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
   is(get(), 42)
 })
 
-t('wat-compiler: import function', () => {
+t('compile: import function', () => {
   let src = `
     (import "math" "add" (func $add (param i32 i32) (result i32)))
     (func (export "call_imported_function") (result i32)
@@ -320,29 +320,29 @@ t('wat-compiler: import function', () => {
   is(call_imported_function(), 42)
 })
 
-t('wat-compiler: import memory 1', () => {
+t('compile: import memory 1', () => {
   run(`
     (import "env" "mem" (memory 1))
   `, { env: { mem: new WebAssembly.Memory({ initial: 1 }) } })
 })
 
-t('wat-compiler: import memory 1 2', () => {
+t('compile: import memory 1 2', () => {
   run(`
     (import "env" "mem" (memory 1 2))
   `, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1 }) } })
 })
 
-t('wat-compiler: import memory 1 2 shared', () => {
+t('compile: import memory 1 2 shared', () => {
   run(`
     (import "env" "mem" (memory 1 2 shared))
   `, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: 1 }) } })
 })
 
-t('wat-compiler: import memory $foo 1 2 shared', () => run(`
+t('compile: import memory $foo 1 2 shared', () => run(`
   (import "env" "mem" (memory $foo 1 2 shared))
 `, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: 1 }) } }))
 
-t('wat-compiler: set a start function', () => {
+t('compile: set a start function', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))
     (start $main)
@@ -358,7 +358,7 @@ t('wat-compiler: set a start function', () => {
   is(get(), 666)
 })
 
-t('wat-compiler: if else', () => {
+t('compile: if else', () => {
   let src1 = `
     (func $dummy)
     (func (export "foo") (param i32) (result i32)
@@ -391,7 +391,7 @@ t('wat-compiler: if else', () => {
   is(foo2(1), 1)
 })
 
-t('wat-compiler: block', () => {
+t('compile: block', () => {
   let src = `
     (func (export "answer") (result i32)
       (block (nop))
@@ -403,7 +403,7 @@ t('wat-compiler: block', () => {
   is(answer(), 42)
 })
 
-t('wat-compiler: block multi', () => {
+t('compile: block multi', () => {
   let src = `
     (func $dummy)
     (func (export "multi") (result i32)
@@ -417,7 +417,7 @@ t('wat-compiler: block multi', () => {
 
 })
 
-t('wat-compiler: br', () => {
+t('compile: br', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))
     (func $set
@@ -434,7 +434,7 @@ t('wat-compiler: br', () => {
   is(main(), 42)
 })
 
-t('wat-compiler: br mid', () => {
+t('compile: br mid', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))
     (func $set
@@ -450,7 +450,7 @@ t('wat-compiler: br mid', () => {
   is(main(), 666)
 })
 
-t('wat-compiler: block named + br', () => {
+t('compile: block named + br', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))
     (func $set
@@ -477,7 +477,7 @@ t('wat-compiler: block named + br', () => {
   is(main(), 0)
 })
 
-t('wat-compiler: block named 2 + br', () => {
+t('compile: block named 2 + br', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))
     (func $set
@@ -505,7 +505,7 @@ t('wat-compiler: block named 2 + br', () => {
 
 })
 
-t('wat-compiler: br_table', () => {
+t('compile: br_table', () => {
   let src = `
     (func (export "main") (param i32) (result i32)
       (block
@@ -524,7 +524,7 @@ t('wat-compiler: br_table', () => {
   is(main(1), 20)
 })
 
-t('wat-compiler: br_table multiple', () => {
+t('compile: br_table multiple', () => {
   let src = `
     (func (export "main") (param i32) (result i32)
       (block
@@ -555,7 +555,7 @@ t('wat-compiler: br_table multiple', () => {
   is(main(4), 104)
 })
 
-t('wat-compiler: loop', () => {
+t('compile: loop', () => {
   let src = `
     (func (export "main") (result i32)
       (loop (nop))
@@ -566,7 +566,7 @@ t('wat-compiler: loop', () => {
   is(main(), 42)
 })
 
-t('wat-compiler: break-value', () => {
+t('compile: break-value', () => {
   let src = `
     (func (export "main") (result i32)
       (block (result i32)
@@ -580,7 +580,7 @@ t('wat-compiler: break-value', () => {
   is(main(), 18)
 })
 
-t('wat-compiler: br_if', () => {
+t('compile: br_if', () => {
   let src = `
     (func (export "main") (result i32)
       (block (result i32)
@@ -601,7 +601,7 @@ t('wat-compiler: br_if', () => {
   is(main(), 18)
 })
 
-t('wat-compiler: while', () => {
+t('compile: while', () => {
   let src = `
     (func (export "main") (param i32) (result i32)
       (local i32)
@@ -621,7 +621,7 @@ t('wat-compiler: while', () => {
   is(main(), 1)
 })
 
-t('wat-compiler: select', () => {
+t('compile: select', () => {
   let src = `
     (func (export "main") (result i32)
       (select (loop (result i32) (i32.const 1)) (i32.const 2) (i32.const 3))
@@ -631,7 +631,7 @@ t('wat-compiler: select', () => {
   is(main(), 1)
 })
 
-t('wat-compiler: select mid', () => {
+t('compile: select mid', () => {
   let src = `
     (func (export "main") (result i32)
       (select (i32.const 2) (loop (result i32) (i32.const 1)) (i32.const 3))
@@ -641,7 +641,7 @@ t('wat-compiler: select mid', () => {
   is(main(), 2)
 })
 
-t('wat-compiler: block labels', () => {
+t('compile: block labels', () => {
   let src = `
     (func (export "main") (result i32)
       (block $exit (result i32)
@@ -654,7 +654,7 @@ t('wat-compiler: block labels', () => {
   is(main(), 1)
 })
 
-t('wat-compiler: loop labels', () => {
+t('compile: loop labels', () => {
   let src = `
     (func (export "main") (result i32)
       (local $i i32)
@@ -675,7 +675,7 @@ t('wat-compiler: loop labels', () => {
   is(main(), 5)
 })
 
-t('wat-compiler: loop labels 2', () => {
+t('compile: loop labels 2', () => {
   let src = `
     (func (export "main") (result i32)
       (local $i i32)
@@ -699,7 +699,7 @@ t('wat-compiler: loop labels 2', () => {
   is(main(), 8)
 })
 
-t('wat-compiler: switch', () => {
+t('compile: switch', () => {
   let src = `
     (func (export "main") (param i32) (result i32)
       (block $ret (result i32)
@@ -731,7 +731,7 @@ t('wat-compiler: switch', () => {
   is(main(3), 3)
 })
 
-t('wat-compiler: label redefinition', () => {
+t('compile: label redefinition', () => {
   let src = `
     (func (export "main") (result i32)
       (block $l1 (result i32)
@@ -746,7 +746,7 @@ t('wat-compiler: label redefinition', () => {
   is(main(), 5)
 })
 
-t('wat-compiler: address', () => {
+t('compile: address', () => {
   let src = `
     (memory 1)
     (data (i32.const 0) "abcdefghijklmnopqrstuvwxyz")
@@ -775,7 +775,7 @@ t('wat-compiler: address', () => {
   is(z(), 122)
 })
 
-t('wat-compiler: int literals', () => {
+t('compile: int literals', () => {
   let src = `
     (func (export "i32.test") (result i32) (return (i32.const 0x0bAdD00D)))
     (func (export "i32.umax") (result i32) (return (i32.const 0xffffffff)))
@@ -812,7 +812,7 @@ t('wat-compiler: int literals', () => {
   run(src)
 })
 
-t('wat-compiler: float literals', () => {
+t('compile: float literals', () => {
   let src = `
     ;; f32 in decimal format
     (func (export "f32_dec.zero") (result i32) (i32.reinterpret_f32 (f32.const 0.0e0)))
@@ -915,7 +915,7 @@ t('wat-compiler: float literals', () => {
   run(special)
 })
 
-t(`wat-compiler: export 2 funcs`, () => run(`
+t(`compile: export 2 funcs`, () => run(`
   (func (export "value") (result i32)
     (i32.const 42)
   )
@@ -924,7 +924,7 @@ t(`wat-compiler: export 2 funcs`, () => run(`
   )
 `))
 
-t(`wat-compiler: exported & unexported function`, () => {
+t(`compile: exported & unexported function`, () => {
   run(`
     (func (export "value") (result i32)
       (i32.const 42)
@@ -935,7 +935,7 @@ t(`wat-compiler: exported & unexported function`, () => {
   `)
 })
 
-t(`wat-compiler: 2 different locals`, () => {
+t(`compile: 2 different locals`, () => {
   let src = `
     (func (export "value") (result i32)
       (local i32)
@@ -947,7 +947,7 @@ t(`wat-compiler: 2 different locals`, () => {
   is(value(), 42)
 })
 
-t(`wat-compiler: 3 locals [i32, i64, i32] (disjointed)`, () => {
+t(`compile: 3 locals [i32, i64, i32] (disjointed)`, () => {
   let src = `
     (func (export "value") (result i32)
       (local i32)
@@ -960,7 +960,7 @@ t(`wat-compiler: 3 locals [i32, i64, i32] (disjointed)`, () => {
   is(value(), 42)
 })
 
-t(`wat-compiler: 3 locals [i32, i32, i64] (joined)`, () => {
+t(`compile: 3 locals [i32, i32, i64] (joined)`, () => {
   let src = `
     (func (export "value") (result i32)
       (local i32)
@@ -973,7 +973,7 @@ t(`wat-compiler: 3 locals [i32, i32, i64] (joined)`, () => {
   is(value(), 42)
 })
 
-t('wat-compiler: call function indirect (table)', () => {
+t('compile: call function indirect (table)', () => {
   let src = `
     (type $return_i32 (func (result i32)))
     (table 2 funcref)
@@ -992,7 +992,7 @@ t('wat-compiler: call function indirect (table)', () => {
   is(call_function_indirect(1), 13)
 })
 
-t('wat-compiler: call function indirect (table) non zero indexed ref types', () => {
+t('compile: call function indirect (table) non zero indexed ref types', () => {
   let src = `
     (type $return_i64 (func (result i64)))
     (type $return_i32 (func (result i32)))
@@ -1151,6 +1151,11 @@ t('case: data content', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
+t.todo('case: data offset', () => {
+  let src = `(data (offset (i32.const 65505)) "\\16\\17\\18\\19\\20\\21\\22\\23\\24\\25\\26\\27\\28\\29\\30\\31")`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
 t('case: float hex', () => {
   let src = `(func (f64.const 0x1p+0) (f64.const -0x1.7f00a2d80faabp-35))`
 
@@ -1192,6 +1197,18 @@ t('feature: bulk memory', () => {
     (memory.fill (local.get 0)(i32.const 0)(i32.const 16))
     (memory.init 0 (local.get 0)(i32.const 0)(i32.const 16))
   )`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t.todo('feature: simd', () => {
+  // ref: https://github.com/WebAssembly/simd/tree/master/test/core/simd
+  let src = `;; Load/Store v128 data with different valid offset/alignment
+  (module
+    (data (i32.const 0) "\\00\\01\\02\\03\\04\\05\\06\\07\\08\\09\\10\\11\\12\\13\\14\\15")
+    (data (offset (i32.const 65505)) "\\16\\17\\18\\19\\20\\21\\22\\23\\24\\25\\26\\27\\28\\29\\30\\31")
+
+  )`
+
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
@@ -1289,7 +1306,8 @@ const hex = (str, ...fields) =>
 export function wat2wasm(code, config) {
   let metrics = config ? config.metrics : true
   const parsed = wabt.parseWat('inline', code, {
-    bulk_memory: true
+    bulk_memory: true,
+    simd: true
   })
   // metrics && console.time('wabt build')
   const binary = parsed.toBinary({
