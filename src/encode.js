@@ -1,4 +1,6 @@
 // encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
+
+// uleb: i8, i16
 export const uleb = (n, buffer = []) => {
   if (typeof n === 'string') n = parseInt(n.replaceAll('_', ''))
 
@@ -14,7 +16,8 @@ export const uleb = (n, buffer = []) => {
   }
 }
 
-export function leb(n, buffer = []) {
+// leb
+export function i32(n, buffer = []) {
   if (typeof n === 'string') n = parseInt(n.replaceAll('_', ''))
 
   while (true) {
@@ -28,8 +31,11 @@ export function leb(n, buffer = []) {
   }
   return buffer
 }
+// alias
+export const i8 = i32, i16 = i32
 
-export function bigleb(n, buffer = []) {
+// bigleb
+export function i64(n, buffer = []) {
   if (typeof n === 'string') {
     n = n.replaceAll('_', '')
     n = n[0] === '-' ? -BigInt(n.slice(1)) : BigInt(n)
@@ -65,7 +71,6 @@ const flt = input => {
 
   return parseFloat(input)
 }
-
 
 const byteView = new DataView(new BigInt64Array(1).buffer)
 

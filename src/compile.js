@@ -1,8 +1,8 @@
-import { uleb, leb, bigleb, f64, f32 } from './util.js'
+import * as encode from './encode.js'
+import { uleb } from './encode.js'
 import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
 import parse from './parse.js'
 
-const OP_END = 0xb, OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44, OP_SKIP = 0x6, OP_GLOBAL_GET = 35, OP_GLOBAL_SET = 36
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (Wasm).
@@ -124,9 +124,19 @@ const build = {
       // v128s: (v128.load x) etc
       // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
       if (opCode >= 268) {
-        immed = [0xfb, opCode %= 268]
-        console.log(immed, opCode)
-        if (!opCode) immed.push(...uleb(args.shift()))
+        immed = [0xfd, opCode %= 268]
+        // FIXME: v128.load must have memory idx
+        if (opCode <= 0x0b) {
+          const o = consumeParams(args)
+          immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
+        }
+        // (v128.const i32x4)
+        else if (opCode === 0x0c) {
+          // https://github.com/WebAssembly/simd/blob/master/proposals/simd/TextSIMD.md
+          let [type, n] = args.shift().split('x')
+          while (n--) immed.push(...encode[type](args.shift()))
+        }
+        opCode = null // ignore opcode
       }
 
       // bulk memory: (memory.init) (memory.copy) etc
@@ -141,20 +151,19 @@ const build = {
         opCode = null // ignore opcode
       }
 
-      // binary/unary - just consume immed
-      else if (opCode >= 69) { }
+      // binary/unary (i32.add a b) - no immed
+      else if (opCode >= 0x45) { }
 
       // (i32.store align=n offset=m at value) etc
       else if (opCode >= 40 && opCode <= 62) {
         // FIXME: figure out point in Math.log2 aligns
-        let o = { align: ALIGN[op], offset: 0 }, param
-        while (args[0]?.includes('=')) param = args.shift().split('='), o[param[0]] = Number(param[1])
-        immed = [Math.log2(o.align), ...uleb(o.offset)]
+        let o = consumeParams(args)
+        immed = [Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0)]
       }
 
-      // (i32.const 123)
-      else if (opCode >= 65 && opCode <= 68) {
-        immed = (opCode == 65 ? leb : opCode == 66 ? bigleb : opCode == 67 ? f32 : f64)(args.shift())
+      // (i32.const 123), (f32.const 123.45) etc
+      else if (opCode >= 0x41 && opCode <= 0x44) {
+        immed = encode[op.split('.')[0]](args.shift())
       }
 
       // (local.get $id), (local.tee $id x)
@@ -163,7 +172,7 @@ const build = {
       }
 
       // (global.get id), (global.set id)
-      else if (opCode == OP_GLOBAL_GET || opCode == OP_GLOBAL_SET) {
+      else if (opCode == 35 || opCode == 36) {
         immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] : args.shift())
       }
 
@@ -271,7 +280,7 @@ const build = {
     return () => {
       const bytes = []
       while (body.length) consume(body, bytes)
-      ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, OP_END])
+      ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, 0x0b])
     }
   },
 
@@ -369,13 +378,9 @@ const build = {
 }
 
 // (i32.const 0), (global.get idx) - instantiation time initializer
-const iinit = ([op, literal], ctx) =>
-  op === 'f32.const' ? [OP_F32_CONST, ...f32(literal), OP_END] :
-    op === 'f64.const' ? [OP_F64_CONST, ...f64(literal), OP_END] :
-      op === 'i32.const' ? [OP_I32_CONST, ...leb(literal), OP_END] :
-        op === 'i64.const' ? [OP_I64_CONST, ...bigleb(literal), OP_END] :
-          op === 'global.get' ? [OP_GLOBAL_GET, ...uleb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
-            err(`Unknown init ${op} ${literal}`)
+const iinit = ([op, literal], ctx, type = op.split('.')[0]) =>
+  op === 'global.get' ? [35, ...uleb(literal[0] === '$' ? ctx.global[literal] : literal), 0x0b] :
+    [65 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](literal), 0x0b]
 
 const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
 
@@ -420,6 +425,13 @@ const consumeType = (nodes, ctx) => {
   if (idx < 0) idx = ctx.type.push(bytes) - 1
 
   return [idx, params, result]
+}
+
+// consume align/offset/etc params
+const consumeParams = (args) => {
+  let params = {}, param
+  while (args[0]?.includes('=')) param = args.shift().split('='), params[param[0]] = Number(param[1])
+  return params
 }
 
 const err = text => { throw Error(text) }
