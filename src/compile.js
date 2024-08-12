@@ -353,9 +353,12 @@ const build = {
 }
 
 // (i32.const 0) - instantiation time initializer
-const iinit = ([op, literal], ctx) => op[0] === 'f' ?
-  [op[1] === '3' ? OP_F32_CONST : OP_F64_CONST, ...(op[1] === '3' ? f32 : f64)(literal), OP_END] :
-  [op[1] === '3' ? OP_I32_CONST : OP_I64_CONST, ...(op[1] === '3' ? leb : bigleb)(literal[0] === '$' ? ctx.global[literal] : literal), OP_END]
+const iinit = ([op, literal], ctx) =>
+  op.startsWith('f32') ? [OP_F32_CONST, ...f32(literal), OP_END] :
+    op.startsWith('f64') ? [OP_F64_CONST, ...f64(literal), OP_END] :
+      op.startsWith('i32') ? [OP_I32_CONST, ...leb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
+        op.startsWith('i64') ? [OP_I64_CONST, ...bigleb(literal[0] === '$' ? ctx.global[literal] : literal), OP_END] :
+          err('Unknown init')
 
 const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
 
