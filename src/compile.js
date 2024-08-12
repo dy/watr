@@ -121,10 +121,17 @@ const build = {
 
       // NOTE: numeric comparison is faster than generic hash lookup
 
+      // v128s: (v128.load x) etc
+      // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
+      if (opCode >= 268) {
+        immed = [0xfb, opCode %= 268]
+        console.log(immed, opCode)
+        if (!opCode) immed.push(...uleb(args.shift()))
+      }
 
       // bulk memory: (memory.init) (memory.copy) etc
       // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
-      if (opCode >= 252) {
+      else if (opCode >= 252) {
         immed = [0xfc, opCode %= 252]
         // memory.init idx, memory.drop idx, table.init idx, table.drop idx
         if (!(opCode & 0b10)) immed.push(...uleb(args.shift()))
@@ -137,7 +144,7 @@ const build = {
       // binary/unary - just consume immed
       else if (opCode >= 69) { }
 
-      // (i32.store align=n offset=m at value)
+      // (i32.store align=n offset=m at value) etc
       else if (opCode >= 40 && opCode <= 62) {
         // FIXME: figure out point in Math.log2 aligns
         let o = { align: ALIGN[op], offset: 0 }, param

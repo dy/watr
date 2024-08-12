@@ -1237,13 +1237,16 @@ t('feature: bulk memory', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t.todo('feature: simd', () => {
+t.only('feature: simd', () => {
   // ref: https://github.com/WebAssembly/simd/tree/master/test/core/simd
   let src = `;; Load/Store v128 data with different valid offset/alignment
   (module
     (data (i32.const 0) "\\00\\01\\02\\03\\04\\05\\06\\07\\08\\09\\10\\11\\12\\13\\14\\15")
     (data (offset (i32.const 65505)) "\\16\\17\\18\\19\\20\\21\\22\\23\\24\\25\\26\\27\\28\\29\\30\\31")
 
+    (func (export "load_data_1") (param $i i32) (result v128)
+      (v128.load (local.get $i))                   ;; 0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 0x09 0x10 0x11 0x12 0x13 0x14 0x15
+    )
   )`
 
   is(compile(parse(src)), wat2wasm(src).buffer)
