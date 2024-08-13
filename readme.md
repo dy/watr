@@ -14,32 +14,12 @@ watr | 3.8 kb | 6000
 
 ## Usage
 
-```js
-import wat from 'watr'
-
-// compile text to binary
-const buffer = wat(`(func
-  (export "double") (param f64) (result f64)
-  (f64.mul (local.get 0) (f64.const 2))
-)`)
-
-// create instance
-const module = new WebAssembly.Module(buffer)
-const instance = new WebAssembly.Instance(module)
-
-// use API
-const {double} = instance.exports
-double(108) // 216
-```
-
-## API
-
 ### Compile
 
-Compiles wasm text or syntax tree into wasm binary.
+Compile wasm text or syntax tree into wasm binary.
 
 ```js
-import { compile } from 'watr'
+import compile from 'watr' // or `import { compile } from 'watr'`
 
 const buffer = compile(`(func (export "double")
   (param f64) (result f64)
@@ -101,8 +81,8 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 
 * [x] wasm core
 * [x] multiple values
-* [x] bulk memory ops (0 index)
-* [ ] simd
+* [x] bulk memory ops
+* [~] simd
 * [ ] multiple memories
 * [ ] func/ref types
 
