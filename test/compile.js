@@ -22,7 +22,7 @@ t('compile: (module (func))', t => {
   new WebAssembly.Module(buffer)
 })
 
-t('compile: (module (memory 1) (func))', t => {
+t('compile: (func))', t => {
   let buffer = hex`
     00 61 73 6d 01 00 00 00
     01 04 01  60 00 00       ; type
@@ -1237,7 +1237,7 @@ t('feature: bulk memory', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd address', () => {
+t('feature: simd load/store', () => {
   // ref: https://github.com/WebAssembly/simd/tree/master/test/core/simd
   let src = `;; Load/Store v128 data with different valid offset/alignment
     ;; (data (i32.const 0) "\\00\\01\\02\\03\\04\\05\\06\\07\\08\\09\\10\\11\\12\\13\\14\\15")
@@ -1289,6 +1289,57 @@ t('feature: simd address', () => {
     (v128.store offset=1 align=1 (local.get $i) (v128.const i32x4 0 1 2 3))
   )
   `
+
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `
+  (func
+    (drop (v128.load8x8_s (i32.const 0)))
+    (drop (v128.load8x8_s align=1 (i32.const 0)))
+    (drop (v128.load8x8_s align=2 (i32.const 0)))
+    (drop (v128.load8x8_s align=4 (i32.const 0)))
+    (drop (v128.load8x8_s align=8 (i32.const 0)))
+    (drop (v128.load8x8_u (i32.const 0)))
+    (drop (v128.load8x8_u align=1 (i32.const 0)))
+    (drop (v128.load8x8_u align=2 (i32.const 0)))
+    (drop (v128.load8x8_u align=4 (i32.const 0)))
+    (drop (v128.load8x8_u align=8 (i32.const 0)))
+    (drop (v128.load16x4_s (i32.const 0)))
+    (drop (v128.load16x4_s align=1 (i32.const 0)))
+    (drop (v128.load16x4_s align=2 (i32.const 0)))
+    (drop (v128.load16x4_s align=4 (i32.const 0)))
+    (drop (v128.load16x4_s align=8 (i32.const 0)))
+    (drop (v128.load16x4_u (i32.const 0)))
+    (drop (v128.load16x4_u align=1 (i32.const 0)))
+    (drop (v128.load16x4_u align=2 (i32.const 0)))
+    (drop (v128.load16x4_u align=4 (i32.const 0)))
+    (drop (v128.load16x4_u align=8 (i32.const 0)))
+    (drop (v128.load32x2_s (i32.const 0)))
+    (drop (v128.load32x2_s align=1 (i32.const 0)))
+    (drop (v128.load32x2_s align=2 (i32.const 0)))
+    (drop (v128.load32x2_s align=4 (i32.const 0)))
+    (drop (v128.load32x2_s align=8 (i32.const 0)))
+    (drop (v128.load32x2_u (i32.const 0)))
+    (drop (v128.load32x2_u align=1 (i32.const 0)))
+    (drop (v128.load32x2_u align=2 (i32.const 0)))
+    (drop (v128.load32x2_u align=4 (i32.const 0)))
+    (drop (v128.load32x2_u align=8 (i32.const 0)))
+
+    (drop (v128.load8_splat (i32.const 0)))
+    (drop (v128.load8_splat align=1 (i32.const 0)))
+    (drop (v128.load16_splat (i32.const 0)))
+    (drop (v128.load16_splat align=1 (i32.const 0)))
+    (drop (v128.load16_splat align=2 (i32.const 0)))
+    (drop (v128.load32_splat (i32.const 0)))
+    (drop (v128.load32_splat align=1 (i32.const 0)))
+    (drop (v128.load32_splat align=2 (i32.const 0)))
+    (drop (v128.load32_splat align=4 (i32.const 0)))
+    (drop (v128.load64_splat (i32.const 0)))
+    (drop (v128.load64_splat align=1 (i32.const 0)))
+    (drop (v128.load64_splat align=2 (i32.const 0)))
+    (drop (v128.load64_splat align=4 (i32.const 0)))
+    (drop (v128.load64_splat align=8 (i32.const 0)))
+  )`
 
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
