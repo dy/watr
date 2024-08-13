@@ -131,10 +131,11 @@ const build = {
           const o = consumeParams(args)
           immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
         }
-        // (v128.const i32x4)
-        else if (opCode === 0x0c) {
+        // (v128.const i32x4), (i8x16.shuffle 0 1 ... 15 a b)
+        else if (opCode === 0x0c || opCode === 0x0d) {
           immed.push(...consumeConst(op.split('.')[0], args))
         }
+
         opCode = null // ignore opcode
       }
 
@@ -386,9 +387,9 @@ const initGlobal = ([op, literal, ...args], ctx) => {
 
 // consume cost, no op type
 const consumeConst = (type, args) => {
-  // (v128.const i32x4 1 2 3 4)
-  if (type === 'v128') {
-    let [t, n] = args.shift().split('x'),
+  // (v128.const i32x4 1 2 3 4), (i8x16.shuffle 1 2 ... 15)
+  if (type === 'v128' || type === 'i8x16') {
+    let [t, n] = (type === 'v128' ? args.shift() : type).split('x'),
       bytes = new Uint8Array(16),
       arr = new TypedArray[t](bytes.buffer)
 
