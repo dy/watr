@@ -1478,10 +1478,18 @@ t('feature: simd const', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd shuffle', () => {
+t('feature: simd shuffle, swizzle, splat', () => {
   let src = `(func
     (i8x16.shuffle 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 (v128.const f32x4 0 1 2 3) (v128.const f32x4 0 1 2 3))
+    (i8x16.swizzle (v128.load (i32.const 0)) (v128.load offset=15 (i32.const 1)))
+    (i8x16.splat (i32.const 0))
+    (i16x8.splat (i32.const 0))
+    (i32x4.splat (i32.const 0))
+    (f32x4.splat (i32.const 0))
+    (i64x2.splat (i32.const 0))
+    (f64x2.splat (i32.const 0))
   )`
+  // FIXME: wrong number of immediates test
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
