@@ -2,6 +2,7 @@ import * as encode from './encode.js'
 import { uleb } from './encode.js'
 import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
 import parse from './parse.js'
+import { err, TypedArray } from './util.js'
 
 
 /**
@@ -383,12 +384,19 @@ const initGlobal = ([op, literal, ...args], ctx) => {
   return [...(type === 'v128' ? [0xfd, 0x0c] : [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type)]), ...consumeConst(type, [literal, ...args]), 0x0b]
 }
 
-// consume const, without op code
+// consume cost, no op type
 const consumeConst = (type, args) => {
   // (v128.const i32x4 1 2 3 4)
   if (type === 'v128') {
-    let [t, n] = args.shift().split('x')
-    return Array(+n).fill(t).flatMap(t => encode[t](args.shift()))
+    let [t, n] = args.shift().split('x'),
+      bytes = new Uint8Array(16),
+      arr = new TypedArray[t](bytes.buffer)
+
+    for (let i = 0; i < n; i++) {
+      arr[i] = encode[t].parse(args.shift())
+    }
+
+    return bytes
   }
   // (i32.const 1)
   return encode[type](args[0])
@@ -446,5 +454,3 @@ const consumeParams = (args) => {
   while (args[0]?.includes('=')) param = args.shift().split('='), params[param[0]] = Number(param[1])
   return params
 }
-
-const err = text => { throw Error(text) }

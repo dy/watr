@@ -1,8 +1,8 @@
 // encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
 
-// uleb: i8, i16
+// uleb
 export const uleb = (n, buffer = []) => {
-  if (typeof n === 'string') n = parseInt(n.replaceAll('_', ''))
+  if (typeof n === 'string') n = i32.parse(n)
 
   let byte = n & 0b01111111;
   n = n >>> 7;
@@ -18,7 +18,7 @@ export const uleb = (n, buffer = []) => {
 
 // leb
 export function i32(n, buffer = []) {
-  if (typeof n === 'string') n = parseInt(n.replaceAll('_', ''))
+  if (typeof n === 'string') n = i32.parse(n)
 
   while (true) {
     const byte = Number(n & 0x7F)
@@ -34,14 +34,11 @@ export function i32(n, buffer = []) {
 // alias
 export const i8 = i32, i16 = i32
 
+i32.parse = n => parseInt(n.replaceAll('_', ''))
+
 // bigleb
 export function i64(n, buffer = []) {
-  if (typeof n === 'string') {
-    n = n.replaceAll('_', '')
-    n = n[0] === '-' ? -BigInt(n.slice(1)) : BigInt(n)
-    byteView.setBigInt64(0, n)
-    n = byteView.getBigInt64(0)
-  }
+  if (typeof n === 'string') n = i64.parse(n)
 
   while (true) {
     const byte = Number(n & 0x7Fn)
@@ -54,22 +51,11 @@ export function i64(n, buffer = []) {
   }
   return buffer
 }
-
-// generalized float cases parser
-const flt = input => {
-  if (input.includes('nan')) return input[0] === '-' ? -NaN : NaN;
-  if (input.includes('inf')) return input[0] === '-' ? -Infinity : Infinity;
-
-  input = input.replaceAll('_', '')
-
-  // 0x1.5p3
-  if (input.includes('0x')) {
-    let [sig, exp] = input.split(/p/i), [dec, fract] = sig.split('.'), sign = dec[0] === '-' ? -1 : 1
-    sig = parseInt(dec) * sign + (fract ? parseInt(fract, 16) / (16 ** fract.length) : 0)
-    return sign * (exp ? sig * 2 ** parseInt(exp, 10) : sig);
-  }
-
-  return parseFloat(input)
+i64.parse = n => {
+  n = n.replaceAll('_', '')
+  n = n[0] === '-' ? -BigInt(n.slice(1)) : BigInt(n)
+  byteView.setBigInt64(0, n)
+  return n = byteView.getBigInt64(0)
 }
 
 const byteView = new DataView(new BigInt64Array(1).buffer)
@@ -83,7 +69,7 @@ export function f32(input, value, idx) {
     byteView.setInt32(0, value)
   }
   else {
-    value = typeof input === 'string' ? flt(input) : input
+    value = typeof input === 'string' ? f32.parse(input) : input
     byteView.setFloat32(0, value);
   }
 
@@ -104,7 +90,7 @@ export function f64(input, value, idx) {
     byteView.setBigInt64(0, value)
   }
   else {
-    value = typeof input === 'string' ? flt(input) : input
+    value = typeof input === 'string' ? f64.parse(input) : input
     byteView.setFloat64(0, value);
   }
 
@@ -118,4 +104,20 @@ export function f64(input, value, idx) {
     byteView.getUint8(1),
     byteView.getUint8(0)
   ];
+}
+
+f32.parse = f64.parse = input => {
+  if (input.includes('nan')) return input[0] === '-' ? -NaN : NaN;
+  if (input.includes('inf')) return input[0] === '-' ? -Infinity : Infinity;
+
+  input = input.replaceAll('_', '')
+
+  // 0x1.5p3
+  if (input.includes('0x')) {
+    let [sig, exp] = input.split(/p/i), [dec, fract] = sig.split('.'), sign = dec[0] === '-' ? -1 : 1
+    sig = parseInt(dec) * sign + (fract ? parseInt(fract, 16) / (16 ** fract.length) : 0)
+    return sign * (exp ? sig * 2 ** parseInt(exp, 10) : sig);
+  }
+
+  return parseFloat(input)
 }
