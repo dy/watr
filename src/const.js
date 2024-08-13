@@ -40,7 +40,7 @@ export const OP = [
     'i64.store': 8, 'f32.store': 4, 'f64.store': 8,
     'i32.store8': 1, 'i32.store16': 2, 'i64.store8': 1, 'i64.store16': 2, 'i64.store32': 4,
 
-    'v128.load': 16
+    'v128.load': 16, 'v128.store': 16
   },
   BLOCK = {
     loop: 1, block: 1, if: 1, end: -1, return: -1

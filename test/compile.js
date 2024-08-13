@@ -1237,10 +1237,9 @@ t('feature: bulk memory', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd load', () => {
+t('feature: simd address', () => {
   // ref: https://github.com/WebAssembly/simd/tree/master/test/core/simd
   let src = `;; Load/Store v128 data with different valid offset/alignment
-  (module
     ;; (data (i32.const 0) "\\00\\01\\02\\03\\04\\05\\06\\07\\08\\09\\10\\11\\12\\13\\14\\15")
     ;; (data (offset (i32.const 65505)) "\\16\\17\\18\\19\\20\\21\\22\\23\\24\\25\\26\\27\\28\\29\\30\\31")
 
@@ -1258,8 +1257,38 @@ t('feature: simd load', () => {
     )
     (func (export "load_data_5") (param $i i32) (result v128)
       (v128.load offset=15 align=1 (local.get $i))          ;; 0x15 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
-    )
-  )`
+    )`
+
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "store_data_0") (result v128)
+    (v128.store offset=0 (i32.const 0) (v128.const f32x4 0 1 2 3))
+    (v128.load offset=0 (i32.const 0))
+  )
+  (func (export "store_data_1") (result v128)
+    (v128.store align=1 (i32.const 0) (v128.const i32x4 0 1 2 3))
+    (v128.load align=1 (i32.const 0))
+  )
+  (func (export "store_data_2") (result v128)
+    (v128.store offset=1 align=1 (i32.const 0) (v128.const i16x8 0 1 2 3 4 5 6 7))
+    (v128.load offset=1 align=1 (i32.const 0))
+  )
+  (func (export "store_data_3") (result v128)
+    (v128.store offset=2 align=1 (i32.const 0) (v128.const i8x16 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15))
+    (v128.load offset=2 align=1 (i32.const 0))
+  )
+  (func (export "store_data_4") (result v128)
+    (v128.store offset=15 align=1 (i32.const 0) (v128.const i32x4 0 1 2 3))
+    (v128.load offset=15 (i32.const 0))
+  )
+  (func (export "store_data_5") (result v128)
+    (v128.store offset=65520 align=1 (i32.const 0) (v128.const i32x4 0 1 2 3))
+    (v128.load offset=65520 (i32.const 0))
+  )
+  (func (export "store_data_6") (param $i i32)
+    (v128.store offset=1 align=1 (local.get $i) (v128.const i32x4 0 1 2 3))
+  )
+  `
 
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
