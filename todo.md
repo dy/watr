@@ -19,7 +19,7 @@
 * [x] Refactor for flat instructions: consume into stack, rather than fixed signatures
 * [x] Multiple results: block, if, loop, func
 * [x] Multiple params
-* [ ] SIMD
+* [x] SIMD
 * [ ] nan:value
 * [ ] bench wassemble
 * [ ] Tests: https://github.com/EmNudge/watlings
