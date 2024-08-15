@@ -1700,10 +1700,8 @@ t('feature: simd extract/replace/load_spat lane', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t.todo('feature: simd bit_shift', () => {
-  let src = `(func (param v128 v128) (result v128) (f64x2.add (local.get 0) (local.get 1)))`
-  is(compile(parse(src)), wat2wasm(src).buffer)
-
+t('feature: simd bit_shift', () => {
+  let src
   src = `
     (func (param $0 v128) (param $1 i32) (result v128) (i8x16.shl (local.get $0) (local.get $1)))
     (func (param $0 v128) (param $1 i32) (result v128) (i8x16.shr_s (local.get $0) (local.get $1)))
@@ -1757,8 +1755,9 @@ t('feature: simd bitwise', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t.todo('feature: simd boolean', () => {
-  let src = `(func (export "i8x16.any_true") (param $0 v128) (result i32) (v128.any_true (local.get $0)))
+t('feature: simd boolean', () => {
+  let src = `
+  (func (export "i8x16.any_true") (param $0 v128) (result i32) (v128.any_true (local.get $0)))
   (func (export "i8x16.all_true") (param $0 v128) (result i32) (i8x16.all_true (local.get $0)))
   (func (export "i8x16.bitmask") (param $0 v128) (result i32) (i8x16.bitmask (local.get $0)))
 
@@ -1771,12 +1770,14 @@ t.todo('feature: simd boolean', () => {
   (func (export "i32x4.bitmask") (param $0 v128) (result i32) (i32x4.bitmask (local.get $0)))
 
   (func (export "i64x2.all_true") (param $0 v128) (result i32) (i64x2.all_true (local.get $0)))
-  (func (export "i64x2.bitmask") (param $0 v128) (result i32) (i64x2.bitmask (local.get $0)))`
+  (func (export "i64x2.bitmask") (param $0 v128) (result i32) (i64x2.bitmask (local.get $0)))
+  `
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t.todo('feature: simd conversion', () => {
-  let src = `;; Integer to floating point
+t('feature: simd conversion', () => {
+  let src = `
+  ;; Integer to floating point
   (func (export "f32x4.convert_i32x4_s") (param v128) (result v128)
     (f32x4.convert_i32x4_s (local.get 0)))
   (func (export "f32x4.convert_i32x4_u") (param v128) (result v128)
@@ -1801,11 +1802,12 @@ t.todo('feature: simd conversion', () => {
   (func (export "f64x2.promote_low_f32x4") (param v128) (result v128)
     (f64x2.promote_low_f32x4 (local.get 0)))
   (func (export "f32x4.demote_f64x2_zero") (param v128) (result v128)
-    (f32x4.demote_f64x2_zero (local.get 0)))`
+    (f32x4.demote_f64x2_zero (local.get 0)))
+  `
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t.todo('feature: f32', () => {
+t('feature: simd f32x4', () => {
   let src = `(func (export "f32x4.min") (param v128 v128) (result v128) (f32x4.min (local.get 0) (local.get 1)))
   (func (export "f32x4.max") (param v128 v128) (result v128) (f32x4.max (local.get 0) (local.get 1)))
   (func (export "f32x4.abs") (param v128) (result v128) (f32x4.abs (local.get 0)))
@@ -1832,7 +1834,249 @@ t.todo('feature: f32', () => {
 
   (func (export "f32x4.abs_with_const") (result v128) (f32x4.abs (v128.const f32x4 -0 -1 -2 -3)))`
   is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "f32x4.add") (param v128 v128) (result v128) (f32x4.add (local.get 0) (local.get 1)))
+  (func (export "f32x4.sub") (param v128 v128) (result v128) (f32x4.sub (local.get 0) (local.get 1)))
+  (func (export "f32x4.mul") (param v128 v128) (result v128) (f32x4.mul (local.get 0) (local.get 1)))
+  (func (export "f32x4.div") (param v128 v128) (result v128) (f32x4.div (local.get 0) (local.get 1)))
+  (func (export "f32x4.neg") (param v128) (result v128) (f32x4.neg (local.get 0)))
+  (func (export "f32x4.sqrt") (param v128) (result v128) (f32x4.sqrt (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "eq") (param $x v128) (param $y v128) (result v128) (f32x4.eq (local.get $x) (local.get $y)))
+  (func (export "ne") (param $x v128) (param $y v128) (result v128) (f32x4.ne (local.get $x) (local.get $y)))
+  (func (export "lt") (param $x v128) (param $y v128) (result v128) (f32x4.lt (local.get $x) (local.get $y)))
+  (func (export "le") (param $x v128) (param $y v128) (result v128) (f32x4.le (local.get $x) (local.get $y)))
+  (func (export "gt") (param $x v128) (param $y v128) (result v128) (f32x4.gt (local.get $x) (local.get $y)))
+  (func (export "ge") (param $x v128) (param $y v128) (result v128) (f32x4.ge (local.get $x) (local.get $y)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "f32x4.pmin") (param v128 v128) (result v128) (f32x4.pmin (local.get 0) (local.get 1)))
+  (func (export "f32x4.pmax") (param v128 v128) (result v128) (f32x4.pmax (local.get 0) (local.get 1)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "f32x4.ceil") (param v128) (result v128) (f32x4.ceil (local.get 0)))
+  (func (export "f32x4.floor") (param v128) (result v128) (f32x4.floor (local.get 0)))
+  (func (export "f32x4.trunc") (param v128) (result v128) (f32x4.trunc (local.get 0)))
+  (func (export "f32x4.nearest") (param v128) (result v128) (f32x4.nearest (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
 })
+
+t('feature: simd f64x2', () => {
+  let src = `(func (export "f64x2.min") (param v128 v128) (result v128) (f64x2.min (local.get 0) (local.get 1)))
+  (func (export "f64x2.max") (param v128 v128) (result v128) (f64x2.max (local.get 0) (local.get 1)))
+  (func (export "f64x2.abs") (param v128) (result v128) (f64x2.abs (local.get 0)))
+  ;; f64x2.min const vs const
+  (func (export "f64x2.min_with_const_0") (result v128) (f64x2.min (v128.const f64x2 0 1) (v128.const f64x2 0 2)))
+  (func (export "f64x2.min_with_const_1") (result v128) (f64x2.min (v128.const f64x2 2 -3) (v128.const f64x2 1 3)))
+  (func (export "f64x2.min_with_const_2") (result v128) (f64x2.min (v128.const f64x2 0 1) (v128.const f64x2 0 1)))
+  (func (export "f64x2.min_with_const_3") (result v128) (f64x2.min (v128.const f64x2 2 3) (v128.const f64x2 2 3)))
+  (func (export "f64x2.min_with_const_4") (result v128) (f64x2.min (v128.const f64x2 0x00 0x01) (v128.const f64x2 0x00 0x02)))
+  (func (export "f64x2.min_with_const_5") (result v128) (f64x2.min (v128.const f64x2 0x02 0x80000000) (v128.const f64x2 0x01 2147483648)))
+  (func (export "f64x2.min_with_const_6") (result v128) (f64x2.min (v128.const f64x2 0x00 0x01) (v128.const f64x2 0x00 0x01)))
+  (func (export "f64x2.min_with_const_7") (result v128) (f64x2.min (v128.const f64x2 0x02 0x80000000) (v128.const f64x2 0x02 0x80000000)))
+  ;; f64x2.min param vs const
+  (func (export "f64x2.min_with_const_9") (param v128) (result v128) (f64x2.min (local.get 0) (v128.const f64x2 0 1)))
+  (func (export "f64x2.min_with_const_10") (param v128) (result v128) (f64x2.min (v128.const f64x2 2 -3) (local.get 0)))
+  (func (export "f64x2.min_with_const_11") (param v128) (result v128) (f64x2.min (v128.const f64x2 0 1) (local.get 0)))
+  (func (export "f64x2.min_with_const_12") (param v128) (result v128) (f64x2.min (local.get 0) (v128.const f64x2 2 3)))
+  (func (export "f64x2.min_with_const_13") (param v128) (result v128) (f64x2.min (v128.const f64x2 0x00 0x01) (local.get 0)))
+  (func (export "f64x2.min_with_const_14") (param v128) (result v128) (f64x2.min (v128.const f64x2 0x02 0x80000000) (local.get 0)))
+  (func (export "f64x2.min_with_const_15") (param v128) (result v128) (f64x2.min (v128.const f64x2 0x00 0x01) (local.get 0)))
+  (func (export "f64x2.min_with_const_16") (param v128) (result v128) (f64x2.min (v128.const f64x2 0x02 0x80000000) (local.get 0)))
+  ;; f64x2.max const vs const
+  (func (export "f64x2.max_with_const_18") (result v128) (f64x2.max (v128.const f64x2 0 1) (v128.const f64x2 0 2)))
+  (func (export "f64x2.max_with_const_19") (result v128) (f64x2.max (v128.const f64x2 2 -3) (v128.const f64x2 1 3)))
+  (func (export "f64x2.max_with_const_20") (result v128) (f64x2.max (v128.const f64x2 0 1) (v128.const f64x2 0 1)))
+  (func (export "f64x2.max_with_const_21") (result v128) (f64x2.max (v128.const f64x2 2 3) (v128.const f64x2 2 3)))
+  (func (export "f64x2.max_with_const_22") (result v128) (f64x2.max (v128.const f64x2 0x00 0x01) (v128.const f64x2 0x00 0x02)))
+  (func (export "f64x2.max_with_const_23") (result v128) (f64x2.max (v128.const f64x2 0x02 0x80000000) (v128.const f64x2 0x01 2147483648)))
+  (func (export "f64x2.max_with_const_24") (result v128) (f64x2.max (v128.const f64x2 0x00 0x01) (v128.const f64x2 0x00 0x01)))
+  (func (export "f64x2.max_with_const_25") (result v128) (f64x2.max (v128.const f64x2 0x02 0x80000000) (v128.const f64x2 0x02 0x80000000)))
+  ;; f64x2.max param vs const
+  (func (export "f64x2.max_with_const_27") (param v128) (result v128) (f64x2.max (local.get 0) (v128.const f64x2 0 1)))
+  (func (export "f64x2.max_with_const_28") (param v128) (result v128) (f64x2.max (v128.const f64x2 2 -3) (local.get 0)))
+  (func (export "f64x2.max_with_const_29") (param v128) (result v128) (f64x2.max (v128.const f64x2 0 1) (local.get 0)))
+  (func (export "f64x2.max_with_const_30") (param v128) (result v128) (f64x2.max (local.get 0) (v128.const f64x2 2 3)))
+  (func (export "f64x2.max_with_const_31") (param v128) (result v128) (f64x2.max (v128.const f64x2 0x00 0x01) (local.get 0)))
+  (func (export "f64x2.max_with_const_32") (param v128) (result v128) (f64x2.max (v128.const f64x2 0x02 0x80000000) (local.get 0)))
+  (func (export "f64x2.max_with_const_33") (param v128) (result v128) (f64x2.max (v128.const f64x2 0x00 0x01) (local.get 0)))
+  (func (export "f64x2.max_with_const_34") (param v128) (result v128) (f64x2.max (v128.const f64x2 0x02 0x80000000) (local.get 0)))
+
+  (func (export "f64x2.abs_with_const_35") (result v128) (f64x2.abs (v128.const f64x2 -0 -1)))
+  (func (export "f64x2.abs_with_const_36") (result v128) (f64x2.abs (v128.const f64x2 -2 -3)))
+  `
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "f64x2.add") (param v128 v128) (result v128) (f64x2.add (local.get 0) (local.get 1)))
+  (func (export "f64x2.sub") (param v128 v128) (result v128) (f64x2.sub (local.get 0) (local.get 1)))
+  (func (export "f64x2.mul") (param v128 v128) (result v128) (f64x2.mul (local.get 0) (local.get 1)))
+  (func (export "f64x2.div") (param v128 v128) (result v128) (f64x2.div (local.get 0) (local.get 1)))
+  (func (export "f64x2.neg") (param v128) (result v128) (f64x2.neg (local.get 0)))
+  (func (export "f64x2.sqrt") (param v128) (result v128) (f64x2.sqrt (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "f64x2.eq") (param v128 v128) (result v128) (f64x2.eq (local.get 0) (local.get 1)))
+  (func (export "f64x2.ne") (param v128 v128) (result v128) (f64x2.ne (local.get 0) (local.get 1)))
+  (func (export "f64x2.lt") (param v128 v128) (result v128) (f64x2.lt (local.get 0) (local.get 1)))
+  (func (export "f64x2.le") (param v128 v128) (result v128) (f64x2.le (local.get 0) (local.get 1)))
+  (func (export "f64x2.gt") (param v128 v128) (result v128) (f64x2.gt (local.get 0) (local.get 1)))
+  (func (export "f64x2.ge") (param v128 v128) (result v128) (f64x2.ge (local.get 0) (local.get 1)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "f64x2.pmin") (param v128 v128) (result v128) (f64x2.pmin (local.get 0) (local.get 1)))
+  (func (export "f64x2.pmax") (param v128 v128) (result v128) (f64x2.pmax (local.get 0) (local.get 1)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "f64x2.ceil") (param v128) (result v128) (f64x2.ceil (local.get 0)))
+  (func (export "f64x2.floor") (param v128) (result v128) (f64x2.floor (local.get 0)))
+  (func (export "f64x2.trunc") (param v128) (result v128) (f64x2.trunc (local.get 0)))
+  (func (export "f64x2.nearest") (param v128) (result v128) (f64x2.nearest (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t('feature: simd i16x8', () => {
+  let src = `(func (export "i16x8.add") (param v128 v128) (result v128) (i16x8.add (local.get 0) (local.get 1)))
+  (func (export "i16x8.sub") (param v128 v128) (result v128) (i16x8.sub (local.get 0) (local.get 1)))
+  (func (export "i16x8.mul") (param v128 v128) (result v128) (i16x8.mul (local.get 0) (local.get 1)))
+  (func (export "i16x8.neg") (param v128) (result v128) (i16x8.neg (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "i16x8.min_s") (param v128 v128) (result v128) (i16x8.min_s (local.get 0) (local.get 1)))
+  (func (export "i16x8.min_u") (param v128 v128) (result v128) (i16x8.min_u (local.get 0) (local.get 1)))
+  (func (export "i16x8.max_s") (param v128 v128) (result v128) (i16x8.max_s (local.get 0) (local.get 1)))
+  (func (export "i16x8.max_u") (param v128 v128) (result v128) (i16x8.max_u (local.get 0) (local.get 1)))
+  (func (export "i16x8.avgr_u") (param v128 v128) (result v128) (i16x8.avgr_u (local.get 0) (local.get 1)))
+  (func (export "i16x8.abs") (param v128) (result v128) (i16x8.abs (local.get 0)))
+  (func (export "i16x8.min_s_with_const_0") (result v128) (i16x8.min_s (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535) (v128.const i16x8 65535 65535 16384 16384 32767 32767 -32768 -32768)))
+  (func (export "i16x8.min_s_with_const_1") (result v128) (i16x8.min_s (v128.const i16x8 0 0 1 1 2 2 3 3) (v128.const i16x8 3 3 2 2 1 1 0 0)))
+  (func (export "i16x8.min_u_with_const_2") (result v128) (i16x8.min_u (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535) (v128.const i16x8 65535 65535 16384 16384 32767 32767 -32768 -32768)))
+  (func (export "i16x8.min_u_with_const_3") (result v128) (i16x8.min_u (v128.const i16x8 0 0 1 1 2 2 3 3) (v128.const i16x8 3 3 2 2 1 1 0 0)))
+  (func (export "i16x8.max_s_with_const_4") (result v128) (i16x8.max_s (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535) (v128.const i16x8 65535 65535 16384 16384 32767 32767 -32768 -32768)))
+  (func (export "i16x8.max_s_with_const_5") (result v128) (i16x8.max_s (v128.const i16x8 0 0 1 1 2 2 3 3) (v128.const i16x8 3 3 2 2 1 1 0 0)))
+  (func (export "i16x8.max_u_with_const_6") (result v128) (i16x8.max_u (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535) (v128.const i16x8 65535 65535 16384 16384 32767 32767 -32768 -32768)))
+  (func (export "i16x8.max_u_with_const_7") (result v128) (i16x8.max_u (v128.const i16x8 0 0 1 1 2 2 3 3) (v128.const i16x8 3 3 2 2 1 1 0 0)))
+  (func (export "i16x8.avgr_u_with_const_8") (result v128) (i16x8.avgr_u (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535) (v128.const i16x8 65535 65535 16384 16384 32767 32767 -32768 -32768)))
+  (func (export "i16x8.avgr_u_with_const_9") (result v128) (i16x8.avgr_u (v128.const i16x8 0 0 1 1 2 2 3 3) (v128.const i16x8 3 3 2 2 1 1 0 0)))
+  (func (export "i16x8.abs_with_const_10") (result v128) (i16x8.abs (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535)))
+  (func (export "i16x8.min_s_with_const_11") (param v128) (result v128) (i16x8.min_s (local.get 0) (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535)))
+  (func (export "i16x8.min_s_with_const_12") (param v128) (result v128) (i16x8.min_s (local.get 0) (v128.const i16x8 0 0 1 1 2 2 3 3)))
+  (func (export "i16x8.min_u_with_const_13") (param v128) (result v128) (i16x8.min_u (local.get 0) (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535)))
+  (func (export "i16x8.min_u_with_const_14") (param v128) (result v128) (i16x8.min_u (local.get 0) (v128.const i16x8 0 0 1 1 2 2 3 3)))
+  (func (export "i16x8.max_s_with_const_15") (param v128) (result v128) (i16x8.max_s (local.get 0) (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535)))
+  (func (export "i16x8.max_s_with_const_16") (param v128) (result v128) (i16x8.max_s (local.get 0) (v128.const i16x8 0 0 1 1 2 2 3 3)))
+  (func (export "i16x8.max_u_with_const_17") (param v128) (result v128) (i16x8.max_u (local.get 0) (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535)))
+  (func (export "i16x8.max_u_with_const_18") (param v128) (result v128) (i16x8.max_u (local.get 0) (v128.const i16x8 0 0 1 1 2 2 3 3)))
+  (func (export "i16x8.avgr_u_with_const_19") (param v128) (result v128) (i16x8.avgr_u (local.get 0) (v128.const i16x8 -32768 -32768 32767 32767 16384 16384 65535 65535)))
+  (func (export "i16x8.avgr_u_with_const_20") (param v128) (result v128) (i16x8.avgr_u (local.get 0) (v128.const i16x8 0 0 1 1 2 2 3 3)))
+  `
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = ` (func (export "eq") (param $x v128) (param $y v128) (result v128) (i16x8.eq (local.get $x) (local.get $y)))
+  (func (export "ne") (param $x v128) (param $y v128) (result v128) (i16x8.ne (local.get $x) (local.get $y)))
+  (func (export "lt_s") (param $x v128) (param $y v128) (result v128) (i16x8.lt_s (local.get $x) (local.get $y)))
+  (func (export "lt_u") (param $x v128) (param $y v128) (result v128) (i16x8.lt_u (local.get $x) (local.get $y)))
+  (func (export "le_s") (param $x v128) (param $y v128) (result v128) (i16x8.le_s (local.get $x) (local.get $y)))
+  (func (export "le_u") (param $x v128) (param $y v128) (result v128) (i16x8.le_u (local.get $x) (local.get $y)))
+  (func (export "gt_s") (param $x v128) (param $y v128) (result v128) (i16x8.gt_s (local.get $x) (local.get $y)))
+  (func (export "gt_u") (param $x v128) (param $y v128) (result v128) (i16x8.gt_u (local.get $x) (local.get $y)))
+  (func (export "ge_s") (param $x v128) (param $y v128) (result v128) (i16x8.ge_s (local.get $x) (local.get $y)))
+  (func (export "ge_u") (param $x v128) (param $y v128) (result v128) (i16x8.ge_u (local.get $x) (local.get $y)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "i16x8.extadd_pairwise_i8x16_s") (param v128) (result v128) (i16x8.extadd_pairwise_i8x16_s (local.get 0)))
+  (func (export "i16x8.extadd_pairwise_i8x16_u") (param v128) (result v128) (i16x8.extadd_pairwise_i8x16_u (local.get 0)))
+
+  (func (export "i16x8.extmul_low_i8x16_s") (param v128 v128) (result v128) (i16x8.extmul_low_i8x16_s (local.get 0) (local.get 1)))
+  (func (export "i16x8.extmul_high_i8x16_s") (param v128 v128) (result v128) (i16x8.extmul_high_i8x16_s (local.get 0) (local.get 1)))
+  (func (export "i16x8.extmul_low_i8x16_u") (param v128 v128) (result v128) (i16x8.extmul_low_i8x16_u (local.get 0) (local.get 1)))
+  (func (export "i16x8.extmul_high_i8x16_u") (param v128 v128) (result v128) (i16x8.extmul_high_i8x16_u (local.get 0) (local.get 1)))
+
+  (func (export "i16x8.q15mulr_sat_s") (param v128 v128) (result v128) (i16x8.q15mulr_sat_s (local.get 0) (local.get 1)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "i16x8.add_sat_s") (param v128 v128) (result v128) (i16x8.add_sat_s (local.get 0) (local.get 1)))
+  (func (export "i16x8.add_sat_u") (param v128 v128) (result v128) (i16x8.add_sat_u (local.get 0) (local.get 1)))
+  (func (export "i16x8.sub_sat_s") (param v128 v128) (result v128) (i16x8.sub_sat_s (local.get 0) (local.get 1)))
+  (func (export "i16x8.sub_sat_u") (param v128 v128) (result v128) (i16x8.sub_sat_u (local.get 0) (local.get 1)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t('feature: simd i32x4', () => {
+  let src = `
+  (func (export "i32x4.add") (param v128 v128) (result v128) (i32x4.add (local.get 0) (local.get 1)))
+  (func (export "i32x4.sub") (param v128 v128) (result v128) (i32x4.sub (local.get 0) (local.get 1)))
+  (func (export "i32x4.mul") (param v128 v128) (result v128) (i32x4.mul (local.get 0) (local.get 1)))
+  (func (export "i32x4.neg") (param v128) (result v128) (i32x4.neg (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "i32x4.min_s") (param v128 v128) (result v128) (i32x4.min_s (local.get 0) (local.get 1)))
+  (func (export "i32x4.min_u") (param v128 v128) (result v128) (i32x4.min_u (local.get 0) (local.get 1)))
+  (func (export "i32x4.max_s") (param v128 v128) (result v128) (i32x4.max_s (local.get 0) (local.get 1)))
+  (func (export "i32x4.max_u") (param v128 v128) (result v128) (i32x4.max_u (local.get 0) (local.get 1)))
+  (func (export "i32x4.abs") (param v128) (result v128) (i32x4.abs (local.get 0)))
+  (func (export "i32x4.min_s_with_const_0") (result v128) (i32x4.min_s (v128.const i32x4 -2147483648 2147483647 1073741824 4294967295) (v128.const i32x4 4294967295 1073741824 2147483647 -2147483648)))
+  (func (export "i32x4.min_s_with_const_1") (result v128) (i32x4.min_s (v128.const i32x4 0 1 2 3) (v128.const i32x4 3 2 1 0)))
+  (func (export "i32x4.min_u_with_const_2") (result v128) (i32x4.min_u (v128.const i32x4 -2147483648 2147483647 1073741824 4294967295) (v128.const i32x4 4294967295 1073741824 2147483647 -2147483648)))
+  (func (export "i32x4.min_u_with_const_3") (result v128) (i32x4.min_u (v128.const i32x4 0 1 2 3) (v128.const i32x4 3 2 1 0)))
+  (func (export "i32x4.max_s_with_const_4") (result v128) (i32x4.max_s (v128.const i32x4 -2147483648 2147483647 1073741824 4294967295) (v128.const i32x4 4294967295 1073741824 2147483647 -2147483648)))
+  (func (export "i32x4.max_s_with_const_5") (result v128) (i32x4.max_s (v128.const i32x4 0 1 2 3) (v128.const i32x4 3 2 1 0)))
+  (func (export "i32x4.max_u_with_const_6") (result v128) (i32x4.max_u (v128.const i32x4 -2147483648 2147483647 1073741824 4294967295) (v128.const i32x4 4294967295 1073741824 2147483647 -2147483648)))
+  (func (export "i32x4.max_u_with_const_7") (result v128) (i32x4.max_u (v128.const i32x4 0 1 2 3) (v128.const i32x4 3 2 1 0)))
+  (func (export "i32x4.abs_with_const_8") (result v128) (i32x4.abs (v128.const i32x4 -2147483648 2147483647 1073741824 4294967295)))
+  (func (export "i32x4.min_s_with_const_9") (param v128) (result v128) (i32x4.min_s (local.get 0) (v128.const i32x4 -2147483648 2147483647 1073741824 4294967295)))
+  (func (export "i32x4.min_s_with_const_10") (param v128) (result v128) (i32x4.min_s (local.get 0) (v128.const i32x4 0 1 2 3)))
+  (func (export "i32x4.min_u_with_const_11") (param v128) (result v128) (i32x4.min_u (local.get 0) (v128.const i32x4 -2147483648 2147483647 1073741824 4294967295)))
+  (func (export "i32x4.min_u_with_const_12") (param v128) (result v128) (i32x4.min_u (local.get 0) (v128.const i32x4 0 1 2 3)))
+  (func (export "i32x4.max_s_with_const_13") (param v128) (result v128) (i32x4.max_s (local.get 0) (v128.const i32x4 -2147483648 2147483647 1073741824 4294967295)))
+  (func (export "i32x4.max_s_with_const_14") (param v128) (result v128) (i32x4.max_s (local.get 0) (v128.const i32x4 0 1 2 3)))
+  (func (export "i32x4.max_u_with_const_15") (param v128) (result v128) (i32x4.max_u (local.get 0) (v128.const i32x4 -2147483648 2147483647 1073741824 4294967295)))
+  (func (export "i32x4.max_u_with_const_16") (param v128) (result v128) (i32x4.max_u (local.get 0) (v128.const i32x4 0 1 2 3)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "i32x4.dot_i16x8_s") (param v128 v128) (result v128) (i32x4.dot_i16x8_s (local.get 0) (local.get 1)))
+  (func (export "i32x4.extadd_pairwise_i16x8_s") (param v128) (result v128) (i32x4.extadd_pairwise_i16x8_s (local.get 0)))
+  (func (export "i32x4.extadd_pairwise_i16x8_u") (param v128) (result v128) (i32x4.extadd_pairwise_i16x8_u (local.get 0)))
+  (func (export "i32x4.extmul_low_i16x8_s") (param v128 v128) (result v128) (i32x4.extmul_low_i16x8_s (local.get 0) (local.get 1)))
+  (func (export "i32x4.extmul_high_i16x8_s") (param v128 v128) (result v128) (i32x4.extmul_high_i16x8_s (local.get 0) (local.get 1)))
+  (func (export "i32x4.extmul_low_i16x8_u") (param v128 v128) (result v128) (i32x4.extmul_low_i16x8_u (local.get 0) (local.get 1)))
+  (func (export "i32x4.extmul_high_i16x8_u") (param v128 v128) (result v128) (i32x4.extmul_high_i16x8_u (local.get 0) (local.get 1)))
+  (func (export "i32x4.trunc_sat_f32x4_s") (param v128) (result v128) (i32x4.trunc_sat_f32x4_s (local.get 0)))
+  (func (export "i32x4.trunc_sat_f32x4_u") (param v128) (result v128) (i32x4.trunc_sat_f32x4_u (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "i32x4.trunc_sat_f64x2_s_zero") (param v128) (result v128) (i32x4.trunc_sat_f64x2_s_zero (local.get 0)))
+  (func (export "i32x4.trunc_sat_f64x2_u_zero") (param v128) (result v128) (i32x4.trunc_sat_f64x2_u_zero (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t('feature: simd i64x2', () => {
+  let src = `
+  (func (export "i64x2.add") (param v128 v128) (result v128) (i64x2.add (local.get 0) (local.get 1)))
+  (func (export "i64x2.sub") (param v128 v128) (result v128) (i64x2.sub (local.get 0) (local.get 1)))
+  (func (export "i64x2.mul") (param v128 v128) (result v128) (i64x2.mul (local.get 0) (local.get 1)))
+  (func (export "i64x2.neg") (param v128) (result v128) (i64x2.neg (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "i64x2.abs") (param v128) (result v128) (i64x2.abs (local.get 0)))
+  (func (export "i64x2.abs_with_const_0") (result v128) (i64x2.abs (v128.const i64x2 -9223372036854775808 9223372036854775807)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "eq") (param $x v128) (param $y v128) (result v128) (i64x2.eq (local.get $x) (local.get $y)))
+  (func (export "ne") (param $x v128) (param $y v128) (result v128) (i64x2.ne (local.get $x) (local.get $y)))
+  (func (export "lt_s") (param $x v128) (param $y v128) (result v128) (i64x2.lt_s (local.get $x) (local.get $y)))
+  (func (export "le_s") (param $x v128) (param $y v128) (result v128) (i64x2.le_s (local.get $x) (local.get $y)))
+  (func (export "gt_s") (param $x v128) (param $y v128) (result v128) (i64x2.gt_s (local.get $x) (local.get $y)))
+  (func (export "ge_s") (param $x v128) (param $y v128) (result v128) (i64x2.ge_s (local.get $x) (local.get $y)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `(func (export "i64x2.extmul_low_i32x4_s") (param v128 v128) (result v128) (i64x2.extmul_low_i32x4_s (local.get 0) (local.get 1)))
+  (func (export "i64x2.extmul_high_i32x4_s") (param v128 v128) (result v128) (i64x2.extmul_high_i32x4_s (local.get 0) (local.get 1)))
+  (func (export "i64x2.extmul_low_i32x4_u") (param v128 v128) (result v128) (i64x2.extmul_low_i32x4_u (local.get 0) (local.get 1)))
+  (func (export "i64x2.extmul_high_i32x4_u") (param v128 v128) (result v128) (i64x2.extmul_high_i32x4_u (local.get 0) (local.get 1)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
 
 // examples
 t('example: wat-compiler', async () => {

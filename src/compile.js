@@ -125,9 +125,8 @@ const build = {
       // v128s: (v128.load x) etc
       // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
       if (opCode >= 268) {
-        immed = [0xfd, opCode -= 268]
-
-        // console.log(op, opCode.toString(16))
+        opCode -= 268
+        immed = [0xfd, ...uleb(opCode)]
         // (v128.load)
         if (opCode <= 0x0b) {
           const o = consumeParams(args)
@@ -148,14 +147,13 @@ const build = {
         else if (opCode >= 0x15 && opCode <= 0x22) {
           immed.push(...uleb(args.shift()))
         }
-
         opCode = null // ignore opcode
       }
 
       // bulk memory: (memory.init) (memory.copy) etc
       // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
       else if (opCode >= 252) {
-        immed = [0xfc, opCode -= 252]
+        immed = [0xfc, ...uleb(opCode -= 252)]
         // memory.init idx, memory.drop idx, table.init idx, table.drop idx
         if (!(opCode & 0b10)) immed.push(...uleb(args.shift()))
         else immed.push(0)
