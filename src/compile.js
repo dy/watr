@@ -125,15 +125,26 @@ const build = {
       // v128s: (v128.load x) etc
       // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
       if (opCode >= 268) {
-        immed = [0xfd, opCode %= 268]
-        // FIXME: v128.load must have memory idx
+        immed = [0xfd, opCode -= 268]
+        // (v128.load)
         if (opCode <= 0x0b) {
           const o = consumeParams(args)
           immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
         }
+        // (v128.load_lane offset? align? idx)
+        else if (opCode >= 0x54 && opCode <= 0x5d) {
+          const o = consumeParams(args)
+          immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
+          // (v128.load_lane_zero)
+          if (opCode <= 0x5b) immed.push(...uleb(args.shift()))
+        }
         // (v128.const i32x4), (i8x16.shuffle 0 1 ... 15 a b)
         else if (opCode === 0x0c || opCode === 0x0d) {
           immed.push(...consumeConst(op.split('.')[0], args))
+        }
+        // (i8x16.extract_lane_s 0 ...)
+        else if (opCode >= 0x15 && opCode <= 0x22) {
+          immed.push(...uleb(args.shift()))
         }
 
         opCode = null // ignore opcode
@@ -142,7 +153,7 @@ const build = {
       // bulk memory: (memory.init) (memory.copy) etc
       // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
       else if (opCode >= 252) {
-        immed = [0xfc, opCode %= 252]
+        immed = [0xfc, opCode -= 252]
         // memory.init idx, memory.drop idx, table.init idx, table.drop idx
         if (!(opCode & 0b10)) immed.push(...uleb(args.shift()))
         else immed.push(0)

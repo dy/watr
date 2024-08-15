@@ -6,11 +6,12 @@ Useful for hi-level languages or dynamic (in-browser) compilation.<br>
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
-&nbsp; | Size (gzipped) | Performance (op/s)
----|---|---
-watr | 3.8 kb | 6000
-[wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 348
-[wabt](https://github.com/AssemblyScript/wabt.js) | 300 kb | 574
+&nbsp; | Size (gzipped) | Performance (op/s) | Features
+---|---|---|---
+watr | 3.8 kb | 6000 |
+[wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 348 |
+[wassemble](https://github.com/wingo/wassemble) | ? kb | ? |
+[wabt](https://github.com/AssemblyScript/wabt.js) | 300 kb | 574 |
 
 ## Usage
 
@@ -80,11 +81,12 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 ## Status
 
 * [x] wasm core
-* [x] multiple values
-* [x] bulk memory ops
-* [~] simd
-* [ ] multiple memories
-* [ ] func/ref types
+* [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md)
+* [x] [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md)
+* [~] [simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
+* [ ] [multiple memories](https://github.com/WebAssembly/multi-memory/blob/master/proposals/multi-memory/Overview.md)
+* [ ] [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md)
+* [ ] [gc](https://github.com/WebAssembly/gc)
 
 
 <!--

@@ -38,4 +38,5 @@
 
 ## Backlog
 
+* [ ] reorganize OP so to store number of immediates
 * wat-based wat-compiler
