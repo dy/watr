@@ -41,6 +41,7 @@
   "devDependencies": {
     "tst": "^7.3.0",
     "wabt": "^1.0.28",
+    "wassemble": "^0.0.2",
     "wat-compiler": "^1.0.0"
   }
 }

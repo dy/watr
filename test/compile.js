@@ -2,7 +2,6 @@ import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import Wabt from '../lib/wabt.js'
-import watCompiler from '../lib/wat-compiler.js'
 
 
 // examples from https://ontouchstart.pages.dev/chapter_wasm_binary
@@ -2107,32 +2106,6 @@ t('example: legacy', async () => {
 
 
 
-// bench
-t.skip('bench: brownian', async () => {
-  // example.ts
-  let src = await file('/test/example/brownian.wat')
-  // let src = `(func $dummy)
-  //   (func (export "foo") (param i32) (result i32)
-  //     (if (result i32) (local.get 0)
-  //       (then (call $dummy) (i32.const 1))
-  //       (else (call $dummy) (i32.const 0))
-  //     )
-  //   )`
-  is(compile(parse(src)), watCompiler(src))
-  let N = 500
-
-  console.time('watr')
-  for (let i = 0; i < N; i++) compile(parse(src))
-  console.timeEnd('watr')
-
-  console.time('wat-compiler')
-  for (let i = 0; i < N; i++) watCompiler(src, { metrics: false })
-  console.timeEnd('wat-compiler')
-
-  console.time('wabt')
-  for (let i = 0; i < N; i++) wat2wasm(src, { metrics: false })
-  console.timeEnd('wabt')
-})
 
 export async function file(path) {
   let res = await fetch(path)
