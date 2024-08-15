@@ -1,17 +1,17 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=red)](https://npmjs.org/watr)
 
-
-Bare minimum wasm text compiler & formatter, light & fast alternative for [wat2wasm](https://github.com/AssemblyScript/wabt.js).<br/>
+Bare minimum wasm text compiler/formatter.<br/>
+A light & fast alternative to [wat2wasm](https://github.com/AssemblyScript/wabt.js).<br/>
 Useful for hi-level languages or dynamic (in-browser) compilation.<br>
 
 <!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
-&nbsp; | Size (gzipped) | Performance (op/s) | Features
+&nbsp; | Size (gzipped) | Performance (op/s)
 ---|---|---|---
-watr | 3.8 kb | 6000 |
-[wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 348 |
-[wassemble](https://github.com/wingo/wassemble) | ? kb | ? |
-[wabt](https://github.com/AssemblyScript/wabt.js) | 300 kb | 574 |
+watr | 3.8 kb | 6000
+[wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 348
+[wabt](https://github.com/AssemblyScript/wabt.js) | 300 kb | 574
+[wassemble](https://github.com/wingo/wassemble) | ? kb | ?
 
 ## Usage
 
@@ -117,12 +117,5 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 * [leb128a](https://github.com/minhducsun2002/leb128/blob/master/src/index.ts)
 * [leb128b](https://github.com/shmishtopher/wasm-LEB128/tree/master/esm)
 -->
-
-## Alternatives
-
-* [wabt](https://www.npmjs.com/package/wabt) − port of WABT for the web, de-facto standard.
-* [wat-compiler](https://www.npmjs.com/package/wat-compiler) − compact alternative for WABT, older brother of _watr_.
-* [wassemble](https://github.com/wingo/wassemble)
-* [web49](https://github.com/FastVM/Web49)
 
 <p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>
