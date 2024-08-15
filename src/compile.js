@@ -126,6 +126,8 @@ const build = {
       // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
       if (opCode >= 268) {
         immed = [0xfd, opCode -= 268]
+
+        // console.log(op, opCode.toString(16))
         // (v128.load)
         if (opCode <= 0x0b) {
           const o = consumeParams(args)

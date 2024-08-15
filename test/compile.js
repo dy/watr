@@ -1700,9 +1700,137 @@ t('feature: simd extract/replace/load_spat lane', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t.todo('feature: simd misc', () => {
-  let src = `
+t.todo('feature: simd bit_shift', () => {
+  let src = `(func (param v128 v128) (result v128) (f64x2.add (local.get 0) (local.get 1)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `
+    (func (param $0 v128) (param $1 i32) (result v128) (i8x16.shl (local.get $0) (local.get $1)))
+    (func (param $0 v128) (param $1 i32) (result v128) (i8x16.shr_s (local.get $0) (local.get $1)))
+    (func (param $0 v128) (param $1 i32) (result v128) (i8x16.shr_u (local.get $0) (local.get $1)))
+
+    (func (param $0 v128) (param $1 i32) (result v128) (i16x8.shl (local.get $0) (local.get $1)))
+    (func (param $0 v128) (param $1 i32) (result v128) (i16x8.shr_s (local.get $0) (local.get $1)))
+    (func (param $0 v128) (param $1 i32) (result v128) (i16x8.shr_u (local.get $0) (local.get $1)))
+
+    (func (param $0 v128) (param $1 i32) (result v128) (i32x4.shl (local.get $0) (local.get $1)))
+    (func (param $0 v128) (param $1 i32) (result v128) (i32x4.shr_s (local.get $0) (local.get $1)))
+    (func (param $0 v128) (param $1 i32) (result v128) (i32x4.shr_u (local.get $0) (local.get $1)))
+
+    (func (param $0 v128) (param $1 i32) (result v128) (i64x2.shl (local.get $0) (local.get $1)))
+    (func (param $0 v128) (param $1 i32) (result v128) (i64x2.shr_s (local.get $0) (local.get $1)))
+    (func (param $0 v128) (param $1 i32) (result v128) (i64x2.shr_u (local.get $0) (local.get $1)))
+
+    ;; shifting by a constant amount
+    ;; i8x16
+    (func (param $0 v128) (result v128) (i8x16.shl (local.get $0) (i32.const 1)))
+    (func (param $0 v128) (result v128) (i8x16.shr_u (local.get $0) (i32.const 8)))
+    (func (param $0 v128) (result v128) (i8x16.shr_s (local.get $0) (i32.const 9)))
+
+    ;; i16x8
+    (func (param $0 v128) (result v128) (i16x8.shl (local.get $0) (i32.const 1)))
+    (func (param $0 v128) (result v128) (i16x8.shr_u (local.get $0) (i32.const 16)))
+    (func (param $0 v128) (result v128) (i16x8.shr_s (local.get $0) (i32.const 17)))
+
+    ;; i32x4
+    (func (param $0 v128) (result v128) (i32x4.shl (local.get $0) (i32.const 1)))
+    (func (param $0 v128) (result v128) (i32x4.shr_u (local.get $0) (i32.const 32)))
+    (func (param $0 v128) (result v128) (i32x4.shr_s (local.get $0) (i32.const 33)))
+
+    ;; i64x2
+    (func (param $0 v128) (result v128) (i64x2.shl (local.get $0) (i32.const 1)))
+    (func (param $0 v128) (result v128) (i64x2.shr_u (local.get $0) (i32.const 64)))
+    (func (param $0 v128) (result v128) (i64x2.shr_s (local.get $0) (i32.const 65)))
   `
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t('feature: simd bitwise', () => {
+  let src = `(func (export "not") (param $0 v128) (result v128) (v128.not (local.get $0)))
+    (func (export "and") (param $0 v128) (param $1 v128) (result v128) (v128.and (local.get $0) (local.get $1)))
+    (func (export "or") (param $0 v128) (param $1 v128) (result v128) (v128.or (local.get $0) (local.get $1)))
+    (func (export "xor") (param $0 v128) (param $1 v128) (result v128) (v128.xor (local.get $0) (local.get $1)))
+    (func (export "bitselect") (param $0 v128) (param $1 v128) (param $2 v128) (result v128)
+      (v128.bitselect (local.get $0) (local.get $1) (local.get $2))
+    )
+    (func (export "andnot") (param $0 v128) (param $1 v128) (result v128) (v128.andnot (local.get $0) (local.get $1)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t.todo('feature: simd boolean', () => {
+  let src = `(func (export "i8x16.any_true") (param $0 v128) (result i32) (v128.any_true (local.get $0)))
+  (func (export "i8x16.all_true") (param $0 v128) (result i32) (i8x16.all_true (local.get $0)))
+  (func (export "i8x16.bitmask") (param $0 v128) (result i32) (i8x16.bitmask (local.get $0)))
+
+  (func (export "i16x8.any_true") (param $0 v128) (result i32) (v128.any_true (local.get $0)))
+  (func (export "i16x8.all_true") (param $0 v128) (result i32) (i16x8.all_true (local.get $0)))
+  (func (export "i16x8.bitmask") (param $0 v128) (result i32) (i16x8.bitmask (local.get $0)))
+
+  (func (export "i32x4.any_true") (param $0 v128) (result i32) (v128.any_true (local.get $0)))
+  (func (export "i32x4.all_true") (param $0 v128) (result i32) (i32x4.all_true (local.get $0)))
+  (func (export "i32x4.bitmask") (param $0 v128) (result i32) (i32x4.bitmask (local.get $0)))
+
+  (func (export "i64x2.all_true") (param $0 v128) (result i32) (i64x2.all_true (local.get $0)))
+  (func (export "i64x2.bitmask") (param $0 v128) (result i32) (i64x2.bitmask (local.get $0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t.todo('feature: simd conversion', () => {
+  let src = `;; Integer to floating point
+  (func (export "f32x4.convert_i32x4_s") (param v128) (result v128)
+    (f32x4.convert_i32x4_s (local.get 0)))
+  (func (export "f32x4.convert_i32x4_u") (param v128) (result v128)
+    (f32x4.convert_i32x4_u (local.get 0)))
+
+  (func (export "f64x2.convert_low_i32x4_s") (param v128) (result v128)
+    (f64x2.convert_low_i32x4_s (local.get 0)))
+  (func (export "f64x2.convert_low_i32x4_u") (param v128) (result v128)
+    (f64x2.convert_low_i32x4_u (local.get 0)))
+
+  ;; Integer to integer narrowing
+  (func (export "i8x16.narrow_i16x8_s") (param v128 v128) (result v128)
+    (i8x16.narrow_i16x8_s (local.get 0) (local.get 1)))
+  (func (export "i8x16.narrow_i16x8_u") (param v128 v128) (result v128)
+    (i8x16.narrow_i16x8_u (local.get 0) (local.get 1)))
+  (func (export "i16x8.narrow_i32x4_s") (param v128 v128) (result v128)
+    (i16x8.narrow_i32x4_s (local.get 0) (local.get 1)))
+  (func (export "i16x8.narrow_i32x4_u") (param v128 v128) (result v128)
+    (i16x8.narrow_i32x4_u (local.get 0)(local.get 1)))
+
+  ;; Float to float promote/demote
+  (func (export "f64x2.promote_low_f32x4") (param v128) (result v128)
+    (f64x2.promote_low_f32x4 (local.get 0)))
+  (func (export "f32x4.demote_f64x2_zero") (param v128) (result v128)
+    (f32x4.demote_f64x2_zero (local.get 0)))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t.todo('feature: f32', () => {
+  let src = `(func (export "f32x4.min") (param v128 v128) (result v128) (f32x4.min (local.get 0) (local.get 1)))
+  (func (export "f32x4.max") (param v128 v128) (result v128) (f32x4.max (local.get 0) (local.get 1)))
+  (func (export "f32x4.abs") (param v128) (result v128) (f32x4.abs (local.get 0)))
+  ;; f32x4.min const vs const
+  (func (export "f32x4.min_with_const_0") (result v128) (f32x4.min (v128.const f32x4 0 1 2 -3) (v128.const f32x4 0 2 1 3)))
+  (func (export "f32x4.min_with_const_1") (result v128) (f32x4.min (v128.const f32x4 0 1 2 3) (v128.const f32x4 0 1 2 3)))
+  (func (export "f32x4.min_with_const_2") (result v128) (f32x4.min (v128.const f32x4 0x00 0x01 0x02 0x80000000) (v128.const f32x4 0x00 0x02 0x01 2147483648)))
+  (func (export "f32x4.min_with_const_3") (result v128) (f32x4.min (v128.const f32x4 0x00 0x01 0x02 0x80000000) (v128.const f32x4 0x00 0x01 0x02 0x80000000)))
+  ;; f32x4.min param vs const
+  (func (export "f32x4.min_with_const_5")(param v128) (result v128) (f32x4.min (local.get 0) (v128.const f32x4 0 1 2 -3)))
+  (func (export "f32x4.min_with_const_6")(param v128) (result v128) (f32x4.min (v128.const f32x4 0 1 2 3) (local.get 0)))
+  (func (export "f32x4.min_with_const_7")(param v128) (result v128) (f32x4.min (v128.const f32x4 0x00 0x01 0x02 0x80000000) (local.get 0)))
+  (func (export "f32x4.min_with_const_8")(param v128) (result v128) (f32x4.min (local.get 0) (v128.const f32x4 0x00 0x01 0x02 0x80000000)))
+  ;; f32x4.max const vs const
+  (func (export "f32x4.max_with_const_10") (result v128) (f32x4.max (v128.const f32x4 0 1 2 -3) (v128.const f32x4 0 2 1 3)))
+  (func (export "f32x4.max_with_const_11") (result v128) (f32x4.max (v128.const f32x4 0 1 2 3) (v128.const f32x4 0 1 2 3)))
+  (func (export "f32x4.max_with_const_12") (result v128) (f32x4.max (v128.const f32x4 0x00 0x01 0x02 0x80000000) (v128.const f32x4 0x00 0x02 0x01 2147483648)))
+  (func (export "f32x4.max_with_const_13") (result v128) (f32x4.max (v128.const f32x4 0x00 0x01 0x02 0x80000000) (v128.const f32x4 0x00 0x01 0x02 0x80000000)))
+  ;; f32x4.max param vs const
+  (func (export "f32x4.max_with_const_15")(param v128) (result v128) (f32x4.max (local.get 0) (v128.const f32x4 0 1 2 -3)))
+  (func (export "f32x4.max_with_const_16")(param v128) (result v128) (f32x4.max (v128.const f32x4 0 1 2 3) (local.get 0)))
+  (func (export "f32x4.max_with_const_17")(param v128) (result v128) (f32x4.max (v128.const f32x4 0x00 0x01 0x02 0x80000000) (local.get 0)))
+  (func (export "f32x4.max_with_const_18")(param v128) (result v128) (f32x4.max (local.get 0) (v128.const f32x4 0x00 0x01 0x02 0x80000000)))
+
+  (func (export "f32x4.abs_with_const") (result v128) (f32x4.abs (v128.const f32x4 -0 -1 -2 -3)))`
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
