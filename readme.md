@@ -79,7 +79,7 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 
 ## Status
 
-* [x] wasm core
+* [x] core
 * [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md)
 * [x] [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md)
 * [x] [simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
