@@ -141,7 +141,7 @@ const build = {
         }
         // (v128.const i32x4), (i8x16.shuffle 0 1 ... 15 a b)
         else if (opCode === 0x0c || opCode === 0x0d) {
-          immed.push(...consumeConst(op.split('.')[0], args))
+          immed.push(...consumeConst(op, args))
         }
         // (i8x16.extract_lane_s 0 ...)
         else if (opCode >= 0x15 && opCode <= 0x22) {
@@ -391,13 +391,20 @@ const build = {
 // (i32.const 0), (global.get idx) - instantiation time initializer
 const initGlobal = ([op, literal, ...args], ctx) => {
   if (op === 'global.get') return [0x23, ...uleb(literal[0] === '$' ? ctx.global[literal] : literal), 0x0b]
-  const [type] = op.split('.')
-  // (v128.const i32x4 1 2 3 4)
-  return [...(type === 'v128' ? [0xfd, 0x0c] : [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type)]), ...consumeConst(type, [literal, ...args]), 0x0b]
+
+  // (v128.const i32x4 1 2 3 4), (i32.add a b) etc
+  return [
+    ...(op === 'v128.const' ? [0xfd, 0x0c] : [0x41 + ['i32.const', 'i64.const', 'f32.const', 'f64.const'].indexOf(op)]),
+    ...consumeConst(op, [literal, ...args]), 0x0b
+  ]
 }
 
 // consume cost, no op type
-const consumeConst = (type, args) => {
+const consumeConst = (op, args) => {
+  if (op === 'global.get') return [0x23, ...uleb(literal[0] === '$' ? ctx.global[literal] : literal), 0x0b]
+
+  const [type] = op.split('.')
+
   // (v128.const i32x4 1 2 3 4), (i8x16.shuffle 1 2 ... 15)
   if (type === 'v128' || type === 'i8x16') {
     let [t, n] = (type === 'v128' ? args.shift() : type).split('x'),
@@ -422,6 +429,7 @@ const consumeConst = (type, args) => {
 
     return arr
   }
+
   // (i32.const 1)
   return encode[type](args[0])
 }

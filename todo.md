@@ -22,7 +22,7 @@
 * [x] SIMD
 * [x] nan:value
 * [ ] constant expressions
-* [ ] bench wassemble
+* [x] ~~bench wassemble~~ - broken
 * [ ] Tests: https://github.com/EmNudge/watlings
 * [ ] Floating hex
 * [ ] Official test suite https://github.com/WebAssembly/testsuite
