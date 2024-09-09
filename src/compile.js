@@ -2,7 +2,7 @@ import * as encode from './encode.js'
 import { uleb } from './encode.js'
 import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
 import parse from './parse.js'
-import { err, TypedArray } from './util.js'
+import { err } from './util.js'
 
 
 /**
@@ -401,14 +401,26 @@ const consumeConst = (type, args) => {
   // (v128.const i32x4 1 2 3 4), (i8x16.shuffle 1 2 ... 15)
   if (type === 'v128' || type === 'i8x16') {
     let [t, n] = (type === 'v128' ? args.shift() : type).split('x'),
-      bytes = new Uint8Array(16),
-      arr = new TypedArray[t](bytes.buffer)
+      stride = t.slice(1) >>> 3 // i16 -> 2, f32 -> 4
 
-    for (let i = 0; i < n; i++) {
-      arr[i] = encode[t].parse(args.shift())
+    n = +n
+
+    // i8, i16, i32 - bypass the encoding
+    if (t[0] === 'i') {
+      let arr = n === 16 ? new Uint8Array(16) : n === 8 ? new Uint16Array(8) : n === 4 ? new Uint32Array(4) : new BigInt64Array(2)
+      for (let i = 0; i < n; i++) {
+        arr[i] = encode[t].parse(args.shift())
+      }
+      return new Uint8Array(arr.buffer)
     }
 
-    return bytes
+    // f32, f64 - encode
+    let arr = new Uint8Array(16)
+    for (let i = 0; i < n; i++) {
+      arr.set(encode[t](args.shift()), i * stride)
+    }
+
+    return arr
   }
   // (i32.const 1)
   return encode[type](args[0])

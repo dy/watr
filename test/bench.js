@@ -1,8 +1,8 @@
 import t, { is } from 'tst'
 import { file } from './compile.js'
 import watr from '../src/compile.js'
-import Wabt from '../lib/wabt.js'
-import watCompiler from '../lib/wat-compiler.js'
+import Wabt from './lib/wabt.js'
+import watCompiler from './lib/wat-compiler.js'
 import wassemble from 'wassemble/wassemble.mjs'
 import { wat2wasm } from './compile.js'
 

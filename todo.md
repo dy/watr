@@ -20,7 +20,8 @@
 * [x] Multiple results: block, if, loop, func
 * [x] Multiple params
 * [x] SIMD
-* [ ] nan:value
+* [x] nan:value
+* [ ] constant expressions
 * [ ] bench wassemble
 * [ ] Tests: https://github.com/EmNudge/watlings
 * [ ] Floating hex
