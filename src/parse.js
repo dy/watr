@@ -17,13 +17,14 @@ export default (str) => {
 
   const parseLevel = () => {
     for (let c, root; i < str.length;) {
+
       c = str.charCodeAt(i)
       if (c === DQUOTE) commit(), buf = str.slice(i++, i = str.indexOf('"', i) + 1), commit()
       else if (c === OPAREN) {
         if (str.charCodeAt(i + 1) === SEMIC) i = str.indexOf(';)', i) + 2 // (; ... ;)
         else commit(), i++, (root = level).push(level = []), parseLevel(), level = root
       }
-      else if (c === SEMIC) i = str.indexOf('\n', i) + 1  // ; ...
+      else if (c === SEMIC) i = str.indexOf('\n', i) + 1 || str.length  // ; ...
       else if (c <= SPACE) commit(), i++
       else if (c === CPAREN) return commit(), i++
       else buf += str[i++]

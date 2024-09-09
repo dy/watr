@@ -157,7 +157,6 @@ t('parse: number', t => {
     })
 })
 
-
 t('parse: complex case 1', () => {
   const tokens = parse(`(
 (hello $hi
@@ -189,4 +188,9 @@ t('parse: data', () => {
     'data', ['i32.const', '4'],
     '"`.-,_:^!~;r+|()=>l?icv[]tzj7*f{}sYTJ1unyIFowe2h3Za4X%5P$mGAUbpK960#H&DRQ80WMB@N"'
   ])
+})
+
+t('parse: immediate comment end', () => {
+  let tokens = parse(`(i32.const 0);;`)
+  is(tokens, ['i32.const', '0'])
 })
