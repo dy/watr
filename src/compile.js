@@ -148,7 +148,6 @@ const build = {
         else if (opCode === 0x0c) {
           args.unshift(op)
           immed = consumeConst(args, ctx)
-          immed.pop() // remove end marker since it's added again
         }
         // (i8x16.extract_lane_s 0 ...)
         else if (opCode >= 0x15 && opCode <= 0x22) {
@@ -318,7 +317,7 @@ const build = {
     let name = args[0][0] === '$' && args.shift()
     if (name) ctx.global[name] = ctx.global.length
     let [type, [...init]] = args, mut = type[0] === 'mut' ? 1 : 0
-    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx)])
+    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx), 0x0b])
   },
 
   // (table 1 2? funcref)
@@ -333,7 +332,7 @@ const build = {
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
   elem([, [...offset], ...elems], ctx) {
     const tableIdx = 0 // FIXME: table index can be defined
-    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), ...uleb(elems.length), ...elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : el))])
+    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), 0x0b, ...uleb(elems.length), ...elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : el))])
   },
 
   //  (export "name" (kind $name|idx))
@@ -386,7 +385,7 @@ const build = {
     if (!offset && !mem) offset = inits.shift()
     if (!offset) offset = ['i32.const', 0]
 
-    ctx.data.push([0, ...consumeConst([...offset], ctx), ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
+    ctx.data.push([0, ...consumeConst([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
   },
 
   // (start $main)
@@ -396,23 +395,23 @@ const build = {
 }
 
 // (i32.add a b) - instantiation time initializer
-const consumeConst = (args, ctx) => {
-  let op = args.shift(), [type, cmd] = op.split('.')
+const consumeConst = (node, ctx) => {
+  let op = node.shift(), [type, cmd] = op.split('.')
 
   // (global.get idx)
-  if (type === 'global') return [0x23, ...uleb(args[0][0] === '$' ? ctx.global[args[0]] : args[0]), 0x0b]
+  if (type === 'global') return [0x23, ...uleb(node[0][0] === '$' ? ctx.global[node[0]] : node[0])]
 
   // (v128.const i32x4 1 2 3 4)
-  if (type === 'v128') return [0xfd, 0x0c, ...v128(args), 0x0b]
+  if (type === 'v128') return [0xfd, 0x0c, ...v128(node)]
 
   // (i32.const 1)
-  if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](args[0]), 0x0b]
+  if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
 
   // (i32.add a b), (i32.mult a b) etc
   return [
     OP.indexOf(op),
-    ...consumeConst(),
-    0x0b
+    ...consumeConst(node.shift(), ctx),
+    ...consumeConst(node.shift(), ctx)
   ]
 }
 
