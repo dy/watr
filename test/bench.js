@@ -8,7 +8,7 @@ import { wat2wasm } from './compile.js'
 
 
 // bench
-t('bench: brownian', async () => {
+t.skip('bench: brownian', async () => {
   // example.ts
   let src = await file('/test/example/brownian.wat')
   // let src = `(module

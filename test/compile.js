@@ -2195,7 +2195,6 @@ t('example: legacy', async () => {
 
 
 
-
 export async function file(path) {
   let res = await fetch(path)
   let src = await res.text()
