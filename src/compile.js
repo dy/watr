@@ -146,7 +146,8 @@ const build = {
         }
         // (v128.const i32x4)
         else if (opCode === 0x0c) {
-          immed = consumeConst(op, args, ctx)
+          args.unshift(op)
+          immed = consumeConst(args, ctx)
           immed.pop() // remove end marker since it's added again
         }
         // (i8x16.extract_lane_s 0 ...)
@@ -316,8 +317,8 @@ const build = {
   global([, ...args], ctx) {
     let name = args[0][0] === '$' && args.shift()
     if (name) ctx.global[name] = ctx.global.length
-    let [type, [op, ...init]] = args, mut = type[0] === 'mut' ? 1 : 0
-    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(op, init, ctx)])
+    let [type, [...init]] = args, mut = type[0] === 'mut' ? 1 : 0
+    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx)])
   },
 
   // (table 1 2? funcref)
@@ -330,9 +331,9 @@ const build = {
   },
 
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
-  elem([, [op, ...offset], ...elems], ctx) {
+  elem([, [...offset], ...elems], ctx) {
     const tableIdx = 0 // FIXME: table index can be defined
-    ctx.elem.push([tableIdx, ...consumeConst(op, offset, ctx), ...uleb(elems.length), ...elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : el))])
+    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), ...uleb(elems.length), ...elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : el))])
   },
 
   //  (export "name" (kind $name|idx))
@@ -385,7 +386,7 @@ const build = {
     if (!offset && !mem) offset = inits.shift()
     if (!offset) offset = ['i32.const', 0]
 
-    ctx.data.push([0, ...consumeConst(offset[0], offset.slice(1), ctx), ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
+    ctx.data.push([0, ...consumeConst([...offset], ctx), ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
   },
 
   // (start $main)
@@ -395,8 +396,8 @@ const build = {
 }
 
 // (i32.add a b) - instantiation time initializer
-const consumeConst = (op, args, ctx) => {
-  let [type, cmd] = op.split('.')
+const consumeConst = (args, ctx) => {
+  let op = args.shift(), [type, cmd] = op.split('.')
 
   // (global.get idx)
   if (type === 'global') return [0x23, ...uleb(args[0][0] === '$' ? ctx.global[args[0]] : args[0]), 0x0b]
@@ -405,9 +406,13 @@ const consumeConst = (op, args, ctx) => {
   if (type === 'v128') return [0xfd, 0x0c, ...v128(args), 0x0b]
 
   // (i32.const 1)
+  if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](args[0]), 0x0b]
+
+  // (i32.add a b), (i32.mult a b) etc
   return [
-    0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type),
-    ...encode[type](args[0]), 0x0b
+    OP.indexOf(op),
+    ...consumeConst(),
+    0x0b
   ]
 }
 
