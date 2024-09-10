@@ -146,10 +146,9 @@ const build = {
         }
         // (v128.const i32x4)
         else if (opCode === 0x0c) {
-          // immed.push(...consumeConst(op, args))
           // FIXME: find more elegant way here
           args.unshift(op)
-          immed = initGlobal(args, ctx)
+          immed = consumeConst(args, ctx)
           immed.pop()
         }
         // (i8x16.extract_lane_s 0 ...)
@@ -320,7 +319,7 @@ const build = {
     let name = args[0][0] === '$' && args.shift()
     if (name) ctx.global[name] = ctx.global.length
     let [type, init] = args, mut = type[0] === 'mut' ? 1 : 0
-    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...initGlobal([...init], ctx)])
+    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst([...init], ctx)])
   },
 
   // (table 1 2? funcref)
@@ -335,7 +334,7 @@ const build = {
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
   elem([, offset, ...elems], ctx) {
     const tableIdx = 0 // FIXME: table index can be defined
-    ctx.elem.push([tableIdx, ...initGlobal([...offset], ctx), ...uleb(elems.length), ...elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : el))])
+    ctx.elem.push([tableIdx, ...consumeConst([...offset], ctx), ...uleb(elems.length), ...elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : el))])
   },
 
   //  (export "name" (kind $name|idx))
@@ -388,7 +387,7 @@ const build = {
     if (!offset && !mem) offset = inits.shift()
     if (!offset) offset = ['i32.const', 0]
 
-    ctx.data.push([0, ...initGlobal([...offset], ctx), ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
+    ctx.data.push([0, ...consumeConst([...offset], ctx), ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
   },
 
   // (start $main)
@@ -397,52 +396,46 @@ const build = {
   }
 }
 
-// (i32.const 0), (global.get idx) - instantiation time initializer
-const initGlobal = (args, ctx) => {
-  let op = args.shift()
+// (i32.add a b) - instantiation time initializer
+const consumeConst = (args, ctx) => {
+  let [type, op] = args.shift().split('.')
 
-  if (op === 'global.get') return [0x23, ...uleb(args[0][0] === '$' ? ctx.global[args[0]] : args[0]), 0x0b]
+  // (global.get idx)
+  if (type === 'global') return [0x23, ...uleb(args[0][0] === '$' ? ctx.global[args[0]] : args[0]), 0x0b]
 
-  // (v128.const i32x4 1 2 3 4), (i32.add a b) etc
+  // (v128.const i32x4 1 2 3 4)
+  if (type === 'v128') return [0xfd, 0x0c, ...v128(args), 0x0b]
+
+  // (i32.const 1)
   return [
-    ...(op === 'v128.const' ? [0xfd, 0x0c] : [0x41 + ['i32.const', 'i64.const', 'f32.const', 'f64.const'].indexOf(op)]),
-    ...consumeConst(op, args), 0x0b
+    0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type),
+    ...encode[type](args[0]), 0x0b
   ]
 }
 
-// consume cost, no op type
-const consumeConst = (op, args) => {
-  // if (op === 'global.get') return [0x23, ...uleb(literal[0] === '$' ? ctx.global[literal] : literal), 0x0b]
+// (v128.const i32x4 1 2 3 4)
+const v128 = (args) => {
+  let [t, n] = args.shift().split('x'),
+    stride = t.slice(1) >>> 3 // i16 -> 2, f32 -> 4
 
-  const [type] = op.split('.')
+  n = +n
 
-  // (v128.const i32x4 1 2 3 4)
-  if (type === 'v128') {
-    let [t, n] = args.shift().split('x'),
-      stride = t.slice(1) >>> 3 // i16 -> 2, f32 -> 4
-
-    n = +n
-
-    // i8, i16, i32 - bypass the encoding
-    if (t[0] === 'i') {
-      let arr = n === 16 ? new Uint8Array(16) : n === 8 ? new Uint16Array(8) : n === 4 ? new Uint32Array(4) : new BigInt64Array(2)
-      for (let i = 0; i < n; i++) {
-        arr[i] = encode[t].parse(args.shift())
-      }
-      return new Uint8Array(arr.buffer)
-    }
-
-    // f32, f64 - encode
-    let arr = new Uint8Array(16)
+  // i8, i16, i32 - bypass the encoding
+  if (t[0] === 'i') {
+    let arr = n === 16 ? new Uint8Array(16) : n === 8 ? new Uint16Array(8) : n === 4 ? new Uint32Array(4) : new BigInt64Array(2)
     for (let i = 0; i < n; i++) {
-      arr.set(encode[t](args.shift()), i * stride)
+      arr[i] = encode[t].parse(args.shift())
     }
-
-    return arr
+    return new Uint8Array(arr.buffer)
   }
 
-  // (i32.const 1)
-  return encode[type](args[0])
+  // f32, f64 - encode
+  let arr = new Uint8Array(16)
+  for (let i = 0; i < n; i++) {
+    arr.set(encode[t](args.shift()), i * stride)
+  }
+
+  return arr
 }
 
 // escape codes
