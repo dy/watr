@@ -394,7 +394,7 @@ const build = {
   }
 }
 
-// (i32.add a b) - instantiation time initializer
+// instantiation time const initializer
 const consumeConst = (node, ctx) => {
   let op = node.shift(), [type, cmd] = op.split('.')
 
