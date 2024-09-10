@@ -409,9 +409,9 @@ const consumeConst = (node, ctx) => {
 
   // (i32.add a b), (i32.mult a b) etc
   return [
-    OP.indexOf(op),
     ...consumeConst(node.shift(), ctx),
-    ...consumeConst(node.shift(), ctx)
+    ...consumeConst(node.shift(), ctx),
+    OP.indexOf(op)
   ]
 }
 
