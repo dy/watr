@@ -22,6 +22,7 @@ export default function print(tree, options = {}) {
 
 const INLINE = [
   'param',
+  'local',
   'drop',
   'f32.const',
   'f64.const',
