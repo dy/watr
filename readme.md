@@ -78,6 +78,7 @@ parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (
 * [x] [simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
 * [x] [extended const](https://github.com/WebAssembly/extended-const/blob/main/proposals/extended-const/Overview.md)
 * [ ] [multiple memories](https://github.com/WebAssembly/multi-memory/blob/master/proposals/multi-memory/Overview.md)
+* [ ] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md)
 * [ ] [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md)
 * [ ] [gc](https://github.com/WebAssembly/gc)
 

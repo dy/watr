@@ -196,7 +196,7 @@ const build = {
       // (call id ...nodes)
       else if (opCode == 16) {
         let fnName = args.shift()
-        immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] ?? err('Unknown function `' + fnName + '`') : fnName);
+        immed = uleb(id = funcId(fnName, ctx));
         // FIXME: how to get signature of imported function
       }
 
@@ -317,6 +317,7 @@ const build = {
     let name = args[0][0] === '$' && args.shift()
     if (name) ctx.global[name] = ctx.global.length
     let [type, [...init]] = args, mut = type[0] === 'mut' ? 1 : 0
+
     ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx), 0x0b])
   },
 
@@ -332,7 +333,7 @@ const build = {
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
   elem([, [...offset], ...elems], ctx) {
     const tableIdx = 0 // FIXME: table index can be defined
-    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), 0x0b, ...uleb(elems.length), ...elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : el))])
+    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), 0x0b, ...uleb(elems.length), ...elems.flatMap(el => uleb(funcId(el, ctx)))])
   },
 
   //  (export "name" (kind $name|idx))
@@ -390,7 +391,7 @@ const build = {
 
   // (start $main)
   start([, name], ctx) {
-    if (!ctx.start.length) ctx.start.push([name[0] === '$' ? ctx.func[name] : name])
+    if (!ctx.start.length) ctx.start.push(uleb(funcId(name, ctx)))
   }
 }
 
@@ -406,6 +407,10 @@ const consumeConst = (node, ctx) => {
 
   // (i32.const 1)
   if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
+
+  // (ref.func $x)
+  console.log(ctx, op, node)
+  if (type === 'ref') return [0xD2, 0]
 
   // (i32.add a b), (i32.mult a b) etc
   return [
@@ -492,3 +497,5 @@ const consumeParams = (args) => {
   while (args[0]?.includes('=')) param = args.shift().split('='), params[param[0]] = Number(param[1])
   return params
 }
+
+const funcId = (name, ctx) => name[0] === '$' ? ctx.func[name] ?? err('Unknown function `' + name + '`') : name
