@@ -21,12 +21,15 @@
 * [x] Multiple params
 * [x] SIMD
 * [x] nan:value
-* [ ] constant expressions
+* [x] constant expressions
 * [x] ~~bench wassemble~~ - broken
+* [x] Floating hex
+* [ ] every section just pushes binary: try to make binary immediately, instead of afterstep
+* [ ] Feature: func-ref
+* [ ] Feature: ref-types
+* [ ] Feature: gc
 * [ ] Tests: https://github.com/EmNudge/watlings
-* [ ] Floating hex
 * [ ] Official test suite https://github.com/WebAssembly/testsuite
-* [ ] Compiler: Externref types;
 * [ ] Compiler: Named/multiple memory;
 * [ ] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
@@ -40,4 +43,4 @@
 ## Backlog
 
 * [ ] reorganize OP so to store number of immediates
-* wat-based wat-compiler
+* [ ] wat-based wat-compiler

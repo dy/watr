@@ -15,9 +15,10 @@ export default (nodes) => {
   if (typeof nodes === 'string') nodes = parse(nodes);
 
   // IR. Alias is stored directly to section array by key, eg. section.func.$name = idx
-  let sections = {
+  const sections = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
-  }, binary = [
+  }
+  const binary = [
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
   ]
@@ -26,13 +27,15 @@ export default (nodes) => {
   // (func) → [(func)]
   if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes]
 
-  // (global $a (import "a" "b") (mut i32)) → (import "a" "b" (global $a (mut i32)))
-  // (memory (import "a" "b") min max shared) → (import "a" "b" (memory min max shared))
+  // FIXME: maybe instead we have to just put import section out and initialize after
+  // OR: can we handle it in individual sections instead?
   nodes = nodes.map(node => {
+    // (global $a (import "a" "b") (mut i32)) → (import "a" "b" (global $a (mut i32)))
     if (node[2]?.[0] === 'import') {
       let [kind, name, imp, ...args] = node
       return [...imp, [kind, name, ...args]]
     }
+    // (memory (import "a" "b") min max shared) → (import "a" "b" (memory min max shared))
     else if (node[1]?.[0] === 'import') {
       let [kind, imp, ...args] = node
       return [...imp, [kind, ...args]]
@@ -41,19 +44,17 @@ export default (nodes) => {
   })
 
   // 2. build IR. import must be initialized first, global before func, elem after func
-  let order = ['type', 'import', 'table', 'memory', 'global', 'func', 'export', 'start', 'elem', 'data'], postcall = []
-
-  for (let name of order) {
+  // FIXME: we can instead sort nodes in order of sections and just run for name in sections once
+  for (let name in sections) {
     let remaining = []
     for (let node of nodes) {
-      node[0] === name ? postcall.push(build[name](node, sections)) : remaining.push(node)
+      if (node[0] === name) build[name](node, sections, remaining)
+      else remaining.push(node)
     }
     nodes = remaining
   }
 
-  // code must be compiled after all definitions
-  for (let cb of postcall) cb?.()
-
+  // FIXME: this is not necessary, sections can build binary immediately
   // 3. build binary
   for (let name in sections) {
     let items = sections[name]
@@ -76,24 +77,119 @@ const build = {
     if (kind !== 'func') err(`Unknown type kind '${kind}'`)
     const [idx] = consumeType(sig, ctx)
     if (typeName) ctx.type[typeName] = idx
+
+    // FIXME: this must build ctx.type
+  },
+
+  // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
+  // (import "js" "mem" (memory 1))
+  // (import "js" "mem" (memory $name 1))
+  // (import "js" "v" (global $name (mut f64)))
+  import([, mod, field, ref], ctx) {
+    let details, [kind, ...parts] = ref,
+      name = parts[0]?.[0] === '$' && parts.shift();
+
+    if (kind === 'func') {
+      // we track imported funcs in func section to share namespace, and skip them on final build
+      if (name) ctx.func[name] = ctx.func.length
+      let [typeIdx] = consumeType(parts, ctx)
+      ctx.func.push(details = uleb(typeIdx))
+      ctx.func.importc = (ctx.func.importc || 0) + 1
+    }
+    else if (kind === 'memory') {
+      if (name) ctx.memory[name] = ctx.memory.length
+      details = range(parts)
+    }
+    else if (kind === 'global') {
+      // imported globals share namespace with internal globals - we skip them in final build
+      if (name) ctx.global[name] = ctx.global.length
+      let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
+      details = [TYPE[mut ? type[1] : type], mut]
+      ctx.global.push(details)
+      ctx.global.importc = (ctx.global.importc || 0) + 1
+    }
+    else throw Error('Unimplemented ' + kind)
+
+    ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
-  func([, ...body], ctx) {
-    let locals = [], // list of local variables
-      blocks = [] // control instructions / blocks stack
+  func([, ...body], ctx, nodes) {
+    const id = ctx.func.length
 
     // fn name
-    if (body[0]?.[0] === '$') ctx.func[body.shift()] = ctx.func.length
+    if (body[0]?.[0] === '$') ctx.func[body.shift()] = id
 
-    // export binding
-    if (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', ctx.func.length]], ctx)
+    // (func (export "name") ) -> (export "name" (func $name))
+    if (body[0]?.[0] === 'export') nodes.push([...body.shift(), ['func', id]])
 
-    // register/consume type info
-    let [typeIdx, params, result] = consumeType(body, ctx)
+    const [typeIdx, params] = consumeType(body, ctx)
+
+    // create (code body) section
+    // FIXME: pass params somehow differently
+    // maybe we can handle that in pre-processing step, when we transform tree?
+    nodes.push(['code', params, ...body])
 
     // register new function
     ctx.func.push([typeIdx])
+  },
+
+  // (table 1 2? funcref)
+  // (table $name 1 2? funcref)
+  table([, ...args], ctx) {
+    let name = args[0][0] === '$' && args.shift()
+    if (name) ctx.table[name] = ctx.table.length
+    let lims = range(args)
+    ctx.table.push([TYPE[args.pop()], ...lims])
+  },
+
+  // (memory min max shared)
+  // (memory $name min max shared)
+  // (memory (export "mem") 5)
+  memory([, ...parts], ctx, nodes) {
+    const id = ctx.memory.length
+    if (parts[0][0] === '$') ctx.memory[parts.shift()] = id
+
+    // (memory (export "m") ) -> (export "m" (memory id))
+    if (parts[0][0] === 'export') nodes.push([...parts.shift(), ['memory', id]])
+
+    // if (parts[0][0] === 'export') build.export([...parts.shift(), ['memory', id]], ctx)
+    ctx.memory.push(range(parts))
+  },
+
+  // (global i32 (i32.const 42))
+  // (global $id i32 (i32.const 42))
+  // (global $id (mut i32) (i32.const 42))
+  global([, ...args], ctx) {
+    let name = args[0][0] === '$' && args.shift()
+    if (name) ctx.global[name] = ctx.global.length
+    let [type, [...init]] = args, mut = type[0] === 'mut' ? 1 : 0
+
+    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx), 0x0b])
+  },
+
+  //  (export "name" (kind $name|idx))
+  export([, name, [kind, idx]], ctx) {
+    if (idx[0] === '$') idx = ctx[kind][idx]
+    ctx.export.push([...str(name), KIND[kind], ...uleb(idx)])
+  },
+
+  // (start $main)
+  start([, name], ctx) {
+    if (!ctx.start.length) ctx.start.push(uleb(funcId(name, ctx)))
+  },
+
+  // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
+  elem([, [...offset], ...elems], ctx) {
+    const tableIdx = 0 // FIXME: table index can be defined
+    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), 0x0b, ...uleb(elems.length), ...elems.flatMap(el => uleb(funcId(el, ctx)))])
+  },
+
+  // artificial section
+  // (code params ...body)
+  code([, params, ...body], ctx) {
+    let blocks = [] // control instructions / blocks stack
+    let locals = [] // list of local variables
 
     // collect locals
     while (body[0]?.[0] === 'local') {
@@ -129,12 +225,12 @@ const build = {
         immed = [0xfd, ...uleb(opCode)]
         // (v128.load)
         if (opCode <= 0x0b) {
-          const o = consumeParams(args)
+          const o = consumeAlignOffset(args)
           immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
         }
         // (v128.load_lane offset? align? idx)
         else if (opCode >= 0x54 && opCode <= 0x5d) {
-          const o = consumeParams(args)
+          const o = consumeAlignOffset(args)
           immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
           // (v128.load_lane_zero)
           if (opCode <= 0x5b) immed.push(...uleb(args.shift()))
@@ -174,7 +270,7 @@ const build = {
       // (i32.store align=n offset=m at value) etc
       else if (opCode >= 40 && opCode <= 62) {
         // FIXME: figure out point in Math.log2 aligns
-        let o = consumeParams(args)
+        let o = consumeAlignOffset(args)
         immed = [Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0)]
       }
 
@@ -292,86 +388,9 @@ const build = {
       if (immed) out.push(...immed)
     }
 
-    // evaluates after all definitions (need globals, elements, data etc.)
-    // FIXME: get rid of this postcall
-    return () => {
-      const bytes = []
-      while (body.length) consume(body, bytes)
-      ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, 0x0b])
-    }
-  },
-
-  // (memory min max shared)
-  // (memory $name min max shared)
-  // (memory (export "mem") 5)
-  memory([, ...parts], ctx) {
-    if (parts[0][0] === '$') ctx.memory[parts.shift()] = ctx.memory.length
-    if (parts[0][0] === 'export') build.export([...parts.shift(), ['memory', ctx.memory.length]], ctx)
-    ctx.memory.push(range(parts))
-  },
-
-  // (global i32 (i32.const 42))
-  // (global $id i32 (i32.const 42))
-  // (global $id (mut i32) (i32.const 42))
-  global([, ...args], ctx) {
-    let name = args[0][0] === '$' && args.shift()
-    if (name) ctx.global[name] = ctx.global.length
-    let [type, [...init]] = args, mut = type[0] === 'mut' ? 1 : 0
-
-    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx), 0x0b])
-  },
-
-  // (table 1 2? funcref)
-  // (table $name 1 2? funcref)
-  table([, ...args], ctx) {
-    let name = args[0][0] === '$' && args.shift()
-    if (name) ctx.table[name] = ctx.table.length
-    let lims = range(args)
-    ctx.table.push([TYPE[args.pop()], ...lims])
-  },
-
-  // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
-  elem([, [...offset], ...elems], ctx) {
-    const tableIdx = 0 // FIXME: table index can be defined
-    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), 0x0b, ...uleb(elems.length), ...elems.flatMap(el => uleb(funcId(el, ctx)))])
-  },
-
-  //  (export "name" (kind $name|idx))
-  export([, name, [kind, idx]], ctx) {
-    if (idx[0] === '$') idx = ctx[kind][idx]
-    ctx.export.push([...str(name), KIND[kind], ...uleb(idx)])
-  },
-
-  // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
-  // (import "js" "mem" (memory 1))
-  // (import "js" "mem" (memory $name 1))
-  // (import "js" "v" (global $name (mut f64)))
-  import([, mod, field, ref], ctx) {
-    let details, [kind, ...parts] = ref,
-      name = parts[0]?.[0] === '$' && parts.shift();
-
-    if (kind === 'func') {
-      // we track imported funcs in func section to share namespace, and skip them on final build
-      if (name) ctx.func[name] = ctx.func.length
-      let [typeIdx] = consumeType(parts, ctx)
-      ctx.func.push(details = uleb(typeIdx))
-      ctx.func.importc = (ctx.func.importc || 0) + 1
-    }
-    else if (kind === 'memory') {
-      if (name) ctx.memory[name] = ctx.memory.length
-      details = range(parts)
-    }
-    else if (kind === 'global') {
-      // imported globals share namespace with internal globals - we skip them in final build
-      if (name) ctx.global[name] = ctx.global.length
-      let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
-      details = [TYPE[mut ? type[1] : type], mut]
-      ctx.global.push(details)
-      ctx.global.importc = (ctx.global.importc || 0) + 1
-    }
-    else throw Error('Unimplemented ' + kind)
-
-    ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
+    const bytes = []
+    while (body.length) consume(body, bytes)
+    ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, 0x0b])
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
@@ -387,11 +406,6 @@ const build = {
     if (!offset) offset = ['i32.const', 0]
 
     ctx.data.push([0, ...consumeConst([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
-  },
-
-  // (start $main)
-  start([, name], ctx) {
-    if (!ctx.start.length) ctx.start.push(uleb(funcId(name, ctx)))
   }
 }
 
@@ -409,8 +423,7 @@ const consumeConst = (node, ctx) => {
   if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
 
   // (ref.func $x)
-  console.log(ctx, op, node)
-  if (type === 'ref') return [0xD2, 0]
+  if (type === 'ref') return console.log(ctx.func) || [0xD2, ...uleb(funcId(node[0], ctx))]
 
   // (i32.add a b), (i32.mult a b) etc
   return [
@@ -465,34 +478,36 @@ const str = str => {
 // build range/limits sequence (non-consuming)
 const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]
 
-// get type info from (params) (result) nodes sequence (consumes nodes)
-// returns registered (reused) type idx, params bytes, result bytes
+// get fn type info from (params) (result) nodes sequence (consumes nodes)
+// returns registered (reused) type idx
 // eg. (type $return_i32 (func (result i32)))
 const consumeType = (nodes, ctx) => {
   let params = [], result = [], idx, bytes
 
-  // collect params
+  // collect params (param i32 i64) (param $x i32)
   while (nodes[0]?.[0] === 'param') {
     let [, ...types] = nodes.shift()
+    // save param by name
     if (types[0]?.[0] === '$') params[types.shift()] = params.length
     params.push(...types.map(t => TYPE[t]))
   }
 
-  // collect result type
+  // collect result eg. (result f64 f32)
   if (nodes[0]?.[0] === 'result') result = nodes.shift().slice(1).map(t => TYPE[t])
 
   // reuse existing type or register new one
+  // FIXME: can be done easier via string comparison
   bytes = [TYPE.func, ...uleb(params.length), ...params, ...uleb(result.length), ...result]
   idx = ctx.type.findIndex((t) => t.every((byte, i) => byte === bytes[i]))
 
   // register new type, if not found
   if (idx < 0) idx = ctx.type.push(bytes) - 1
 
-  return [idx, params, result]
+  return [idx, params]
 }
 
 // consume align/offset/etc params
-const consumeParams = (args) => {
+const consumeAlignOffset = (args) => {
   let params = {}, param
   while (args[0]?.includes('=')) param = args.shift().split('='), params[param[0]] = Number(param[1])
   return params
