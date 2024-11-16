@@ -1,6 +1,6 @@
 import t, { is, ok, same } from 'tst'
 import print from '../src/print.js'
-import { wat2wasm, file } from './compile.js'
+import { wat2wasm } from './compile.js'
 
 t('print: basics', () => {
   const tree = [
@@ -60,7 +60,8 @@ t('print: doesnt break samples', async t => {
     '/test/example/stack.wat',
   ]
   for (let path of files) {
-    let src = await file(path)
+    let res = await fetch(path)
+    let src = await res.text()
     const dino = print(src)
     wat2wasm(dino)
   }

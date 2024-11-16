@@ -24,7 +24,8 @@
 * [x] constant expressions
 * [x] ~~bench wassemble~~ - broken
 * [x] Floating hex
-* [ ] every section just pushes binary: try to make binary immediately, instead of afterstep
+* [ ] Streamline compiler: single pass
+* [ ] Tests: official set
 * [ ] Feature: func-ref
 * [ ] Feature: ref-types
 * [ ] Feature: gc

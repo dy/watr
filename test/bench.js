@@ -1,5 +1,4 @@
 import t, { is } from 'tst'
-import { file } from './compile.js'
 import watr from '../src/compile.js'
 import Wabt from './lib/wabt.js'
 import watCompiler from './lib/wat-compiler.js'
@@ -10,7 +9,8 @@ import { wat2wasm } from './compile.js'
 // bench
 t.skip('bench: brownian', async () => {
   // example.ts
-  let src = await file('/test/example/brownian.wat')
+  let res = await fetch('/test/example/brownian.wat')
+  let src = await res.text()
   // let src = `(module
   //   (func $dummy)
   //   (func (export "foo") (param i32) (result i32)
