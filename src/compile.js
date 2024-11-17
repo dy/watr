@@ -2,7 +2,6 @@ import * as encode from './encode.js'
 import { uleb } from './encode.js'
 import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
 import parse from './parse.js'
-import { err } from './util.js'
 
 
 /**
@@ -100,7 +99,8 @@ const build = {
       if (name) ctx.func[name] = ctx.func.length
       let [typeIdx] = consumeType(parts, ctx)
       ctx.func.push(details = uleb(typeIdx))
-      ctx.import.func = (ctx.import.func || 0) + 1
+      // const typeIdx = build.func(['func', ...parts], ctx)
+      ctx.import.func ||= 0; ctx.import.func++
     }
     else if (kind === 'memory') {
       if (name) ctx.memory[name] = ctx.memory.length
@@ -112,7 +112,7 @@ const build = {
       let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
       details = [TYPE[mut ? type[1] : type], mut]
       ctx.global.push(details)
-      ctx.import.global = (ctx.import.global || 0) + 1
+      ctx.import.global ||= 0; ctx.import.global++
     }
     else throw Error('Unimplemented ' + kind)
 
@@ -130,7 +130,7 @@ const build = {
     const [typeIdx, params] = consumeType(body, ctx)
 
     // create (code body) section
-    nodes.push(['code', params, ...body])
+    if (nodes) nodes.push(['code', params, ...body])
 
     // register new function
     ctx.func.push(uleb(typeIdx))
@@ -190,6 +190,8 @@ const build = {
 
   // (elem (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
   elem([, [...offset], ...elems], ctx) {
+    // FIXME: it can also have name
+
     const tableIdx = 0 // FIXME: table index can be defined
     ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), 0x0b, ...uleb(elems.length), ...elems.flatMap(el => uleb(funcId(el, ctx)))])
   },
@@ -408,6 +410,8 @@ const build = {
   data([, ...inits], ctx) {
     let offset, mem
 
+    // FIXME: it can have name also
+
     if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
     if (inits[0]?.[0] === 'memory') [, mem] = inits.shift()
     if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
@@ -467,25 +471,6 @@ const v128 = (args) => {
   return arr
 }
 
-// escape codes
-const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
-
-// build string binary
-const str = str => {
-  str = str[0] === '"' ? str.slice(1, -1) : str
-  let res = [], i = 0, c, BSLASH = 92
-  // spec https://webassembly.github.io/spec/core/text/values.html#strings
-  for (; i < str.length;) {
-    c = str.charCodeAt(i++)
-    res.push(c === BSLASH ? escape[str[i++]] || parseInt(str.slice(i - 1, ++i), 16) : c)
-  }
-
-  res.unshift(...uleb(res.length))
-  return res
-}
-
-// build range/limits sequence (non-consuming)
-const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]
 
 // get type info from (params) (result) nodes sequence - consumes nodes
 // returns registered (reused) type idx
@@ -533,4 +518,28 @@ const consumeAlignOffset = (args) => {
   return params
 }
 
+// get func id from name
+// FIXME: generalize to any-type id
 const funcId = (name, ctx) => name[0] === '$' ? ctx.func[name] ?? err('Unknown function `' + name + '`') : name
+
+const err = text => { throw Error(text) }
+
+// escape codes
+const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
+
+// build string binary
+const str = str => {
+  str = str[0] === '"' ? str.slice(1, -1) : str
+  let res = [], i = 0, c, BSLASH = 92
+  // spec https://webassembly.github.io/spec/core/text/values.html#strings
+  for (; i < str.length;) {
+    c = str.charCodeAt(i++)
+    res.push(c === BSLASH ? escape[str[i++]] || parseInt(str.slice(i - 1, ++i), 16) : c)
+  }
+
+  res.unshift(...uleb(res.length))
+  return res
+}
+
+// build range/limits sequence (non-consuming)
+const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]
