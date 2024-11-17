@@ -143,11 +143,11 @@ const build = {
   // (table 1 2? funcref)
   // (table $name 1 2? funcref)
   table([, ...args], ctx) {
-    let name = args[0][0] === '$' && args.shift()
-    if (name) ctx.table[name] = ctx.table.length
+    const id = ctx.table.length
+    if (args[0][0] === '$') ctx.table[args.shift()] = id
 
-    // FIXME: handle export
-    // FIXME: handle import
+    // (table (export "m") ) -> (export "m" (table id))
+    while (args[0]?.[0] === 'export') build.export([...args.shift(), ['table', id]], ctx)
 
     let lims = range(args)
     ctx.table.push([TYPE[args.pop()], ...lims])
@@ -156,15 +156,14 @@ const build = {
   // (memory min max shared)
   // (memory $name min max shared)
   // (memory (export "mem") 5)
-  memory([, ...parts], ctx, nodes) {
+  memory([, ...args], ctx) {
     const id = ctx.memory.length
-    if (parts[0][0] === '$') ctx.memory[parts.shift()] = id
+    if (args[0][0] === '$') ctx.memory[args.shift()] = id
 
     // (memory (export "m") ) -> (export "m" (memory id))
-    // if (parts[0][0] === 'export') nodes.push([...parts.shift(), ['memory', id]])
-    while (parts[0]?.[0] === 'export') build.export([...parts.shift(), ['memory', id]], ctx)
+    while (args[0]?.[0] === 'export') build.export([...args.shift(), ['memory', id]], ctx)
 
-    ctx.memory.push(range(parts))
+    ctx.memory.push(range(args))
   },
 
   // (global i32 (i32.const 42))
@@ -517,7 +516,7 @@ const consumeType = (nodes, ctx) => {
   if (nodes[0]?.[0] === 'result') result = nodes.shift().slice(1).map(t => TYPE[t])
 
   // if new type, not (type 0) (...)
-  if (!idx) {
+  if (idx == null) {
     // reuse existing type or register new one
     // FIXME: can be done easier via string comparison
     bytes = [TYPE.func, ...uleb(params.length), ...params, ...uleb(result.length), ...result]
