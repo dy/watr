@@ -58,7 +58,7 @@ export default (nodes) => {
   // 3. build binary
   for (let name in sections) {
     let items = sections[name]
-    if (items.importc) items = items.slice(items.importc) // discard imported functions/globals
+    if (sections.import[name]) items = items.slice(sections.import[name]) // skip number of imported entries
     if (!items.length) continue
     let sectionCode = SECTION[name], bytes = []
     if (sectionCode !== 8) bytes.push(items.length) // skip start section count
@@ -100,7 +100,7 @@ const build = {
       if (name) ctx.func[name] = ctx.func.length
       let [typeIdx] = consumeType(parts, ctx)
       ctx.func.push(details = uleb(typeIdx))
-      ctx.func.importc = (ctx.func.importc || 0) + 1
+      ctx.import.func = (ctx.import.func || 0) + 1
     }
     else if (kind === 'memory') {
       if (name) ctx.memory[name] = ctx.memory.length
@@ -112,7 +112,7 @@ const build = {
       let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
       details = [TYPE[mut ? type[1] : type], mut]
       ctx.global.push(details)
-      ctx.global.importc = (ctx.global.importc || 0) + 1
+      ctx.import.global = (ctx.import.global || 0) + 1
     }
     else throw Error('Unimplemented ' + kind)
 
@@ -122,8 +122,6 @@ const build = {
   // (func $name? ...params result ...body)
   func([, ...body], ctx, nodes) {
     const id = ctx.func.length
-
-    // fn name
     if (body[0]?.[0] === '$') ctx.func[body.shift()] = id
 
     // (func (export "a")(export "b") ) -> (export "a" (func $name))(export "b" (func $name))
@@ -132,19 +130,17 @@ const build = {
     const [typeIdx, params] = consumeType(body, ctx)
 
     // create (code body) section
-    // FIXME: pass params somehow differently
-    // maybe we can handle that in pre-processing step, when we transform tree?
     nodes.push(['code', params, ...body])
 
     // register new function
-    ctx.func.push([typeIdx])
+    ctx.func.push(uleb(typeIdx))
   },
 
   // (table 1 2? funcref)
   // (table $name 1 2? funcref)
   table([, ...args], ctx) {
     const id = ctx.table.length
-    if (args[0][0] === '$') ctx.table[args.shift()] = id
+    if (args[0]?.[0] === '$') ctx.table[args.shift()] = id
 
     // (table (export "m") ) -> (export "m" (table id))
     while (args[0]?.[0] === 'export') build.export([...args.shift(), ['table', id]], ctx)
@@ -158,7 +154,7 @@ const build = {
   // (memory (export "mem") 5)
   memory([, ...args], ctx) {
     const id = ctx.memory.length
-    if (args[0][0] === '$') ctx.memory[args.shift()] = id
+    if (args[0]?.[0] === '$') ctx.memory[args.shift()] = id
 
     // (memory (export "m") ) -> (export "m" (memory id))
     while (args[0]?.[0] === 'export') build.export([...args.shift(), ['memory', id]], ctx)
