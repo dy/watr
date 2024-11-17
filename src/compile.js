@@ -73,7 +73,13 @@ const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
   // FIXME: handle non-function types
-  type([, typeName, [kind, ...sig]], ctx) {
+  type([, ...parts], ctx) {
+    let typeName
+
+    // type name
+    if (parts[0]?.[0] === '$') typeName = parts.shift()
+    let [kind, ...sig] = parts.shift()
+
     if (kind !== 'func') err(`Unknown type kind '${kind}'`)
     const [idx] = consumeType(sig, ctx)
     if (typeName) ctx.type[typeName] = idx
@@ -120,8 +126,8 @@ const build = {
     // fn name
     if (body[0]?.[0] === '$') ctx.func[body.shift()] = id
 
-    // (func (export "name") ) -> (export "name" (func $name))
-    if (body[0]?.[0] === 'export') nodes.push([...body.shift(), ['func', id]])
+    // (func (export "a")(export "b") ) -> (export "a" (func $name))(export "b" (func $name))
+    while (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', id]], ctx)
 
     const [typeIdx, params] = consumeType(body, ctx)
 
@@ -139,6 +145,10 @@ const build = {
   table([, ...args], ctx) {
     let name = args[0][0] === '$' && args.shift()
     if (name) ctx.table[name] = ctx.table.length
+
+    // FIXME: handle export
+    // FIXME: handle import
+
     let lims = range(args)
     ctx.table.push([TYPE[args.pop()], ...lims])
   },
@@ -151,9 +161,9 @@ const build = {
     if (parts[0][0] === '$') ctx.memory[parts.shift()] = id
 
     // (memory (export "m") ) -> (export "m" (memory id))
-    if (parts[0][0] === 'export') nodes.push([...parts.shift(), ['memory', id]])
+    // if (parts[0][0] === 'export') nodes.push([...parts.shift(), ['memory', id]])
+    while (parts[0]?.[0] === 'export') build.export([...parts.shift(), ['memory', id]], ctx)
 
-    // if (parts[0][0] === 'export') build.export([...parts.shift(), ['memory', id]], ctx)
     ctx.memory.push(range(parts))
   },
 
@@ -163,6 +173,10 @@ const build = {
   global([, ...args], ctx) {
     let name = args[0][0] === '$' && args.shift()
     if (name) ctx.global[name] = ctx.global.length
+
+    // (global $id (export "a") i32 )
+    while (args[0]?.[0] === 'export') build.export([...args.shift(), ['global', name]], ctx);
+
     let [type, [...init]] = args, mut = type[0] === 'mut' ? 1 : 0
 
     ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx), 0x0b])
@@ -478,11 +492,18 @@ const str = str => {
 // build range/limits sequence (non-consuming)
 const range = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]
 
-// get fn type info from (params) (result) nodes sequence (consumes nodes)
+// get type info from (params) (result) nodes sequence - consumes nodes
 // returns registered (reused) type idx
 // eg. (type $return_i32 (func (result i32)))
 const consumeType = (nodes, ctx) => {
   let params = [], result = [], idx, bytes
+
+  // existing type (type 0), (type $name) - can repeat params, result after
+  if (nodes[0]?.[0] === 'type') {
+    idx = nodes.shift()[1]
+    if (idx[0] === '$') idx = ctx.type[idx]
+    else idx = +idx
+  }
 
   // collect params (param i32 i64) (param $x i32)
   while (nodes[0]?.[0] === 'param') {
@@ -495,14 +516,18 @@ const consumeType = (nodes, ctx) => {
   // collect result eg. (result f64 f32)
   if (nodes[0]?.[0] === 'result') result = nodes.shift().slice(1).map(t => TYPE[t])
 
-  // reuse existing type or register new one
-  // FIXME: can be done easier via string comparison
-  bytes = [TYPE.func, ...uleb(params.length), ...params, ...uleb(result.length), ...result]
-  idx = ctx.type.findIndex((t) => t.every((byte, i) => byte === bytes[i]))
+  // if new type, not (type 0) (...)
+  if (!idx) {
+    // reuse existing type or register new one
+    // FIXME: can be done easier via string comparison
+    bytes = [TYPE.func, ...uleb(params.length), ...params, ...uleb(result.length), ...result]
+    idx = ctx.type.findIndex((t) => t.every((byte, i) => byte === bytes[i]))
 
-  // register new type, if not found
-  if (idx < 0) idx = ctx.type.push(bytes) - 1
+    // register new type, if not found
+    if (idx < 0) idx = ctx.type.push(bytes) - 1
+  }
 
+  // FIXME: we should not return params here
   return [idx, params]
 }
 

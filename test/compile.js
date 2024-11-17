@@ -2,6 +2,7 @@ import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import Wabt from './lib/wabt.js'
+import print from '../src/print.js'
 
 
 t('compile: reexport func', () => {
@@ -2224,7 +2225,29 @@ t('example: wat-compiler', async () => {
 })
 
 t('example: official', async () => {
+  async function ex(path) {
+    let res = await fetch(path)
+    let src = await res.text()
+    let nodes = parse(src)
+    let buf, mod, inst
+    for (let node of nodes) {
+      // (module $name) - creates module instance, collects exports
+      if (node[0] === 'module') {
+        console.log('compile', print(node));
+        buf = compile(node)
+        mod = new WebAssembly.Module(buf)
+        inst = new WebAssembly.Instance(mod, {})
+      }
+      // else if (node[0] === 'assert_return') {
 
+      // }
+      // else if (node[0] === 'assert_invalid') {
+
+      // }
+    }
+  }
+
+  await ex('/test/official/export.wat')
 })
 
 
