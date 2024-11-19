@@ -32,11 +32,11 @@ export default (nodes) => {
   const nodeSections = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
   }
-  for (let node of nodes) {
-    let [kind] = node, id;
-
-    // TODO: deref
-    // id = typeof node[0] === 'string' && node.shift()
+  for (let [kind, ...node] of nodes) {
+    // get name reference
+    let id = nodeSections[kind].length
+    let name = typeof node[0] === 'string' && node.shift()
+    // if (name) sections[kind][name] = id
 
     // // (global ...)
     // if (id == null) id = sections[kind].length
@@ -55,9 +55,9 @@ export default (nodes) => {
     // TODO: prevent dupe start
     // if (kind === 'start') node = sections.start.length ? null : id
 
-    // TODO: normalize export
-    // (func (export "a")(export "b") ) -> (export "a" (func 0))(export "b" (func 0))
-    // while (node[0]?.[0] === 'export') sections.export.push([...node.shift().slice(1), [kind, id]])
+    // normalize exports
+    // (func (export "a")(export "b") (type) ... ) -> (export "a" (func 0))(export "b" (func 0))
+    while (node[0]?.[0] === 'export') nodeSections.export.push([...node.shift(), [kind, id]])
 
     // TODO: normalize import (comes after exports)
     // (memory (import "a" "b") min max shared) -> (import "a" "b" (memory min max shared))
@@ -81,7 +81,7 @@ export default (nodes) => {
     //   node =
     // }
 
-    nodeSections[kind].push(node)
+    nodeSections[kind].push([kind, ...(name ? [name] : []), ...node])
   }
 
   // build sections

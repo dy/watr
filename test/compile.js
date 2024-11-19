@@ -128,45 +128,6 @@ t('compile: function param + local', () => {
   is(add(22), 42)
 })
 
-t('compile: call function indirect (table)', () => {
-  let { call_function_indirect } = run(`
-    (type $return_i32 (func (result i32)))
-    (table 2 funcref)
-      (elem (i32.const 0) $f1 $f2)
-      (func $f1 (result i32)
-        (i32.const 42))
-      (func $f2 (result i32)
-        (i32.const 13))
-    (func (export "call_function_indirect") (param $a i32) (result i32)
-      (call_indirect (type $return_i32) (local.get $a))
-    )
-  `).exports
-
-  is(call_function_indirect(0), 42)
-  is(call_function_indirect(1), 13)
-})
-
-t('compile: call function indirect (table) non zero indexed ref types', () => {
-  let { call_function_indirect } = run(`
-    (type $return_i32 (func (result i32)))
-    (type $return_i64 (func (result i64)))
-    (table 2 funcref)
-      (elem (i32.const 0) $f1 $f2)
-      (func $xx (result i32)
-        (i32.const 42))
-      (func $f1 (result i32)
-        (i32.const 42))
-      (func $f2 (result i32)
-        (i32.const 13))
-    (func (export "call_function_indirect") (param $a i32) (result i32)
-      (call_indirect (type $return_i32) (local.get $a))
-    )
-  `).exports
-
-  is(call_function_indirect(0), 42)
-  is(call_function_indirect(1), 13)
-})
-
 t('compile: 1 global const (immutable)', () => {
   let { get } = run(`
     (global $answer i32 (i32.const 42))
@@ -273,13 +234,13 @@ t('compile: import memory $foo 1 2 shared', () => run(`
 t('compile: set a start function', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))
-    (start $main)
     (func $main
-      (global.set $answer (i32.const 666))
+    (global.set $answer (i32.const 666))
     )
     (func (export "get") (result i32)
-      (global.get $answer)
+    (global.get $answer)
     )
+    (start $main)
   `
   let { get } = run(src).exports
 
@@ -904,12 +865,12 @@ t(`compile: 3 locals [i32, i32, i64] (joined)`, () => {
 t('compile: call function indirect (table)', () => {
   let src = `
     (type $return_i32 (func (result i32)))
+    (func $f1 (result i32)
+      (i32.const 42))
+    (func $f2 (result i32)
+      (i32.const 13))
     (table 2 funcref)
       (elem (i32.const 0) $f1 $f2)
-      (func $f1 (result i32)
-        (i32.const 42))
-      (func $f2 (result i32)
-        (i32.const 13))
     (func (export "call_function_indirect") (param $a i32) (result i32)
       (call_indirect (type $return_i32) (local.get $a))
     )
@@ -925,13 +886,13 @@ t('compile: call function indirect (table) non zero indexed ref types', () => {
     (type $return_i64 (func (result i64)))
     (type $return_i32 (func (result i32)))
     (table 2 funcref)
-      (elem (i32.const 0) $f1 $f2)
-      (func $xx (result i64)
-        (i64.const 42))
-      (func $f1 (result i32)
-        (i32.const 42))
-      (func $f2 (result i32)
-        (i32.const 13))
+    (func $xx (result i64)
+    (i64.const 42))
+    (func $f1 (result i32)
+    (i32.const 42))
+    (func $f2 (result i32)
+    (i32.const 13))
+    (elem (i32.const 0) $f1 $f2)
     (func (export "call_function_indirect") (param $a i32) (result i32)
       (call_indirect (type $return_i32) (local.get $a))
     )
@@ -999,8 +960,10 @@ t('case: globals', () => {
 
 t('case: func hoist', () => {
   let src = `
+    (global funcref (ref.func $a))
     (func (call $a))
-    (func $a)
+    (func $a (type $a))
+    (type $a (func))
   `
   run(src)
 })
@@ -2148,16 +2111,17 @@ t.todo('feature: ref_func', () => {
   (global funcref (ref.func $f))
   (global funcref (ref.func $g))
   (global $v (mut funcref) (ref.func $f))
+
+  (global funcref (ref.func $gf1))
+  (global funcref (ref.func $gf2))
+  (func (drop (ref.func $ff1)) (drop (ref.func $ff2)))
+  (elem declare func $gf1 $ff1)
+  (elem declare funcref (ref.func $gf2) (ref.func $ff2))
+  (func $gf1)
+  (func $gf2)
+  (func $ff1)
+  (func $ff2)
   `
-  // (global funcref (ref.func $gf1))
-  // (global funcref (ref.func $gf2))
-  // (func (drop (ref.func $ff1)) (drop (ref.func $ff2)))
-  // (elem declare func $gf1 $ff1)
-  // (elem declare funcref (ref.func $gf2) (ref.func $ff2))
-  // (func $gf1)
-  // (func $gf2)
-  // (func $ff1)
-  // (func $ff2)
 
   // (func (export "is_null-f") (result i32)
   //   (ref.is_null (ref.func $f))
@@ -2247,7 +2211,7 @@ t('example: official', async () => {
     }
   }
 
-  await ex('/test/official/export.wat')
+  await ex('/test/official/exports.wat')
 })
 
 
@@ -2259,7 +2223,9 @@ export function wat2wasm(code, config) {
   let metrics = config ? config.metrics : true
   const parsed = wabt.parseWat('inline', code, {
     bulk_memory: true,
-    simd: true
+    simd: true,
+    function_references: true,
+    reference_types: true
   })
   // metrics && console.time('wabt build')
   const binary = parsed.toBinary({
