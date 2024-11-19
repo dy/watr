@@ -1128,6 +1128,15 @@ t('case: export order initialize', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
+t('case: start index', () => {
+  let src = `
+  (import "a" "b" (func $a (param i32)))
+  (func (param i32))
+  (start 1)
+  `
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
 // extensions
 
 t('feature: multiple results', () => {
@@ -2174,10 +2183,9 @@ t('example: wat-compiler', async () => {
   await ex('/test/example/loops.wat')
   await ex('/test/example/memory.wat')
   await ex('/test/example/stack.wat')
-
-
   await ex('/test/example/multivar.wat')
-  // FIXME await ex('/test/example/amp.wat')
+
+  // await ex('/test/example/amp.wat')
   // FIXME await ex('/test/example/types.wat')
   // FIXME await ex('/test/example/table.wat')
 })
