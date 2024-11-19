@@ -22,28 +22,24 @@ export default (nodes) => {
     0x01, 0x00, 0x00, 0x00, // version
   ]
 
-  // 1. transform tree
+  // (module $a? ...body) -> ...body
+  if (nodes[0] === 'module') [, ...nodes] = nodes, typeof nodes[0] == 'string' && nodes.shift()
   // (func) → [(func)]
-  if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes]
+  else if (typeof nodes[0] === 'string') nodes = [nodes]
+  // prevent mutations
+  else nodes = [...nodes]
 
-  // 2. build IR. import must be initialized first, global before func, elem after func
-  // FIXME: we can instead sort nodes in order of sections and just run for name in sections once
-  for (let name in sections) {
-    let remaining = []
-    for (let node of nodes) {
-      if (node[0] === name) build[name](node, sections, remaining)
-      else remaining.push(node)
-    }
-    nodes = remaining
+  // build sections
+  for (let node of nodes) {
+    build[node[0]](node, sections, nodes)
   }
 
-  // FIXME: this is not necessary, sections can build binary immediately
-  // 3. build binary
+  // build binary
   for (let name in sections) {
     let items = sections[name].filter(Boolean)
     if (!items.length) continue
     let sectionCode = SECTION[name], bytes = []
-    if (sectionCode !== 8) bytes.push(items.length) // skip start section count
+    if (sectionCode !== 8) bytes.push(...uleb(items.length)) // skip start section count
     for (let item of items) bytes.push(...item)
     binary.push(sectionCode, ...uleb(bytes.length), ...bytes)
   }
