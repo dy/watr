@@ -36,6 +36,7 @@ export default (nodes) => {
     // get name reference
     let id = nodeSections[kind].length
     let name = typeof node[0] === 'string' && node.shift()
+    // FIXME: why can't we define name ahead?
     // if (name) sections[kind][name] = id
 
     // // (global ...)
@@ -95,7 +96,7 @@ export default (nodes) => {
 
   // build binary
   for (let name in sections) {
-    let items = sections[name].filter(Boolean)
+    let items = sections[name].filter(item => item != null)
     if (!items.length) continue
     let sectionCode = SECTION[name], bytes = []
     if (sectionCode !== 8) bytes.push(...uleb(items.length)) // skip start section count
@@ -139,8 +140,6 @@ const build = {
     const id = ctx.func.length
     if (body[0]?.[0] === '$') ctx.func[body.shift()] = id
 
-    // (func (export "a")(export "b") ) -> (export "a" (func $name))(export "b" (func $name))
-    while (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', id]], ctx)
     if (body[0]?.[0] === 'import') imp = body.shift()
 
     const [typeIdx, params] = consumeType(body, ctx)
@@ -164,8 +163,6 @@ const build = {
     const id = ctx.table.length
     if (args[0]?.[0] === '$') ctx.table[args.shift()] = id
 
-    // (table (export "m") ) -> (export "m" (table id))
-    while (args[0]?.[0] === 'export') build.export([...args.shift(), ['table', id]], ctx)
     if (args[0]?.[0] === 'import') imp = args.shift()
 
     if (imp) {
@@ -183,8 +180,6 @@ const build = {
     const id = ctx.memory.length
     if (args[0]?.[0] === '$') ctx.memory[args.shift()] = id
 
-    // (memory (export "m") ) -> (export "m" (memory id))
-    while (args[0]?.[0] === 'export') build.export([...args.shift(), ['memory', id]], ctx)
     if (args[0]?.[0] === 'import') imp = args.shift()
 
     if (imp) {
@@ -202,8 +197,6 @@ const build = {
     let name = args[0][0] === '$' && args.shift()
     if (name) ctx.global[name] = ctx.global.length
 
-    // (global $id (export "a") i32 )
-    while (args[0]?.[0] === 'export') build.export([...args.shift(), ['global', name]], ctx);
     if (args[0]?.[0] === 'import') imp = args.shift()
 
     let [type] = args, mut = type[0] === 'mut' ? 1 : 0
