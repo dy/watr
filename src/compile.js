@@ -26,12 +26,71 @@ export default (nodes) => {
   if (nodes[0] === 'module') [, ...nodes] = nodes, typeof nodes[0] == 'string' && nodes.shift()
   // (func) → [(func)]
   else if (typeof nodes[0] === 'string') nodes = [nodes]
-  // prevent mutations
-  else nodes = [...nodes]
+
+  // 1. Group node kinds by "buckets": (import (func)) must be in order, etc
+  // FIXME: merge into sections
+  const nodeSections = {
+    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
+  }
+  for (let node of nodes) {
+    let [kind] = node, id;
+
+    // TODO: deref
+    // id = typeof node[0] === 'string' && node.shift()
+
+    // // (global ...)
+    // if (id == null) id = sections[kind].length
+    // // (global $x)
+    // else if (id[0] === '$') id = sections[kind][id] = sections[kind].length
+    // // (global 0)
+    // else id = +id
+
+    // TODO: squoosh types
+    // if (kind === 'type') {
+    //   let type = parseParams(node[0].slice(1))
+    //   if (types[type.join(':')]) continue
+    //   types[type.join(':')] = node = type
+    // }
+
+    // TODO: prevent dupe start
+    // if (kind === 'start') node = sections.start.length ? null : id
+
+    // TODO: normalize export
+    // (func (export "a")(export "b") ) -> (export "a" (func 0))(export "b" (func 0))
+    // while (node[0]?.[0] === 'export') sections.export.push([...node.shift().slice(1), [kind, id]])
+
+    // TODO: normalize import (comes after exports)
+    // (memory (import "a" "b") min max shared) -> (import "a" "b" (memory min max shared))
+    // if (node[0]?.[0] === 'import') {
+    //   sections.import.push([...node.shift().slice(1), [kind, id, ...node]])
+    //   node = null // placeholder
+    // }
+
+    // TODO: create code nodes, collect types, flatten groups
+    // if (kind === 'func') {
+    //   // collect fn type
+    //   let type = parseParams(node)
+    //   if (!types[type.join(':')]) sections.type.push(type), types[type.join(':')] = type
+
+    //   // TODO: flatten groups/blocks (add a b) -> a b add
+
+    //   // write code section
+    //   sections.code.push(code)
+
+    //   // function is just type idx
+    //   node =
+    // }
+
+    nodeSections[kind].push(node)
+  }
 
   // build sections
-  for (let node of nodes) {
-    build[node[0]](node, sections, nodes)
+  // FIXME: should not be here, shouls be binary right away
+  for (let section in nodeSections) {
+    let nodes = nodeSections[section]
+    for (let node of nodes) {
+      build[node[0]](node, sections, nodeSections.code)
+    }
   }
 
   // build binary
@@ -419,7 +478,7 @@ const consumeConst = (node, ctx) => {
   if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
 
   // (ref.func $x)
-  if (type === 'ref') return console.log(ctx.func) || [0xD2, ...uleb(funcId(node[0], ctx))]
+  if (type === 'ref') return [0xD2, ...uleb(funcId(node[0], ctx))]
 
   // (i32.add a b), (i32.mult a b) etc
   return [
@@ -503,7 +562,9 @@ const consumeAlignOffset = (args) => {
 
 // get func id from name
 // FIXME: generalize to any-type id
-const funcId = (name, ctx) => name[0] === '$' ? ctx.func[name] ?? err('Unknown function `' + name + '`') : name
+const funcId = (name, ctx) =>
+  name[0] === '$' ? ctx.func[name] ?? err('Unknown function `' + name + '`') : name
+
 
 const err = text => { throw Error(text) }
 
