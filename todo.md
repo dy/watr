@@ -24,8 +24,13 @@
 * [x] constant expressions
 * [x] ~~bench wassemble~~ - broken
 * [x] Floating hex
-* [ ] Streamline compiler: single pass
+* [ ] Streamline compiler
+  * [x] Remove duplication from import section
+  * [ ] Each section may have a name in advance: remove it from per-section handler
+  * [x] ~~Sort nodes by buckets, run single pass~~
+  * [ ] Is block type same as fn type? Can fn type be flat?
 * [ ] Tests: official set
+* [ ] Enhance print: make it as nice as AI
 * [ ] Feature: func-ref
 * [ ] Feature: ref-types
 * [ ] Feature: gc
