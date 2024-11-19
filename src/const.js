@@ -50,7 +50,4 @@ export const OP = [
     'v128.load': 16,
 
     "v128.load8_lane": 1, "v128.load16_lane": 2, "v128.load32_lane": 4, "v128.load64_lane": 8, "v128.store8_lane": 1, "v128.store16_lane": 2, "v128.store32_lane": 4, "v128.store64_lane": 8, "v128.load32_zero": 4, "v128.load64_zero": 8
-  },
-  BLOCK = {
-    loop: 1, block: 1, if: 1, end: -1, return: -1
   }

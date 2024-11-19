@@ -1,4 +1,8 @@
 
+## goal
+
+* must be working nicely
+
 ## plan
 
 * [x] Basic compilation examples from wasm book
