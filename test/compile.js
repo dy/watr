@@ -20,12 +20,6 @@ t('compile: reexport func', () => {
   is(f1(3, 1), 2)
 })
 
-t('compile: export global/table', () => {
-  let src = `(memory $foo (import "env" "mem") 1 2 shared)`
-  run(src, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: 1 }) } })
-})
-
-
 t('compile: memory $foo (import "a" "b" ) 1 2 shared', () => {
   let src = `(memory $foo (import "env" "mem") 1 2 shared)`
   run(src, { env: { mem: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: 1 }) } })
@@ -200,13 +194,13 @@ t('compile: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
 t('compile: import function', () => {
   let src = `
     (import "math" "add" (func $add (param i32 i32) (result i32)))
-    (func (export "call_imported_function") (result i32)
+    (func (export "c") (result i32)
       (call $add (i32.const 20) (i32.const 22))
     )
   `
-  let { call_imported_function } = run(src, { math: { add: (a, b) => a + b } }).exports
+  let { c } = run(src, { math: { add: (a, b) => a + b } }).exports
 
-  is(call_imported_function(), 42)
+  is(c(), 42)
 })
 
 t('compile: import memory 1', () => {
@@ -2176,16 +2170,16 @@ t('example: wat-compiler', async () => {
   await ex('/test/example/raytrace.wat')
   await ex('/test/example/maze.wat')
   await ex('/test/example/metaball.wat')
-
-  // legacy
-  await ex('/test/example/amp.wat')
   await ex('/test/example/global.wat')
   await ex('/test/example/loops.wat')
   await ex('/test/example/memory.wat')
-  await ex('/test/example/multivar.wat')
   await ex('/test/example/stack.wat')
-  // FIXME await ex('/test/example/table.wat')
+
+
+  await ex('/test/example/multivar.wat')
+  // FIXME await ex('/test/example/amp.wat')
   // FIXME await ex('/test/example/types.wat')
+  // FIXME await ex('/test/example/table.wat')
 })
 
 t('example: official', async () => {

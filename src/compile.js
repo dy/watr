@@ -33,11 +33,17 @@ export default (nodes) => {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
   }
   for (let [kind, ...node] of nodes) {
+    let imp
+
+    // import defines section, so we unwrap it
+    // (import "a" "b" (memory min max shared)) -> (memory (import "a" "b") min max shared)
+    if (kind === 'import') imp = [kind, node.shift(), node.shift()], [kind, ...node] = node.shift();
+
     // get name reference
     let id = nodeSections[kind].length
-    let name = typeof node[0] === 'string' && node.shift()
-    // FIXME: why can't we define name ahead?
-    // if (name) sections[kind][name] = id
+    let name = node[0]?.[0] === '$' && node.shift()
+    // FIXME: the id can be incorrect: first, types squoosh on the way; second, import doesn't increase section count
+    // if (name[0] === '$') sections[kind][name] = id
 
     // // (global ...)
     // if (id == null) id = sections[kind].length
@@ -60,29 +66,30 @@ export default (nodes) => {
     // (func (export "a")(export "b") (type) ... ) -> (export "a" (func 0))(export "b" (func 0))
     while (node[0]?.[0] === 'export') nodeSections.export.push([...node.shift(), [kind, id]])
 
-    // TODO: normalize import (comes after exports)
+    // normalize import (comes after exports)
     // (memory (import "a" "b") min max shared) -> (import "a" "b" (memory min max shared))
+    // (func (import "a" "b") (type $x)) -> (import "a" "b" (func (type $x)))
     // if (node[0]?.[0] === 'import') {
-    //   sections.import.push([...node.shift().slice(1), [kind, id, ...node]])
-    //   node = null // placeholder
+    //   nodeSections.import.push([...node.shift(), [kind, id]])
     // }
+
+    nodeSections[kind].push([kind, ...(name ? [name] : []), ...(imp ? [imp] : []), ...node])
+
 
     // TODO: create code nodes, collect types, flatten groups
     // if (kind === 'func') {
-    //   // collect fn type
-    //   let type = parseParams(node)
-    //   if (!types[type.join(':')]) sections.type.push(type), types[type.join(':')] = type
+    // // collect fn type
+    // let type = parseParams(node)
+    // if (!types[type.join(':')]) sections.type.push(type), types[type.join(':')] = type
 
-    //   // TODO: flatten groups/blocks (add a b) -> a b add
+    // // TODO: flatten groups/blocks (add a b) -> a b add
 
-    //   // write code section
-    //   sections.code.push(code)
+    // // write code section
+    // sections.code.push(code)
 
-    //   // function is just type idx
-    //   node =
+    // // function is just type idx
+    // node =
     // }
-
-    nodeSections[kind].push([kind, ...(name ? [name] : []), ...node])
   }
 
   // build sections
@@ -117,7 +124,6 @@ const build = {
     if (parts[0]?.[0] === '$') typeName = parts.shift()
     let [kind, ...sig] = parts.shift()
 
-    if (kind !== 'func') err(`Unknown type kind '${kind}'`)
     const [idx] = consumeType(sig, ctx)
     if (typeName) ctx.type[typeName] = idx
   },
@@ -131,6 +137,7 @@ const build = {
       name = parts[0]?.[0] === '$' && parts.shift();
 
     // (import "a" "b" (global $a (mut i32))) -> (global $a (import "a" "b") (mut i32))
+    ctx[kind].push(null) // inc counter
     build[kind]([kind, ...(name ? [name] : []), ['import', mod, field], ...parts], ctx)
   },
 
@@ -179,7 +186,6 @@ const build = {
     let imp
     const id = ctx.memory.length
     if (args[0]?.[0] === '$') ctx.memory[args.shift()] = id
-
     if (args[0]?.[0] === 'import') imp = args.shift()
 
     if (imp) {
