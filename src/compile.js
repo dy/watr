@@ -26,22 +26,6 @@ export default (nodes) => {
   // (func) → [(func)]
   if (typeof nodes[0] === 'string' && nodes[0] !== 'module') nodes = [nodes]
 
-  // FIXME: maybe instead we have to just put import section out and initialize after
-  // OR: can we handle it in individual sections instead?
-  nodes = nodes.map(node => {
-    // (global $a (import "a" "b") (mut i32)) → (import "a" "b" (global $a (mut i32)))
-    if (node[2]?.[0] === 'import') {
-      let [kind, name, imp, ...args] = node
-      return [...imp, [kind, name, ...args]]
-    }
-    // (memory (import "a" "b") min max shared) → (import "a" "b" (memory min max shared))
-    else if (node[1]?.[0] === 'import') {
-      let [kind, imp, ...args] = node
-      return [...imp, [kind, ...args]]
-    }
-    return node
-  })
-
   // 2. build IR. import must be initialized first, global before func, elem after func
   // FIXME: we can instead sort nodes in order of sections and just run for name in sections once
   for (let name in sections) {
@@ -56,8 +40,7 @@ export default (nodes) => {
   // FIXME: this is not necessary, sections can build binary immediately
   // 3. build binary
   for (let name in sections) {
-    let items = sections[name]
-    if (sections.import[name]) items = items.slice(sections.import[name]) // skip number of imported entries
+    let items = sections[name].filter(Boolean)
     if (!items.length) continue
     let sectionCode = SECTION[name], bytes = []
     if (sectionCode !== 8) bytes.push(items.length) // skip start section count
@@ -71,7 +54,6 @@ export default (nodes) => {
 const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
-  // FIXME: handle non-function types
   type([, ...parts], ctx) {
     let typeName
 
@@ -82,8 +64,6 @@ const build = {
     if (kind !== 'func') err(`Unknown type kind '${kind}'`)
     const [idx] = consumeType(sig, ctx)
     if (typeName) ctx.type[typeName] = idx
-
-    // FIXME: this must build ctx.type
   },
 
   // (import "math" "add" (func $add (param i32 i32 externref) (result i32)))
@@ -91,90 +71,96 @@ const build = {
   // (import "js" "mem" (memory $name 1))
   // (import "js" "v" (global $name (mut f64)))
   import([, mod, field, ref], ctx) {
-    let details, [kind, ...parts] = ref,
+    let [kind, ...parts] = ref,
       name = parts[0]?.[0] === '$' && parts.shift();
 
-    if (kind === 'func') {
-      // we track imported funcs in func section to share namespace, and skip them on final build
-      if (name) ctx.func[name] = ctx.func.length
-      let [typeIdx] = consumeType(parts, ctx)
-      ctx.func.push(details = uleb(typeIdx))
-      // const typeIdx = build.func(['func', ...parts], ctx)
-      ctx.import.func ||= 0; ctx.import.func++
-    }
-    else if (kind === 'memory') {
-      if (name) ctx.memory[name] = ctx.memory.length
-      details = range(parts)
-    }
-    else if (kind === 'global') {
-      // imported globals share namespace with internal globals - we skip them in final build
-      if (name) ctx.global[name] = ctx.global.length
-      let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
-      details = [TYPE[mut ? type[1] : type], mut]
-      ctx.global.push(details)
-      ctx.import.global ||= 0; ctx.import.global++
-    }
-    else throw Error('Unimplemented ' + kind)
-
-    ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
+    // (import "a" "b" (global $a (mut i32))) -> (global $a (import "a" "b") (mut i32))
+    build[kind]([kind, ...(name ? [name] : []), ['import', mod, field], ...parts], ctx)
   },
 
   // (func $name? ...params result ...body)
   func([, ...body], ctx, nodes) {
+    let imp;
     const id = ctx.func.length
     if (body[0]?.[0] === '$') ctx.func[body.shift()] = id
 
     // (func (export "a")(export "b") ) -> (export "a" (func $name))(export "b" (func $name))
     while (body[0]?.[0] === 'export') build.export([...body.shift(), ['func', id]], ctx)
+    if (body[0]?.[0] === 'import') imp = body.shift()
 
     const [typeIdx, params] = consumeType(body, ctx)
 
-    // create (code body) section
-    if (nodes) nodes.push(['code', params, ...body])
-
-    // register new function
-    ctx.func.push(uleb(typeIdx))
+    if (imp) {
+      ctx.import.push([...str(imp[1]), ...str(imp[2]), KIND.func, ...uleb(typeIdx)])
+      ctx.func.push(null)
+    }
+    else {
+      // create (code body) section
+      if (nodes) nodes.push(['code', params, ...body])
+      // register new function
+      ctx.func.push(uleb(typeIdx))
+    }
   },
 
   // (table 1 2? funcref)
   // (table $name 1 2? funcref)
   table([, ...args], ctx) {
+    let imp
     const id = ctx.table.length
     if (args[0]?.[0] === '$') ctx.table[args.shift()] = id
 
     // (table (export "m") ) -> (export "m" (table id))
     while (args[0]?.[0] === 'export') build.export([...args.shift(), ['table', id]], ctx)
+    if (args[0]?.[0] === 'import') imp = args.shift()
 
-    let lims = range(args)
-    ctx.table.push([TYPE[args.pop()], ...lims])
+    if (imp) {
+      ctx.import.push([...str(imp[1]), ...str(imp[2]), KIND.table, ...range(args)])
+      ctx.table.push(null)
+    }
+    else ctx.table.push([TYPE[args.pop()], ...range(args)])
   },
 
   // (memory min max shared)
   // (memory $name min max shared)
   // (memory (export "mem") 5)
   memory([, ...args], ctx) {
+    let imp
     const id = ctx.memory.length
     if (args[0]?.[0] === '$') ctx.memory[args.shift()] = id
 
     // (memory (export "m") ) -> (export "m" (memory id))
     while (args[0]?.[0] === 'export') build.export([...args.shift(), ['memory', id]], ctx)
+    if (args[0]?.[0] === 'import') imp = args.shift()
 
-    ctx.memory.push(range(args))
+    if (imp) {
+      ctx.import.push([...str(imp[1]), ...str(imp[2]), KIND.memory, ...range(args)])
+      ctx.memory.push(null)
+    }
+    else ctx.memory.push(range(args))
   },
 
   // (global i32 (i32.const 42))
   // (global $id i32 (i32.const 42))
   // (global $id (mut i32) (i32.const 42))
   global([, ...args], ctx) {
+    let imp
     let name = args[0][0] === '$' && args.shift()
     if (name) ctx.global[name] = ctx.global.length
 
     // (global $id (export "a") i32 )
     while (args[0]?.[0] === 'export') build.export([...args.shift(), ['global', name]], ctx);
+    if (args[0]?.[0] === 'import') imp = args.shift()
 
-    let [type, [...init]] = args, mut = type[0] === 'mut' ? 1 : 0
+    let [type] = args, mut = type[0] === 'mut' ? 1 : 0
 
-    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx), 0x0b])
+    if (imp) {
+      ctx.import.push([...str(imp[1]), ...str(imp[2]), KIND.global, TYPE[mut ? type[1] : type], mut])
+      ctx.global.push(null)
+    }
+    else {
+      let [, [...init]] = args
+      ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx), 0x0b])
+    }
   },
 
   //  (export "name" (kind $name|idx))
@@ -401,6 +387,7 @@ const build = {
 
     const bytes = []
     while (body.length) consume(body, bytes)
+
     ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, 0x0b])
   },
 
