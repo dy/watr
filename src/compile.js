@@ -26,7 +26,11 @@ INSTR.forEach((instr, i) => {
  * @returns {Uint8Array} The compiled Wasm binary data.
  */
 export default (nodes) => {
-  if (typeof nodes === 'string') nodes = parse(nodes);
+  if (typeof nodes === 'string') nodes = parse(nodes); else nodes = [...nodes]
+  if (nodes[0] === 'module') nodes.shift()
+
+  // (module $id? ...)
+  id(nodes)
 
   // IR. Alias is stored directly to section array by key, eg. section.func.$name = idx
   const sections = {
@@ -56,24 +60,10 @@ export default (nodes) => {
 
     // get name reference
     let name = node[0]?.[0] === '$' && node.shift()
-    // FIXME: the id can be incorrect: types squoosh on the way
-    // if (name[0] === '$') sections[kind][name] = id
 
-    // TODO: squoosh types
-    // if (kind === 'type') {
-    //   let type = parseParams(node[0].slice(1))
-    //   if (types[type.join(':')]) continue
-    //   types[type.join(':')] = node = type
-    // }
-
-    // TODO: prevent dupe start
-    // if (kind === 'start') node = sections.start.length ? null : id
-
-    // normalize exports
-    // (func (export "a")(export "b") (type) ... ) -> (export "a" (func 0))(export "b" (func 0))
-    while (node[0]?.[0] === 'export') {
-      nodeSections.export.push([...node.shift(), [kind, nodeSections[kind].length]])
-    }
+    // export abbr
+    // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
+    while (node[0]?.[0] === 'export') nodes.push([...node.shift(), [kind, nodeSections[kind].length]])
 
     // normalize import (comes after exports)
     // (memory (import "a" "b") min max shared) -> (import "a" "b" (memory min max shared))
@@ -461,6 +451,10 @@ const build = {
     ctx.data.push([0, ...consumeConst([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
   }
 }
+
+// consume id
+// https://webassembly.github.io/spec/core/text/values.html#text-id
+const id = (nodes) => (nodes[0]?.[0] === '$') && nodes.shift()
 
 // instantiation time const initializer
 const consumeConst = (node, ctx) => {
