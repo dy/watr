@@ -377,14 +377,13 @@ const build = {
 
     const bytes = []
     while (body.length) consume(body, bytes)
+    bytes.push(0x0b)
 
-    // squash local types
-    let locTypes = locals.reduce((a, type) => (type == a[a.length - 1] ? a[a.length - 2]++ : a.push(1, type), a), [])
+    // squash locals into (n:u32 t:valtype)*, n is number and t is type
+    let loctypes = locals.reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
 
-    // FIXME: try expressing via vec
-    // ctx.code.push(vec(...vec(locTypes.length >> 1, locTypes), bytes))
-
-    ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, 0x0b])
+    // https://webassembly.github.io/spec/core/binary/modules.html#code-section
+    ctx.code.push(vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes]))
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
