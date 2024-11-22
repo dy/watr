@@ -100,15 +100,15 @@ t('compile: named function named param', () => {
 })
 
 t('compile: call function direct', () => {
-  let { call_function_direct } = run(`
+  let { f } = run(`
   (func $dbl (param $a i32) (result i32)
     (i32.add (local.get $a) (local.get $a))
   )
-  (func (export "call_function_direct") (param $a i32) (result i32)
+  (func (export "f") (param $a i32) (result i32)
     (call $dbl (local.get $a))
   )
   `).exports
-  is(call_function_direct(333), 666)
+  is(f(333), 666)
 })
 
 t('compile: function param + local', () => {
@@ -193,12 +193,12 @@ t('compile: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
 
 t('compile: import function', () => {
   let src = `
-    (import "math" "add" (func $add (param i32 i32) (result i32)))
+    (import "m" "add" (func $add (param i32 i32) (result i32)))
     (func (export "c") (result i32)
       (call $add (i32.const 20) (i32.const 22))
     )
   `
-  let { c } = run(src, { math: { add: (a, b) => a + b } }).exports
+  let { c } = run(src, { m: { add: (a, b) => a + b } }).exports
 
   is(c(), 42)
 })
@@ -2171,7 +2171,6 @@ t('example: wat-compiler', async () => {
   await ex('/test/example/malloc.wat')
   await ex('/test/example/brownian.wat')
   await ex('/test/example/quine.wat')
-  await ex('/test/example/raycast.wat')
   await ex('/test/example/containers.wat')
   await ex('/test/example/fire.wat')
   await ex('/test/example/snake.wat')
@@ -2184,10 +2183,11 @@ t('example: wat-compiler', async () => {
   await ex('/test/example/memory.wat')
   await ex('/test/example/stack.wat')
   await ex('/test/example/multivar.wat')
+  await ex('/test/example/amp.wat')
+  // await ex('/test/example/types.wat')
+  // await ex('/test/example/table.wat')
 
-  // await ex('/test/example/amp.wat')
-  // FIXME await ex('/test/example/types.wat')
-  // FIXME await ex('/test/example/table.wat')
+  await ex('/test/example/raycast.wat')
 })
 
 t('example: official', async () => {
@@ -2201,6 +2201,7 @@ t('example: official', async () => {
       if (node[0] === 'module') {
         console.log('compile', print(node));
         buf = compile(node)
+        is(buf, wat2wasm(print(node)).buffer)
         mod = new WebAssembly.Module(buf)
         inst = new WebAssembly.Instance(mod, {})
       }

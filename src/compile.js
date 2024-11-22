@@ -26,13 +26,16 @@ INSTR.forEach((instr, i) => {
  * @returns {Uint8Array} The compiled Wasm binary data.
  */
 export default (nodes) => {
+  // normalize to (module ...) form
   if (typeof nodes === 'string') nodes = parse(nodes); else nodes = [...nodes]
   if (nodes[0] === 'module') nodes.shift()
+  else if (typeof nodes[0] === 'string') nodes = [nodes]
 
   // (module $id? ...)
   id(nodes)
 
-  // IR. Alias is stored directly to section array by key, eg. section.func.$name = idx
+  // Scopes are stored directly on section array by key, eg. section.func.$name = idx
+  // FIXME: make direct binary instead
   const sections = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
   }
@@ -41,26 +44,17 @@ export default (nodes) => {
     0x01, 0x00, 0x00, 0x00, // version
   ]
 
-  // (module $a? ...body) -> ...body
-  if (nodes[0] === 'module') [, ...nodes] = nodes, typeof nodes[0] == 'string' && nodes.shift()
-  // (func) → [(func)]
-  else if (typeof nodes[0] === 'string') nodes = [nodes]
-
-  // 1. Group node kinds by "buckets": (import (func)) must be in order, etc
-  // FIXME: merge into sections
-  const nodeSections = {
-    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
-  }
-  // FIXME: this must be part of compile right away
+  // directly map nodes to binary sections
   for (let [kind, ...node] of nodes) {
     // get name reference
-    let name = node[0]?.[0] === '$' && node.shift()
+    let name = id(node)
+    // if (name) sections[kind][name] = sections[kind].length
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
 
     while (node[0]?.[0] === 'export') {
-      nodes.push([...node.shift(), [kind, nodeSections[kind].length]])
+      nodes.push([...node.shift(), [kind, sections[kind].length]])
     }
 
     // FIXME: elem/etc or others who depend on hoisting can push themselves to the end
@@ -71,27 +65,7 @@ export default (nodes) => {
       node = [...node.shift(), [kind, ...(name ? [name] : []), ...node]], kind = node.shift()
     }
 
-    if (kind === 'import') nodeSections[node[2][0]].push(null) // stub
-
-    nodeSections[kind].push([name, ...node])
-
-    // TODO: create code nodes, collect types, flatten groups
-    // if (kind === 'func') {
-    // // collect fn type
-    // let type = parseParams(node)
-    // if (!types[type.join(':')]) sections.type.push(type), types[type.join(':')] = type
-
-    // // write code section
-    // sections.code.push(code)
-  }
-
-  // build sections
-  // FIXME: should not be here, shouls be binary right away
-  for (let section in nodeSections) {
-    let nodes = nodeSections[section]
-    for (let node of nodes) {
-      if (node) build[section](node, sections, nodeSections.code)
-    }
+    build[kind]([name, ...node], sections, nodes)
   }
 
   // build binary
@@ -111,7 +85,6 @@ const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
   type([name, ...parts], ctx) {
-    // type name
     let [kind, ...sig] = parts.shift()
 
     const [idx] = consumeType(sig, ctx)
@@ -124,6 +97,7 @@ const build = {
 
     // (import "a" "b" (global $a (mut i32))) -> (global $a (import "a" "b") (mut i32))
     if (name) ctx[kind][name] = ctx[kind].length
+    ctx[kind].push(null) // stub
 
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
@@ -149,7 +123,8 @@ const build = {
     const [typeidx, params] = consumeType(body, ctx)
 
     // create (code body) section
-    if (nodes) nodes.push([name, params, ...body])
+    nodes.push(['code', params, ...body])
+
     // register new function
     ctx.func.push(uleb(typeidx))
   },
@@ -179,9 +154,11 @@ const build = {
     ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx), 0x0b])
   },
 
-  //  (export "name" (kind $name|idx))
-  export([, s, [kind, idx]], ctx) {
-    if (idx[0] === '$') idx = ctx[kind][idx]
+  //  (export "name" (func|table|mem $name|idx))
+  export([, s, ref], ctx) {
+    let [kind, idx] = ref
+    idx = idx[0] === '$' ? ctx[kind][idx] : +idx
+    if (isNaN(idx)) err('Unknown export id ' + ref[1])
     ctx.export.push([...str(s), KIND[kind], ...uleb(idx)])
   },
 
@@ -200,7 +177,7 @@ const build = {
 
   // artificial section
   // (code params ...body)
-  code([name, params, ...body], ctx) {
+  code([, params, ...body], ctx) {
     let blocks = [] // control instructions / blocks stack
     let locals = [] // list of local variables
 
@@ -443,7 +420,7 @@ const consumeConst = (node, ctx) => {
   if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
 
   // (ref.func $x)
-  if (type === 'ref') return [0xD2, ...uleb(node[0][0] === '$' ? ctx.func[node[0]] : +node[0])]
+  if (type === 'ref') return [0xD2, ...uleb(node[0][0] === '$' ? ctx.func[node[0]] ?? err('Unknown func ' + node[0]) : +node[0])]
 
   // (i32.add a b), (i32.mult a b) etc
   return [
@@ -526,6 +503,7 @@ const consumeAlignOffset = (args) => {
 }
 
 const err = text => { throw Error(text) }
+
 
 // escape codes
 const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
