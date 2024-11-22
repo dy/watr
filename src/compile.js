@@ -75,7 +75,7 @@ export default (nodes) => {
     let sectionCode = SECTION[name], bytes = []
     if (sectionCode !== 8) bytes.push(...uleb(items.length)) // skip start section count
     for (let item of items) bytes.push(...item)
-    binary.push(sectionCode, ...uleb(bytes.length), ...bytes)
+    binary.push(sectionCode, ...vec(bytes))
   }
 
   return new Uint8Array(binary)
@@ -172,7 +172,7 @@ const build = {
     // FIXME: it can also have name
 
     const tableIdx = 0 // FIXME: table index can be defined
-    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), 0x0b, ...uleb(elems.length), ...elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : +el))])
+    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), 0x0b, ...vec(elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : +el)))])
   },
 
   // artificial section
@@ -185,13 +185,10 @@ const build = {
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift(), name
       if (types[0][0] === '$')
-        params[name = types.shift()] ? err('Ambiguous name ' + name) :
+        params[name = types.shift()] ? err('Ambiguous name ' + name) : // FIXME: not supposed to happen
           locals[name] = params.length + locals.length
       locals.push(...types.map(t => TYPE[t]))
     }
-
-    // squash local types
-    let locTypes = locals.reduce((a, type) => (type == a[a.length - 1] ? a[a.length - 2]++ : a.push(1, type), a), [])
 
     // convert sequence of instructions from input nodes to out bytes
     const consume = (nodes, out = []) => {
@@ -381,6 +378,12 @@ const build = {
     const bytes = []
     while (body.length) consume(body, bytes)
 
+    // squash local types
+    let locTypes = locals.reduce((a, type) => (type == a[a.length - 1] ? a[a.length - 2]++ : a.push(1, type), a), [])
+
+    // FIXME: try expressing via vec
+    // ctx.code.push(vec(...vec(locTypes.length >> 1, locTypes), bytes))
+
     ctx.code.push([...uleb(bytes.length + 2 + locTypes.length), ...uleb(locTypes.length >> 1), ...locTypes, ...bytes, 0x0b])
   },
 
@@ -401,6 +404,9 @@ const build = {
     ctx.data.push([0, ...consumeConst([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
   }
 }
+
+// serialize binary list
+const vec = a => [...uleb(a.length), ...a]
 
 // consume id
 // https://webassembly.github.io/spec/core/text/values.html#text-id
@@ -484,7 +490,7 @@ const consumeType = (nodes, ctx) => {
   if (idx == null) {
     // reuse existing type or register new one
     // FIXME: can be done easier via string comparison
-    bytes = [TYPE.func, ...uleb(params.length), ...params, ...uleb(result.length), ...result]
+    bytes = [TYPE.func, ...vec(params), ...vec(result)]
     idx = ctx.type.findIndex((t) => t.every((byte, i) => byte === bytes[i]))
 
     // register new type, if not found
@@ -518,8 +524,7 @@ const str = str => {
     res.push(c === BSLASH ? escape[str[i++]] || parseInt(str.slice(i - 1, ++i), 16) : c)
   }
 
-  res.unshift(...uleb(res.length))
-  return res
+  return vec(res)
 }
 
 // build limits sequence (non-consuming)
