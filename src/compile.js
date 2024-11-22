@@ -1,7 +1,22 @@
 import * as encode from './encode.js'
 import { uleb } from './encode.js'
-import { OP, SECTION, ALIGN, TYPE, KIND } from './const.js'
+import { SECTION, ALIGN, TYPE, KIND, INSTR } from './const.js'
 import parse from './parse.js'
+
+// build instructions index
+INSTR.forEach((instr, i) => {
+  let [op, ...imm] = instr.split(' '), a, b
+  INSTR[i] = op // rewrite original instr
+
+  // TODO
+  // // wrap codes
+  // const code = i >= 0x10f ? [0xfd, ...uleb(i - 0x10f)] : i >= 0xfc ? [0xfc, ...uleb(i - 0xfc)] : i
+
+  // // handle immediates
+  // INSTR[op] = !imm.length ? () => code :
+  //   imm.length === 1 ? (a = immedname(imm[0]), nodes => [...code, ...a(nodes)]) :
+  //     (imm = imm.map(immedname), nodes => [...code, ...imm.flatMap(imm => imm(nodes))])
+})
 
 
 /**
@@ -153,8 +168,7 @@ const build = {
     }
   },
 
-  // (table 1 2? funcref)
-  // (table $name 1 2? funcref)
+  // (table id? 1 2? funcref)
   table([name, ...args], ctx) {
     let imp
     if (name) ctx.table[name] = ctx.table.length
@@ -168,9 +182,7 @@ const build = {
     else ctx.table.push([TYPE[args.pop()], ...limits(args)])
   },
 
-  // (memory min max shared)
-  // (memory $name min max shared)
-  // (memory (export "mem") 5)
+  // (memory id? export* min max shared)
   memory([name, ...args], ctx) {
     let imp
     if (name) ctx.memory[name] = ctx.memory.length
@@ -184,8 +196,7 @@ const build = {
     else ctx.memory.push(limits(args))
   },
 
-  // (global i32 (i32.const 42))
-  // (global $id i32 (i32.const 42))
+  // (global id? i32 (i32.const 42))
   // (global $id (mut i32) (i32.const 42))
   global([name, ...args], ctx) {
     let imp
@@ -251,16 +262,16 @@ const build = {
       // groups are flattened, eg. (cmd z w) -> z w cmd
       if (group = Array.isArray(op)) {
         args = [...op] // op is immutable
-        opCode = OP.indexOf(op = args.shift())
+        opCode = INSTR.indexOf(op = args.shift())
       }
-      else opCode = OP.indexOf(op)
+      else opCode = INSTR.indexOf(op)
 
       // NOTE: numeric comparison is faster than generic hash lookup
 
       // v128s: (v128.load x) etc
       // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
-      if (opCode >= 268) {
-        opCode -= 268
+      if (opCode >= 0x10f) {
+        opCode -= 0x10f
         immed = [0xfd, ...uleb(opCode)]
         // (v128.load)
         if (opCode <= 0x0b) {
@@ -293,8 +304,8 @@ const build = {
 
       // bulk memory: (memory.init) (memory.copy) etc
       // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
-      else if (opCode >= 252) {
-        immed = [0xfc, ...uleb(opCode -= 252)]
+      else if (opCode >= 0xfc) {
+        immed = [0xfc, ...uleb(opCode -= 0xfc)]
         // memory.init idx, memory.drop idx, table.init idx, table.drop idx
         if (!(opCode & 0b10)) immed.push(...uleb(args.shift()))
         else immed.push(0)
@@ -320,7 +331,7 @@ const build = {
 
       // (local.get $id), (local.tee $id x)
       else if (opCode >= 32 && opCode <= 34) {
-        immed = uleb(args[0]?.[0] === '$' ? params[id = args.shift()] || locals[id] : args.shift())
+        immed = uleb(args[0]?.[0] === '$' ? params[id = args.shift()] ?? locals[id] : args.shift())
       }
 
       // (global.get id), (global.set id)
@@ -471,7 +482,7 @@ const consumeConst = (node, ctx) => {
   return [
     ...consumeConst(node.shift(), ctx),
     ...consumeConst(node.shift(), ctx),
-    OP.indexOf(op)
+    INSTR.indexOf(op)
   ]
 }
 
