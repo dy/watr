@@ -1,7 +1,7 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=red)](https://npmjs.org/watr)
 
-WASM text compiler/formatter. A light & fast alternative to [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).<br/>
-Useful for hi-level languages or dynamic (in-browser) compilation.<br>
+Light & fast WASM compiler. An alternative to [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).<br/>
+Useful as a base for hi-level languages or dynamic (in-browser) compilation.<br>
 
 ## Usage
 
@@ -10,7 +10,7 @@ Useful for hi-level languages or dynamic (in-browser) compilation.<br>
 Compile wasm text or syntax tree into wasm binary.
 
 ```js
-import compile from 'watr' // or `import { compile } from 'watr'`
+import { compile } from 'watr'
 
 const buffer = compile(`(func (export "double")
   (param f64) (result f64)
@@ -107,12 +107,14 @@ watr | 5 kb | 6000
 * [auro](https://github.com/audio-lab/auro) – audio processing language
 -->
 
+<!--
 ## Useful links
 
 * [watlings](https://github.com/EmNudge/watlings) – learn Wasm text by examples.
 * [MDN: control flow](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/Control_flow)
 * [WASM reference manual](https://github.com/sunfishcode/wasm-reference-manual/blob/master/WebAssembly.md#loop)
 * [WASM binary encoding](https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md)
+-->
 
 <!--
 ## Refs

@@ -28,11 +28,18 @@
 * [x] constant expressions
 * [x] ~~bench wassemble~~ - broken
 * [x] Floating hex
-* [ ] Streamline compiler
+* [x] Streamline compiler
   * [x] Remove duplication from import section
-  * [ ] Each section may have a name in advance: remove it from per-section handler
+  * [x] Each section may have a name in advance: remove it from per-section handler
   * [x] ~~Sort nodes by buckets, run single pass~~
-  * [ ] Is block type same as fn type? Can fn type be flat?
+  * [ ] Incorporate alt compiler into main one
+    * [ ] register by names from common place
+    * [ ] Use keys for ops
+    * [x] Get rid of precompile, do binary immediately, just re-add nodes as abbr
+    * [x] Optimize import
+    * [ ] consumeType -> typeuse (better storage)
+    * [x] vec
+    * [x] common parts pre-parse
 * [ ] Tests: official set
 * [ ] Enhance print: make it as nice as AI
 * [ ] Feature: func-ref
@@ -49,6 +56,13 @@
 * [ ] better errors: should be safe to type in anything
 * [ ] numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
 * [ ] extended-const (polyfill?) https://github.com/WebAssembly/extended-const
+
+## [ ] REPL
+
+* [ ] compiler selector
+* [ ] examples
+* [ ] perf stats
+* [ ] prettifier
 
 ## Backlog
 

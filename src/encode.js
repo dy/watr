@@ -2,6 +2,7 @@
 
 // uleb
 export const uleb = (n, buffer = []) => {
+  if (n == null) return buffer
   if (typeof n === 'string') n = i32.parse(n)
 
   let byte = n & 0b01111111;
