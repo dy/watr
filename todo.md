@@ -35,6 +35,7 @@
   * [ ] Incorporate alt compiler into main one
     * [ ] register by names from common place
     * [ ] Use keys for ops
+    * [ ] hoisting
     * [x] Get rid of precompile, do binary immediately, just re-add nodes as abbr
     * [x] Optimize import
     * [ ] consumeType -> typeuse (better storage)

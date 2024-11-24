@@ -2184,10 +2184,10 @@ t('example: wat-compiler', async () => {
   await ex('/test/example/stack.wat')
   await ex('/test/example/multivar.wat')
   await ex('/test/example/amp.wat')
-  // await ex('/test/example/types.wat')
-  // await ex('/test/example/table.wat')
-
   await ex('/test/example/raycast.wat')
+  // FIXME: await ex('/test/example/types.wat')
+  // FIXME: await ex('/test/example/table.wat')
+
 })
 
 t('example: official', async () => {
@@ -2199,7 +2199,6 @@ t('example: official', async () => {
     for (let node of nodes) {
       // (module $name) - creates module instance, collects exports
       if (node[0] === 'module') {
-        console.log('compile', print(node));
         buf = compile(node)
         is(buf, wat2wasm(print(node)).buffer)
         mod = new WebAssembly.Module(buf)
@@ -2217,6 +2216,20 @@ t('example: official', async () => {
   await ex('/test/official/exports.wat')
 })
 
+const save = (buf) => {
+  // Create a Blob
+  const blob = new Blob([buf], { type: "application/wasm" });
+
+  // Create a download link
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "module.wasm"; // Desired file name
+  document.body.appendChild(link);
+
+  // Trigger the download
+  link.click();
+  document.body.removeChild(link);
+}
 
 
 let wabt = await Wabt()

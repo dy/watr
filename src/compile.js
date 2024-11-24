@@ -45,17 +45,15 @@ export default (nodes) => {
   ]
 
   // directly map nodes to binary sections
-  for (let [kind, ...node] of nodes) {
+  while (nodes.length) {
+    let [kind, ...node] = nodes.shift()
     // get name reference
     let name = id(node)
     // if (name) sections[kind][name] = sections[kind].length
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-
-    while (node[0]?.[0] === 'export') {
-      nodes.push([...node.shift(), [kind, sections[kind].length]])
-    }
+    while (node[0]?.[0] === 'export') nodes.unshift([...node.shift(), [kind, sections[kind].length]])
 
     // FIXME: elem/etc or others who depend on hoisting can push themselves to the end
 
@@ -155,11 +153,17 @@ const build = {
   },
 
   //  (export "name" (func|table|mem $name|idx))
-  export([, s, ref], ctx) {
+  export([, nm, ref], ctx, nodes) {
     let [kind, idx] = ref
-    idx = idx[0] === '$' ? ctx[kind][idx] : +idx
-    if (isNaN(idx)) err('Unknown export id ' + ref[1])
-    ctx.export.push([...str(s), KIND[kind], ...uleb(idx)])
+    if (idx[0] === '$') {
+      idx = ctx[kind][idx];
+      if (idx == null) {
+        // handle hoisting by placing self to the end
+        if (nodes.length) return nodes.push(['export', nm, ref])
+        err('Unknown export id ' + ref[1])
+      }
+    }
+    ctx.export.push([...str(nm), KIND[kind], ...uleb(idx)])
   },
 
   // (start $main)
@@ -167,12 +171,29 @@ const build = {
     if (!ctx.start.length) ctx.start.push(uleb(name ? ctx.func[name] : +id))
   },
 
-  // (elem $name? (i32.const 0) $f1 $f2), (elem (global.get 0) $f1 $f2)
-  elem([name, [...offset], ...elems], ctx) {
-    // FIXME: it can also have name
+  // (elem $name? declare? funcref|func (ref.func $f) (item ref.func $f))
+  // (elem $name? (table $t)? (offset (i32.const 0))|(i32.const 9)? ...parts)
+  elem([name, ...parts], ctx) {
+    let tableIdx = 0, offset
 
-    const tableIdx = 0 // FIXME: table index can be defined
-    ctx.elem.push([tableIdx, ...consumeConst(offset, ctx), 0x0b, ...vec(elems.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : +el)))])
+    // declare?
+    if (parts[0] === 'declare') parts.shift()
+
+    // table?
+    if (parts[0][0] === 'table') {
+      [, tableIdx] = parts.shift()
+    }
+
+    // (offset expr)|expr
+    if (parts[0] === 'offset' || (typeof parts[0] !== 'string' && !parts[0]?.[0].startsWith('ref'))) {
+      [...offset] = parts.shift()
+      if (offset[0] === 'offset') [, offset] = offset
+    }
+
+    // func|funcref?
+    if (parts[0].startsWith('func')) parts.shift()
+
+    ctx.elem.push([+tableIdx, ...(offset ? consumeConst(offset, ctx) : []), 0x0b, ...vec(parts.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : +el)))])
   },
 
   // artificial section
@@ -412,6 +433,7 @@ const vec = a => [...uleb(a.length), ...a]
 const id = (nodes) => (nodes[0]?.[0] === '$') && nodes.shift()
 
 // instantiation time const initializer
+// FIXME: must be called expr
 const consumeConst = (node, ctx) => {
   let op = node.shift(), [type, cmd] = op.split('.')
 
@@ -464,6 +486,7 @@ const v128 = (args) => {
 // get type info from (params) (result) nodes sequence - consumes nodes
 // returns registered (reused) type idx
 // eg. (type $return_i32 (func (result i32)))
+// FIXME: must be called typeuse
 const consumeType = (nodes, ctx) => {
   let params = [], result = [], idx, bytes
 

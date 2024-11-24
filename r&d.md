@@ -124,3 +124,12 @@
   * needs to collapse on section build
   + shortens parse code
   + likely we need to use it here: we can use late-binding for name/ref and so for typerefs
+
+## [ ] Hoisting
+
+1. Init nodes in order of sections
+2. Redirect current node to the end
+  ?- can screw up exports order compared to wabt
+3. Save names to output, resolve at final step (binary conversion)
+  - we cannot resolve type so easily from binary
+  - extra iteration
