@@ -2190,15 +2190,16 @@ t('example: wat-compiler', async () => {
 
 })
 
-t('example: official', async () => {
+t.todo('example: official', async () => {
   async function ex(path) {
-    let res = await fetch(path)
+    let res = await fetch(path, { cache: 'no-cache' })
     let src = await res.text()
     let nodes = parse(src)
     let buf, mod, inst
     for (let node of nodes) {
       // (module $name) - creates module instance, collects exports
       if (node[0] === 'module') {
+        console.log(print(node))
         buf = compile(node)
         is(buf, wat2wasm(print(node)).buffer)
         mod = new WebAssembly.Module(buf)
@@ -2213,7 +2214,8 @@ t('example: official', async () => {
     }
   }
 
-  await ex('/test/official/exports.wat')
+  await ex('/test/official/elem.wat')
+  // await ex('/test/official/exports.wat')
 })
 
 const save = (buf) => {

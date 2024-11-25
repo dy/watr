@@ -128,8 +128,18 @@
 ## [ ] Hoisting
 
 1. Init nodes in order of sections
-2. Redirect current node to the end
-  ?- can screw up exports order compared to wabt
+  - not necessarily helpful: global can depend on global declared later
+  - adds O(n*log(n))
+2. Push current node to the end
+  - can screw up exports order compared to wabt
+  - it's a bit unsafe condition `if (nodes.length && !noref) nodes.push(currentNode)`
 3. Save names to output, resolve at final step (binary conversion)
   - we cannot resolve type so easily from binary
+    ~ we can store type along
+    ? what is there can be referenced in advance besides function?
+      * func, table, memory, global, type
   - extra iteration
+    ~ we anyways iterate bytes by pushing in global bytes
+  - looks like illicit extra transform step
+  + can save code parts
+  + generic solution for any forward-refs

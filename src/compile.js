@@ -49,10 +49,12 @@ export default (nodes) => {
     let [kind, ...node] = nodes.shift()
     // get name reference
     let name = id(node)
+    // FIXME: find out if this might work
     // if (name) sections[kind][name] = sections[kind].length
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
+    // NOTE: we unshift to keep order on par with wabt
     while (node[0]?.[0] === 'export') nodes.unshift([...node.shift(), [kind, sections[kind].length]])
 
     // FIXME: elem/etc or others who depend on hoisting can push themselves to the end
@@ -66,14 +68,20 @@ export default (nodes) => {
     build[kind]([name, ...node], sections, nodes)
   }
 
+  const deref = ([sec, name]) => name[0] === '$' ? sections[sec][name] : name
+
   // build binary
   for (let name in sections) {
-    let items = sections[name].filter(item => item != null)
-    if (!items.length) continue
-    let sectionCode = SECTION[name], bytes = []
-    if (sectionCode !== 8) bytes.push(...uleb(items.length)) // skip start section count
-    for (let item of items) bytes.push(...item)
-    binary.push(sectionCode, ...vec(bytes))
+    let items = sections[name], secCode = SECTION[name], bytes = [], count = 0
+    for (let item of items) {
+      if (!item) continue
+      count++ // count number of entries in section
+      for (let byte of item) Array.isArray(byte) ? bytes.push(...uleb(deref(byte))) : bytes.push(byte)
+    }
+    if (!bytes.length) continue
+    // skip start section count
+    if (secCode !== 8) bytes.unshift(...uleb(count))
+    binary.push(secCode, ...vec(bytes))
   }
 
   return new Uint8Array(binary)
@@ -153,35 +161,27 @@ const build = {
   },
 
   //  (export "name" (func|table|mem $name|idx))
-  export([, nm, ref], ctx, nodes) {
-    let [kind, idx] = ref
-    if (idx[0] === '$') {
-      idx = ctx[kind][idx];
-      if (idx == null) {
-        // handle hoisting by placing self to the end
-        if (nodes.length) return nodes.push(['export', nm, ref])
-        err('Unknown export id ' + ref[1])
-      }
-    }
-    ctx.export.push([...str(nm), KIND[kind], ...uleb(idx)])
+  export([, nm, ref], ctx) {
+    ctx.export.push([...str(nm), KIND[ref[0]], ref])
   },
 
   // (start $main)
   start([name, id], ctx) {
+    // FIXME: can be resolved later
     if (!ctx.start.length) ctx.start.push(uleb(name ? ctx.func[name] : +id))
   },
 
   // (elem $name? declare? funcref|func (ref.func $f) (item ref.func $f))
   // (elem $name? (table $t)? (offset (i32.const 0))|(i32.const 9)? ...parts)
   elem([name, ...parts], ctx) {
-    let tableIdx = 0, offset
+    let table, offset
 
     // declare?
     if (parts[0] === 'declare') parts.shift()
 
     // table?
     if (parts[0][0] === 'table') {
-      [, tableIdx] = parts.shift()
+      table = parts.shift()
     }
 
     // (offset expr)|expr
@@ -191,9 +191,15 @@ const build = {
     }
 
     // func|funcref?
-    if (parts[0].startsWith('func')) parts.shift()
+    if (parts[0]?.startsWith('func')) parts.shift()
 
-    ctx.elem.push([+tableIdx, ...(offset ? consumeConst(offset, ctx) : []), 0x0b, ...vec(parts.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : +el)))])
+    // FIXME: make late-deref
+    // FIXME: https://webassembly.github.io/spec/core/binary/modules.html#element-section
+    ctx.elem.push([
+      table,
+      ...(offset ? consumeConst(offset, ctx) : []), 0x0b,
+      ...vec(parts.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : +el)))
+    ])
   },
 
   // artificial section
@@ -438,7 +444,7 @@ const consumeConst = (node, ctx) => {
   let op = node.shift(), [type, cmd] = op.split('.')
 
   // (global.get idx)
-  if (type === 'global') return [0x23, ...uleb(node[0][0] === '$' ? ctx.global[node[0]] : node[0])]
+  if (type === 'global') return [0x23, ['global', node[0]]]
 
   // (v128.const i32x4 1 2 3 4)
   if (type === 'v128') return [0xfd, 0x0c, ...v128(node)]
@@ -447,7 +453,7 @@ const consumeConst = (node, ctx) => {
   if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
 
   // (ref.func $x)
-  if (type === 'ref') return [0xD2, ...uleb(node[0][0] === '$' ? ctx.func[node[0]] ?? err('Unknown func ' + node[0]) : +node[0])]
+  if (type === 'ref') return [0xD2, ['func', node[0]]]
 
   // (i32.add a b), (i32.mult a b) etc
   return [
@@ -492,6 +498,7 @@ const consumeType = (nodes, ctx) => {
 
   // existing type (type 0), (type $name) - can repeat params, result after
   if (nodes[0]?.[0] === 'type') {
+    // FIXME: make via deref
     idx = nodes.shift()[1]
     if (idx[0] === '$') idx = ctx.type[idx]
     else idx = +idx
