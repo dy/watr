@@ -65,9 +65,13 @@ export default (nodes) => {
       node = [...node.shift(), [kind, ...(name ? [name] : []), ...node]], kind = node.shift()
     }
 
-    build[kind]([name, ...node], sections, nodes)
+    // duplicate func as code section
+    if (kind === 'func') nodes.push(['code', ...node])
+
+    build[kind]([name, ...node], sections)
   }
 
+  // FIXME: try doing in advance and building after
   const deref = ([sec, name]) => name[0] === '$' ? sections[sec][name] : name
 
   // build binary
@@ -93,7 +97,7 @@ const build = {
   type([name, ...parts], ctx) {
     let [kind, ...sig] = parts.shift()
 
-    const [idx] = consumeType(sig, ctx)
+    const [idx] = typeuse(sig, ctx)
     if (name) ctx.type[name] = idx
   },
 
@@ -107,7 +111,7 @@ const build = {
 
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
-      let [typeIdx] = consumeType(parts, ctx)
+      let [typeIdx] = typeuse(parts, ctx)
       details = uleb(typeIdx)
     }
     else if (kind === 'memory') {
@@ -123,13 +127,11 @@ const build = {
   },
 
   // (func $name? ...params result ...body)
-  func([name, ...body], ctx, nodes) {
+  // FIXME: get rid of nodes here
+  func([name, ...body], ctx) {
     if (name) ctx.func[name] = ctx.func.length
 
-    const [typeidx, params] = consumeType(body, ctx)
-
-    // create (code body) section
-    nodes.push(['code', params, ...body])
+    const [typeidx] = typeuse(body, ctx)
 
     // register new function
     ctx.func.push(uleb(typeidx))
@@ -204,7 +206,8 @@ const build = {
 
   // artificial section
   // (code params ...body)
-  code([, params, ...body], ctx) {
+  code([, ...body], ctx) {
+    const [typeidx, params] = typeuse(body, ctx)
     let blocks = [] // control instructions / blocks stack
     let locals = [] // list of local variables
 
@@ -337,7 +340,7 @@ const build = {
         }
         // (result i32 i32)
         else if (args[0]?.[0] === 'result' || args[0]?.[0] === 'param') {
-          let [typeidx] = consumeType(args, ctx)
+          let [typeidx] = typeuse(args, ctx)
           immed = [typeidx]
         }
         else {
@@ -488,47 +491,44 @@ const v128 = (args) => {
   return arr
 }
 
-
-// get type info from (params) (result) nodes sequence - consumes nodes
-// returns registered (reused) type idx
-// eg. (type $return_i32 (func (result i32)))
-// FIXME: must be called typeuse
-const consumeType = (nodes, ctx) => {
-  let params = [], result = [], idx, bytes
+// https://webassembly.github.io/spec/core/text/modules.html#type-uses
+// consume (type id)(param t+)* (result t+)*
+const typeuse = (nodes, ctx) => {
+  let idx
 
   // existing type (type 0), (type $name) - can repeat params, result after
   if (nodes[0]?.[0] === 'type') {
-    // FIXME: make via deref
-    idx = nodes.shift()[1]
-    if (idx[0] === '$') idx = ctx.type[idx]
-    else idx = +idx
+    [, idx] = nodes.shift()
+    idx = idx[0] === '$' ? ctx.type[idx] : +idx
   }
 
-  // collect params (param i32 i64) (param $x i32)
+  let params = [], result = []
+  // collect params (param i32 i64) (param $x? i32)
   while (nodes[0]?.[0] === 'param') {
-    let [, ...types] = nodes.shift()
-    // save param by name
-    if (types[0]?.[0] === '$') params[types.shift()] = params.length
-    params.push(...types.map(t => TYPE[t]))
+    let [, ...args] = nodes.shift()
+    let name = id(args)
+    if (name) params[name] = params.length // expose name refs
+    params.push(...args)
   }
 
   // collect result eg. (result f64 f32)(result i32)
-  while (nodes[0]?.[0] === 'result') result.push(...nodes.shift().slice(1).map(t => TYPE[t]))
+  while (nodes[0]?.[0] === 'result') {
+    let [, ...args] = nodes.shift()
+    result.push(...args)
+  }
 
   // if new type, not (type 0) (...)
   if (idx == null) {
+    // for simplicity of search we fabricate type name
+    let pr = params + '>' + result
     // reuse existing type or register new one
-    // FIXME: can be done easier via string comparison
-    bytes = [TYPE.func, ...vec(params), ...vec(result)]
-    idx = ctx.type.findIndex((t) => t.every((byte, i) => byte === bytes[i]))
-
-    // register new type, if not found
-    if (idx < 0) idx = ctx.type.push(bytes) - 1
+    idx = ctx.type[pr] ??=
+      ctx.type.push([TYPE.func, ...vec(params.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))]) - 1
   }
 
-  // FIXME: we should not return params here
-  return [idx, params]
+  return [idx, params, result]
 }
+
 
 // consume align/offset/etc params
 const consumeAlignOffset = (args) => {
@@ -547,7 +547,7 @@ const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
 const str = str => {
   str = str[0] === '"' ? str.slice(1, -1) : str
   let res = [], i = 0, c, BSLASH = 92
-  // spec https://webassembly.github.io/spec/core/text/values.html#strings
+  // https://webassembly.github.io/spec/core/text/values.html#strings
   for (; i < str.length;) {
     c = str.charCodeAt(i++)
     res.push(c === BSLASH ? escape[str[i++]] || parseInt(str.slice(i - 1, ++i), 16) : c)
