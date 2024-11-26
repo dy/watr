@@ -49,8 +49,6 @@ export default (nodes) => {
     let [kind, ...node] = nodes.shift()
     // get name reference
     let name = id(node)
-    // FIXME: find out if this might work
-    // if (name) sections[kind][name] = sections[kind].length
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
@@ -65,8 +63,18 @@ export default (nodes) => {
       node = [...node.shift(), [kind, ...(name ? [name] : []), ...node]], kind = node.shift()
     }
 
+    // create stub for imported name
+    if (kind === 'import') {
+      let [k, nm] = node[2]
+      if (nm[0] === '$') sections[k][nm] = sections[k].length
+      sections[k].push(null)
+    }
+
     // duplicate func as code section
-    if (kind === 'func') nodes.push(['code', ...node])
+    else if (kind === 'func') nodes.push(['code', ...node])
+
+    // FIXME: find out if this might work
+    if (name) sections[kind][name] = sections[kind].length
 
     build[kind]([name, ...node], sections)
   }
@@ -105,10 +113,6 @@ const build = {
   import([, mod, field, [kind, ...parts]], ctx) {
     let name = id(parts), details
 
-    // (import "a" "b" (global $a (mut i32))) -> (global $a (import "a" "b") (mut i32))
-    if (name) ctx[kind][name] = ctx[kind].length
-    ctx[kind].push(null) // stub
-
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
       let [typeIdx] = typeuse(parts, ctx)
@@ -129,8 +133,6 @@ const build = {
   // (func $name? ...params result ...body)
   // FIXME: get rid of nodes here
   func([name, ...body], ctx) {
-    if (name) ctx.func[name] = ctx.func.length
-
     const [typeidx] = typeuse(body, ctx)
 
     // register new function
@@ -139,23 +141,17 @@ const build = {
 
   // (table id? 1 2? funcref)
   table([name, ...args], ctx) {
-    if (name) ctx.table[name] = ctx.table.length
-
     ctx.table.push([TYPE[args.pop()], ...limits(args)])
   },
 
   // (memory id? export* min max shared)
   memory([name, ...args], ctx) {
-    if (name) ctx.memory[name] = ctx.memory.length
-
     ctx.memory.push(limits(args))
   },
 
   // (global id? i32 (i32.const 42))
   // (global $id (mut i32) (i32.const 42))
   global([name, ...args], ctx) {
-    if (name) ctx.global[name] = ctx.global.length
-
     let [type] = args, mut = type[0] === 'mut' ? 1 : 0
 
     let [, [...init]] = args

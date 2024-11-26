@@ -130,6 +130,7 @@
 1. Init nodes in order of sections
   - not necessarily helpful: global can depend on global declared later
   - adds O(n*log(n))
+    ~ that's minimal overhead
 2. Push current node to the end
   - can screw up exports order compared to wabt
   - it's a bit unsafe condition `if (nodes.length && !noref) nodes.push(currentNode)`
@@ -143,3 +144,12 @@
   - looks like illicit extra transform step
   + can save code parts
   + generic solution for any forward-refs
+  - has problems with calculating vec when internal refs can resolve to variable-length
+  - cannot be used everywhere since code still reads from locals, blocks etc
+  - causes at least type check for every single output byte
+  - layers/concerns mixup: we mix binary representation with parsed parts, less clear code
+4. Collect ref ids via single initial pre-run
+  + Adds only O(n) (checking section nodes is way cheaper than every single byte)
+  + Separates concern, not mixing up
+  - It's unnecessary step same as what we do now
+  - We anyways have to refer by name later so we deal with sections already
