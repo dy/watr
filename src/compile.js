@@ -239,12 +239,12 @@ const build = {
         immed = [0xfd, ...uleb(opCode)]
         // (v128.load)
         if (opCode <= 0x0b) {
-          const o = consumeAlignOffset(args)
+          const o = memarg(args)
           immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
         }
         // (v128.load_lane offset? align? idx)
         else if (opCode >= 0x54 && opCode <= 0x5d) {
-          const o = consumeAlignOffset(args)
+          const o = memarg(args)
           immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
           // (v128.load_lane_zero)
           if (opCode <= 0x5b) immed.push(...uleb(args.shift()))
@@ -284,7 +284,7 @@ const build = {
       // (i32.store align=n offset=m at value) etc
       else if (opCode >= 40 && opCode <= 62) {
         // FIXME: figure out point in Math.log2 aligns
-        let o = consumeAlignOffset(args)
+        let o = memarg(args)
         immed = [Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0)]
       }
 
@@ -528,11 +528,12 @@ const typeuse = (nodes, ctx) => {
 
 
 // consume align/offset/etc params
-const consumeAlignOffset = (args) => {
+const memarg = (args) => {
   let params = {}, param
   while (args[0]?.includes('=')) param = args.shift().split('='), params[param[0]] = Number(param[1])
   return params
 }
+
 
 const err = text => { throw Error(text) }
 
