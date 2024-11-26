@@ -67,16 +67,19 @@ export default (nodes) => {
     if (kind === 'import') {
       let [k, nm] = node[2]
       if (nm[0] === '$') sections[k][nm] = sections[k].length
-      sections[k].push(null)
+      sections[k].length++ // inc counter
     }
 
     // duplicate func as code section
     else if (kind === 'func') nodes.push(['code', ...node])
 
-    // FIXME: find out if this might work
+    // workaround start
+    else if (name && kind === 'start') node.unshift(sections.func[name])
+
+    // track section name ref, if any
     if (name) sections[kind][name] = sections[kind].length
 
-    build[kind]([name, ...node], sections)
+    build[kind](node, sections)
   }
 
   // FIXME: try doing in advance and building after
@@ -102,15 +105,12 @@ export default (nodes) => {
 const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
-  type([name, ...parts], ctx) {
-    let [kind, ...sig] = parts.shift()
-
-    const [idx] = typeuse(sig, ctx)
-    if (name) ctx.type[name] = idx
+  type([[, ...sig]], ctx) {
+    typeuse(sig, ctx)
   },
 
   // (import "math" "add" (func|table|global|memory $name? typedef?))
-  import([, mod, field, [kind, ...parts]], ctx) {
+  import([mod, field, [kind, ...parts]], ctx) {
     let name = id(parts), details
 
     if (kind === 'func') {
@@ -132,7 +132,7 @@ const build = {
 
   // (func $name? ...params result ...body)
   // FIXME: get rid of nodes here
-  func([name, ...body], ctx) {
+  func(body, ctx) {
     const [typeidx] = typeuse(body, ctx)
 
     // register new function
@@ -140,38 +140,39 @@ const build = {
   },
 
   // (table id? 1 2? funcref)
-  table([name, ...args], ctx) {
+  table(args, ctx) {
     ctx.table.push([TYPE[args.pop()], ...limits(args)])
   },
 
   // (memory id? export* min max shared)
-  memory([name, ...args], ctx) {
+  memory(args, ctx) {
     ctx.memory.push(limits(args))
   },
 
   // (global id? i32 (i32.const 42))
   // (global $id (mut i32) (i32.const 42))
-  global([name, ...args], ctx) {
+  global(args, ctx) {
     let [type] = args, mut = type[0] === 'mut' ? 1 : 0
 
     let [, [...init]] = args
-    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...consumeConst(init, ctx), 0x0b])
+    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...expr(init, ctx), 0x0b])
   },
 
   //  (export "name" (func|table|mem $name|idx))
-  export([, nm, ref], ctx) {
+  export([nm, ref], ctx) {
     ctx.export.push([...str(nm), KIND[ref[0]], ref])
   },
 
   // (start $main)
-  start([name, id], ctx) {
+  start([id], ctx) {
     // FIXME: can be resolved later
+    // FIXME: do away with name
     if (!ctx.start.length) ctx.start.push(uleb(name ? ctx.func[name] : +id))
   },
 
   // (elem $name? declare? funcref|func (ref.func $f) (item ref.func $f))
   // (elem $name? (table $t)? (offset (i32.const 0))|(i32.const 9)? ...parts)
-  elem([name, ...parts], ctx) {
+  elem(parts, ctx) {
     let table, offset
 
     // declare?
@@ -195,14 +196,14 @@ const build = {
     // FIXME: https://webassembly.github.io/spec/core/binary/modules.html#element-section
     ctx.elem.push([
       table,
-      ...(offset ? consumeConst(offset, ctx) : []), 0x0b,
+      ...(offset ? expr(offset, ctx) : []), 0x0b,
       ...vec(parts.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : +el)))
     ])
   },
 
   // artificial section
   // (code params ...body)
-  code([, ...body], ctx) {
+  code(body, ctx) {
     const [typeidx, params] = typeuse(body, ctx)
     let blocks = [] // control instructions / blocks stack
     let locals = [] // list of local variables
@@ -256,7 +257,7 @@ const build = {
         // (v128.const i32x4)
         else if (opCode === 0x0c) {
           args.unshift(op)
-          immed = consumeConst(args, ctx)
+          immed = expr(args, ctx)
         }
         // (i8x16.extract_lane_s 0 ...)
         else if (opCode >= 0x15 && opCode <= 0x22) {
@@ -415,7 +416,7 @@ const build = {
   // (data (i32.const 0) "\aa" "\bb"?)
   // (data (offset (i32.const 0)) (memory ref) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
-  data([name, ...inits], ctx) {
+  data(inits, ctx) {
     let offset, mem
 
     // FIXME: it can have name also
@@ -426,7 +427,7 @@ const build = {
     if (!offset && !mem) offset = inits.shift()
     if (!offset) offset = ['i32.const', 0]
 
-    ctx.data.push([0, ...consumeConst([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
+    ctx.data.push([0, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
   }
 }
 
@@ -439,7 +440,7 @@ const id = (nodes) => (nodes[0]?.[0] === '$') && nodes.shift()
 
 // instantiation time const initializer
 // FIXME: must be called expr
-const consumeConst = (node, ctx) => {
+const expr = (node, ctx) => {
   let op = node.shift(), [type, cmd] = op.split('.')
 
   // (global.get idx)
@@ -456,8 +457,8 @@ const consumeConst = (node, ctx) => {
 
   // (i32.add a b), (i32.mult a b) etc
   return [
-    ...consumeConst(node.shift(), ctx),
-    ...consumeConst(node.shift(), ctx),
+    ...expr(node.shift(), ctx),
+    ...expr(node.shift(), ctx),
     INSTR.indexOf(op)
   ]
 }
