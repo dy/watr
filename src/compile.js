@@ -73,11 +73,10 @@ export default (nodes) => {
     // duplicate func as code section
     else if (kind === 'func') nodes.push(['code', ...node])
 
-    // workaround start
-    else if (name && kind === 'start') node.unshift(sections.func[name])
-
     // track section name ref, if any
-    if (name) sections[kind][name] = sections[kind].length
+    if (name)
+      if (kind === 'start') node.push(sections.func[name]); // workaround start
+      else sections[kind][name] = sections[kind].length
 
     build[kind](node, sections)
   }
@@ -125,6 +124,7 @@ const build = {
       let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
       details = [TYPE[mut ? type[1] : type], mut]
     }
+    // FIXME: add table
     else throw Error('Unknown import ' + kind)
 
     ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
@@ -179,9 +179,7 @@ const build = {
     if (parts[0] === 'declare') parts.shift()
 
     // table?
-    if (parts[0][0] === 'table') {
-      table = parts.shift()
-    }
+    if (parts[0][0] === 'table') table = parts.shift()
 
     // (offset expr)|expr
     if (parts[0] === 'offset' || (typeof parts[0] !== 'string' && !parts[0]?.[0].startsWith('ref'))) {
