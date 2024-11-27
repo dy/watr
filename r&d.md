@@ -153,3 +153,7 @@
   + Separates concern, not mixing up
   - It's unnecessary step same as what we do now
   - We anyways have to refer by name later so we deal with sections already
+5. We create refs on-the-go like typeuse, but when we meet actual nodes they create real definition
+  + avoids double pass
+  + avoids binary-stage deref
+  - doesn't make build[type] direct return

@@ -5,12 +5,11 @@ import parse from './parse.js'
 
 // build instructions index
 INSTR.forEach((instr, i) => {
-  let [op, ...imm] = instr.split(' '), a, b
-  INSTR[i] = op // rewrite original instr
+  let [op, ...imm] = instr.split(':'), a, b
 
-  // TODO
-  // // wrap codes
-  // const code = i >= 0x10f ? [0xfd, ...uleb(i - 0x10f)] : i >= 0xfc ? [0xfc, ...uleb(i - 0xfc)] : i
+  // wrap codes
+  // const code = i >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc ? [0xfc, i - 0xfc] : i
+  INSTR[op] = i
 
   // // handle immediates
   // INSTR[op] = !imm.length ? () => code :
@@ -224,9 +223,9 @@ const build = {
       // groups are flattened, eg. (cmd z w) -> z w cmd
       if (group = Array.isArray(op)) {
         args = [...op] // op is immutable
-        opCode = INSTR.indexOf(op = args.shift())
+        opCode = INSTR[op = args.shift()]
       }
-      else opCode = INSTR.indexOf(op)
+      else opCode = INSTR[op]
 
       // NOTE: numeric comparison is faster than generic hash lookup
 
@@ -388,7 +387,7 @@ const build = {
         while (!Array.isArray(args[0])) id = args.shift(), immed.push(...uleb(id[0][0] === '$' ? blocks.length - blocks[id] : id))
         immed.unshift(...uleb(immed.length - 1))
       }
-      else if (opCode < 0) err(`Unknown instruction \`${op}\``)
+      else if (opCode == null) err(`Unknown instruction \`${op}\``)
 
       // if group (cmd im1 im2 arg1 arg2) - insert any remaining args first: arg1 arg2
       // because inline case has them in stack already
@@ -403,6 +402,13 @@ const build = {
     const bytes = []
     while (body.length) consume(body, bytes)
     bytes.push(0x0b)
+
+    // TODO: what would flat walk look like
+    // while (body.length) {
+    //   let op = body.shift()
+    //   bytes.push(...INSTR[op](body))
+    // }
+    // bytes.push(0x0b)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     let loctypes = locals.reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
@@ -457,7 +463,7 @@ const expr = (node, ctx) => {
   return [
     ...expr(node.shift(), ctx),
     ...expr(node.shift(), ctx),
-    INSTR.indexOf(op)
+    INSTR[op]
   ]
 }
 
