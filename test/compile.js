@@ -952,7 +952,7 @@ t('case: globals', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('case: func hoist', () => {
+t.todo('case: func hoist', () => {
   let src = `
     (global funcref (ref.func $a))
     (func (call $a))

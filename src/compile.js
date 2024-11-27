@@ -62,26 +62,20 @@ export default (nodes) => {
       node = [...node.shift(), [kind, ...(name ? [name] : []), ...node]], kind = node.shift()
     }
 
-    // create stub for imported name
-    if (kind === 'import') {
-      let [k, nm] = node[2]
-      if (nm[0] === '$') sections[k][nm] = sections[k].length
-      sections[k].length++ // inc counter
-    }
-
     // duplicate func as code section
-    else if (kind === 'func') nodes.push(['code', ...node])
+    if (kind === 'func') nodes.push(['code', ...node])
+
+    // workaround start
+    else if (kind === 'start' && name) node.push(sections.func[name]);
 
     // track section name ref, if any
-    if (name)
-      if (kind === 'start') node.push(sections.func[name]); // workaround start
-      else sections[kind][name] = sections[kind].length
+    if (name) {
+      // was defined before
+      sections[kind][name] = sections[kind].length
+    }
 
     build[kind](node, sections)
   }
-
-  // FIXME: try doing in advance and building after
-  const deref = ([sec, name]) => name[0] === '$' ? sections[sec][name] : name
 
   // build binary
   for (let name in sections) {
@@ -89,7 +83,7 @@ export default (nodes) => {
     for (let item of items) {
       if (!item) continue
       count++ // count number of entries in section
-      for (let byte of item) Array.isArray(byte) ? bytes.push(...uleb(deref(byte))) : bytes.push(byte)
+      bytes.push(...item)
     }
     if (!bytes.length) continue
     // skip start section count
@@ -109,7 +103,11 @@ const build = {
 
   // (import "math" "add" (func|table|global|memory $name? typedef?))
   import([mod, field, [kind, ...parts]], ctx) {
-    let name = id(parts), details
+    let nm = id(parts), details
+
+    // create stub
+    if (nm[0] === '$') ctx[kind][nm] = ctx[kind].length
+    ctx[kind].length++ // inc counter
 
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
@@ -158,8 +156,18 @@ const build = {
   },
 
   //  (export "name" (func|table|mem $name|idx))
-  export([nm, ref], ctx) {
-    ctx.export.push([...str(nm), KIND[ref[0]], ref])
+  export([s, [kind, nm]], ctx) {
+    let idx
+    if (nm[0] === '$') {
+      if (nm == null) {
+        // put placeholder to future-init
+        err('Unknown export ' + nm)
+        // ctx[kind][nm] = ctx[kind].length++
+      }
+      idx = ctx[kind][nm];
+    }
+    else idx = +nm
+    ctx.export.push([...str(s), KIND[kind], ...uleb(idx)])
   },
 
   // (start $main)
@@ -448,7 +456,7 @@ const expr = (node, ctx) => {
   let op = node.shift(), [type, cmd] = op.split('.')
 
   // (global.get idx)
-  if (type === 'global') return [0x23, ['global', node[0]]]
+  if (type === 'global') return [0x23, ...uleb(node[0][0] === '$' ? ctx.global[node[0]] ?? err('Unknown global ' + node[0]) : +node)]
 
   // (v128.const i32x4 1 2 3 4)
   if (type === 'v128') return [0xfd, 0x0c, ...v128(node)]
@@ -457,7 +465,7 @@ const expr = (node, ctx) => {
   if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
 
   // (ref.func $x)
-  if (type === 'ref') return [0xD2, ['func', node[0]]]
+  if (type === 'ref') return [0xD2, ...uleb(node[0][0] === '$' ? ctx.func[node[0]] ?? err('Unknown func ' + node[0]) : +node)]
 
   // (i32.add a b), (i32.mult a b) etc
   return [
