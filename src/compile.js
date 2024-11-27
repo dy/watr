@@ -68,13 +68,26 @@ export default (nodes) => {
     // workaround start
     else if (kind === 'start' && name) node.push(sections.func[name]);
 
+    // index at which to insert new node
+    let idx = sections[kind].length
+
     // track section name ref, if any
     if (name) {
-      // was defined before
-      sections[kind][name] = sections[kind].length
+      // was defined before - skip indexing
+      if (sections[kind][name] == null) {
+        sections[kind][name] = sections[kind].length
+      }
+      // existing name means item was referenced before (via expr or etc)
+      else {
+        idx = sections[kind][name]
+      }
     }
 
-    build[kind](node, sections)
+    // FIXME: streamline/dedupe this
+    if (kind === 'type') build[kind](node, sections)
+    else {
+      sections[kind][idx] = build[kind](node, sections)
+    }
   }
 
   // build binary
@@ -98,6 +111,7 @@ const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
   type([[, ...sig]], ctx) {
+    // TODO: try making return binary instead, for signature
     typeuse(sig, ctx)
   },
 
@@ -124,7 +138,7 @@ const build = {
     // FIXME: add table
     else throw Error('Unknown import ' + kind)
 
-    ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
+    return [...str(mod), ...str(field), KIND[kind], ...details]
   },
 
   // (func $name? ...params result ...body)
@@ -133,17 +147,17 @@ const build = {
     const [typeidx] = typeuse(body, ctx)
 
     // register new function
-    ctx.func.push(uleb(typeidx))
+    return uleb(typeidx)
   },
 
   // (table id? 1 2? funcref)
   table(args, ctx) {
-    ctx.table.push([TYPE[args.pop()], ...limits(args)])
+    return [TYPE[args.pop()], ...limits(args)]
   },
 
   // (memory id? export* min max shared)
   memory(args, ctx) {
-    ctx.memory.push(limits(args))
+    return limits(args)
   },
 
   // (global id? i32 (i32.const 42))
@@ -152,7 +166,7 @@ const build = {
     let [type] = args, mut = type[0] === 'mut' ? 1 : 0
 
     let [, [...init]] = args
-    ctx.global.push([TYPE[mut ? type[1] : type], mut, ...expr(init, ctx), 0x0b])
+    return [TYPE[mut ? type[1] : type], mut, ...expr(init, ctx), 0x0b]
   },
 
   //  (export "name" (func|table|mem $name|idx))
@@ -167,14 +181,14 @@ const build = {
       idx = ctx[kind][nm];
     }
     else idx = +nm
-    ctx.export.push([...str(s), KIND[kind], ...uleb(idx)])
+    return [...str(s), KIND[kind], ...uleb(idx)]
   },
 
   // (start $main)
   start([id], ctx) {
     // FIXME: can be resolved later
     // FIXME: do away with name
-    if (!ctx.start.length) ctx.start.push(uleb(name ? ctx.func[name] : +id))
+    return uleb(+id)
   },
 
   // (elem $name? declare? funcref|func (ref.func $f) (item ref.func $f))
@@ -199,11 +213,11 @@ const build = {
 
     // FIXME: make late-deref
     // FIXME: https://webassembly.github.io/spec/core/binary/modules.html#element-section
-    ctx.elem.push([
+    return [
       table,
       ...(offset ? expr(offset, ctx) : []), 0x0b,
       ...vec(parts.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : +el)))
-    ])
+    ]
   },
 
   // artificial section
@@ -422,7 +436,7 @@ const build = {
     let loctypes = locals.reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    ctx.code.push(vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes]))
+    return vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes])
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
@@ -439,7 +453,7 @@ const build = {
     if (!offset && !mem) offset = inits.shift()
     if (!offset) offset = ['i32.const', 0]
 
-    ctx.data.push([0, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))])
+    return [0, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))]
   }
 }
 
@@ -465,7 +479,9 @@ const expr = (node, ctx) => {
   if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
 
   // (ref.func $x)
-  if (type === 'ref') return [0xD2, ...uleb(node[0][0] === '$' ? ctx.func[node[0]] ?? err('Unknown func ' + node[0]) : +node)]
+  if (type === 'ref') {
+    return [0xD2, ...uleb(node[0][0] === '$' ? (ctx.func[node[0]] ??= ctx.func.length) : +node)]
+  }
 
   // (i32.add a b), (i32.mult a b) etc
   return [
