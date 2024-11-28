@@ -46,6 +46,7 @@ export default (nodes) => {
   // directly map nodes to binary sections
   while (nodes.length) {
     let [kind, ...node] = nodes.shift()
+
     // get name reference
     let name = id(node)
 
@@ -53,8 +54,6 @@ export default (nodes) => {
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
     // NOTE: we unshift to keep order on par with wabt
     while (node[0]?.[0] === 'export') nodes.unshift([...node.shift(), [kind, sections[kind].length]])
-
-    // FIXME: elem/etc or others who depend on hoisting can push themselves to the end
 
     // import abbr
     // (table|memory|global|func id? (import m n) type) -> (import m n (table|memory|global|func id? type))
@@ -68,26 +67,14 @@ export default (nodes) => {
     // workaround start
     else if (kind === 'start' && name) node.push(sections.func[name]);
 
-    // index at which to insert new node
+    // if id was defined before - take it
     let idx = sections[kind].length
 
-    // track section name ref, if any
-    if (name) {
-      // was defined before - skip indexing
-      if (sections[kind][name] == null) {
-        sections[kind][name] = sections[kind].length
-      }
-      // existing name means item was referenced before (via expr or etc)
-      else {
-        idx = sections[kind][name]
-      }
-    }
+    // save section name or load idx, if it was saved before
+    if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
 
-    // FIXME: streamline/dedupe this
-    if (kind === 'type') build[kind](node, sections)
-    else {
-      sections[kind][idx] = build[kind](node, sections)
-    }
+    let res = build[kind](node, sections)
+    if (res) sections[kind][idx] = res
   }
 
   // build binary
@@ -142,7 +129,6 @@ const build = {
   },
 
   // (func $name? ...params result ...body)
-  // FIXME: get rid of nodes here
   func(body, ctx) {
     const [typeidx] = typeuse(body, ctx)
 
@@ -173,12 +159,11 @@ const build = {
   export([s, [kind, nm]], ctx) {
     let idx
     if (nm[0] === '$') {
-      if (nm == null) {
-        // put placeholder to future-init
-        err('Unknown export ' + nm)
-        // ctx[kind][nm] = ctx[kind].length++
-      }
       idx = ctx[kind][nm];
+      if (idx == null) {
+        // put placeholder to future-init
+        idx = ctx[kind][nm] = ctx[kind].length++
+      }
     }
     else idx = +nm
     return [...str(s), KIND[kind], ...uleb(idx)]
@@ -444,8 +429,6 @@ const build = {
   // (data (global.get $x) "\aa" "\bb"?)
   data(inits, ctx) {
     let offset, mem
-
-    // FIXME: it can have name also
 
     if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
     if (inits[0]?.[0] === 'memory') [, mem] = inits.shift()
