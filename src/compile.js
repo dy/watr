@@ -65,7 +65,7 @@ export default (nodes) => {
     if (kind === 'func') nodes.push(['code', ...node])
 
     // workaround start
-    else if (kind === 'start' && name) node.push(sections.func[name]);
+    else if (name && kind === 'start') node.push(sections.func[name]);
 
     // if id was defined before - take it
     let idx = sections[kind].length
@@ -98,7 +98,6 @@ const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
   type([[, ...sig]], ctx) {
-    // TODO: try making return binary instead, for signature
     typeuse(sig, ctx)
   },
 
@@ -208,7 +207,7 @@ const build = {
   // artificial section
   // (code params ...body)
   code(body, ctx) {
-    const [typeidx, params] = typeuse(body, ctx)
+    const [, params] = typeuse(body, ctx)
     let blocks = [] // control instructions / blocks stack
     let locals = [] // list of local variables
 
@@ -227,7 +226,7 @@ const build = {
 
       let op = nodes.shift(), opCode, args = nodes, immed, id, group
 
-      // groups are flattened, eg. (cmd z w) -> z w cmd
+      // flatten groups, eg. (cmd z w) -> z w cmd
       if (group = Array.isArray(op)) {
         args = [...op] // op is immutable
         opCode = INSTR[op = args.shift()]
@@ -299,25 +298,25 @@ const build = {
 
       // (local.get $id), (local.tee $id x)
       else if (opCode >= 32 && opCode <= 34) {
-        immed = uleb(args[0]?.[0] === '$' ? params[id = args.shift()] ?? locals[id] : args.shift())
+        immed = uleb(args[0]?.[0] === '$' ? params[id = args.shift()] ?? locals[id] ?? err('Unknown local ' + id) : args.shift())
       }
 
-      // (global.get id), (global.set id)
+      // (global.get $id), (global.set $id)
       else if (opCode == 0x23 || opCode == 36) {
-        immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] : args.shift())
+        immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] ?? err('Unknown global ' + id) : args.shift())
       }
 
       // (call id ...nodes)
       else if (opCode == 16) {
         let fnName = args.shift()
-        immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] : +fnName);
+        immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] ?? err('Unknown func ' + fnName) : +fnName);
         // FIXME: how to get signature of imported function
       }
 
       // (call_indirect (type $typeName) (idx) ...nodes)
       else if (opCode == 17) {
         let typeidx = args.shift()[1];
-        typeidx = typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx
+        typeidx = typeidx[0] === '$' ? ctx.type[typeidx] ?? err('Unknown type ' + typeidx) : +typeidx
         immed = uleb(typeidx), immed.push(0) // extra immediate indicates table idx (reserved)
       }
 
@@ -353,7 +352,6 @@ const build = {
           nodes.unshift('end')
 
           if (opCode < 4) while (args.length) nodes.unshift(args.pop())
-
           // (if cond a) -> cond if a end
           else if (args.length < 3) nodes.unshift(args.pop())
           // (if cond (then a) (else b)) -> `cond if a else b end`
@@ -398,9 +396,7 @@ const build = {
 
       // if group (cmd im1 im2 arg1 arg2) - insert any remaining args first: arg1 arg2
       // because inline case has them in stack already
-      if (group) {
-        while (args.length) consume(args, out)
-      }
+      if (group) while (args.length) consume(args, out)
 
       if (opCode) out.push(opCode)
       if (immed) out.push(...immed)
@@ -409,13 +405,6 @@ const build = {
     const bytes = []
     while (body.length) consume(body, bytes)
     bytes.push(0x0b)
-
-    // TODO: what would flat walk look like
-    // while (body.length) {
-    //   let op = body.shift()
-    //   bytes.push(...INSTR[op](body))
-    // }
-    // bytes.push(0x0b)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     let loctypes = locals.reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
