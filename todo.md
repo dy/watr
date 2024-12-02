@@ -46,19 +46,19 @@
     * [x] common parts pre-parse
 * [ ] Optimizations
   * [x] make generic consuming ops instead of condition checks
-  * [ ] make func init code immediately
+  * [ ] make func init code immediately instead of duplicating code
   * [ ] make use of deref with id creator for `x[0]?.[0] === '$'` things
   * [ ] make code insert refs, and then check if there are empty spots in output to show errors
-  * [ ] make code section do generic ops handling, no a bunch of checks
+  * [ ] make code section do generic ops handling, not a bunch of checks
   * [ ] make use of expr inside of code section
-* [ ] elem all use-cases
+* [x] elem all use-cases
 * [ ] Enhance print: make it as nice as AI
 * [ ] Feature: func-ref
 * [ ] Feature: ref-types
 * [ ] Feature: gc
 * [ ] Tests: all official
-* [ ] Compiler: Named/multiple memory;
-* [ ] Compiler: Named/multiple tables;
+* [x] Compiler: Named/multiple memory;
+* [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
   ~ many examples use loop ... end, br 0 and other simple inliners
   ~ from code point things coming in loop/block node are not arguments, they're immediates-ish, or "body"
