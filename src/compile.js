@@ -175,33 +175,75 @@ const build = {
     return uleb(+id)
   },
 
-  // (elem $name? declare? funcref|func (ref.func $f) (item ref.func $f))
-  // (elem $name? (table $t)? (offset (i32.const 0))|(i32.const 9)? ...parts)
+  // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
+  // passive
+  // (elem elem*)
+  // declarative
+  // (elem declare elem*)
+  // active
+  // (elem (table idx)? (offset expr)|(expr) elem*)
+  // elems
+  // funcref|externref (item expr)|expr (item expr)|expr
+  // func? $id0 $id1
   elem(parts, ctx) {
-    let table, offset
+    let table, offset, mode = 0b000, reftype
 
     // declare?
-    if (parts[0] === 'declare') parts.shift()
+    if (parts[0] === 'declare') parts.shift(), mode |= 0b010
 
     // table?
-    if (parts[0][0] === 'table') table = parts.shift()
-
-    // (offset expr)|expr
-    if (parts[0] === 'offset' || (typeof parts[0] !== 'string' && !parts[0]?.[0].startsWith('ref'))) {
-      [...offset] = parts.shift()
-      if (offset[0] === 'offset') [, offset] = offset
+    if (parts[0][0] === 'table') {
+      [, table] = parts.shift()
+      table = table[0] === '$' ? (ctx.table[table] ??= ctx.table.length) : +table
+      // ignore table=0
+      if (table) mode |= 0b010
     }
 
-    // func|funcref?
-    if (parts[0]?.startsWith('func')) parts.shift()
+    // (offset expr)|expr
+    // FIXME: offset can be calculable like global.get, although not in tests
+    if (parts[0]?.[0] === 'offset' || parts[0]?.[0] === 'i32.const') {
+      [...offset] = parts.shift()
+      if (offset[0] === 'offset') [, [...offset]] = offset
+    }
+    else mode |= 0b001 // passive
 
-    // FIXME: make late-deref
-    // FIXME: https://webassembly.github.io/spec/core/binary/modules.html#element-section
-    return [
-      table,
-      ...(offset ? expr(offset, ctx) : []), 0x0b,
-      ...vec(parts.flatMap(el => uleb(el[0] === '$' ? ctx.func[el] : +el)))
-    ]
+    // funcref|externref|func
+    if (parts[0] === 'func') parts.shift()
+    else if (parts[0] === 'funcref') reftype = parts.shift(), mode |= 0b100
+
+
+    // reset to simplest mode if no actual elements
+    if (!parts.length) mode &= 0b011
+
+    return console.log([
+      mode,
+      ...(
+        // 0b000 e:expr y*:vec(funcidx)                     | type=funcref, init ((ref.func y)end)*, active (table=0,offset=e)
+        mode === 0b000 ? [...expr(offset), 0x0b] :
+          // 0b001 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive
+          mode === 0b001 ? [0x00] :
+            // 0b010 x:tabidx e:expr et:elkind y*:vec(funcidx)  | type=0x00, init ((ref.func y)end)*, active (table=x,offset=e)
+            mode === 0b010 ? err('todo') :
+              // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
+              mode === 0b011 ? [0x00] :
+                // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
+                mode === 0b101 ? [TYPE[reftype]] :
+                  // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
+                  mode === 0b110 ? err('todo') :
+                    // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
+                    mode === 0b100 ? [...expr(offset), 0x0b] :
+                      // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
+                      [TYPE[reftype]]
+      ),
+      ...uleb(parts.length),
+      ...parts.flatMap(el => (
+        typeof el === 'string' ?
+          // $id0 1 2, secure new fn name
+          uleb(el[0] === '$' ? (ctx.func[el] ??= ctx.func.length) : +el) :
+          // (ref.func a) (item (ref.func 2)) (item ref.func 2)
+          [...expr(el[0] === 'item' ? (el.length > 2 ? el.slice(1) : [...el[1]]) : [...el], ctx), 0x0b]
+      ))
+    ])
   },
 
   // artificial section
@@ -436,8 +478,7 @@ const vec = a => [...uleb(a.length), ...a]
 // https://webassembly.github.io/spec/core/text/values.html#text-id
 const id = (nodes) => (nodes[0]?.[0] === '$') && nodes.shift()
 
-// instantiation time const initializer
-// FIXME: must be called expr
+// instantiation time const initializer (consuming)
 const expr = (node, ctx) => {
   let op = node.shift(), [type, cmd] = op.split('.')
 
@@ -450,9 +491,11 @@ const expr = (node, ctx) => {
   // (i32.const 1)
   if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
 
-  // (ref.func $x)
+  // (ref.func $x) or (ref.null func)
   if (type === 'ref') {
-    return [0xD2, ...uleb(node[0][0] === '$' ? (ctx.func[node[0]] ??= ctx.func.length) : +node)]
+    return cmd === 'func' ?
+      [0xD2, ...uleb(node[0][0] === '$' ? (ctx.func[node[0]] ??= ctx.func.length) : +node)] :
+      [0xD0, TYPE.null]
   }
 
   // (i32.add a b), (i32.mult a b) etc
