@@ -1,7 +1,8 @@
 import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
-import Wabt from './lib/wabt.js'
+// import Wabt from './lib/wabt.js'
+import Wabt from './lib/libwabt.js'
 import print from '../src/print.js'
 
 
@@ -1428,6 +1429,7 @@ t('feature: simd const', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 
   // ref: https://github.com/WebAssembly/simd/tree/master/test/core/simd
+  // FIXME: not sure where's that from - globals seem to be not allowed
   src = `
   (global v128 (v128.const i8x16 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF))
   (global v128 (v128.const i8x16 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80))
@@ -2190,16 +2192,16 @@ t('example: wat-compiler', async () => {
 
 })
 
-t.todo('example: official', async () => {
+t.only('example: official', async () => {
   async function ex(path) {
     let res = await fetch(path, { cache: 'no-cache' })
     let src = await res.text()
     let nodes = parse(src)
+    freeze(nodes)
     let buf, mod, inst
     for (let node of nodes) {
       // (module $name) - creates module instance, collects exports
       if (node[0] === 'module') {
-        console.log(print(node))
         buf = compile(node)
         is(buf, wat2wasm(print(node)).buffer)
         mod = new WebAssembly.Module(buf)
@@ -2240,10 +2242,24 @@ let wabt = await Wabt()
 export function wat2wasm(code, config) {
   let metrics = config ? config.metrics : true
   const parsed = wabt.parseWat('inline', code, {
-    bulk_memory: true,
-    simd: true,
-    function_references: true,
-    reference_types: true
+    "exceptions": true,
+    "mutable_globals": true,
+    "sat_float_to_int": true,
+    "sign_extension": true,
+    "simd": true,
+    "threads": true,
+    "function_references": true,
+    "multi_value": true,
+    "tail_call": true,
+    "bulk_memory": true,
+    "reference_types": true,
+    "annotations": true,
+    "code_metadata": true,
+    "gc": true,
+    "memory64": true,
+    "multi_memory": true,
+    "extended_const": true,
+    "relaxed_simd": true
   })
   // metrics && console.time('wabt build')
   const binary = parsed.toBinary({
@@ -2263,7 +2279,6 @@ export function wat2wasm(code, config) {
 const run = (src, importObj) => {
   let tree = parse(src)
   // in order to make sure tree is not messed up we freeze it
-  const freeze = node => Array.isArray(node) && (Object.freeze(node), node.forEach(freeze))
   freeze(tree)
   let wabtBuffer = wat2wasm(src).buffer, watrBuffer = compile(tree)
   // console.log('wabt:')
@@ -2274,3 +2289,5 @@ const run = (src, importObj) => {
   const mod = new WebAssembly.Module(watrBuffer)
   return new WebAssembly.Instance(mod, importObj)
 }
+
+const freeze = node => Array.isArray(node) && (Object.freeze(node), node.forEach(freeze))
