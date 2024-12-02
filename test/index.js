@@ -13,10 +13,11 @@ if (isNode) {
   }
 }
 
-// redefine console.log to return first arg
+// redefine console.log to return last arg
 let log = console.log
 console.log = (...args) => (log.apply(console, args), args.pop())
 
+// render buffer as hex
 console.hex = (d) => console.log((Object(d).buffer instanceof ArrayBuffer ? new Uint8Array(d.buffer) :
   typeof d === 'string' ? (new TextEncoder('utf-8')).encode(d) :
     new Uint8ClampedArray(d)).reduce((p, c, i, a) => p + (i % 16 === 0 ? i.toString(16).padStart(6, 0) + '  ' : ' ') +

@@ -51,6 +51,12 @@ export default (nodes) => {
     // get name reference
     let name = node[0]?.[0] === '$' && node.shift()
 
+    // figure out section id
+    let idx = sections[kind].length
+
+    // if section name was referenced before - use existing id, else assign idx to name
+    if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
+
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
     // NOTE: we unshift to keep order on par with wabt
@@ -63,10 +69,11 @@ export default (nodes) => {
     }
 
     // table abbr
-    // (table id? reftype (elem ...)) -> (table id? reftype) (elem (table id) (i32.const 0) reftype ...)
+    // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
     if (node[1]?.[0] === 'elem') {
-      let [reftype, elem] = node
-      nodes.unshift([])
+      let [reftype, [, ...els]] = node
+      node = [els.length, els.length, reftype]
+      nodes.unshift(['elem', ['table', name || idx], ['i32.const', '0'], reftype, ...els])
     }
 
     // duplicate func as code section
@@ -75,12 +82,6 @@ export default (nodes) => {
 
     // workaround start
     else if (name && kind === 'start') node.push(sections.func[name]);
-
-    // figure out section id
-    let idx = sections[kind].length
-
-    // if section name was referenced before - use existing id, else assign idx to name
-    if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
 
     // build into corresponding idx (res can be null for type sections)
     let res = build[kind](node, sections)
@@ -133,7 +134,10 @@ const build = {
       details = [TYPE[mut ? type[1] : type], mut]
     }
     // FIXME: add table
-    else throw Error('Unknown import ' + kind)
+    else if (kind === 'table') {
+      details = [TYPE[parts.pop()], ...limits(parts)]
+    }
+    else err('Unknown import ' + kind)
 
     return [...str(mod), ...str(field), KIND[kind], ...details]
   },
