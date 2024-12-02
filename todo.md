@@ -1,4 +1,8 @@
 
+## goal
+
+* must be working nicely
+
 ## plan
 
 * [x] Basic compilation examples from wasm book
@@ -21,23 +25,55 @@
 * [x] Multiple params
 * [x] SIMD
 * [x] nan:value
-* [ ] constant expressions
+* [x] constant expressions
 * [x] ~~bench wassemble~~ - broken
-* [ ] Tests: https://github.com/EmNudge/watlings
-* [ ] Floating hex
-* [ ] Official test suite https://github.com/WebAssembly/testsuite
-* [ ] Compiler: Externref types;
-* [ ] Compiler: Named/multiple memory;
-* [ ] Compiler: Named/multiple tables;
+* [x] Floating hex
+* [x] Streamline compiler
+  * [x] Remove duplication from import section
+  * [x] Each section may have a name in advance: remove it from per-section handler
+  * [x] ~~Sort nodes by buckets, run single pass~~
+  * [x] Incorporate alt compiler into main one
+    * [x] register by names from common place
+    * [x] resolve import stubs
+    * [x] push returning arrays instead of modifying ctx (section.type)
+    * [x] resolve refs / hoisting
+    * [x] ~~collect by sections first, as array, to flat-map after~~
+    * [x] Use keys for ops
+    * [x] Get rid of precompile, do binary immediately, just re-add nodes as abbr
+    * [x] Optimize import
+    * [x] consumeType -> typeuse (better storage)
+    * [x] vec
+    * [x] common parts pre-parse
+* [ ] Optimizations
+  * [x] make generic consuming ops instead of condition checks
+  * [ ] make func init code immediately instead of duplicating code
+  * [ ] make use of deref with id creator for `x[0]?.[0] === '$'` things
+  * [ ] make code insert refs, and then check if there are empty spots in output to show errors
+  * [ ] make code section do generic ops handling, not a bunch of checks
+  * [ ] make use of expr inside of code section
+* [x] elem all use-cases
+* [ ] Enhance print: make it as nice as AI
+* [ ] Feature: func-ref
+* [ ] Feature: ref-types
+* [ ] Feature: gc
+* [ ] Tests: all official
+* [x] Compiler: Named/multiple memory;
+* [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
   ~ many examples use loop ... end, br 0 and other simple inliners
   ~ from code point things coming in loop/block node are not arguments, they're immediates-ish, or "body"
 * [ ] make repl support switch of compiler
-* [ ] better errors: should be safe to type in anything
+* [ ] validation / errors: should be safe to type in anything
 * [ ] numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
 * [ ] extended-const (polyfill?) https://github.com/WebAssembly/extended-const
 
+## [ ] REPL
+
+* [ ] compiler selector
+* [ ] examples
+* [ ] perf stats
+* [ ] prettifier
+
 ## Backlog
 
-* [ ] reorganize OP so to store number of immediates
-* wat-based wat-compiler
+* [ ] wat-based wat-compiler

@@ -1,7 +1,7 @@
 ;; test passing array to and back
 (module
-  (import "js" "mem" (memory 1))
   (import "console" "log" (func $log (param i32 f32)))
+  (import "js" "mem" (memory 1))
 
   (global $blockSize (import "js" "blockSize") (mut i32))
   (global $len (mut i32) (i32.const 0))

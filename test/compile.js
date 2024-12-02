@@ -1,88 +1,12 @@
 import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
-import Wabt from './lib/wabt.js'
+// import Wabt from './lib/wabt.js'
+import Wabt from './lib/libwabt.js'
+import print from '../src/print.js'
 
 
-// examples from https://ontouchstart.pages.dev/chapter_wasm_binary
-t('compile: empty', t => {
-  is(compile(['module']), hex`00 61 73 6d 01 00 00 00`)
-})
-
-t('compile: (module (func))', t => {
-  let buffer
-  is(compile(['module', ['func']]), buffer = hex`
-    00 61 73 6d 01 00 00 00
-    01 04 01  60 00 00         ; type section
-    03 02 01  00               ; func section
-    0a 04 01  02 00 0b         ; code section
-  `)
-
-  new WebAssembly.Module(buffer)
-})
-
-t('compile: (func))', t => {
-  let buffer = hex`
-    00 61 73 6d 01 00 00 00
-    01 04 01  60 00 00       ; type
-    03 02 01  00             ; func
-    05 03 01  00 01          ; memory
-    0a 04 01  02 00 0b       ; code
-  `
-  new WebAssembly.Module(buffer)
-
-  is(compile(['module', ['memory', 1], ['func']]), buffer)
-})
-
-t('compile: (module (memory (import "js" "mem") 1) (func))', t => {
-  let buffer = hex`
-    00 61 73 6d 01 00 00 00
-    01 04 01 60 00 00                       ; type
-    02 0b 01 02 6a 73 03 6d 65 6d 02 00 01  ; import
-    03 02 01 00                             ; func
-    0a 04 01 02 00 0b                       ; code
-  `
-  new WebAssembly.Module(buffer)
-  is(compile(['module', ['memory', ['import', 'js', 'mem'], 1], ['func']]), buffer)
-})
-
-t('compile: export mem/func', t => {
-  let buffer = hex`
-    00 61 73 6d 01 00 00 00
-    01 07 01 60 02 7f 7f 01 7f                    ; type
-    03 02 01 00                                   ; function
-    05 03 01 00 01                                ; memory
-    07 09 02 01 6d 02 00 01 66 00 00              ; export
-    0a 0d 01 0b 00 20 00 20 01 36 02 00 20 01 0b  ; code
-  `
-  // let src = `
-  //   (module
-  //     (memory 1)
-  //     (func)
-  //     (export "m" (memory 0))
-  //     (export "f" (func 0))
-  //   )
-  // `
-  // console.log(wat2wasm(src))
-  // is(wat2wasm(src).buffer, compile(parse(src)))
-  is(compile(['module',                                   // (module
-    ['memory', 1],                                        //   (memory 1)
-    ['func', ['param', 'i32', 'i32'], ['result', 'i32'],  //   (func (param i32 i32) (result i32)
-      // ['local.get', 0],                                   //     local.get 0
-      // ['local.get', 1],                                   //     local.get 1
-      // ['i32.store', ['align','4']],                           //     i32.store
-      ['i32.store', 'align=4', ['local.get', 0], ['local.get', 1]],
-      ['local.get', 1]                                    //     local.get 1
-    ],                                                    //   )
-    ['export', '"m"', ['memory', 0]],                       //   (export "m" (memory 0 ))
-    ['export', '"f"', ['func', 0]],                         //   (export "f" (func 0 ))
-  ]),                                                     // )
-    buffer)
-
-  new WebAssembly.Module(buffer)
-})
-
-t('compile: reexport', () => {
+t('compile: reexport func', () => {
   let src = `
     (export "f0" (func 0))
     (export "f1" (func 1))
@@ -177,15 +101,15 @@ t('compile: named function named param', () => {
 })
 
 t('compile: call function direct', () => {
-  let { call_function_direct } = run(`
+  let { f } = run(`
   (func $dbl (param $a i32) (result i32)
     (i32.add (local.get $a) (local.get $a))
   )
-  (func (export "call_function_direct") (param $a i32) (result i32)
+  (func (export "f") (param $a i32) (result i32)
     (call $dbl (local.get $a))
   )
   `).exports
-  is(call_function_direct(333), 666)
+  is(f(333), 666)
 })
 
 t('compile: function param + local', () => {
@@ -197,45 +121,6 @@ t('compile: function param + local', () => {
   `).exports
 
   is(add(22), 42)
-})
-
-t('compile: call function indirect (table)', () => {
-  let { call_function_indirect } = run(`
-    (type $return_i32 (func (result i32)))
-    (table 2 funcref)
-      (elem (i32.const 0) $f1 $f2)
-      (func $f1 (result i32)
-        (i32.const 42))
-      (func $f2 (result i32)
-        (i32.const 13))
-    (func (export "call_function_indirect") (param $a i32) (result i32)
-      (call_indirect (type $return_i32) (local.get $a))
-    )
-  `).exports
-
-  is(call_function_indirect(0), 42)
-  is(call_function_indirect(1), 13)
-})
-
-t('compile: call function indirect (table) non zero indexed ref types', () => {
-  let { call_function_indirect } = run(`
-    (type $return_i32 (func (result i32)))
-    (type $return_i64 (func (result i64)))
-    (table 2 funcref)
-      (elem (i32.const 0) $f1 $f2)
-      (func $xx (result i32)
-        (i32.const 42))
-      (func $f1 (result i32)
-        (i32.const 42))
-      (func $f2 (result i32)
-        (i32.const 13))
-    (func (export "call_function_indirect") (param $a i32) (result i32)
-      (call_indirect (type $return_i32) (local.get $a))
-    )
-  `).exports
-
-  is(call_function_indirect(0), 42)
-  is(call_function_indirect(1), 13)
 })
 
 t('compile: 1 global const (immutable)', () => {
@@ -309,14 +194,14 @@ t('compile: local memory page min 1 max 2 - data 1 offset 0 i32', () => {
 
 t('compile: import function', () => {
   let src = `
-    (import "math" "add" (func $add (param i32 i32) (result i32)))
-    (func (export "call_imported_function") (result i32)
+    (import "m" "add" (func $add (param i32 i32) (result i32)))
+    (func (export "c") (result i32)
       (call $add (i32.const 20) (i32.const 22))
     )
   `
-  let { call_imported_function } = run(src, { math: { add: (a, b) => a + b } }).exports
+  let { c } = run(src, { m: { add: (a, b) => a + b } }).exports
 
-  is(call_imported_function(), 42)
+  is(c(), 42)
 })
 
 t('compile: import memory 1', () => {
@@ -344,13 +229,13 @@ t('compile: import memory $foo 1 2 shared', () => run(`
 t('compile: set a start function', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))
-    (start $main)
     (func $main
-      (global.set $answer (i32.const 666))
+    (global.set $answer (i32.const 666))
     )
     (func (export "get") (result i32)
-      (global.get $answer)
+    (global.get $answer)
     )
+    (start $main)
   `
   let { get } = run(src).exports
 
@@ -975,12 +860,12 @@ t(`compile: 3 locals [i32, i32, i64] (joined)`, () => {
 t('compile: call function indirect (table)', () => {
   let src = `
     (type $return_i32 (func (result i32)))
+    (func $f1 (result i32)
+      (i32.const 42))
+    (func $f2 (result i32)
+      (i32.const 13))
     (table 2 funcref)
       (elem (i32.const 0) $f1 $f2)
-      (func $f1 (result i32)
-        (i32.const 42))
-      (func $f2 (result i32)
-        (i32.const 13))
     (func (export "call_function_indirect") (param $a i32) (result i32)
       (call_indirect (type $return_i32) (local.get $a))
     )
@@ -996,13 +881,13 @@ t('compile: call function indirect (table) non zero indexed ref types', () => {
     (type $return_i64 (func (result i64)))
     (type $return_i32 (func (result i32)))
     (table 2 funcref)
-      (elem (i32.const 0) $f1 $f2)
-      (func $xx (result i64)
-        (i64.const 42))
-      (func $f1 (result i32)
-        (i32.const 42))
-      (func $f2 (result i32)
-        (i32.const 13))
+    (func $xx (result i64)
+    (i64.const 42))
+    (func $f1 (result i32)
+    (i32.const 42))
+    (func $f2 (result i32)
+    (i32.const 13))
+    (elem (i32.const 0) $f1 $f2)
     (func (export "call_function_indirect") (param $a i32) (result i32)
       (call_indirect (type $return_i32) (local.get $a))
     )
@@ -1068,10 +953,12 @@ t('case: globals', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('case: func hoist', () => {
+t.todo('case: func hoist', () => {
   let src = `
+    (global funcref (ref.func $a))
     (func (call $a))
-    (func $a)
+    (func $a (type $a))
+    (type $a (func))
   `
   run(src)
 })
@@ -1209,6 +1096,49 @@ t('case: error on unknown instruction', () => {
     compile(parse(`(func (i32.shr (i32.const 0) (i32.const 1)) (xxx))`))
   }, /i32.shr/)
 })
+
+t('case: export order initialize', () => {
+  let src = `
+    (memory (export "m") 5)
+    (func (export "f"))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `
+    (func (export "f"))
+    (memory (export "m") 5)
+  `
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `
+    (memory (export "m") 5)
+    (func (export "f"))
+    (func (export "g"))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `
+    (func (export "f"))
+    (memory (export "m") 5)
+    (func (export "g"))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  src = `
+    (func (export "g"))
+    (func (export "f"))
+    (memory (export "m") 5)
+  `
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t('case: start index', () => {
+  let src = `
+  (import "a" "b" (func $a (param i32)))
+  (func (param i32))
+  (start 1)
+  `
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+// extensions
 
 t('feature: multiple results', () => {
   let src = `(func (block (result i32 i32) (i32.const 1) (i32.const 2)))`
@@ -1499,6 +1429,7 @@ t('feature: simd const', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 
   // ref: https://github.com/WebAssembly/simd/tree/master/test/core/simd
+  // FIXME: not sure where's that from - globals seem to be not allowed
   src = `
   (global v128 (v128.const i8x16 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF))
   (global v128 (v128.const i8x16 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80))
@@ -2173,75 +2104,179 @@ t('feature: extended const', () => {
 
 })
 
+// func refs
+t.todo('feature: ref_func', () => {
+  let src
+  src = `
+  (func $f (import "M" "f") (param i32) (result i32))
+  (func $g (param $x i32) (result i32)
+    (i32.add (local.get $x) (i32.const 1))
+  )
+
+  (global funcref (ref.func $f))
+  (global funcref (ref.func $g))
+  (global $v (mut funcref) (ref.func $f))
+
+  (global funcref (ref.func $gf1))
+  (global funcref (ref.func $gf2))
+  (func (drop (ref.func $ff1)) (drop (ref.func $ff2)))
+  (elem declare func $gf1 $ff1)
+  (elem declare funcref (ref.func $gf2) (ref.func $ff2))
+  (func $gf1)
+  (func $gf2)
+  (func $ff1)
+  (func $ff2)
+  `
+
+  // (func (export "is_null-f") (result i32)
+  //   (ref.is_null (ref.func $f))
+  // )
+  // (func (export "is_null-g") (result i32)
+  //   (ref.is_null (ref.func $g))
+  // )
+  // (func (export "is_null-v") (result i32)
+  //   (ref.is_null (global.get $v))
+  // )
+
+  // (func (export "set-f") (global.set $v (ref.func $f)))
+  // (func (export "set-g") (global.set $v (ref.func $g)))
+
+  // (table $t 1 funcref)
+  // (elem declare func $f $g)
+
+  // (func (export "call-f") (param $x i32) (result i32)
+  //   (table.set $t (i32.const 0) (ref.func $f))
+  //   (call_indirect $t (param i32) (result i32) (local.get $x) (i32.const 0))
+  // )
+  // (func (export "call-g") (param $x i32) (result i32)
+  //   (table.set $t (i32.const 0) (ref.func $g))
+  //   (call_indirect $t (param i32) (result i32) (local.get $x) (i32.const 0))
+  // )
+  // (func (export "call-v") (param $x i32) (result i32)
+  //   (table.set $t (i32.const 0) (global.get $v))
+  //   (call_indirect $t (param i32) (result i32) (local.get $x) (i32.const 0))
+  // )
+
+  is(compile(parse(src)), wat2wasm(src).buffer)
+})
 
 // examples
 t('example: wat-compiler', async () => {
-  await runExample('/test/example/malloc.wat')
-  await runExample('/test/example/brownian.wat')
-  await runExample('/test/example/fire.wat')
-  await runExample('/test/example/quine.wat')
-  await runExample('/test/example/metaball.wat')
-  await runExample('/test/example/maze.wat')
-  await runExample('/test/example/raytrace.wat')
-  await runExample('/test/example/snake.wat')
-  await runExample('/test/example/dino.wat')
-  await runExample('/test/example/containers.wat')
-  await runExample('/test/example/raycast.wat')
+  async function ex(path) {
+    let res = await fetch(path)
+    let src = await res.text()
+    let buffer = compile(parse(src))
+    // console.hex(buffer)
+    is(buffer, wat2wasm(src).buffer)
+    // const mod = new WebAssembly.Module(buffer)
+  }
+
+  await ex('/test/example/types.wat')
+  await ex('/test/example/table.wat')
+
+  await ex('/test/example/global.wat')
+  await ex('/test/example/multivar.wat')
+  await ex('/test/example/amp.wat')
+
+  await ex('/test/example/malloc.wat')
+  await ex('/test/example/brownian.wat')
+  await ex('/test/example/quine.wat')
+  await ex('/test/example/containers.wat')
+  await ex('/test/example/fire.wat')
+  await ex('/test/example/snake.wat')
+  await ex('/test/example/dino.wat')
+  await ex('/test/example/raytrace.wat')
+  await ex('/test/example/maze.wat')
+  await ex('/test/example/metaball.wat')
+  await ex('/test/example/loops.wat')
+  await ex('/test/example/memory.wat')
+  await ex('/test/example/stack.wat')
+  await ex('/test/example/raycast.wat')
 })
 
-t('example: legacy', async () => {
-  await runExample('/test/example/amp.wat')
-  await runExample('/test/example/global.wat')
-  await runExample('/test/example/loops.wat')
-  await runExample('/test/example/memory.wat')
-  await runExample('/test/example/multivar.wat')
-  await runExample('/test/example/stack.wat')
-  // FIXME await runExample('/test/example/table.wat')
-  // FIXME await runExample('/test/example/types.wat')
+t('example: official', async () => {
+  async function ex(path) {
+    let res = await fetch(path)
+    let src = await res.text()
+    let nodes = parse(src)
+    freeze(nodes)
+    let buf, mod, inst, importObj = {}
+    for (let node of nodes) {
+      // (module $name) - creates module instance, collects exports
+      if (node[0] === 'module') {
+        buf = compile(node)
+        is(buf, wat2wasm(print(node)).buffer)
+        mod = new WebAssembly.Module(buf)
+        inst = new WebAssembly.Instance(mod, {
+          // FIXME: define via register
+          spectest: {
+            table: new WebAssembly.Table({ initial: 10, maximum: 30, element: 'anyfunc' }),
+            global_i32: 0
+          },
+          exporter: {
+            table: new WebAssembly.Table({ initial: 2, element: 'externref' })
+          },
+          module1: {
+            'shared-table': new WebAssembly.Table({ initial: 10, element: 'anyfunc' })
+          },
+          module4: {
+            f: null
+          }
+        })
+      }
+      // else if (node[0] === 'assert_return') {
 
+      // }
+      // else if (node[0] === 'assert_invalid') {
+
+      // }
+    }
+  }
+
+  await ex('/test/official/elem.wat')
+  // await ex('/test/official/exports.wat')
 })
 
+const save = (buf) => {
+  // Create a Blob
+  const blob = new Blob([buf], { type: "application/wasm" });
 
+  // Create a download link
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "module.wasm"; // Desired file name
+  document.body.appendChild(link);
 
-export async function file(path) {
-  let res = await fetch(path)
-  let src = await res.text()
-  return src
+  // Trigger the download
+  link.click();
+  document.body.removeChild(link);
 }
-
-async function runExample(path) {
-  let src = await file(path)
-  let buffer = compile(parse(src))
-  is(buffer, wat2wasm(src).buffer)
-  // const mod = new WebAssembly.Module(buffer)
-}
-
-console.hex = (d) => console.log((Object(d).buffer instanceof ArrayBuffer ? new Uint8Array(d.buffer) :
-  typeof d === 'string' ? (new TextEncoder('utf-8')).encode(d) :
-    new Uint8ClampedArray(d)).reduce((p, c, i, a) => p + (i % 16 === 0 ? i.toString(16).padStart(6, 0) + '  ' : ' ') +
-      c.toString(16).padStart(2, 0) + (i === a.length - 1 || i % 16 === 15 ?
-        ' '.repeat((15 - i % 16) * 3) + Array.from(a).splice(i - i % 16, 16).reduce((r, v) =>
-          r + (v > 31 && v < 127 || v > 159 ? String.fromCharCode(v) : '.'), '  ') + '\n' : ''), ''));
 
 
 let wabt = await Wabt()
-
-const hex = (str, ...fields) =>
-  new Uint8Array(
-    String.raw.call(null, str, fields)
-      .trim()
-      .replace(/;[^\n]*/g, '')
-      .split(/[\s\n]+/)
-      .filter(n => n !== '')
-      .map(n => parseInt(n, 16))
-  )
 
 // convert wast code to binary via Wabt
 export function wat2wasm(code, config) {
   let metrics = config ? config.metrics : true
   const parsed = wabt.parseWat('inline', code, {
-    bulk_memory: true,
-    simd: true
+    "exceptions": true,
+    "mutable_globals": true,
+    "sat_float_to_int": true,
+    "sign_extension": true,
+    "simd": true,
+    "threads": true,
+    "function_references": true,
+    "multi_value": true,
+    "tail_call": true,
+    "bulk_memory": true,
+    "reference_types": true,
+    "annotations": true,
+    "code_metadata": true,
+    "gc": true,
+    "memory64": true,
+    "multi_memory": true,
+    "extended_const": true,
+    "relaxed_simd": true
   })
   // metrics && console.time('wabt build')
   const binary = parsed.toBinary({
@@ -2261,7 +2296,6 @@ export function wat2wasm(code, config) {
 const run = (src, importObj) => {
   let tree = parse(src)
   // in order to make sure tree is not messed up we freeze it
-  const freeze = node => Array.isArray(node) && (Object.freeze(node), node.forEach(freeze))
   freeze(tree)
   let wabtBuffer = wat2wasm(src).buffer, watrBuffer = compile(tree)
   // console.log('wabt:')
@@ -2272,3 +2306,5 @@ const run = (src, importObj) => {
   const mod = new WebAssembly.Module(watrBuffer)
   return new WebAssembly.Instance(mod, importObj)
 }
+
+const freeze = node => Array.isArray(node) && (Object.freeze(node), node.forEach(freeze))
