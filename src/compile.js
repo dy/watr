@@ -208,8 +208,7 @@ const build = {
     }
 
     // (offset expr)|expr
-    // FIXME: offset can be calculable like global.get, although not in tests
-    if (parts[0]?.[0] === 'offset' || parts[0]?.[0] === 'i32.const') {
+    if (parts[0]?.[0] === 'offset' || (Array.isArray(parts[0]) && parts[0][0] !== 'item' && !parts[0][0].startsWith('ref'))) {
       [...offset] = parts.shift()
       if (offset[0] === 'offset') [, [...offset]] = offset
     }
@@ -227,7 +226,7 @@ const build = {
       mode,
       ...(
         // 0b000 e:expr y*:vec(funcidx)                     | type=funcref, init ((ref.func y)end)*, active (table=0,offset=e)
-        mode === 0b000 ? [...expr(offset), 0x0b] :
+        mode === 0b000 ? [...expr(offset, ctx), 0x0b] :
           // 0b001 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive
           mode === 0b001 ? [0x00] :
             // 0b010 x:tabidx e:expr et:elkind y*:vec(funcidx)  | type=0x00, init ((ref.func y)end)*, active (table=x,offset=e)
@@ -235,7 +234,7 @@ const build = {
               // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
               mode === 0b011 ? [0x00] :
                 // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
-                mode === 0b100 ? [...expr(offset), 0x0b] :
+                mode === 0b100 ? [...expr(offset, ctx), 0x0b] :
                   // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
                   mode === 0b101 ? [TYPE[reftype]] :
                     // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
@@ -282,6 +281,7 @@ const build = {
         opCode = INSTR[op = args.shift()]
       }
       else opCode = INSTR[op]
+      console.log(op, opCode)
 
       // NOTE: numeric comparison is faster than generic hash lookup
 
@@ -348,12 +348,17 @@ const build = {
 
       // (local.get $id), (local.tee $id x)
       else if (opCode >= 32 && opCode <= 34) {
-        immed = uleb(args[0]?.[0] === '$' ? params[id = args.shift()] ?? locals[id] ?? err('Unknown local ' + id) : args.shift())
+        immed = uleb(args[0]?.[0] === '$' ? params[id = args.shift()] ?? locals[id] ?? err('Unknown local ' + id) : +args.shift())
       }
 
       // (global.get $id), (global.set $id)
-      else if (opCode == 0x23 || opCode == 36) {
-        immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] ?? err('Unknown global ' + id) : args.shift())
+      else if (opCode == 0x23 || opCode == 0x24) {
+        immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] ??= ctx.global.length++ : +args.shift())
+      }
+
+      // (table.get $id)
+      else if (opCode == 0x25 || opCode == 0x26) {
+        immed = uleb(args[0]?.[0] === '$' ? ctx.table[args.shift()] ??= ctx.table.length++ : +args.shift())
       }
 
       // (call id ...nodes)
@@ -373,6 +378,11 @@ const build = {
       // FIXME multiple memory (memory.grow $idx?)
       else if (opCode == 63 || opCode == 64) {
         immed = [0]
+      }
+
+      // table.grow id, table.size id, table.fill id
+      else if (opCode >= 0x0f && opCode <= 0x11) {
+        immed = []
       }
 
       // (block ...), (loop ...), (if ...)

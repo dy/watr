@@ -2206,7 +2206,10 @@ t.only('example: official', async () => {
         is(buf, wat2wasm(print(node)).buffer)
         mod = new WebAssembly.Module(buf)
         inst = new WebAssembly.Instance(mod, {
-          spectest: { table: new WebAssembly.Table({ initial: 10, element: 'anyfunc' }) }
+          spectest: {
+            table: new WebAssembly.Table({ initial: 10, maximum: 30, element: 'anyfunc' }),
+            global_i32: 0
+          }
         })
       }
       // else if (node[0] === 'assert_return') {
