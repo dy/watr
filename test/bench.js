@@ -1,6 +1,6 @@
 import t, { is } from 'tst'
 import watr from '../src/compile.js'
-import watr0 from 'https://cdn.skypack.dev/watr'
+// import watr0 from 'https://cdn.skypack.dev/watr'
 import Wabt from './lib/wabt.js'
 import watCompiler from './lib/wat-compiler.js'
 import wassemble from 'wassemble/wassemble.mjs'
@@ -29,18 +29,6 @@ t.todo('bench: brownian', async () => {
   console.time('watr')
   for (let i = 0; i < N; i++) watr(src)
   console.timeEnd('watr')
-
-  console.time('watr0')
-  for (let i = 0; i < N; i++) watr0(src)
-  console.timeEnd('watr0')
-
-  console.time('watr')
-  for (let i = 0; i < N; i++) watr(src)
-  console.timeEnd('watr')
-
-  console.time('watr0')
-  for (let i = 0; i < N; i++) watr0(src)
-  console.timeEnd('watr0')
 
   console.time('wat-compiler')
   for (let i = 0; i < N; i++) watCompiler(src, { metrics: false })
