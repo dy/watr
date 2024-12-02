@@ -2161,7 +2161,7 @@ t.todo('feature: ref_func', () => {
 })
 
 // examples
-t.only('example: wat-compiler', async () => {
+t('example: wat-compiler', async () => {
   async function ex(path) {
     let res = await fetch(path)
     let src = await res.text()
@@ -2171,7 +2171,7 @@ t.only('example: wat-compiler', async () => {
     // const mod = new WebAssembly.Module(buffer)
   }
 
-  // await ex('/test/example/types.wat')
+  await ex('/test/example/types.wat')
   await ex('/test/example/table.wat')
 
   await ex('/test/example/global.wat')

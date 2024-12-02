@@ -77,15 +77,24 @@ export default (nodes) => {
     // workaround start
     else if (name && kind === 'start') node.push(sections.func[name]);
 
-    // figure out section id
-    let idx = sections[kind].length
+    // type may not have return and name can already be defined indirectly via typeuse
+    if (kind === 'type') {
+      let [, ...sig] = node[0]
+      let [idx] = typeuse(sig, sections)
+      if (name) sections.type[name] = idx
+    }
+    else {
+      // figure out section id
+      let idx = sections[kind].length
 
-    // if section name was referenced before - use existing id, else assign idx to name
-    if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
+      // if section name was referenced before - use existing id, else assign idx to name
+      if (name) {
+        name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
+      }
 
-    // build into corresponding idx (res can be null for type sections)
-    let res = build[kind](node, sections)
-    if (res) sections[kind][idx] = res
+      // build into corresponding idx
+      sections[kind][idx] = build[kind](node, sections)
+    }
   }
 
   // build binary
@@ -108,11 +117,6 @@ export default (nodes) => {
 
 // build section binary (non consuming)
 const build = {
-  // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
-  type([[, ...sig]], ctx) {
-    typeuse(sig, ctx)
-  },
-
   // (import "math" "add" (func|table|global|memory $name? typedef?))
   import([mod, field, [kind, ...parts]], ctx) {
     let nm = parts[0]?.[0] === '$' && parts.shift(), details
@@ -229,7 +233,7 @@ const build = {
           // 0b001 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive
           mode === 0b001 ? [0x00] :
             // 0b010 x:tabidx e:expr et:elkind y*:vec(funcidx)  | type=0x00, init ((ref.func y)end)*, active (table=x,offset=e)
-            mode === 0b010 ? err('todo') :
+            mode === 0b010 ? [...uleb(tabidx || 0), ...expr(offset), 0x0b, 0x00] :
               // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
               mode === 0b011 ? [0x00] :
                 // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
@@ -281,8 +285,6 @@ const build = {
       }
       else opCode = INSTR[op]
 
-      // NOTE: numeric comparison is faster than generic hash lookup
-
       // v128s: (v128.load x) etc
       // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
       if (opCode >= 0x10f) {
@@ -329,11 +331,20 @@ const build = {
         opCode = null // ignore opcode
       }
 
+      // ref.func $id
+      else if (opCode == 0xd2) {
+        immed = uleb(args[0][0] === '$' ? (ctx.func[args.shift()] ??= ctx.func.length++) : +args.shift())
+      }
+      // ref.null
+      else if (opCode == 0xd0) {
+        immed = [TYPE[args.shift() + 'ref']] // func->funcref, extern->externref
+      }
+
       // binary/unary (i32.add a b) - no immed
       else if (opCode >= 0x45) { }
 
       // (i32.store align=n offset=m at value) etc
-      else if (opCode >= 40 && opCode <= 62) {
+      else if (opCode >= 0x28 && opCode <= 0x3e) {
         // FIXME: figure out point in Math.log2 aligns
         let o = memarg(args)
         immed = [Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0)]
@@ -345,7 +356,7 @@ const build = {
       }
 
       // (local.get $id), (local.tee $id x)
-      else if (opCode >= 32 && opCode <= 34) {
+      else if (opCode >= 0x20 && opCode <= 0x22) {
         immed = uleb(args[0]?.[0] === '$' ? params[id = args.shift()] ?? locals[id] ?? err('Unknown local ' + id) : +args.shift())
       }
 
@@ -354,33 +365,20 @@ const build = {
         immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] ??= ctx.global.length++ : +args.shift())
       }
 
-      // (table.get $id)
-      else if (opCode == 0x25 || opCode == 0x26) {
-        immed = uleb(args[0]?.[0] === '$' ? ctx.table[args.shift()] ??= ctx.table.length++ : +args.shift())
-      }
-
       // (call id ...nodes)
-      else if (opCode == 16) {
+      else if (opCode == 0x10) {
         let fnName = args.shift()
         immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] ?? err('Unknown func ' + fnName) : +fnName);
         // FIXME: how to get signature of imported function
       }
 
-      // (call_indirect (type $typeName) (idx) ...nodes)
-      else if (opCode == 17) {
-        let typeidx = args.shift()[1];
-        typeidx = typeidx[0] === '$' ? ctx.type[typeidx] ?? err('Unknown type ' + typeidx) : +typeidx
-        immed = uleb(typeidx), immed.push(0) // extra immediate indicates table idx (reserved)
-      }
-
-      // FIXME multiple memory (memory.grow $idx?)
-      else if (opCode == 63 || opCode == 64) {
-        immed = [0]
-      }
-
-      // table.grow id, table.size id, table.fill id
-      else if (opCode >= 0x0f && opCode <= 0x11) {
-        immed = []
+      // (call_indirect tableIdx? (type $typeName) (idx) ...nodes)
+      else if (opCode == 0x11) {
+        let tableidx = args[0]?.[0] === '$' ? ctx.table[args.shift()] ??= ctx.table.length++ : 0
+        let [typeidx] = typeuse(args, ctx)
+        // let typeidx = args.shift()[1];
+        // typeidx = typeidx[0] === '$' ? ctx.type[typeidx] ?? err('Unknown type ' + typeidx) : +typeidx
+        immed = [...uleb(typeidx), ...uleb(tableidx)]
       }
 
       // (block ...), (loop ...), (if ...)
@@ -450,6 +448,22 @@ const build = {
         while (!Array.isArray(args[0])) id = args.shift(), immed.push(...uleb(id[0][0] === '$' ? blocks.length - blocks[id] : id))
         immed.unshift(...uleb(immed.length - 1))
       }
+
+      // FIXME multiple memory (memory.grow $idx?)
+      else if (opCode == 0x3f || opCode == 0x40) {
+        immed = [0]
+      }
+
+      // (table.get $id)
+      else if (opCode == 0x25 || opCode == 0x26) {
+        immed = uleb(args[0]?.[0] === '$' ? ctx.table[args.shift()] ??= ctx.table.length++ : +args.shift())
+      }
+
+      // table.grow id, table.size id, table.fill id
+      else if (opCode >= 0x0f && opCode <= 0x11) {
+        immed = []
+      }
+
       else if (opCode == null) err(`Unknown instruction \`${op}\``)
 
       // if group (cmd im1 im2 arg1 arg2) - insert any remaining args first: arg1 arg2
@@ -503,11 +517,12 @@ const expr = (node, ctx) => {
   // (i32.const 1)
   if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
 
-  // (ref.func $x) or (ref.null func)
+  // (ref.func $x) or (ref.null func|extern)
   if (type === 'ref') {
     return cmd === 'func' ?
-      [0xD2, ...uleb(node[0][0] === '$' ? (ctx.func[node[0]] ??= ctx.func.length++) : +node)] :
-      [0xD0, TYPE[node[0] + 'ref'] || TYPE[node[0]]] // func->funcref, extern->externref
+      [0xd2, ...uleb(node[0][0] === '$' ? (ctx.func[node[0]] ??= ctx.func.length++) : +node)] :
+      // heaptype
+      [0xd0, TYPE[node[0] + 'ref']] // func->funcref, extern->externref
   }
 
   // (i32.add a b), (i32.mult a b) etc

@@ -14,8 +14,7 @@ if (isNode) {
 }
 
 // redefine console.log to return last arg
-let log = console.log
-console.log = (...args) => (log.apply(console, args), args.pop())
+console.tap = (...args) => (console.log(args), args.pop())
 
 // render buffer as hex
 console.hex = (d) => console.log((Object(d).buffer instanceof ArrayBuffer ? new Uint8Array(d.buffer) :

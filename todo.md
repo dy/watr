@@ -50,6 +50,7 @@
   * [ ] make use of deref with id creator for `x[0]?.[0] === '$'` things
   * [ ] make code insert refs, and then check if there are empty spots in output to show errors
   * [ ] make code section do generic ops handling, no a bunch of checks
+  * [ ] make use of expr inside of code section
 * [ ] elem all use-cases
 * [ ] Enhance print: make it as nice as AI
 * [ ] Feature: func-ref
