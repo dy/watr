@@ -65,22 +65,24 @@ export default (nodes) => {
     // table abbr
     // (table id? reftype (elem ...)) -> (table id? reftype) (elem (table id) (i32.const 0) reftype ...)
     if (node[1]?.[0] === 'elem') {
-      nodes.unshift([node.pop()])
+      let [reftype, elem] = node
+      nodes.unshift([])
     }
 
     // duplicate func as code section
-    // FIXME: func can buid binary right away
+    // FIXME: func can buid binary right away if we insert refs properly
     if (kind === 'func') nodes.push(['code', ...node])
 
     // workaround start
     else if (name && kind === 'start') node.push(sections.func[name]);
 
-    // if id was defined before - take it
+    // figure out section id
     let idx = sections[kind].length
 
-    // save section name or load idx, if it was saved before
+    // if section name was referenced before - use existing id, else assign idx to name
     if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
 
+    // build into corresponding idx (res can be null for type sections)
     let res = build[kind](node, sections)
     if (res) sections[kind][idx] = res
   }
@@ -89,12 +91,13 @@ export default (nodes) => {
   for (let name in sections) {
     let items = sections[name], secCode = SECTION[name], bytes = [], count = 0
     for (let item of items) {
-      if (!item) continue
-      count++ // count number of entries in section
+      if (!item) continue // ignore empty items (like import placeholders)
+      count++ // count number of items in section
       bytes.push(...item)
     }
+    // ignore empty sections
     if (!bytes.length) continue
-    // skip start section count
+    // skip start section count - write length
     if (secCode !== 8) bytes.unshift(...uleb(count))
     binary.push(secCode, ...vec(bytes))
   }
@@ -105,7 +108,6 @@ export default (nodes) => {
 // build section binary (non consuming)
 const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
-  // signature part is identical to function
   type([[, ...sig]], ctx) {
     typeuse(sig, ctx)
   },
@@ -196,7 +198,7 @@ const build = {
     // table?
     if (parts[0][0] === 'table') {
       [, table] = parts.shift()
-      table = table[0] === '$' ? (ctx.table[table] ??= ctx.table.length) : +table
+      table = table[0] === '$' ? (ctx.table[table] ??= ctx.table.length++) : +table
       // ignore table=0
       if (table) mode |= 0b010
     }
@@ -228,27 +230,27 @@ const build = {
             mode === 0b010 ? err('todo') :
               // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
               mode === 0b011 ? [0x00] :
-                // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
-                mode === 0b101 ? [TYPE[reftype]] :
-                  // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
-                  mode === 0b110 ? err('todo') :
-                    // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
-                    mode === 0b100 ? [...expr(offset), 0x0b] :
+                // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
+                mode === 0b100 ? [...expr(offset), 0x0b] :
+                  // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
+                  mode === 0b101 ? [TYPE[reftype]] :
+                    // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
+                    mode === 0b110 ? err('todo') :
                       // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
                       [TYPE[reftype]]
       ),
       ...uleb(parts.length),
       ...parts.flatMap(el => (
         typeof el === 'string' ?
-          // $id0 1 2, secure new fn name
-          uleb(el[0] === '$' ? (ctx.func[el] ??= ctx.func.length) : +el) :
+          // $id0 1 2
+          uleb(el[0] === '$' ? (ctx.func[el] ??= ctx.func.length++) : +el) :
           // (ref.func a) (item (ref.func 2)) (item ref.func 2)
           [...expr(el[0] === 'item' ? (el.length > 2 ? el.slice(1) : [...el[1]]) : [...el], ctx), 0x0b]
       ))
     ])
   },
 
-  // artificial section
+  // FIXME: artificial section, can be handled via func
   // (code params ...body)
   code(body, ctx) {
     const [, params] = typeuse(body, ctx)
@@ -473,7 +475,7 @@ const build = {
   }
 }
 
-// serialize binary list
+// serialize binary array
 const vec = a => [...uleb(a.length), ...a]
 
 // instantiation time const initializer (consuming)
@@ -481,7 +483,7 @@ const expr = (node, ctx) => {
   let op = node.shift(), [type, cmd] = op.split('.')
 
   // (global.get idx)
-  if (type === 'global') return [0x23, ...uleb(node[0][0] === '$' ? ctx.global[node[0]] ?? err('Unknown global ' + node[0]) : +node)]
+  if (type === 'global') return [0x23, ...uleb(node[0][0] === '$' ? ctx.global[node[0]] ??= ctx.global.length++ : +node)]
 
   // (v128.const i32x4 1 2 3 4)
   if (type === 'v128') return [0xfd, 0x0c, ...v128(node)]
@@ -492,7 +494,7 @@ const expr = (node, ctx) => {
   // (ref.func $x) or (ref.null func)
   if (type === 'ref') {
     return cmd === 'func' ?
-      [0xD2, ...uleb(node[0][0] === '$' ? (ctx.func[node[0]] ??= ctx.func.length) : +node)] :
+      [0xD2, ...uleb(node[0][0] === '$' ? (ctx.func[node[0]] ??= ctx.func.length++) : +node)] :
       [0xD0, TYPE.null]
   }
 
