@@ -7,6 +7,7 @@ import parse from './parse.js'
 INSTR.forEach((instr, i) => {
   let [op, ...imm] = instr.split(':'), a, b
 
+  // TODO
   // wrap codes
   // const code = i >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc ? [0xfc, i - 0xfc] : i
   INSTR[op] = i
@@ -19,10 +20,10 @@ INSTR.forEach((instr, i) => {
 
 
 /**
- * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (Wasm).
+ * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
  *
- * @param {string|Array} nodes - The WAT tree or string to be compiled to Wasm binary.
- * @returns {Uint8Array} The compiled Wasm binary data.
+ * @param {string|Array} nodes - The WAT tree or string to be compiled to WASM binary.
+ * @returns {Uint8Array} The compiled WASM binary data.
  */
 export default (nodes) => {
   // normalize to (module ...) form
@@ -31,7 +32,7 @@ export default (nodes) => {
   else if (typeof nodes[0] === 'string') nodes = [nodes]
 
   // (module $id? ...)
-  id(nodes)
+  nodes[0]?.[0] === '$' && nodes.shift();
 
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
   // FIXME: make direct binary instead
@@ -48,7 +49,7 @@ export default (nodes) => {
     let [kind, ...node] = nodes.shift()
 
     // get name reference
-    let name = id(node)
+    let name = node[0]?.[0] === '$' && node.shift()
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
@@ -61,7 +62,14 @@ export default (nodes) => {
       node = [...node.shift(), [kind, ...(name ? [name] : []), ...node]], kind = node.shift()
     }
 
+    // table abbr
+    // (table id? reftype (elem ...)) -> (table id? reftype) (elem (table id) (i32.const 0) reftype ...)
+    if (node[1]?.[0] === 'elem') {
+      nodes.unshift([node.pop()])
+    }
+
     // duplicate func as code section
+    // FIXME: func can buid binary right away
     if (kind === 'func') nodes.push(['code', ...node])
 
     // workaround start
@@ -94,6 +102,7 @@ export default (nodes) => {
   return new Uint8Array(binary)
 }
 
+// build section binary (non consuming)
 const build = {
   // (type $name? (func (param $x i32) (param i64 i32) (result i32 i64)))
   // signature part is identical to function
@@ -103,7 +112,7 @@ const build = {
 
   // (import "math" "add" (func|table|global|memory $name? typedef?))
   import([mod, field, [kind, ...parts]], ctx) {
-    let nm = id(parts), details
+    let nm = parts[0]?.[0] === '$' && parts.shift(), details
 
     // create stub
     if (nm[0] === '$') ctx[kind][nm] = ctx[kind].length
@@ -156,15 +165,8 @@ const build = {
 
   //  (export "name" (func|table|mem $name|idx))
   export([s, [kind, nm]], ctx) {
-    let idx
-    if (nm[0] === '$') {
-      idx = ctx[kind][nm];
-      if (idx == null) {
-        // put placeholder to future-init
-        idx = ctx[kind][nm] = ctx[kind].length++
-      }
-    }
-    else idx = +nm
+    // put placeholder to future-init
+    let idx = nm[0] === '$' ? ctx[kind][nm] ??= ctx[kind].length++ : +nm
     return [...str(s), KIND[kind], ...uleb(idx)]
   },
 
@@ -474,10 +476,6 @@ const build = {
 // serialize binary list
 const vec = a => [...uleb(a.length), ...a]
 
-// consume id
-// https://webassembly.github.io/spec/core/text/values.html#text-id
-const id = (nodes) => (nodes[0]?.[0] === '$') && nodes.shift()
-
 // instantiation time const initializer (consuming)
 const expr = (node, ctx) => {
   let op = node.shift(), [type, cmd] = op.split('.')
@@ -546,7 +544,7 @@ const typeuse = (nodes, ctx) => {
   // collect params (param i32 i64) (param $x? i32)
   while (nodes[0]?.[0] === 'param') {
     let [, ...args] = nodes.shift()
-    let name = id(args)
+    let name = args[0]?.[0] === '$' && args.shift()
     if (name) params[name] = params.length // expose name refs
     params.push(...args)
   }
@@ -569,17 +567,12 @@ const typeuse = (nodes, ctx) => {
   return [idx, params, result]
 }
 
-
 // consume align/offset/etc params
 const memarg = (args) => {
   let params = {}, param
   while (args[0]?.includes('=')) param = args.shift().split('='), params[param[0]] = Number(param[1])
   return params
 }
-
-
-const err = text => { throw Error(text) }
-
 
 // escape codes
 const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
@@ -599,3 +592,5 @@ const str = str => {
 
 // build limits sequence (non-consuming)
 const limits = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]
+
+const err = text => { throw Error(text) }
