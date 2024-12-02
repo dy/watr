@@ -219,7 +219,7 @@ const build = {
     // funcref|externref|func
     if (parts[0] === 'func') parts.shift()
     else if (parts[0] === 'funcref') reftype = parts.shift(), mode |= 0b100
-    // FIXME: externref makes explicit table index (in wabt, but not in standard)
+    // NOTE: externref makes explicit table index (in wabt/browser, but not in standard)
     else if (parts[0] === 'externref') reftype = parts.shift(), offset ||= ['i32.const', 0], mode = 0b110
 
     // reset to simplest mode if no actual elements
