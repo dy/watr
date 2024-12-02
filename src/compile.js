@@ -51,12 +51,6 @@ export default (nodes) => {
     // get name reference
     let name = node[0]?.[0] === '$' && node.shift()
 
-    // figure out section id
-    let idx = sections[kind].length
-
-    // if section name was referenced before - use existing id, else assign idx to name
-    if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
-
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
     // NOTE: we unshift to keep order on par with wabt
@@ -82,6 +76,12 @@ export default (nodes) => {
 
     // workaround start
     else if (name && kind === 'start') node.push(sections.func[name]);
+
+    // figure out section id
+    let idx = sections[kind].length
+
+    // if section name was referenced before - use existing id, else assign idx to name
+    if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
 
     // build into corresponding idx (res can be null for type sections)
     let res = build[kind](node, sections)
@@ -133,13 +133,11 @@ const build = {
       let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
       details = [TYPE[mut ? type[1] : type], mut]
     }
-    // FIXME: add table
     else if (kind === 'table') {
       details = [TYPE[parts.pop()], ...limits(parts)]
     }
-    else err('Unknown import ' + kind)
 
-    return [...str(mod), ...str(field), KIND[kind], ...details]
+    return ([...str(mod), ...str(field), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
@@ -194,17 +192,17 @@ const build = {
   // funcref|externref (item expr)|expr (item expr)|expr
   // func? $id0 $id1
   elem(parts, ctx) {
-    let table, offset, mode = 0b000, reftype
+    let tabidx, offset, mode = 0b000, reftype
 
     // declare?
     if (parts[0] === 'declare') parts.shift(), mode |= 0b010
 
     // table?
     if (parts[0][0] === 'table') {
-      [, table] = parts.shift()
-      table = table[0] === '$' ? (ctx.table[table] ??= ctx.table.length++) : +table
+      [, tabidx] = parts.shift()
+      tabidx = tabidx[0] === '$' ? (ctx.table[tabidx] ??= ctx.table.length++) : +tabidx
       // ignore table=0
-      if (table) mode |= 0b010
+      if (tabidx) mode |= 0b010
     }
 
     // (offset expr)|expr
@@ -217,12 +215,13 @@ const build = {
     // funcref|externref|func
     if (parts[0] === 'func') parts.shift()
     else if (parts[0] === 'funcref') reftype = parts.shift(), mode |= 0b100
-
+    // FIXME: externref makes explicit table index (in wabt, but not in standard)
+    else if (parts[0] === 'externref') reftype = parts.shift(), offset ||= ['i32.const', 0], mode = 0b110
 
     // reset to simplest mode if no actual elements
     if (!parts.length) mode &= 0b011
 
-    return console.log([
+    return ([
       mode,
       ...(
         // 0b000 e:expr y*:vec(funcidx)                     | type=funcref, init ((ref.func y)end)*, active (table=0,offset=e)
@@ -238,7 +237,7 @@ const build = {
                   // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
                   mode === 0b101 ? [TYPE[reftype]] :
                     // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
-                    mode === 0b110 ? err('todo') :
+                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset), 0x0b, TYPE[reftype]] :
                       // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
                       [TYPE[reftype]]
       ),
@@ -281,7 +280,6 @@ const build = {
         opCode = INSTR[op = args.shift()]
       }
       else opCode = INSTR[op]
-      console.log(op, opCode)
 
       // NOTE: numeric comparison is faster than generic hash lookup
 
@@ -509,7 +507,7 @@ const expr = (node, ctx) => {
   if (type === 'ref') {
     return cmd === 'func' ?
       [0xD2, ...uleb(node[0][0] === '$' ? (ctx.func[node[0]] ??= ctx.func.length++) : +node)] :
-      [0xD0, TYPE.null]
+      [0xD0, TYPE[node[0] + 'ref'] || TYPE[node[0]]] // func->funcref, extern->externref
   }
 
   // (i32.add a b), (i32.mult a b) etc

@@ -2161,14 +2161,22 @@ t.todo('feature: ref_func', () => {
 })
 
 // examples
-t('example: wat-compiler', async () => {
+t.only('example: wat-compiler', async () => {
   async function ex(path) {
     let res = await fetch(path)
     let src = await res.text()
     let buffer = compile(parse(src))
+    // console.hex(buffer)
     is(buffer, wat2wasm(src).buffer)
     // const mod = new WebAssembly.Module(buffer)
   }
+
+  // await ex('/test/example/types.wat')
+  await ex('/test/example/table.wat')
+
+  await ex('/test/example/global.wat')
+  await ex('/test/example/multivar.wat')
+  await ex('/test/example/amp.wat')
 
   await ex('/test/example/malloc.wat')
   await ex('/test/example/brownian.wat')
@@ -2180,25 +2188,19 @@ t('example: wat-compiler', async () => {
   await ex('/test/example/raytrace.wat')
   await ex('/test/example/maze.wat')
   await ex('/test/example/metaball.wat')
-  await ex('/test/example/global.wat')
   await ex('/test/example/loops.wat')
   await ex('/test/example/memory.wat')
   await ex('/test/example/stack.wat')
-  await ex('/test/example/multivar.wat')
-  await ex('/test/example/amp.wat')
   await ex('/test/example/raycast.wat')
-  // FIXME: await ex('/test/example/types.wat')
-  // FIXME: await ex('/test/example/table.wat')
-
 })
 
-t.only('example: official', async () => {
+t('example: official', async () => {
   async function ex(path) {
-    let res = await fetch(path, { cache: 'no-cache' })
+    let res = await fetch(path)
     let src = await res.text()
     let nodes = parse(src)
     freeze(nodes)
-    let buf, mod, inst
+    let buf, mod, inst, importObj = {}
     for (let node of nodes) {
       // (module $name) - creates module instance, collects exports
       if (node[0] === 'module') {
@@ -2206,9 +2208,19 @@ t.only('example: official', async () => {
         is(buf, wat2wasm(print(node)).buffer)
         mod = new WebAssembly.Module(buf)
         inst = new WebAssembly.Instance(mod, {
+          // FIXME: define via register
           spectest: {
             table: new WebAssembly.Table({ initial: 10, maximum: 30, element: 'anyfunc' }),
             global_i32: 0
+          },
+          exporter: {
+            table: new WebAssembly.Table({ initial: 2, element: 'externref' })
+          },
+          module1: {
+            'shared-table': new WebAssembly.Table({ initial: 10, element: 'anyfunc' })
+          },
+          module4: {
+            f: null
           }
         })
       }
