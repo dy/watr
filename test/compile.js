@@ -2171,8 +2171,8 @@ t('example: wat-compiler', async () => {
     // const mod = new WebAssembly.Module(buffer)
   }
 
-  await ex('/test/example/types.wat')
   await ex('/test/example/table.wat')
+  await ex('/test/example/types.wat')
 
   await ex('/test/example/global.wat')
   await ex('/test/example/multivar.wat')
@@ -2197,7 +2197,8 @@ t('example: wat-compiler', async () => {
 
 let official = [
   '/test/official/elem.wat',
-  '/test/official/exports.wat'
+  '/test/official/exports.wat',
+  '/test/official/func_ptrs.wat'
 ]
 
 official.forEach((it) => t(`official: ${it}`, () => ex(it)));
@@ -2210,7 +2211,8 @@ async function ex(path) {
   let buf, mod = {}, importObj = {
     spectest: {
       table: new WebAssembly.Table({ initial: 10, maximum: 30, element: 'anyfunc' }),
-      global_i32: 0
+      global_i32: 0,
+      print_i32: (x) => { }
     }
   }
   for (let node of nodes) {

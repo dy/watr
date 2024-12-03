@@ -67,7 +67,7 @@ export default (nodes) => {
     if (node[1]?.[0] === 'elem') {
       let [reftype, [, ...els]] = node
       node = [els.length, els.length, reftype]
-      nodes.unshift(['elem', ['table', name || idx], ['i32.const', '0'], reftype, ...els])
+      nodes.unshift(['elem', ['table', name || sections[kind].length], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els])
     }
 
     // duplicate func as code section
@@ -77,24 +77,14 @@ export default (nodes) => {
     // workaround start
     else if (name && kind === 'start') node.push(sections.func[name]);
 
-    // type may not have return and name can already be defined indirectly via typeuse
-    if (kind === 'type') {
-      let [, ...sig] = node[0]
-      let [idx] = typeuse(sig, sections)
-      if (name) sections.type[name] = idx
-    }
-    else {
-      // figure out section id
-      let idx = sections[kind].length
+    // figure out section id
+    let idx = sections[kind].length
 
-      // if section name was referenced before - use existing id, else assign idx to name
-      if (name) {
-        name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
-      }
+    // if section name was referenced before - use existing id, else assign idx to name
+    if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
 
-      // build into corresponding idx
-      sections[kind][idx] = build[kind](node, sections)
-    }
+    // build into corresponding idx
+    sections[kind][idx] = build[kind](node, sections)
   }
 
   // build binary
@@ -117,6 +107,12 @@ export default (nodes) => {
 
 // build section binary (non consuming)
 const build = {
+  // (type $id? (func params result))
+  type([fn], ctx) {
+    let [, ...sig] = fn || [], [params, result] = paramres(sig)
+    return [TYPE.func, ...vec(params.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))]
+  },
+
   // (import "math" "add" (func|table|global|memory $name? typedef?))
   import([mod, field, [kind, ...parts]], ctx) {
     let nm = parts[0]?.[0] === '$' && parts.shift(), details
@@ -566,10 +562,28 @@ const typeuse = (nodes, ctx) => {
   // existing type (type 0), (type $name) - can repeat params, result after
   if (nodes[0]?.[0] === 'type') {
     [, idx] = nodes.shift()
-    idx = idx[0] === '$' ? ctx.type[idx] : +idx
+    idx = idx[0] === '$' ? ctx.type[idx] ?? err('Unknown type ' + idx) : +idx
   }
 
+  let [params, result] = paramres(nodes)
+
+  // if new type, not (type 0) (...) - try reusing or adding new
+  if (idx == null) {
+    let b = build.type([[, ['param', ...params], ['result', ...result]]])
+    idx = ctx.type.findIndex(
+      a => a.length === b.length && a.join('') === b.join('')
+    )
+
+    if (idx < 0) idx = ctx.type.push(b) - 1
+  }
+
+  return [idx, params, result]
+}
+
+// consume (param t+)* (result t+)* sequence
+const paramres = (nodes) => {
   let params = [], result = []
+
   // collect params (param i32 i64) (param $x? i32)
   while (nodes[0]?.[0] === 'param') {
     let [, ...args] = nodes.shift()
@@ -584,16 +598,7 @@ const typeuse = (nodes, ctx) => {
     result.push(...args)
   }
 
-  // if new type, not (type 0) (...)
-  if (idx == null) {
-    // for simplicity of search we fabricate type name
-    let pr = params + '>' + result
-    // reuse existing type or register new one
-    idx = ctx.type[pr] ??=
-      ctx.type.push([TYPE.func, ...vec(params.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))]) - 1
-  }
-
-  return [idx, params, result]
+  return [params, result]
 }
 
 // consume align/offset/etc params
