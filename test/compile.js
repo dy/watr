@@ -2194,48 +2194,48 @@ t('example: wat-compiler', async () => {
   await ex('/test/example/raycast.wat')
 })
 
-t('example: official', async () => {
-  async function ex(path) {
-    let res = await fetch(path)
-    let src = await res.text()
-    let nodes = parse(src)
-    freeze(nodes)
-    let buf, mod, inst, importObj = {}
-    for (let node of nodes) {
-      // (module $name) - creates module instance, collects exports
-      if (node[0] === 'module') {
-        buf = compile(node)
-        is(buf, wat2wasm(print(node)).buffer)
-        mod = new WebAssembly.Module(buf)
-        inst = new WebAssembly.Instance(mod, {
-          // FIXME: define via register
-          spectest: {
-            table: new WebAssembly.Table({ initial: 10, maximum: 30, element: 'anyfunc' }),
-            global_i32: 0
-          },
-          exporter: {
-            table: new WebAssembly.Table({ initial: 2, element: 'externref' })
-          },
-          module1: {
-            'shared-table': new WebAssembly.Table({ initial: 10, element: 'anyfunc' })
-          },
-          module4: {
-            f: null
-          }
-        })
-      }
-      // else if (node[0] === 'assert_return') {
 
-      // }
-      // else if (node[0] === 'assert_invalid') {
+let official = [
+  '/test/official/elem.wat',
+  '/test/official/exports.wat'
+]
 
-      // }
+official.forEach((it) => t(`official: ${it}`, () => ex(it)));
+
+async function ex(path) {
+  let res = await fetch(path)
+  let src = await res.text()
+  let nodes = parse(src)
+  freeze(nodes)
+  let buf, mod = {}, importObj = {
+    spectest: {
+      table: new WebAssembly.Table({ initial: 10, maximum: 30, element: 'anyfunc' }),
+      global_i32: 0
     }
   }
+  for (let node of nodes) {
+    // (module $name) - creates module instance, collects exports
+    if (node[0] === 'module') {
+      buf = compile(node)
+      is(buf, wat2wasm(print(node)).buffer)
+      let m = new WebAssembly.Module(buf)
+      let i = new WebAssembly.Instance(m, importObj)
+      // collect exports under name
+      if (node[1]?.[0] === '$') mod[node[1]] = i.exports
+    }
+    else if (node[0] === 'register') {
+      // include exports from prev module
+      let [, nm, m] = node
+      importObj[nm.slice(1, -1)] = mod[m]
+    }
+    // else if (node[0] === 'assert_return') {
 
-  await ex('/test/official/elem.wat')
-  // await ex('/test/official/exports.wat')
-})
+    // }
+    // else if (node[0] === 'assert_invalid') {
+
+    // }
+  }
+}
 
 const save = (buf) => {
   // Create a Blob

@@ -53,8 +53,8 @@ export default (nodes) => {
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    // NOTE: we unshift to keep order on par with wabt
-    while (node[0]?.[0] === 'export') nodes.unshift([...node.shift(), [kind, sections[kind].length]])
+    // NOTE: we call direct export to simplify loop through and make order match wabt
+    while (node[0]?.[0] === 'export') sections.export.push(build.export([node.shift()[1], [kind, sections[kind].length]]))
 
     // import abbr
     // (table|memory|global|func id? (import m n) type) -> (import m n (table|memory|global|func id? type))
