@@ -2200,7 +2200,8 @@ let official = [
   '/test/official/exports.wat',
   '/test/official/func_ptrs.wat',
   '/test/official/func.wat',
-  // '/test/official/global.wat',
+  '/test/official/global.wat',
+  '/test/official/if.wat',
 ]
 
 official.forEach((it) => t(`official: ${it}`, () => ex(it)));
@@ -2214,6 +2215,7 @@ async function ex(path) {
     spectest: {
       table: new WebAssembly.Table({ initial: 10, maximum: 30, element: 'anyfunc' }),
       global_i32: 0,
+      global_i64: 0n,
       print_i32: (x) => { }
     }
   }

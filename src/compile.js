@@ -386,7 +386,7 @@ const build = {
         blocks.push(opCode)
 
         // (block $x) (loop $y)
-        if (opCode < 4 && args[0]?.[0] === '$') (blocks[args.shift()] = blocks.length)
+        if (args[0]?.[0] === '$') (blocks[args.shift()] = blocks.length)
 
         // get type - can be either typeidx or valtype (numtype | reftype)
         // (result i32) - doesn't require registering type
@@ -397,7 +397,14 @@ const build = {
         // (result i32 i32)
         else if (args[0]?.[0] === 'result' || args[0]?.[0] === 'param') {
           let [typeidx] = typeuse(args, ctx)
-          immed = [typeidx]
+          immed = uleb(typeidx)
+        }
+        // FIXME: that def can be done nicer
+        else if (args[0]?.[0] === 'type') {
+          let [typeidx, params, result] = typeuse(args, ctx)
+          if (!params.length && !result.length) immed = [TYPE.void]
+          else if (!param.length && result.length === 1) immed = [TYPE[result[0]]]
+          else immed = uleb(typeidx)
         }
         else {
           immed = [TYPE.void]
@@ -445,7 +452,10 @@ const build = {
       // (br_table 1 2 3 4  0  selector result?)
       else if (opCode == 0x0e) {
         immed = []
-        while (!Array.isArray(args[0])) id = args.shift(), immed.push(...uleb(id[0][0] === '$' ? blocks.length - blocks[id] : id))
+        while (args[0] && !Array.isArray(args[0])) {
+          id = args.shift()
+          immed.push(...uleb(id[0][0] === '$' ? blocks.length - blocks[id] : id))
+        }
         immed.unshift(...uleb(immed.length - 1))
       }
 

@@ -1,6 +1,8 @@
 ;; Test globals
 
 (module
+  (type $check (func (param i32 i32) (result i32)))
+
   (global (import "spectest" "global_i32") i32)
   (global (import "spectest" "global_i64") i64)
 
@@ -114,7 +116,7 @@
   )
 
   (func $func (param i32 i32) (result i32) (local.get 0))
-  (type $check (func (param i32 i32) (result i32)))
+  ;; (type $check (func (param i32 i32) (result i32)))
   (table funcref (elem $func))
   (func (export "as-call_indirect-first") (result i32)
     (block (result i32)
