@@ -45,6 +45,7 @@ export default (nodes) => {
   ]
 
   // directly map nodes to binary sections
+  // FIXME: maybe instead of this generic handler it'd be easier indeed to just use builders
   while (nodes.length) {
     let [kind, ...node] = nodes.shift()
 
@@ -53,7 +54,7 @@ export default (nodes) => {
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    // NOTE: we call direct export to simplify loop through and make order match wabt
+    // we call direct export to simplify loop through and make order match wabt
     while (node[0]?.[0] === 'export') sections.export.push(build.export([node.shift()[1], [kind, sections[kind].length]]))
 
     // import abbr
@@ -70,18 +71,18 @@ export default (nodes) => {
       nodes.unshift(['elem', ['table', name || sections[kind].length], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els])
     }
 
-    // duplicate func as code section
-    // FIXME: func can buid binary right away if we insert refs properly
-    if (kind === 'func') nodes.push(['code', ...node])
-
     // workaround start
-    else if (name && kind === 'start') node.push(sections.func[name]);
+    if (name && kind === 'start') node.push(sections.func[name]);
 
     // figure out section id
     let idx = sections[kind].length
 
     // if section name was referenced before - use existing id, else assign idx to name
     if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
+
+    // duplicate func as code section
+    // unshift to keep proper typeuse order
+    if (kind === 'func') sections.code[idx] = build.code([...node], sections)
 
     // build into corresponding idx
     sections[kind][idx] = build[kind](node, sections)
@@ -91,7 +92,7 @@ export default (nodes) => {
   for (let name in sections) {
     let items = sections[name], secCode = SECTION[name], bytes = [], count = 0
     for (let item of items) {
-      if (!item) continue // ignore empty items (like import placeholders)
+      if (!item) { continue } // ignore empty items (like import placeholders)
       count++ // count number of items in section
       bytes.push(...item)
     }
@@ -109,8 +110,11 @@ export default (nodes) => {
 const build = {
   // (type $id? (func params result))
   type([fn], ctx) {
-    let [, ...sig] = fn || [], [params, result] = paramres(sig)
-    return [TYPE.func, ...vec(params.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))]
+    let [, ...sig] = fn || [], [param, result] = paramres(sig)
+    return Object.assign(
+      [TYPE.func, ...vec(param.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))],
+      { param, result } // save params for the type name
+    )
   },
 
   // (import "math" "add" (func|table|global|memory $name? typedef?))
@@ -255,16 +259,16 @@ const build = {
   // FIXME: artificial section, can be handled via func
   // (code params ...body)
   code(body, ctx) {
-    const [, params] = typeuse(body, ctx)
+    const [, param] = typeuse(body, ctx)
     let blocks = [] // control instructions / blocks stack
     let locals = [] // list of local variables
 
     // collect locals
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift(), name
-      if (types[0][0] === '$')
-        params[name = types.shift()] ? err('Ambiguous name ' + name) : // FIXME: not supposed to happen
-          locals[name] = params.length + locals.length
+      if (types[0]?.[0] === '$')
+        param[name = types.shift()] ? err('Ambiguous name ' + name) : // FIXME: not supposed to happen
+          locals[name] = param.length + locals.length
       locals.push(...types.map(t => TYPE[t]))
     }
 
@@ -353,7 +357,7 @@ const build = {
 
       // (local.get $id), (local.tee $id x)
       else if (opCode >= 0x20 && opCode <= 0x22) {
-        immed = uleb(args[0]?.[0] === '$' ? params[id = args.shift()] ?? locals[id] ?? err('Unknown local ' + id) : +args.shift())
+        immed = uleb(args[0]?.[0] === '$' ? param[id = args.shift()] ?? locals[id] ?? err('Unknown local ' + id) : +args.shift())
       }
 
       // (global.get $id), (global.set $id)
@@ -364,7 +368,7 @@ const build = {
       // (call id ...nodes)
       else if (opCode == 0x10) {
         let fnName = args.shift()
-        immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] ?? err('Unknown func ' + fnName) : +fnName);
+        immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] ??= ctx.func.length++ : +fnName);
         // FIXME: how to get signature of imported function
       }
 
@@ -466,7 +470,7 @@ const build = {
       // because inline case has them in stack already
       if (group) while (args.length) consume(args, out)
 
-      if (opCode) out.push(opCode)
+      if (opCode != null) out.push(opCode)
       if (immed) out.push(...immed)
     }
 
@@ -562,34 +566,36 @@ const typeuse = (nodes, ctx) => {
   // existing type (type 0), (type $name) - can repeat params, result after
   if (nodes[0]?.[0] === 'type') {
     [, idx] = nodes.shift()
-    idx = idx[0] === '$' ? ctx.type[idx] ?? err('Unknown type ' + idx) : +idx
+    idx = idx[0] === '$' ? ctx.type[idx] ?? err('Forward type: ' + idx) : +idx
   }
 
-  let [params, result] = paramres(nodes)
+  let [param, result] = paramres(nodes)
 
   // if new type, not (type 0) (...) - try reusing or adding new
   if (idx == null) {
-    let b = build.type([[, ['param', ...params], ['result', ...result]]])
+    let b = build.type([[, ['param', ...param], ['result', ...result]]])
     idx = ctx.type.findIndex(
-      a => a.length === b.length && a.join('') === b.join('')
+      (a, i) => (a && a.length === b.length && a.join('') === b.join(''))
     )
 
     if (idx < 0) idx = ctx.type.push(b) - 1
   }
+  // read param, result from known type
+  else if (ctx.type[idx] != null) ({ param, result } = ctx.type[idx])
 
-  return [idx, params, result]
+  return [idx, param, result]
 }
 
 // consume (param t+)* (result t+)* sequence
 const paramres = (nodes) => {
-  let params = [], result = []
+  let param = [], result = []
 
-  // collect params (param i32 i64) (param $x? i32)
+  // collect param (param i32 i64) (param $x? i32)
   while (nodes[0]?.[0] === 'param') {
     let [, ...args] = nodes.shift()
     let name = args[0]?.[0] === '$' && args.shift()
-    if (name) params[name] = params.length // expose name refs
-    params.push(...args)
+    if (name) param[name] = param.length // expose name refs
+    param.push(...args)
   }
 
   // collect result eg. (result f64 f32)(result i32)
@@ -598,14 +604,14 @@ const paramres = (nodes) => {
     result.push(...args)
   }
 
-  return [params, result]
+  return [param, result]
 }
 
 // consume align/offset/etc params
 const memarg = (args) => {
-  let params = {}, param
-  while (args[0]?.includes('=')) param = args.shift().split('='), params[param[0]] = Number(param[1])
-  return params
+  let ao = {}, kv
+  while (args[0]?.includes('=')) kv = args.shift().split('='), ao[kv[0]] = Number(kv[1])
+  return ao
 }
 
 // escape codes

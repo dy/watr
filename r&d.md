@@ -125,7 +125,7 @@
   + shortens parse code
   + likely we need to use it here: we can use late-binding for name/ref and so for typerefs
 
-## [ ] Hoisting
+## [ ] Hoisting -> `ctx.kind[name] ??= ctx.kind.length++` and then after-init
 
 1. Init nodes in order of sections
   - not necessarily helpful: global can depend on global declared later
@@ -157,3 +157,20 @@
   + avoids double pass
   + avoids binary-stage deref
   - doesn't make build[type] direct return
+
+## [ ] Generic prepare-loop vs section builders
+
+1. Generic prepare loop
+  + generic name handling
+  + generic import, export lists
+  + less args for section builders
+  + handles name refs in unified way
+  - unnecessary checks for abbrs
+  - we anyways pass context
+
+2. Per-section handlers right away modify contexts
+  + more flexibility
+  + no troubles with start, func duplicate
+  - duplicate of name, abbrs
+    ~ can be reused via funcs?
+  + allows not returning anything

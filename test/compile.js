@@ -2198,7 +2198,9 @@ t('example: wat-compiler', async () => {
 let official = [
   '/test/official/elem.wat',
   '/test/official/exports.wat',
-  '/test/official/func_ptrs.wat'
+  '/test/official/func_ptrs.wat',
+  '/test/official/func.wat',
+  // '/test/official/global.wat',
 ]
 
 official.forEach((it) => t(`official: ${it}`, () => ex(it)));

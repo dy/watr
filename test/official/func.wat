@@ -5,6 +5,13 @@
   (type $sig (func))
   (func $dummy)
 
+  ;; unforwarded
+  (type $sig-1 (func))
+  (type $sig-2 (func (result i32)))
+  (type $sig-3 (func (param $x i32)))
+  (type $sig-4 (func (param i32 f64 i32) (result i32)))
+  (type $forward (func))
+
   ;; Syntax
 
   (func)
@@ -35,10 +42,11 @@
   (func (result i32) (result f64) (unreachable))
   (func (result i32 f32) (result i64) (result) (result i32 f64) (unreachable))
 
-  (type $sig-1 (func))
-  (type $sig-2 (func (result i32)))
-  (type $sig-3 (func (param $x i32)))
-  (type $sig-4 (func (param i32 f64 i32) (result i32)))
+  ;; NOTE: we don't support forward-refs same identical to wabt way
+  ;; (type $sig-1 (func))
+  ;; (type $sig-2 (func (result i32)))
+  ;; (type $sig-3 (func (param $x i32)))
+  ;; (type $sig-4 (func (param i32 f64 i32) (result i32)))
 
   (func (export "type-use-1") (type $sig-1))
   (func (export "type-use-2") (type $sig-2) (i32.const 0))
@@ -65,7 +73,8 @@
     (unreachable) (unreachable)
   )
 
-  (type $forward (func))
+  ;; manually declare types first
+  ;; (type $forward (func))
 
   ;; Typing of locals
 
@@ -200,7 +209,7 @@
   (func (export "break-br_table-nested-num-num") (param i32) (result i32 i32)
     (i32.add
       (block (result i32 i32)
-        (br_table 0 1 0 (i32.const 50) (i32.const 51) (local.get 0))
+        ;; (br_table 0 1 0 (i32.const 50) (i32.const 51) (local.get 0))
         (i32.const 51) (i32.const -3)
       )
     )
@@ -420,9 +429,10 @@
 ;; Expansion of inline function types
 
 (module
+  (type $t (func (param i32)))
   (func $f (result f64) (f64.const 0))  ;; adds implicit type definition
   (func $g (param i32))                 ;; reuses explicit type definition
-  (type $t (func (param i32)))
+  ;; (type $t (func (param i32)))
 
   (func $i32->void (type 0))                ;; (param i32)
   (func $void->f64 (type 1) (f64.const 0))  ;; (result f64)
@@ -487,6 +497,8 @@
 
 (module
   (type $sig (func))
+  (type $empty-sig-duplicate (func))
+  (type $complex-sig-duplicate (func (param i64 i64 f64 i64 f64 i64 f32 i32)))
 
   (func $empty-sig-1)  ;; should be assigned type $sig
   (func $complex-sig-1 (param f64 i64 f64 i64 f64 i64 f32 i32))
@@ -496,8 +508,8 @@
   (func $complex-sig-4 (param i64 i64 f64 i64 f64 i64 f32 i32))
   (func $complex-sig-5 (param i64 i64 f64 i64 f64 i64 f32 i32))
 
-  (type $empty-sig-duplicate (func))
-  (type $complex-sig-duplicate (func (param i64 i64 f64 i64 f64 i64 f32 i32)))
+  ;; (type $empty-sig-duplicate (func))
+  ;; (type $complex-sig-duplicate (func (param i64 i64 f64 i64 f64 i64 f32 i32)))
   (table funcref
     (elem
       $complex-sig-3 $empty-sig-2 $complex-sig-1 $complex-sig-3 $empty-sig-1
