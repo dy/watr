@@ -71,21 +71,12 @@ export default (nodes) => {
 // consume $id
 const id = nodes => nodes[0]?.[0] === '$' && nodes.shift()
 
-// consume $id, return idx
-// FIXME: can be used more actively, there's more use-cases around
-const deref = (nodes, list) => {
-  let name = id(nodes)
-  if (!name) return list.length
-  if (name in list) return list[name]
-  return list[name] = list.length
-}
-
 // build section binary (non consuming)
 const build = {
   // (type $id? (func params result))
   // we cannot squash types since indices can refer to them
   type([, ...node], ctx) {
-    let idx = deref(node, ctx.type),
+    let name = id(node), idx = name ? (ctx.type[name] ??= ctx.type.length++) : ctx.type.length++,
       [, ...sig] = node?.[0] || [], [param, result] = paramres(sig)
 
     ctx.type[idx] = Object.assign(
@@ -124,10 +115,8 @@ const build = {
 
   // (func $name? ...params result ...body)
   func([, ...node], ctx) {
-    let name = id(node)
+    let name = id(node), idx = !name ? ctx.func.length++ : (ctx.func[name] ??= ctx.func.length++)
 
-    // register new function (existing id or new one)
-    let idx = !name ? ctx.func.length++ : (ctx.func[name] ??= ctx.func.length++)
     // exports
     while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['func', idx]], ctx)
     // import abbr
@@ -375,10 +364,8 @@ const build = {
 
   // (table id? 1 2? funcref)
   table([, ...node], ctx) {
-    let name = id(node)
+    let name = id(node), idx = name ? (ctx.table[name] ??= ctx.table.length++) : ctx.table.length++
 
-    // existing or new idx
-    let idx = !name ? ctx.table.length++ : (ctx.table[name] ??= ctx.table.length++)
     // exports
     while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['table', idx]], ctx)
     // import
@@ -386,22 +373,19 @@ const build = {
 
     // elem abbr
     // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-    // TODO
-    // if (node[1]?.[0] === 'elem') {
-    //   let [reftype, [, ...els]] = node
-    //   node = [els.length, els.length, reftype]
-    //   nodes.unshift(['elem', ['table', name || sections[kind].length], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els])
-    // }
+    if (node[1]?.[0] === 'elem') {
+      let [reftype, [, ...els]] = node
+      node = [els.length, els.length, reftype]
+      build.elem([, ['table', idx], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els], ctx)
+    }
 
     ctx.table[idx] = [TYPE[node.pop()], ...limits(node)]
   },
 
   // (memory id? export* min max shared)
   memory([, ...node], ctx) {
-    let name = id(node)
+    let name = id(node), idx = name ? (ctx.memory[name] ??= ctx.memory.length++) : ctx.memory.length++
 
-    // existing or new idx
-    let idx = !name ? ctx.memory.length++ : (ctx.memory[name] ??= ctx.memory.length++)
     // exports
     while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['memory', idx]], ctx)
     // import
@@ -412,15 +396,12 @@ const build = {
 
   // (global $id? (mut i32) (i32.const 42))
   global([, ...node], ctx) {
-    let name = id(node)
+    let name = id(node), idx = name ? (ctx.global[name] ??= ctx.global.length) : ctx.global.length
 
-    // existing or new idx
-    let idx = !name ? ctx.global.length : (ctx.global[name] ??= ctx.global.length)
     // exports
     while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['global', idx]], ctx)
     // import
     if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['global', ...(name ? [name] : []), ...node]], ctx)
-
 
     let [type] = node, mut = type[0] === 'mut' ? 1 : 0
 
@@ -452,9 +433,8 @@ const build = {
   // funcref|externref (item expr)|expr (item expr)|expr
   // func? $id0 $id1
   elem([, ...parts], ctx) {
-    let idx = deref(parts, ctx.elem)
-
-    let tabidx, offset, mode = 0b000, reftype
+    let name = id(parts), idx = name ? (ctx.elem[name] ??= ctx.elem.length++) : ctx.elem.length++,
+      tabidx, offset, mode = 0b000, reftype
 
     // declare?
     if (parts[0] === 'declare') parts.shift(), mode |= 0b010
@@ -518,9 +498,8 @@ const build = {
   // (data (offset (i32.const 0)) (memory ref) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
   data([, ...inits], ctx) {
-    let idx = deref(inits, ctx.data)
-
-    let offset, mem
+    let name = id(inits), idx = name ? (ctx.data[name] ??= ctx.data.length++) : ctx.data.length++,
+      offset, mem
 
     if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
     if (inits[0]?.[0] === 'memory') [, mem] = inits.shift()
@@ -599,7 +578,12 @@ const typeuse = (nodes, ctx) => {
     [, idx] = nodes.shift();
 
     // (type 0), (type $n) - existing type
-    if (idx[0] !== '$' || ctx.type[idx] != null) return paramres(nodes), { param, result } = ctx.type[idx] ?? err('Bad type ' + idx), [+idx, param, result]
+    if (ctx.type[idx] != null) {
+      paramres(nodes);
+      if (idx[0] === '$') idx = ctx.type[idx];
+      ({ param, result } = ctx.type[idx] ?? err('Bad type ' + idx));
+      return [+idx, param, result]
+    }
   }
 
 
