@@ -209,7 +209,7 @@
   (func (export "break-br_table-nested-num-num") (param i32) (result i32 i32)
     (i32.add
       (block (result i32 i32)
-        ;; (br_table 0 1 0 (i32.const 50) (i32.const 51) (local.get 0))
+        (br_table 0 1 0 (i32.const 50) (i32.const 51) (local.get 0))
         (i32.const 51) (i32.const -3)
       )
     )

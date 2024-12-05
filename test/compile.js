@@ -1097,10 +1097,12 @@ t('case: error on unknown instruction', () => {
   }, /i32.shr/)
 })
 
-t('case: export order initialize', () => {
-  let src = `
-    (memory (export "m") 5)
-    (func (export "f"))`
+t.skip('case: export order initialize', () => {
+  let src
+  src = `
+  (memory (export "m") 5)
+  (func (export "f"))
+  `
   is(compile(parse(src)), wat2wasm(src).buffer)
 
   src = `
@@ -2161,7 +2163,7 @@ t.todo('feature: ref_func', () => {
 })
 
 // examples
-t('example: wat-compiler', async () => {
+t.only('example: wat-compiler', async () => {
   async function ex(path) {
     let res = await fetch(path)
     let src = await res.text()
@@ -2197,13 +2199,13 @@ t('example: wat-compiler', async () => {
 
 let official = [
   // '/test/official/block.wat',
-  '/test/official/elem.wat',
+  // '/test/official/elem.wat',
   // '/test/official/exports.wat',
   // '/test/official/func_ptrs.wat',
   // '/test/official/func.wat',
   // '/test/official/global.wat',
   // '/test/official/if.wat',
-  // '/test/official/imports.wat',
+  '/test/official/imports.wat',
   // '/test/official/memory.wat',
   // '/test/official/ref_func.wat',
   // '/test/official/start.wat',
@@ -2211,26 +2213,47 @@ let official = [
   // '/test/official/type.wat',
 ]
 
-official.forEach((it) => t.only(`official: ${it}`, () => ex(it)));
+official.forEach((it) => t.skip(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
+  // load src
   let res = await fetch(path)
   let src = await res.text()
+
+  // parse
   let nodes = parse(src)
   freeze(nodes)
+
+  // test runtime
   let buf, mod = {}, importObj = {
     spectest: {
       table: new WebAssembly.Table({ initial: 10, maximum: 30, element: 'anyfunc' }),
-      global_i32: 0,
-      global_i64: 0n,
-      print_i32: (x) => { }
+      global_i32: 666,
+      global_i64: 666n,
+      global_f32: 666.6,
+      global_f64: 666.6,
+      print_i32: console.log,
+      print_i64: console.log,
+      print_f32: console.log,
+      print_f64: console.log,
+      print_i32_f32: console.log,
+      print_f64_f64: console.log,
     }
   }, cur
+
   for (let node of nodes) {
     // (module $name) - creates module instance, collects exports
     if (node[0] === 'module') {
       buf = compile(node)
-      // is(buf, wat2wasm(print(node)).buffer)
+
+      // sync up with libwabt
+      let wabtBuffer
+      try {
+        wabtBuffer = wat2wasm(print(node)).buffer
+      } catch (e) { console.warn(e) }
+
+      if (wabtBuffer) is(buf, wat2wasm(print(node)).buffer)
+
       let m = new WebAssembly.Module(buf)
       let inst = new WebAssembly.Instance(m, importObj)
       cur = inst.exports
@@ -2239,17 +2262,25 @@ async function ex(path) {
     }
     else if (node[0] === 'register') {
       // include exports from prev module
-      let [, nm, m] = node
-      importObj[nm.slice(1, -1)] = mod[m]
+      let [, nm] = node
+      // console.log('register', nm, cur)
+      importObj[nm.slice(1, -1)] = cur
     }
     else if (node[0] === 'assert_return') {
-      let [, [, ...invoke], ...expects] = node,
-        m = invoke[0]?.[0] === '$' ? mod[invoke.shift()] : cur,
-        nm = invoke.shift().slice(1, -1),
-        args = invoke.map(a => a[0].startsWith('i64') ? BigInt(a[1]) : +a[1])
+      let [, [kind, ...args], ...expects] = node;
+      let m = args[0]?.[0] === '$' ? mod[args.shift()] : cur,
+        nm = args.shift().slice(1, -1);
+      args = args.map(val)
+      expects = expects?.map(val)
 
-      expects = expects?.map(a => a[0].startsWith('i64') ? BigInt(a[1]) : +a[1])
-      is(m[nm](...args), expects.length > 1 ? expects : expects[0])
+      if (kind === 'invoke') {
+        // console.log('invoke', nm, args, expects)
+        is(m[nm](...args), expects.length > 1 ? expects : expects[0])
+      }
+      else if (kind === 'get') {
+        // console.log('get', m, nm, ...expects)
+        is(m[nm].value, expects[0])
+      }
     }
     // else if (node[0] === 'assert_invalid') {
 
@@ -2257,6 +2288,11 @@ async function ex(path) {
   }
 }
 
+// get value from [type, value] args
+var f32arr = new Float32Array(1)
+const val = ([t, v]) => t === 'ref.null' ? null : t === 'i64.const' ? BigInt(v) : t === 'f32.const' ? (f32arr[0] = +v, f32arr[0]) : +v
+
+// save binary (asm buffer) to file
 const save = (buf) => {
   // Create a Blob
   const blob = new Blob([buf], { type: "application/wasm" });

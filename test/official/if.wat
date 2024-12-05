@@ -534,13 +534,13 @@
     (drop) (drop) (drop)
   )
 
-  ;; ;; Atypical folded condition syntax
+  ;; Atypical folded condition syntax
   ;; this breaks libwabt
-  ;; (func (export "atypical-condition")
-  ;;   i32.const 0
-  ;;   (if (then) (else))
-  ;;   (if (i32.const 1) (i32.eqz) (then) (else))
-  ;; )
+  (func (export "atypical-condition")
+    i32.const 0
+    (if (then) (else))
+    (if (i32.const 1) (i32.eqz) (then) (else))
+  )
 )
 
 (assert_return (invoke "empty" (i32.const 0)))
