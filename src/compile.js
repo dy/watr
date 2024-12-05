@@ -18,7 +18,6 @@ INSTR.forEach((instr, i) => {
   //     (imm = imm.map(immedname), nodes => [...code, ...imm.flatMap(imm => imm(nodes))])
 })
 
-
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
  *
@@ -35,7 +34,7 @@ export default (nodes) => {
   nodes[0]?.[0] === '$' && nodes.shift();
 
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
-  // FIXME: make direct binary instead
+  // FIXME: make direct binary instead (faster)
   const sections = {
     type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
   }
@@ -76,14 +75,14 @@ const build = {
   // (type $id? (func params result))
   // we cannot squash types since indices can refer to them
   type([, ...node], ctx) {
-    let name = id(node), idx = name ? (ctx.type[name] ??= ctx.type.length++) : ctx.type.length++,
+    let name = id(node), idx = name ? (ctx.type[name] ??= ctx.type.length) : ctx.type.length,
       [, ...sig] = node?.[0] || [], [param, result] = paramres(sig)
 
     ctx.type[idx] = Object.assign(
       [TYPE.func, ...vec(param.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))],
       { param, result } // save params for the type name
     )
-    ctx.type[param + '>' + result] = idx // alias for quick search
+    ctx.type[param + '>' + result] ??= idx // alias for quick search (don't increment if exists)
   },
 
   // (import "math" "add" (func|table|global|memory $name? typedef?))
@@ -115,7 +114,7 @@ const build = {
 
   // (func $name? ...params result ...body)
   func([, ...node], ctx) {
-    let name = id(node), idx = !name ? ctx.func.length++ : (ctx.func[name] ??= ctx.func.length++)
+    let name = id(node), idx = name ? (ctx.func[name] ??= ctx.func.length) : ctx.func.length
 
     // exports
     while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['func', idx]], ctx)
@@ -364,7 +363,7 @@ const build = {
 
   // (table id? 1 2? funcref)
   table([, ...node], ctx) {
-    let name = id(node), idx = name ? (ctx.table[name] ??= ctx.table.length++) : ctx.table.length++
+    let name = id(node), idx = name ? (ctx.table[name] ??= ctx.table.length) : ctx.table.length
 
     // exports
     while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['table', idx]], ctx)
@@ -384,7 +383,7 @@ const build = {
 
   // (memory id? export* min max shared)
   memory([, ...node], ctx) {
-    let name = id(node), idx = name ? (ctx.memory[name] ??= ctx.memory.length++) : ctx.memory.length++
+    let name = id(node), idx = name ? (ctx.memory[name] ??= ctx.memory.length) : ctx.memory.length
 
     // exports
     while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['memory', idx]], ctx)
@@ -423,17 +422,13 @@ const build = {
   },
 
   // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
-  // passive
-  // (elem elem*)
-  // declarative
-  // (elem declare elem*)
-  // active
-  // (elem (table idx)? (offset expr)|(expr) elem*)
-  // elems
-  // funcref|externref (item expr)|expr (item expr)|expr
-  // func? $id0 $id1
+  // passive: (elem elem*)
+  // declarative: (elem declare elem*)
+  // active: (elem (table idx)? (offset expr)|(expr) elem*)
+  // elems: funcref|externref (item expr)|expr (item expr)|expr
+  // idxs: func? $id0 $id1
   elem([, ...parts], ctx) {
-    let name = id(parts), idx = name ? (ctx.elem[name] ??= ctx.elem.length++) : ctx.elem.length++,
+    let name = id(parts), idx = name ? (ctx.elem[name] ??= ctx.elem.length) : ctx.elem.length,
       tabidx, offset, mode = 0b000, reftype
 
     // declare?
@@ -498,7 +493,7 @@ const build = {
   // (data (offset (i32.const 0)) (memory ref) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
   data([, ...inits], ctx) {
-    let name = id(inits), idx = name ? (ctx.data[name] ??= ctx.data.length++) : ctx.data.length++,
+    let name = id(inits), idx = name ? (ctx.data[name] ??= ctx.data.length) : ctx.data.length,
       offset, mem
 
     if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
@@ -585,7 +580,6 @@ const typeuse = (nodes, ctx) => {
       return [+idx, param, result]
     }
   }
-
 
   // if new type - find existing match
   ;[param, result] = paramres(nodes), alias = param + '>' + result
