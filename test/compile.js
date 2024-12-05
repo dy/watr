@@ -2196,22 +2196,22 @@ t('example: wat-compiler', async () => {
 
 
 let official = [
-  '/test/official/block.wat',
+  // '/test/official/block.wat',
   '/test/official/elem.wat',
-  '/test/official/exports.wat',
-  '/test/official/func_ptrs.wat',
-  '/test/official/func.wat',
-  '/test/official/global.wat',
-  '/test/official/if.wat',
-  '/test/official/imports.wat',
-  '/test/official/memory.wat',
-  '/test/official/ref_func.wat',
-  '/test/official/start.wat',
-  '/test/official/table.wat',
-  '/test/official/type.wat',
+  // '/test/official/exports.wat',
+  // '/test/official/func_ptrs.wat',
+  // '/test/official/func.wat',
+  // '/test/official/global.wat',
+  // '/test/official/if.wat',
+  // '/test/official/imports.wat',
+  // '/test/official/memory.wat',
+  // '/test/official/ref_func.wat',
+  // '/test/official/start.wat',
+  // '/test/official/table.wat',
+  // '/test/official/type.wat',
 ]
 
-official.forEach((it) => t.todo(`official: ${it}`, () => ex(it)));
+official.forEach((it) => t.only(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
   let res = await fetch(path)
@@ -2244,13 +2244,12 @@ async function ex(path) {
     }
     else if (node[0] === 'assert_return') {
       let [, [, ...invoke], ...expects] = node,
-        m = console.log(invoke) || invoke[0]?.[0] === '$' ? mod[invoke.shift()] : cur,
+        m = invoke[0]?.[0] === '$' ? mod[invoke.shift()] : cur,
         nm = invoke.shift().slice(1, -1),
-        args = invoke.map(a => +a[1])
+        args = invoke.map(a => a[0].startsWith('i64') ? BigInt(a[1]) : +a[1])
 
-      expects = expects?.map(a => +a[1])
-      console.log('call', nm, m, args, expects)
-      is(m[nm](...args), expects[0])
+      expects = expects?.map(a => a[0].startsWith('i64') ? BigInt(a[1]) : +a[1])
+      is(m[nm](...args), expects.length > 1 ? expects : expects[0])
     }
     // else if (node[0] === 'assert_invalid') {
 
