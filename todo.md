@@ -45,18 +45,21 @@
     * [x] vec
     * [x] common parts pre-parse
 * [ ] Optimizations
-  * [x] make generic consuming ops instead of condition checks
+  * [x] split generic precompile into section builders as was in v1
+  * [ ] make generic consuming ops for instructions instead of condition checks
   * [ ] make func init code immediately instead of duplicating code
   * [ ] make use of deref with id creator for `x[0]?.[0] === '$'` things
   * [ ] make code insert refs, and then check if there are empty spots in output to show errors
   * [ ] make code section do generic ops handling, not a bunch of checks
   * [ ] make use of expr inside of code section, !mb instr groups?
 * [x] elem all use-cases
-* [ ] Enhance print: make it as nice as AI
+* [ ] Print: make it as nice as AI
 * [ ] Feature: func-ref
 * [ ] Feature: ref-types
 * [ ] Feature: gc
-* [ ] Tests: all official
+* [ ] Official tests
+  * [ ] Include testsuite repo
+  * [ ] Complete custom test instructions
 * [x] Compiler: Named/multiple memory;
 * [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
@@ -65,6 +68,7 @@
 * [ ] validation / errors: should be safe to type in anything
 * [ ] numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
 * [ ] extended-const (polyfill?) https://github.com/WebAssembly/extended-const
+* [ ] Wasm3
 
 ## [ ] REPL
 

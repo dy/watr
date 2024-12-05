@@ -101,6 +101,8 @@ watr | 5 kb | 6000
 [wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 348
 <!-- [wassemble](https://github.com/wingo/wassemble) | ? kb | ? -->
 
+<!-- Watr has better syntax support than wabt & produces more compact output due to types squash. -->
+
 <!--
 ## Projects using watr
 

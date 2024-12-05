@@ -44,49 +44,11 @@ export default (nodes) => {
     0x01, 0x00, 0x00, 0x00, // version
   ]
 
-  // directly map nodes to binary sections
-  // FIXME: maybe instead of this generic handler it'd be easier indeed to just use builders
-  while (nodes.length) {
-    let [kind, ...node] = nodes.shift()
+  // we have to init types first to have correct indices (otherwise func can init block types via code)
+  nodes = nodes.filter(node => node[0] !== 'type' || build.type(node, sections))
 
-    // get name reference
-    let name = node[0]?.[0] === '$' && node.shift()
-
-    // export abbr
-    // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    // we call direct export to simplify loop through and make order match wabt
-    while (node[0]?.[0] === 'export') sections.export.push(build.export([node.shift()[1], [kind, sections[kind].length]]))
-
-    // import abbr
-    // (table|memory|global|func id? (import m n) type) -> (import m n (table|memory|global|func id? type))
-    if (node[0]?.[0] === 'import') {
-      node = [...node.shift(), [kind, ...(name ? [name] : []), ...node]], kind = node.shift()
-    }
-
-    // table abbr
-    // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-    if (node[1]?.[0] === 'elem') {
-      let [reftype, [, ...els]] = node
-      node = [els.length, els.length, reftype]
-      nodes.unshift(['elem', ['table', name || sections[kind].length], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els])
-    }
-
-    // workaround start
-    if (name && kind === 'start') node.push(sections.func[name]);
-
-    // figure out section id
-    let idx = sections[kind].length
-
-    // if section name was referenced before - use existing id, else assign idx to name
-    if (name) name in sections[kind] ? idx = sections[kind][name] : sections[kind][name] = idx
-
-    // duplicate func as code section
-    // unshift to keep proper typeuse order
-    if (kind === 'func') sections.code[idx] = build.code([...node], sections)
-
-    // build into corresponding idx
-    sections[kind][idx] = build[kind](node, sections)
-  }
+  // build sections
+  for (let node of nodes) build[node[0]](node, sections)
 
   // build binary
   for (let name in sections) {
@@ -106,19 +68,35 @@ export default (nodes) => {
   return new Uint8Array(binary)
 }
 
+// consume $id
+const id = nodes => nodes[0]?.[0] === '$' && nodes.shift()
+
+// consume $id, return idx
+// FIXME: can be used more actively, there's more use-cases around
+const deref = (nodes, list) => {
+  let name = id(nodes)
+  if (!name) return list.length
+  if (name in list) return list[name]
+  return list[name] = list.length
+}
+
 // build section binary (non consuming)
 const build = {
   // (type $id? (func params result))
-  type([fn], ctx) {
-    let [, ...sig] = fn || [], [param, result] = paramres(sig)
-    return Object.assign(
+  // we cannot squash types since indices can refer to them
+  type([, ...node], ctx) {
+    let idx = deref(node, ctx.type),
+      [, ...sig] = node?.[0] || [], [param, result] = paramres(sig)
+
+    ctx.type[idx] = Object.assign(
       [TYPE.func, ...vec(param.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))],
       { param, result } // save params for the type name
     )
+    ctx.type[param + '>' + result] = idx // alias for quick search
   },
 
   // (import "math" "add" (func|table|global|memory $name? typedef?))
-  import([mod, field, [kind, ...parts]], ctx) {
+  import([, mod, field, [kind, ...parts]], ctx) {
     let nm = parts[0]?.[0] === '$' && parts.shift(), details
 
     // create stub
@@ -141,131 +119,31 @@ const build = {
       details = [TYPE[parts.pop()], ...limits(parts)]
     }
 
-    return ([...str(mod), ...str(field), KIND[kind], ...details])
+    ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
-  func(body, ctx) {
-    const [typeidx] = typeuse(body, ctx)
+  func([, ...node], ctx) {
+    let name = id(node)
 
-    // register new function
-    return uleb(typeidx)
-  },
+    // register new function (existing id or new one)
+    let idx = !name ? ctx.func.length++ : (ctx.func[name] ??= ctx.func.length++)
+    // exports
+    while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['func', idx]], ctx)
+    // import abbr
+    if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['func', ...(name ? [name] : []), ...node]], ctx)
 
-  // (table id? 1 2? funcref)
-  table(args, ctx) {
-    return [TYPE[args.pop()], ...limits(args)]
-  },
+    const [typeidx, param, result] = typeuse(node, ctx)
 
-  // (memory id? export* min max shared)
-  memory(args, ctx) {
-    return limits(args)
-  },
+    ctx.func[idx] = uleb(typeidx)
 
-  // (global id? i32 (i32.const 42))
-  // (global $id (mut i32) (i32.const 42))
-  global(args, ctx) {
-    let [type] = args, mut = type[0] === 'mut' ? 1 : 0
-
-    let [, [...init]] = args
-    return [TYPE[mut ? type[1] : type], mut, ...expr(init, ctx), 0x0b]
-  },
-
-  //  (export "name" (func|table|mem $name|idx))
-  export([s, [kind, nm]], ctx) {
-    // put placeholder to future-init
-    let idx = nm[0] === '$' ? ctx[kind][nm] ??= ctx[kind].length++ : +nm
-    return [...str(s), KIND[kind], ...uleb(idx)]
-  },
-
-  // (start $main)
-  start([id], ctx) {
-    // FIXME: can be resolved later
-    // FIXME: do away with name
-    return uleb(+id)
-  },
-
-  // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
-  // passive
-  // (elem elem*)
-  // declarative
-  // (elem declare elem*)
-  // active
-  // (elem (table idx)? (offset expr)|(expr) elem*)
-  // elems
-  // funcref|externref (item expr)|expr (item expr)|expr
-  // func? $id0 $id1
-  elem(parts, ctx) {
-    let tabidx, offset, mode = 0b000, reftype
-
-    // declare?
-    if (parts[0] === 'declare') parts.shift(), mode |= 0b010
-
-    // table?
-    if (parts[0][0] === 'table') {
-      [, tabidx] = parts.shift()
-      tabidx = tabidx[0] === '$' ? (ctx.table[tabidx] ??= ctx.table.length++) : +tabidx
-      // ignore table=0
-      if (tabidx) mode |= 0b010
-    }
-
-    // (offset expr)|expr
-    if (parts[0]?.[0] === 'offset' || (Array.isArray(parts[0]) && parts[0][0] !== 'item' && !parts[0][0].startsWith('ref'))) {
-      [...offset] = parts.shift()
-      if (offset[0] === 'offset') [, [...offset]] = offset
-    }
-    else mode |= 0b001 // passive
-
-    // funcref|externref|func
-    if (parts[0] === 'func') parts.shift()
-    else if (parts[0] === 'funcref') reftype = parts.shift(), mode |= 0b100
-    // NOTE: externref makes explicit table index (in wabt/browser, but not in standard)
-    else if (parts[0] === 'externref') reftype = parts.shift(), offset ||= ['i32.const', 0], mode = 0b110
-
-    // reset to simplest mode if no actual elements
-    if (!parts.length) mode &= 0b011
-
-    return ([
-      mode,
-      ...(
-        // 0b000 e:expr y*:vec(funcidx)                     | type=funcref, init ((ref.func y)end)*, active (table=0,offset=e)
-        mode === 0b000 ? [...expr(offset, ctx), 0x0b] :
-          // 0b001 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive
-          mode === 0b001 ? [0x00] :
-            // 0b010 x:tabidx e:expr et:elkind y*:vec(funcidx)  | type=0x00, init ((ref.func y)end)*, active (table=x,offset=e)
-            mode === 0b010 ? [...uleb(tabidx || 0), ...expr(offset), 0x0b, 0x00] :
-              // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
-              mode === 0b011 ? [0x00] :
-                // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
-                mode === 0b100 ? [...expr(offset, ctx), 0x0b] :
-                  // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
-                  mode === 0b101 ? [TYPE[reftype]] :
-                    // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
-                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset), 0x0b, TYPE[reftype]] :
-                      // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
-                      [TYPE[reftype]]
-      ),
-      ...uleb(parts.length),
-      ...parts.flatMap(el => (
-        typeof el === 'string' ?
-          // $id0 1 2
-          uleb(el[0] === '$' ? (ctx.func[el] ??= ctx.func.length++) : +el) :
-          // (ref.func a) (item (ref.func 2)) (item ref.func 2)
-          [...expr(el[0] === 'item' ? (el.length > 2 ? el.slice(1) : [...el[1]]) : [...el], ctx), 0x0b]
-      ))
-    ])
-  },
-
-  // FIXME: artificial section, can be handled via func
-  // (code params ...body)
-  code(body, ctx) {
-    const [, param] = typeuse(body, ctx)
+    // build code section
     let blocks = [] // control instructions / blocks stack
     let locals = [] // list of local variables
 
     // collect locals
-    while (body[0]?.[0] === 'local') {
-      let [, ...types] = body.shift(), name
+    while (node[0]?.[0] === 'local') {
+      let [, ...types] = node.shift(), name
       if (types[0]?.[0] === '$')
         param[name = types.shift()] ? err('Ambiguous name ' + name) : // FIXME: not supposed to happen
           locals[name] = param.length + locals.length
@@ -273,6 +151,7 @@ const build = {
     }
 
     // convert sequence of instructions from input nodes to out bytes
+    // FIXME: make external func
     const consume = (nodes, out = []) => {
       if (!nodes?.length) return out
 
@@ -376,8 +255,6 @@ const build = {
       else if (opCode == 0x11) {
         let tableidx = args[0]?.[0] === '$' ? ctx.table[args.shift()] ??= ctx.table.length++ : 0
         let [typeidx] = typeuse(args, ctx)
-        // let typeidx = args.shift()[1];
-        // typeidx = typeidx[0] === '$' ? ctx.type[typeidx] ?? err('Unknown type ' + typeidx) : +typeidx
         immed = [...uleb(typeidx), ...uleb(tableidx)]
       }
 
@@ -485,20 +362,164 @@ const build = {
     }
 
     const bytes = []
-    while (body.length) consume(body, bytes)
+    // FIXME: avoid passing bytes from outside, push result instead
+    while (node.length) consume(node, bytes)
     bytes.push(0x0b)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     let loctypes = locals.reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    return vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes])
+    ctx.code[idx] = vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes])
+  },
+
+  // (table id? 1 2? funcref)
+  table([, ...node], ctx) {
+    let name = id(node)
+
+    // existing or new idx
+    let idx = !name ? ctx.table.length++ : (ctx.table[name] ??= ctx.table.length++)
+    // exports
+    while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['table', idx]], ctx)
+    // import
+    if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['table', ...(name ? [name] : []), ...node]], ctx)
+
+    // elem abbr
+    // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
+    // TODO
+    // if (node[1]?.[0] === 'elem') {
+    //   let [reftype, [, ...els]] = node
+    //   node = [els.length, els.length, reftype]
+    //   nodes.unshift(['elem', ['table', name || sections[kind].length], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els])
+    // }
+
+    ctx.table[idx] = [TYPE[node.pop()], ...limits(node)]
+  },
+
+  // (memory id? export* min max shared)
+  memory([, ...node], ctx) {
+    let name = id(node)
+
+    // existing or new idx
+    let idx = !name ? ctx.memory.length++ : (ctx.memory[name] ??= ctx.memory.length++)
+    // exports
+    while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['memory', idx]], ctx)
+    // import
+    if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['memory', ...(name ? [name] : []), ...node]], ctx)
+
+    ctx.memory[idx] = limits(node)
+  },
+
+  // (global $id? (mut i32) (i32.const 42))
+  global([, ...node], ctx) {
+    let name = id(node)
+
+    // existing or new idx
+    let idx = !name ? ctx.global.length : (ctx.global[name] ??= ctx.global.length)
+    // exports
+    while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['global', idx]], ctx)
+    // import
+    if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['global', ...(name ? [name] : []), ...node]], ctx)
+
+
+    let [type] = node, mut = type[0] === 'mut' ? 1 : 0
+
+    let [, [...init]] = node
+    ctx.global[idx] = [TYPE[mut ? type[1] : type], mut, ...expr(init, ctx), 0x0b]
+  },
+
+  //  (export "name" (func|table|mem $name|idx))
+  export([, nm, [kind, id]], ctx) {
+    // put placeholder to future-init
+    let idx = id[0] === '$' ? (ctx[kind][id] ??= ctx[kind].length++) : +id
+    ctx.export.push([...str(nm), KIND[kind], ...uleb(idx)])
+  },
+
+  // (start $main)
+  start([, id], ctx) {
+    id = id[0] === '$' ? ctx.func[id] : +id
+    ctx.start[0] = uleb(id)
+  },
+
+  // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
+  // passive
+  // (elem elem*)
+  // declarative
+  // (elem declare elem*)
+  // active
+  // (elem (table idx)? (offset expr)|(expr) elem*)
+  // elems
+  // funcref|externref (item expr)|expr (item expr)|expr
+  // func? $id0 $id1
+  elem([, ...parts], ctx) {
+    let idx = deref(parts, ctx.elem)
+
+    let tabidx, offset, mode = 0b000, reftype
+
+    // declare?
+    if (parts[0] === 'declare') parts.shift(), mode |= 0b010
+
+    // table?
+    if (parts[0][0] === 'table') {
+      [, tabidx] = parts.shift()
+      tabidx = tabidx[0] === '$' ? (ctx.table[tabidx] ??= ctx.table.length++) : +tabidx
+      // ignore table=0
+      if (tabidx) mode |= 0b010
+    }
+
+    // (offset expr)|expr
+    if (parts[0]?.[0] === 'offset' || (Array.isArray(parts[0]) && parts[0][0] !== 'item' && !parts[0][0].startsWith('ref'))) {
+      [...offset] = parts.shift()
+      if (offset[0] === 'offset') [, [...offset]] = offset
+    }
+    else mode |= 0b001 // passive
+
+    // funcref|externref|func
+    if (parts[0] === 'func') parts.shift()
+    else if (parts[0] === 'funcref') reftype = parts.shift(), mode |= 0b100
+    // NOTE: externref makes explicit table index (in wabt/browser, but not in standard)
+    else if (parts[0] === 'externref') reftype = parts.shift(), offset ||= ['i32.const', 0], mode = 0b110
+
+    // reset to simplest mode if no actual elements
+    if (!parts.length) mode &= 0b011
+
+    ctx.elem[idx] = ([
+      mode,
+      ...(
+        // 0b000 e:expr y*:vec(funcidx)                     | type=funcref, init ((ref.func y)end)*, active (table=0,offset=e)
+        mode === 0b000 ? [...expr(offset, ctx), 0x0b] :
+          // 0b001 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive
+          mode === 0b001 ? [0x00] :
+            // 0b010 x:tabidx e:expr et:elkind y*:vec(funcidx)  | type=0x00, init ((ref.func y)end)*, active (table=x,offset=e)
+            mode === 0b010 ? [...uleb(tabidx || 0), ...expr(offset), 0x0b, 0x00] :
+              // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
+              mode === 0b011 ? [0x00] :
+                // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
+                mode === 0b100 ? [...expr(offset, ctx), 0x0b] :
+                  // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
+                  mode === 0b101 ? [TYPE[reftype]] :
+                    // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
+                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset), 0x0b, TYPE[reftype]] :
+                      // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
+                      [TYPE[reftype]]
+      ),
+      ...uleb(parts.length),
+      ...parts.flatMap(el => (
+        typeof el === 'string' ?
+          // $id0 1 2
+          uleb(el[0] === '$' ? (ctx.func[el] ??= ctx.func.length++) : +el) :
+          // (ref.func a) (item (ref.func 2)) (item ref.func 2)
+          [...expr(el[0] === 'item' ? (el.length > 2 ? el.slice(1) : [...el[1]]) : [...el], ctx), 0x0b]
+      ))
+    ])
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
   // (data (offset (i32.const 0)) (memory ref) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
-  data(inits, ctx) {
+  data([, ...inits], ctx) {
+    let idx = deref(inits, ctx.data)
+
     let offset, mem
 
     if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
@@ -507,7 +528,7 @@ const build = {
     if (!offset && !mem) offset = inits.shift()
     if (!offset) offset = ['i32.const', 0]
 
-    return [0, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))]
+    ctx.data[idx] = [0, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))]
   }
 }
 
@@ -569,31 +590,27 @@ const v128 = (args) => {
 }
 
 // https://webassembly.github.io/spec/core/text/modules.html#type-uses
-// consume (type id)(param t+)* (result t+)*
+// consume (type $id|id) (param t+)* (result t+)*
 const typeuse = (nodes, ctx) => {
-  let idx
+  let idx, param, result, alias
 
-  // existing type (type 0), (type $name) - can repeat params, result after
+  // existing/new type (type 0|$name)
   if (nodes[0]?.[0] === 'type') {
-    [, idx] = nodes.shift()
-    idx = idx[0] === '$' ? ctx.type[idx] ?? err('Forward type: ' + idx) : +idx
+    [, idx] = nodes.shift();
+
+    // (type 0), (type $n) - existing type
+    if (idx[0] !== '$' || ctx.type[idx] != null) return paramres(nodes), { param, result } = ctx.type[idx] ?? err('Bad type ' + idx), [+idx, param, result]
   }
 
-  let [param, result] = paramres(nodes)
 
-  // if new type, not (type 0) (...) - try reusing or adding new
-  if (idx == null) {
-    let b = build.type([[, ['param', ...param], ['result', ...result]]])
-    idx = ctx.type.findIndex(
-      (a, i) => (a && a.length === b.length && a.join('') === b.join(''))
-    )
-
-    if (idx < 0) idx = ctx.type.push(b) - 1
+  // if new type - find existing match
+  ;[param, result] = paramres(nodes), alias = param + '>' + result
+  // or register new type
+  if (ctx.type[alias] == null) {
+    build.type([, ...(idx ? [idx] : []), [, ['param', ...param], ['result', ...result]]], ctx)
   }
-  // read param, result from known type
-  else if (ctx.type[idx] != null) ({ param, result } = ctx.type[idx])
 
-  return [idx, param, result]
+  return [ctx.type[alias], param, result]
 }
 
 // consume (param t+)* (result t+)* sequence

@@ -158,7 +158,7 @@
   + avoids binary-stage deref
   - doesn't make build[type] direct return
 
-## [ ] Generic prepare-loop vs section builders
+## [x] Generic prepare-loop vs section builders -> let's try section builders back - most simple & flexible
 
 1. Generic prepare loop
   + generic name handling
@@ -174,3 +174,17 @@
   - duplicate of name, abbrs
     ~ can be reused via funcs?
   + allows not returning anything
+  + easier to search particular parts: less meta stuff
+
+## [x] Sync with wabt binary -> ~~let's not sync, keep meaningful small compiled version~~ likely we have to sync since it's low-hanging fruit
+
+1. Yes
+- debugging time wasted on meaningless compat
++ guaranteed work
+
+2. No
++ compact types
+  - we can't do much here
++ wabt fails some test cases
++ no time wasted
++ better codebase org
