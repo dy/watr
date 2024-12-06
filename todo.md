@@ -46,11 +46,9 @@
     * [x] common parts pre-parse
 * [ ] Optimizations
   * [x] split generic precompile into section builders as was in v1
+  * [ ] introduce more complete ref/deref use
   * [ ] make generic consuming ops for instructions instead of condition checks
-  * [ ] make func init code immediately instead of duplicating code
-  * [ ] make use of deref with id creator for `x[0]?.[0] === '$'` things
-  * [ ] make code insert refs, and then check if there are empty spots in output to show errors
-  * [ ] make code section do generic ops handling, not a bunch of checks
+  * [x] make func init code immediately instead of duplicating code
   * [ ] make use of expr inside of code section, !mb instr groups?
 * [x] elem all use-cases
 * [ ] Print: make it as nice as AI
