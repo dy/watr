@@ -55,7 +55,9 @@ export default (nodes) => {
     for (let item of items) {
       if (!item) { continue } // ignore empty items (like import placeholders)
       count++ // count number of items in section
-      bytes.push(...item)
+      // deref names
+      for (let byte of item) typeof byte === 'number' ? bytes.push(byte) : bytes.push(...uleb(deref(byte)))
+      // bytes.push(...item)
     }
     // ignore empty sections
     if (!bytes.length) continue
@@ -69,6 +71,10 @@ export default (nodes) => {
 
 // consume $id
 const id = nodes => nodes[0]?.[0] === '$' && nodes.shift()
+
+// store / restore idx
+const deref = ([hash, str]) => hash[str]
+const ref = (hash, str) => [hash, str]
 
 // build section binary (non consuming)
 const build = {
@@ -482,7 +488,7 @@ const build = {
       ...parts.flatMap(el => (
         typeof el === 'string' ?
           // $id0 1 2
-          uleb(el[0] === '$' ? (ctx.func[el] ??= ctx.func.length++) : +el) :
+          el[0] === '$' ? [ref(ctx.func, el)] : uleb(+el) :
           // (ref.func a) (item (ref.func 2)) (item ref.func 2)
           [...expr(el[0] === 'item' ? (el.length > 2 ? el.slice(1) : [...el[1]]) : [...el], ctx), 0x0b]
       ))
@@ -490,19 +496,26 @@ const build = {
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
-  // (data (offset (i32.const 0)) (memory ref) "\aa" "\bb"?)
+  // (data (memory ref) (offset (i32.const 0)) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
   data([, ...inits], ctx) {
     let name = id(inits), idx = name ? (ctx.data[name] ??= ctx.data.length) : ctx.data.length,
-      offset, mem
+      offset, mem = [0]
 
-    if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
-    if (inits[0]?.[0] === 'memory') [, mem] = inits.shift()
-    if (inits[0]?.[0] === 'offset') [, offset] = inits.shift()
-    if (!offset && !mem) offset = inits.shift()
-    if (!offset) offset = ['i32.const', 0]
+    // (memory ref)?
+    if (inits[0]?.[0] === 'memory') {
+      [, mem] = inits.shift()
+      mem = mem[0] === '$' ? ctx.memory[mem] : +mem
+      mem = !mem ? [0] : [2, ...uleb(mem)]
+    }
 
-    ctx.data[idx] = [0, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))]
+    // (offset (i32.const 0)) or (i32.const 0)
+    if (typeof inits[0] !== 'string') {
+      offset = inits.shift()
+      if (offset[0] === 'offset') [, offset] = offset
+    }
+    else offset = ['i32.const', 0]
+    ctx.data[idx] = [...mem, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))]
   }
 }
 

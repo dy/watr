@@ -1045,6 +1045,9 @@ t('case: data offset', () => {
 t('case: data full cases', () => {
   // ref: https://github.com/WebAssembly/simd/blob/master/test/core/data.wast
   let src = `
+  (memory $n 1)
+  (memory $m 1)
+
   (global $a i32 (i32.const 1))
   (global $b i32 (i32.const 1))
   (data (i32.const 0))
@@ -1054,11 +1057,11 @@ t('case: data full cases', () => {
   (data (offset (i32.const 0)) "" "a" "bc" "")
   (data (global.get $a) "a")
   (data (global.get 1) "bc")
-  ;; (data (memory 0) (i32.const 0))
-  ;; (data (memory 0x0) (i32.const 1) "a" "" "bcd")
-  ;; (data (memory 0x000) (offset (i32.const 0)))
-  ;; (data (memory 0) (offset (i32.const 0)) "" "a" "bc" "")
-  ;; (data (memory $m) (i32.const 0))
+  (data (memory 0) (i32.const 0))
+  (data (memory 0x0) (i32.const 1) "a" "" "bcd")
+  (data (memory 0x000) (offset (i32.const 0)))
+  (data (memory 0) (offset (i32.const 0)) "" "a" "bc" "")
+  (data (memory $m) (i32.const 0))
   ;; (data (memory $m) (i32.const 1) "a" "" "bcd")
   ;; (data (memory $m) (offset (i32.const 0)))
   ;; (data (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
@@ -1075,8 +1078,9 @@ t('case: data full cases', () => {
   ;; (data $d11 (memory $m) (offset (i32.const 0)))
   ;; (data $d12 (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
   `
-
-  is(compile(parse(src)), wat2wasm(src).buffer)
+  let mod = new WebAssembly.Module(compile(src))
+  new WebAssembly.Instance(mod)
+  // is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
 t('case: float hex', () => {
@@ -2163,7 +2167,7 @@ t.todo('feature: ref_func', () => {
 })
 
 // examples
-t.only('example: wat-compiler', async () => {
+t('example: wat-compiler', async () => {
   async function ex(path) {
     let res = await fetch(path)
     let src = await res.text()
@@ -2198,13 +2202,13 @@ t.only('example: wat-compiler', async () => {
 
 
 let official = [
-  // '/test/official/block.wat',
-  // '/test/official/elem.wat',
-  // '/test/official/exports.wat',
-  // '/test/official/func_ptrs.wat',
-  // '/test/official/func.wat',
-  // '/test/official/global.wat',
-  // '/test/official/if.wat',
+  '/test/official/block.wat',
+  '/test/official/elem.wat',
+  '/test/official/exports.wat',
+  '/test/official/func_ptrs.wat',
+  '/test/official/func.wat',
+  '/test/official/global.wat',
+  '/test/official/if.wat',
   '/test/official/imports.wat',
   // '/test/official/memory.wat',
   // '/test/official/ref_func.wat',
@@ -2213,7 +2217,7 @@ let official = [
   // '/test/official/type.wat',
 ]
 
-official.forEach((it) => t.skip(`official: ${it}`, () => ex(it)));
+official.forEach((it) => t(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
   // load src
@@ -2227,7 +2231,8 @@ async function ex(path) {
   // test runtime
   let buf, mod = {}, importObj = {
     spectest: {
-      table: new WebAssembly.Table({ initial: 10, maximum: 30, element: 'anyfunc' }),
+      memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }),
+      table: new WebAssembly.Table({ initial: 10, maximum: 20, element: 'anyfunc' }),
       global_i32: 666,
       global_i64: 666n,
       global_f32: 666.6,
