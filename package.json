@@ -11,7 +11,8 @@
   },
   "type": "module",
   "scripts": {
-    "test": "node test"
+    "test": "node test",
+    "postinstall": "git submodule update --init --recursive"
   },
   "repository": {
     "type": "git",
