@@ -1,7 +1,6 @@
 import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
-// import Wabt from './lib/wabt.js'
 import Wabt from './lib/libwabt.js'
 import print from '../src/print.js'
 
@@ -1062,24 +1061,25 @@ t('case: data full cases', () => {
   (data (memory 0x000) (offset (i32.const 0)))
   (data (memory 0) (offset (i32.const 0)) "" "a" "bc" "")
   (data (memory $m) (i32.const 0))
-  ;; (data (memory $m) (i32.const 1) "a" "" "bcd")
-  ;; (data (memory $m) (offset (i32.const 0)))
-  ;; (data (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
-  ;; (data $d1 (i32.const 0))
-  ;; (data $d2 (i32.const 1) "a" "" "bcd")
-  ;; (data $d3 (offset (i32.const 0)))
-  ;; (data $d4 (offset (i32.const 0)) "" "a" "bc" "")
-  ;; (data $d5 (memory 0) (i32.const 0))
-  ;; (data $d6 (memory 0x0) (i32.const 1) "a" "" "bcd")
-  ;; (data $d7 (memory 0x000) (offset (i32.const 0)))
-  ;; (data $d8 (memory 0) (offset (i32.const 0)) "" "a" "bc" "")
-  ;; (data $d9 (memory $m) (i32.const 0))
-  ;; (data $d10 (memory $m) (i32.const 1) "a" "" "bcd")
-  ;; (data $d11 (memory $m) (offset (i32.const 0)))
-  ;; (data $d12 (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
+  (data (memory $m) (i32.const 1) "a" "" "bcd")
+  (data (memory $m) (offset (i32.const 0)))
+  (data (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
+  (data $d1 (i32.const 0))
+  (data $d2 (i32.const 1) "a" "" "bcd")
+  (data $d3 (offset (i32.const 0)))
+  (data $d4 (offset (i32.const 0)) "" "a" "bc" "")
+  (data $d5 (memory 0) (i32.const 0))
+  (data $d6 (memory 0x0) (i32.const 1) "a" "" "bcd")
+  (data $d7 (memory 0x000) (offset (i32.const 0)))
+  (data $d8 (memory 0) (offset (i32.const 0)) "" "a" "bc" "")
+  (data $d9 (memory $m) (i32.const 0))
+  (data $d10 (memory $m) (i32.const 1) "a" "" "bcd")
+  (data $d11 (memory $m) (offset (i32.const 0)))
+  (data $d12 (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
   `
   let mod = new WebAssembly.Module(compile(src))
   new WebAssembly.Instance(mod)
+  // NOTE: https://github.com/WebAssembly/wabt/issues/2518 - libwabt is corrupted
   // is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
@@ -1175,8 +1175,8 @@ t('feature: bulk memory', () => {
 t('feature: simd load/store', () => {
   // ref: https://github.com/WebAssembly/simd/tree/master/test/core/simd
   let src = `;; Load/Store v128 data with different valid offset/alignment
-    ;; (data (i32.const 0) "\\00\\01\\02\\03\\04\\05\\06\\07\\08\\09\\10\\11\\12\\13\\14\\15")
-    ;; (data (offset (i32.const 65505)) "\\16\\17\\18\\19\\20\\21\\22\\23\\24\\25\\26\\27\\28\\29\\30\\31")
+    (data (i32.const 0) "\\00\\01\\02\\03\\04\\05\\06\\07\\08\\09\\10\\11\\12\\13\\14\\15")
+    (data (offset (i32.const 65505)) "\\16\\17\\18\\19\\20\\21\\22\\23\\24\\25\\26\\27\\28\\29\\30\\31")
 
     (func (param $i i32) (result v128)
       (v128.load (local.get $i))                   ;; 0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 0x09 0x10 0x11 0x12 0x13 0x14 0x15
