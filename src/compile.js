@@ -27,11 +27,10 @@ INSTR.forEach((instr, i) => {
 export default (nodes) => {
   // normalize to (module ...) form
   if (typeof nodes === 'string') nodes = parse(nodes); else nodes = [...nodes]
-  if (nodes[0] === 'module') nodes.shift()
-  else if (typeof nodes[0] === 'string') nodes = [nodes]
 
-  // (module $id? ...)
-  nodes[0]?.[0] === '$' && nodes.shift();
+  // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
+  if (nodes[0] === 'module') nodes.shift(), id(nodes)
+  else if (typeof nodes[0] === 'string') nodes = [nodes]
 
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
   // FIXME: make direct binary instead (faster)
@@ -396,6 +395,12 @@ const build = {
     // import
     if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['memory', ...(name ? [name] : []), ...node]], ctx)
 
+    // data abbr
+    if (node[0]?.[0] === 'data') {
+      let [,...data] = node.shift(), m = ''+Math.ceil(data.map(s => s.slice(1,-1)).join('').length / 65536) // FIXME: figure out actual data size
+      build.data([,['memory', idx],['i32.const',0], ...data], ctx), node = [m, m]
+    }
+
     ctx.memory[idx] = limits(node)
   },
 
@@ -515,7 +520,7 @@ const build = {
       if (offset[0] === 'offset') [, offset] = offset
     }
     else offset = ['i32.const', 0]
-    ctx.data[idx] = [...mem, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i[0] === '"' ? i.slice(1, -1) : i).join(''))]
+    ctx.data[idx] = [...mem, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i.slice(1, -1)).join(''))]
   }
 }
 
