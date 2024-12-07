@@ -90,7 +90,7 @@
     - too much of fancy constructs/wrappers
 
 
-## [x] Wrap to module? -> likely yes - no much sense for instructions without context
+## [x] Wrap to module? -> ~~likely yes - no much sense for instructions without context~~ just follow standard abbr: (module $id ...) === ...
 
 1. Convert single/multiple/module always to module
   + ease of use
@@ -125,7 +125,7 @@
   + shortens parse code
   + likely we need to use it here: we can use late-binding for name/ref and so for typerefs
 
-## [ ] Hoisting -> `ctx.kind[name] ??= ctx.kind.length++` and then after-init
+## [x] Hoisting -> ~~`ctx.kind[name] ??= ctx.kind.length++` and then after-init~~ must be on-par with wabt/standard to keep proper indices
 
 1. Init nodes in order of sections
   - not necessarily helpful: global can depend on global declared later

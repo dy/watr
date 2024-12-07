@@ -2258,6 +2258,7 @@ async function ex(path) {
       } catch (e) { console.warn(e) }
 
       if (wabtBuffer) is(buf, wat2wasm(print(node)).buffer)
+      // buf = wabtBuffer
 
       let m = new WebAssembly.Module(buf)
       let inst = new WebAssembly.Instance(m, importObj)
@@ -2268,22 +2269,21 @@ async function ex(path) {
     else if (node[0] === 'register') {
       // include exports from prev module
       let [, nm] = node
-      // console.log('register', nm, cur)
+      console.log('register', nm)
       importObj[nm.slice(1, -1)] = cur
     }
     else if (node[0] === 'assert_return') {
       let [, [kind, ...args], ...expects] = node;
       let m = args[0]?.[0] === '$' ? mod[args.shift()] : cur,
-        nm = args.shift().slice(1, -1);
+      nm = args.shift().slice(1, -1);
+      console.log('assert', kind, nm, ...args, ...expects)
       args = args.map(val)
       expects = expects?.map(val)
 
       if (kind === 'invoke') {
-        // console.log('invoke', nm, args, expects)
         is(m[nm](...args), expects.length > 1 ? expects : expects[0])
       }
       else if (kind === 'get') {
-        // console.log('get', m, nm, ...expects)
         is(m[nm].value, expects[0])
       }
     }
@@ -2294,8 +2294,13 @@ async function ex(path) {
 }
 
 // get value from [type, value] args
-var f32arr = new Float32Array(1)
-const val = ([t, v]) => t === 'ref.null' ? null : t === 'i64.const' ? BigInt(v) : t === 'f32.const' ? (f32arr[0] = +v, f32arr[0]) : +v
+var f32arr = new Float32Array(1), i32arr = new Int32Array(1), i64arr = new BigInt64Array(1)
+const val = ([t, v]) =>
+    t === 'ref.null' ? null :
+    t === 'i64.const' ? (i64arr[0] = v, i64arr[0]) :
+    t === 'f32.const' ? (f32arr[0] = v, f32arr[0]) :
+    t === 'i32.const' ? (i32arr[0] = v, i32arr[0]) :
+    Number(v)
 
 // save binary (asm buffer) to file
 const save = (buf) => {
