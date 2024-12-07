@@ -1101,7 +1101,7 @@ t('case: error on unknown instruction', () => {
   }, /i32.shr/)
 })
 
-t.skip('case: export order initialize', () => {
+t('case: export order initialize', () => {
   let src
   src = `
   (memory (export "m") 5)
@@ -2202,22 +2202,22 @@ t('example: wat-compiler', async () => {
 
 
 let official = [
-  '/test/official/block.wat',
-  '/test/official/elem.wat',
-  '/test/official/exports.wat',
-  '/test/official/func_ptrs.wat',
-  '/test/official/func.wat',
-  '/test/official/global.wat',
-  '/test/official/if.wat',
-  '/test/official/imports.wat',
-  // '/test/official/memory.wat',
-  // '/test/official/ref_func.wat',
-  // '/test/official/start.wat',
-  // '/test/official/table.wat',
-  // '/test/official/type.wat',
+  '/test/official/block.wast',
+  '/test/official/elem.wast',
+  '/test/official/exports.wast',
+  '/test/official/func_ptrs.wast',
+  '/test/official/func.wast',
+  '/test/official/global.wast',
+  '/test/official/if.wast',
+  '/test/official/imports.wast',
+  '/test/official/memory.wast',
+  '/test/official/ref_func.wast',
+  '/test/official/start.wast',
+  '/test/official/table.wast',
+  '/test/official/type.wast',
 ]
 
-official.forEach((it) => t(`official: ${it}`, () => ex(it)));
+official.forEach((it) => t.only(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
   // load src
