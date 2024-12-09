@@ -34,29 +34,32 @@ export default (nodes) => {
 
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
   // FIXME: make direct binary instead (faster)
-  const sections = {
-    type: [], import: [], func: [], table: [], memory: [], global: [], export: [], start: [], elem: [], code: [], data: []
-  }
+  const sections = []
+  for (let kind in SECTION) sections.push(sections[kind] = [])
+
   const binary = [
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
   ]
 
-  // we have to init types first to have correct indices (otherwise func can init block types via code)
-  nodes = nodes.filter(node => node[0] !== 'type' || build.type(node, sections))
+  // sort nodes by sections
+  let sortedNodes = []
+  for (let kind in SECTION) sortedNodes.push(sortedNodes[kind] = [])
+  for (let node of nodes) sortedNodes[node[0]].push(node)
 
   // build sections
-  for (let node of nodes) build[node[0]](node, sections)
+  for (let nodes of sortedNodes)
+    for (let node of nodes) build[node[0]](node, sections)
 
   // build binary
-  for (let name in sections) {
-    let items = sections[name], secCode = SECTION[name], bytes = [], count = 0
+  for (let secCode = 0; secCode < sections.length; secCode++) {
+    let items = sections[secCode], bytes = [], count = 0
     for (let item of items) {
       if (!item) { continue } // ignore empty items (like import placeholders)
       count++ // count number of items in section
       // deref names
-      for (let byte of item) typeof byte === 'number' ? bytes.push(byte) : bytes.push(...uleb(deref(byte)))
-      // bytes.push(...item)
+      // for (let byte of item) typeof byte === 'number' ? bytes.push(byte) : bytes.push(...uleb(deref(byte)))
+      bytes.push(...item)
     }
     // ignore empty sections
     if (!bytes.length) continue

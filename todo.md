@@ -46,7 +46,8 @@
     * [x] common parts pre-parse
 * [ ] Optimizations
   * [x] split generic precompile into section builders as was in v1
-  * [ ] introduce more complete ref/deref use
+  * [x] ~~introduce more complete ref/deref use~~ -> we can't really solve full hoisting issue (types, code refs)
+  * [ ] make IR: types indexing, code deferring
   * [ ] make generic consuming ops for instructions instead of condition checks
   * [x] make func init code immediately instead of duplicating code
   * [ ] make use of expr inside of code section, !mb instr groups?
@@ -56,7 +57,7 @@
 * [ ] Feature: ref-types
 * [ ] Feature: gc
 * [ ] Official tests
-  * [ ] Include testsuite repo
+  * [x] Include testsuite repo
   * [ ] Complete custom test instructions
 * [x] Compiler: Named/multiple memory;
 * [x] Compiler: Named/multiple tables;
