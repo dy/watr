@@ -43,22 +43,54 @@ export default (nodes) => {
   ]
 
   // sort nodes by sections
-  let sortedNodes = []
-  for (let kind in SECTION) sortedNodes.push(sortedNodes[kind] = [])
-  for (let node of nodes) sortedNodes[node[0]].push(node)
+  // TODO: make this more elegant
+  let nodeGroups = []
+  for (let kind in SECTION) nodeGroups.push(nodeGroups[kind] = [])
 
-  // build sections
-  for (let nodes of sortedNodes)
-    for (let node of nodes) build[node[0]](node, sections)
+  for (let [kind, ...node] of nodes) {
+    // index, alias
+    let name = id(node), idx = nodeGroups[kind].length;
+    if (name) sections[kind][name] = idx; // save alias
 
-  // build binary
+    // export abbr
+    // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
+    while (node[0]?.[0] === 'export') nodeGroups.export.push([node.shift()[1], [kind, idx]])
+
+    // import abbr
+    // (table|memory|global|func id? (import m n) type) -> (import m n (table|memory|global|func id? type))
+    if (node[0]?.[0] === 'import') node = [...node.shift(), [kind, ...(name ? [name] : []), ...node]], kind = node.shift()
+
+    // table abbr
+    // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
+    if (node[1]?.[0] === 'elem') {
+      let [reftype, [, ...els]] = node
+      node = [els.length, els.length, reftype]
+      nodeGroups.elem.push([['table', name || nodeGroups.table.length], ['i32.const', '0'],  typeof els[0] === 'string' ? 'func' : reftype, ...els])
+    }
+
+    // import increments corresponding section index
+    // FIXME: can be turned into shallow node
+    if (kind === 'import') {
+      let [mod, field, [kind, ...dfn]] = node
+      let name = id(dfn)
+      if (name) sections[kind][name] = nodeGroups[kind].length
+      nodeGroups[kind].length++
+      node[2] = [kind, ...dfn]
+    }
+    else if (kind === 'start') {name && node.unshift(name);}
+
+    nodeGroups[kind].push(node)
+  }
+
+  // build sections binaries
+  for (let kind in SECTION) nodeGroups[kind].map((node,i) => !node ? [] : build[kind](i, node, sections))
+
+  // build final binary
   for (let secCode = 0; secCode < sections.length; secCode++) {
     let items = sections[secCode], bytes = [], count = 0
     for (let item of items) {
       if (!item) { continue } // ignore empty items (like import placeholders)
       count++ // count number of items in section
-      // deref names
-      // for (let byte of item) typeof byte === 'number' ? bytes.push(byte) : bytes.push(...uleb(deref(byte)))
       bytes.push(...item)
     }
     // ignore empty sections
@@ -74,17 +106,12 @@ export default (nodes) => {
 // consume $id
 const id = nodes => nodes[0]?.[0] === '$' && nodes.shift()
 
-// store / restore idx
-const deref = ([hash, str]) => hash[str]
-const ref = (hash, str) => [hash, str]
-
 // build section binary (non consuming)
 const build = {
   // (type $id? (func params result))
   // we cannot squash types since indices can refer to them
-  type([, ...node], ctx) {
-    let name = id(node), idx = name ? (ctx.type[name] ??= ctx.type.length) : ctx.type.length,
-      [, ...sig] = node?.[0] || [], [param, result] = paramres(sig)
+  type(idx, [...node], ctx) {
+    let [, ...sig] = node?.[0] || [], [param, result] = paramres(sig)
 
     ctx.type[idx] = Object.assign(
       [TYPE.func, ...vec(param.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))],
@@ -93,42 +120,31 @@ const build = {
     ctx.type[param + '>' + result] ??= idx // alias for quick search (don't increment if exists)
   },
 
-  // (import "math" "add" (func|table|global|memory $name? typedef?))
-  import([, mod, field, [kind, ...parts]], ctx) {
-    let nm = parts[0]?.[0] === '$' && parts.shift(), details
-
-    // create stub
-    if (nm[0] === '$') ctx[kind][nm] = ctx[kind].length
-    ctx[kind].length++ // inc counter
+  // (import "math" "add" (func|table|global|memory typedef?))
+  import(_, [mod, field, [kind, ...dfn]], ctx) {
+    let details
 
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
-      let [typeIdx] = typeuse(parts, ctx)
+      let [typeIdx] = typeuse(dfn, ctx)
       details = uleb(typeIdx)
     }
     else if (kind === 'memory') {
-      details = limits(parts)
+      details = limits(dfn)
     }
     else if (kind === 'global') {
-      let [type] = parts, mut = type[0] === 'mut' ? 1 : 0
+      let [type] = dfn, mut = type[0] === 'mut' ? 1 : 0
       details = [TYPE[mut ? type[1] : type], mut]
     }
     else if (kind === 'table') {
-      details = [TYPE[parts.pop()], ...limits(parts)]
+      details = [TYPE[dfn.pop()], ...limits(dfn)]
     }
 
     ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
-  func([, ...node], ctx) {
-    let name = id(node), idx = name ? (ctx.func[name] ??= ctx.func.length) : ctx.func.length
-
-    // exports
-    while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['func', idx]], ctx)
-    // import abbr
-    if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['func', ...(name ? [name] : []), ...node]], ctx)
-
+  func(idx, [...node], ctx) {
     const [typeidx, param, result] = typeuse(node, ctx)
 
     ctx.func[idx] = uleb(typeidx)
@@ -208,7 +224,7 @@ const build = {
 
       // ref.func $id
       else if (opCode == 0xd2) {
-        immed = uleb(args[0][0] === '$' ? (ctx.func[args.shift()] ??= ctx.func.length++) : +args.shift())
+        immed = uleb(args[0][0] === '$' ? ctx.func[args.shift()] : +args.shift())
       }
       // ref.null
       else if (opCode == 0xd0) {
@@ -237,19 +253,19 @@ const build = {
 
       // (global.get $id), (global.set $id)
       else if (opCode == 0x23 || opCode == 0x24) {
-        immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] ??= ctx.global.length++ : +args.shift())
+        immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] : +args.shift())
       }
 
       // (call id ...nodes)
       else if (opCode == 0x10) {
         let fnName = args.shift()
-        immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] ??= ctx.func.length++ : +fnName);
+        immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] : +fnName);
         // FIXME: how to get signature of imported function
       }
 
       // (call_indirect tableIdx? (type $typeName) (idx) ...nodes)
       else if (opCode == 0x11) {
-        let tableidx = args[0]?.[0] === '$' ? ctx.table[args.shift()] ??= ctx.table.length++ : 0
+        let tableidx = args[0]?.[0] === '$' ? ctx.table[args.shift()] : 0
         let [typeidx] = typeuse(args, ctx)
         immed = [...uleb(typeidx), ...uleb(tableidx)]
       }
@@ -339,7 +355,7 @@ const build = {
 
       // (table.get $id)
       else if (opCode == 0x25 || opCode == 0x26) {
-        immed = uleb(args[0]?.[0] === '$' ? ctx.table[args.shift()] ??= ctx.table.length++ : +args.shift())
+        immed = uleb(args[0]?.[0] === '$' ? ctx.table[args.shift()] : +args.shift())
       }
 
       // table.grow id, table.size id, table.fill id
@@ -370,52 +386,24 @@ const build = {
   },
 
   // (table id? 1 2? funcref)
-  table([, ...node], ctx) {
-    let name = id(node), idx = name ? (ctx.table[name] ??= ctx.table.length) : ctx.table.length
-
-    // exports
-    while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['table', idx]], ctx)
-    // import
-    if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['table', ...(name ? [name] : []), ...node]], ctx)
-
-    // elem abbr
-    // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-    if (node[1]?.[0] === 'elem') {
-      let [reftype, [, ...els]] = node
-      node = [els.length, els.length, reftype]
-      build.elem([, ['table', idx], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els], ctx)
-    }
-
+  table(idx, [...node], ctx) {
     ctx.table[idx] = [TYPE[node.pop()], ...limits(node)]
   },
 
   // (memory id? export* min max shared)
-  memory([, ...node], ctx) {
-    let name = id(node), idx = name ? (ctx.memory[name] ??= ctx.memory.length) : ctx.memory.length
-
-    // exports
-    while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['memory', idx]], ctx)
-    // import
-    if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['memory', ...(name ? [name] : []), ...node]], ctx)
-
+  memory(idx, [...node], ctx) {
+    // FIXME: move away
     // data abbr
     if (node[0]?.[0] === 'data') {
       let [,...data] = node.shift(), m = ''+Math.ceil(data.map(s => s.slice(1,-1)).join('').length / 65536) // FIXME: figure out actual data size
-      build.data([,['memory', idx],['i32.const',0], ...data], ctx), node = [m, m]
+      build.data(idx, [,['memory', idx],['i32.const',0], ...data], ctx), node = [m, m]
     }
 
     ctx.memory[idx] = limits(node)
   },
 
   // (global $id? (mut i32) (i32.const 42))
-  global([, ...node], ctx) {
-    let name = id(node), idx = name ? (ctx.global[name] ??= ctx.global.length) : ctx.global.length
-
-    // exports
-    while (node[0]?.[0] === 'export') build.export([, node.shift()[1], ['global', idx]], ctx)
-    // import
-    if (node[0]?.[0] === 'import') return build.import([...node.shift(), ['global', ...(name ? [name] : []), ...node]], ctx)
-
+  global(idx, [...node], ctx) {
     let [type] = node, mut = type[0] === 'mut' ? 1 : 0
 
     let [, [...init]] = node
@@ -423,14 +411,14 @@ const build = {
   },
 
   //  (export "name" (func|table|mem $name|idx))
-  export([, nm, [kind, id]], ctx) {
+  export(_, [nm, [kind, id]], ctx) {
     // put placeholder to future-init
-    let idx = id[0] === '$' ? (ctx[kind][id] ??= ctx[kind].length++) : +id
+    let idx = id[0] === '$' ? ctx[kind][id] : +id
     ctx.export.push([...str(nm), KIND[kind], ...uleb(idx)])
   },
 
   // (start $main)
-  start([, id], ctx) {
+  start(_,[id], ctx) {
     id = id[0] === '$' ? ctx.func[id] : +id
     ctx.start[0] = uleb(id)
   },
@@ -441,9 +429,8 @@ const build = {
   // active: (elem (table idx)? (offset expr)|(expr) elem*)
   // elems: funcref|externref (item expr)|expr (item expr)|expr
   // idxs: func? $id0 $id1
-  elem([, ...parts], ctx) {
-    let name = id(parts), idx = name ? (ctx.elem[name] ??= ctx.elem.length) : ctx.elem.length,
-      tabidx, offset, mode = 0b000, reftype
+  elem(idx,[...parts], ctx) {
+    let tabidx, offset, mode = 0b000, reftype
 
     // declare?
     if (parts[0] === 'declare') parts.shift(), mode |= 0b010
@@ -451,7 +438,7 @@ const build = {
     // table?
     if (parts[0][0] === 'table') {
       [, tabidx] = parts.shift()
-      tabidx = tabidx[0] === '$' ? (ctx.table[tabidx] ??= ctx.table.length++) : +tabidx
+      tabidx = tabidx[0] === '$' ? ctx.table[tabidx] : +tabidx
       // ignore table=0
       if (tabidx) mode |= 0b010
     }
@@ -496,7 +483,7 @@ const build = {
       ...parts.flatMap(el => (
         typeof el === 'string' ?
           // $id0 1 2
-          el[0] === '$' ? [ref(ctx.func, el)] : uleb(+el) :
+          uleb(el[0] === '$' ? ctx.func[el] : +el) :
           // (ref.func a) (item (ref.func 2)) (item ref.func 2)
           [...expr(el[0] === 'item' ? (el.length > 2 ? el.slice(1) : [...el[1]]) : [...el], ctx), 0x0b]
       ))
@@ -506,9 +493,8 @@ const build = {
   // (data (i32.const 0) "\aa" "\bb"?)
   // (data (memory ref) (offset (i32.const 0)) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
-  data([, ...inits], ctx) {
-    let name = id(inits), idx = name ? (ctx.data[name] ??= ctx.data.length) : ctx.data.length,
-      offset, mem = [0]
+  data(idx, [...inits], ctx) {
+    let offset, mem = [0]
 
     // (memory ref)?
     if (inits[0]?.[0] === 'memory') {
@@ -535,7 +521,7 @@ const expr = (node, ctx) => {
   let op = node.shift(), [type, cmd] = op.split('.')
 
   // (global.get idx)
-  if (type === 'global') return [0x23, ...uleb(node[0][0] === '$' ? ctx.global[node[0]] ??= ctx.global.length++ : +node)]
+  if (type === 'global') return [0x23, ...uleb(node[0][0] === '$' ? ctx.global[node[0]] : +node)]
 
   // (v128.const i32x4 1 2 3 4)
   if (type === 'v128') return [0xfd, 0x0c, ...v128(node)]
@@ -546,7 +532,7 @@ const expr = (node, ctx) => {
   // (ref.func $x) or (ref.null func|extern)
   if (type === 'ref') {
     return cmd === 'func' ?
-      [0xd2, ...uleb(node[0][0] === '$' ? (ctx.func[node[0]] ??= ctx.func.length++) : +node)] :
+      [0xd2, ...uleb(node[0][0] === '$' ? ctx.func[node[0]] : +node)] :
       // heaptype
       [0xd0, TYPE[node[0] + 'ref']] // func->funcref, extern->externref
   }
@@ -606,7 +592,7 @@ const typeuse = (nodes, ctx) => {
   ;[param, result] = paramres(nodes), alias = param + '>' + result
   // or register new type
   if (ctx.type[alias] == null) {
-    build.type([, ...(idx ? [idx] : []), [, ['param', ...param], ['result', ...result]]], ctx)
+    build.type(ctx.type.length, [[, ['param', ...param], ['result', ...result]]], ctx)
   }
 
   return [ctx.type[alias], param, result]
