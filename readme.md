@@ -106,7 +106,7 @@ watr | 5 kb | 6000
 <!--
 ## Projects using watr
 
-* [auro](https://github.com/audio-lab/auro) – audio processing language
+* [piezo](https://github.com/audio-lab/piezo) – audio processing language
 -->
 
 <!--

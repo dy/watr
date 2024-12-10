@@ -31,7 +31,9 @@
     "wabt",
     "pretty-print",
     "webassembly",
-    "wasm-text"
+    "wasm-text",
+    "wast",
+    "wat-compiler"
   ],
   "author": "Dmitry Iv",
   "license": "MIT",
