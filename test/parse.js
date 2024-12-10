@@ -108,8 +108,11 @@ t('parse: hex', () => {
 })
 
 t('parse: comments', () => {
-  const tokens = parse('(an (; inline ;) comment\n;; line comment\n1)')
+  let tokens = parse('(an (; inline ;) comment\n;; line comment\n1)')
   is(tokens, ['an', 'comment', '1'])
+
+  tokens = parse('(an (; inline ;) comment\n;; line comment\n1)', {comments: true})
+  is(tokens, ['an', '(; inline ;)', 'comment', ';; line comment\n', '1'])
 })
 
 t('parse: nul', () => {
