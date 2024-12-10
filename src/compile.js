@@ -30,7 +30,15 @@ export default (nodes) => {
 
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
   if (nodes[0] === 'module') nodes.shift(), id(nodes)
+  // single node, not module
   else if (typeof nodes[0] === 'string') nodes = [nodes]
+
+  // binary abbr "\00" "\0x61" ...
+  // FIXME: be slightly smarter here: parse by sections, optimize them in default way
+  if (nodes[0] === 'binary') {
+    nodes.shift()
+    return new Uint8Array(str(nodes.map(i => i.slice(1, -1)).join('')))
+  }
 
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
   // FIXME: make direct binary instead (faster)
@@ -149,7 +157,7 @@ const build = {
       details = [TYPE[dfn.pop()], ...limits(dfn)]
     }
 
-    ctx.import.push([...str(mod), ...str(field), KIND[kind], ...details])
+    ctx.import.push([...vec(str(mod.slice(1,-1))), ...vec(str(field.slice(1,-1))), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
@@ -416,7 +424,7 @@ const build = {
   export(_, [nm, [kind, id]], ctx) {
     // put placeholder to future-init
     let idx = id[0] === '$' ? ctx[kind][id] : +id
-    ctx.export.push([...str(nm), KIND[kind], ...uleb(idx)])
+    ctx.export.push([...vec(str(nm.slice(1,-1))), KIND[kind], ...uleb(idx)])
   },
 
   // (start $main)
@@ -518,7 +526,7 @@ const build = {
       if (offset[0] === 'offset') [, offset] = offset
     }
     else offset = ['i32.const', 0]
-    ctx.data[idx] = [...mem, ...expr([...offset], ctx), 0x0b, ...str(inits.map(i => i.slice(1, -1)).join(''))]
+    ctx.data[idx] = [...mem, ...expr([...offset], ctx), 0x0b, ...vec(str(inits.map(i => i.slice(1, -1)).join('')))]
   }
 }
 
@@ -636,19 +644,17 @@ const memarg = (args) => {
 }
 
 // escape codes
-const escape = { n: 10, r: 13, t: 9, v: 1, '\\': 92 }
+const escape = { n: 10, r: 13, t: 9, v: 1, '"':34, "'": 39, '\\': 92 }
 
 // build string binary
 const str = str => {
-  str = str[0] === '"' ? str.slice(1, -1) : str
   let res = [], i = 0, c, BSLASH = 92
   // https://webassembly.github.io/spec/core/text/values.html#strings
   for (; i < str.length;) {
     c = str.charCodeAt(i++)
     res.push(c === BSLASH ? escape[str[i++]] || parseInt(str.slice(i - 1, ++i), 16) : c)
   }
-
-  return vec(res)
+  return res
 }
 
 // build limits sequence (non-consuming)
