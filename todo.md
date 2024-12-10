@@ -59,7 +59,8 @@
 * [ ] Feature: gc
 * [ ] Official tests
   * [x] Include testsuite repo
-  * [ ] Test instructions: assert_invalid etc
+  * [ ] All test instructions: assert_invalid
+  * [ ] All tests
 * [x] Compiler: Named/multiple memory;
 * [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?

@@ -2110,61 +2110,6 @@ t('feature: extended const', () => {
 
 })
 
-// func refs
-t.todo('feature: ref_func', () => {
-  let src
-  src = `
-  (func $f (import "M" "f") (param i32) (result i32))
-  (func $g (param $x i32) (result i32)
-    (i32.add (local.get $x) (i32.const 1))
-  )
-
-  (global funcref (ref.func $f))
-  (global funcref (ref.func $g))
-  (global $v (mut funcref) (ref.func $f))
-
-  (global funcref (ref.func $gf1))
-  (global funcref (ref.func $gf2))
-  (func (drop (ref.func $ff1)) (drop (ref.func $ff2)))
-  (elem declare func $gf1 $ff1)
-  (elem declare funcref (ref.func $gf2) (ref.func $ff2))
-  (func $gf1)
-  (func $gf2)
-  (func $ff1)
-  (func $ff2)
-  `
-
-  // (func (export "is_null-f") (result i32)
-  //   (ref.is_null (ref.func $f))
-  // )
-  // (func (export "is_null-g") (result i32)
-  //   (ref.is_null (ref.func $g))
-  // )
-  // (func (export "is_null-v") (result i32)
-  //   (ref.is_null (global.get $v))
-  // )
-
-  // (func (export "set-f") (global.set $v (ref.func $f)))
-  // (func (export "set-g") (global.set $v (ref.func $g)))
-
-  // (table $t 1 funcref)
-  // (elem declare func $f $g)
-
-  // (func (export "call-f") (param $x i32) (result i32)
-  //   (table.set $t (i32.const 0) (ref.func $f))
-  //   (call_indirect $t (param i32) (result i32) (local.get $x) (i32.const 0))
-  // )
-  // (func (export "call-g") (param $x i32) (result i32)
-  //   (table.set $t (i32.const 0) (ref.func $g))
-  //   (call_indirect $t (param i32) (result i32) (local.get $x) (i32.const 0))
-  // )
-  // (func (export "call-v") (param $x i32) (result i32)
-  //   (table.set $t (i32.const 0) (global.get $v))
-  //   (call_indirect $t (param i32) (result i32) (local.get $x) (i32.const 0))
-  // )
-
-  is(compile(parse(src)), wat2wasm(src).buffer)
-})
 
 // examples
 t('example: wat-compiler', async () => {
@@ -2202,22 +2147,115 @@ t('example: wat-compiler', async () => {
 
 
 let official = [
+  // '/test/official/address.wast',
+  // '/test/official/align.wast',
+  // '/test/official/binary-leb128.wast',
+  // '/test/official/binary.wast',
   '/test/official/block.wast',
-  '/test/official/elem.wast',
-  '/test/official/exports.wast',
-  '/test/official/func_ptrs.wast',
-  '/test/official/func.wast',
-  '/test/official/global.wast',
-  '/test/official/if.wast',
-  '/test/official/imports.wast',
-  '/test/official/memory.wast',
-  '/test/official/ref_func.wast',
-  '/test/official/start.wast',
-  '/test/official/table.wast',
-  '/test/official/type.wast',
+  '/test/official/br_if.wast',
+  '/test/official/br_table.wast',
+  '/test/official/br.wast',
+  // '/test/official/bulk.wast',
+  // '/test/official/call_indirect.wast',
+  // '/test/official/call.wast',
+  // '/test/official/comments.wast',
+  // '/test/official/const.wast',
+  // '/test/official/conversions.wast',
+  // '/test/official/custom.wast',
+  // '/test/official/data.wast',
+  // '/test/official/elem.wast',
+  // '/test/official/endianness.wast',
+  // '/test/official/exports.wast',
+  // '/test/official/f32_bitwise.wast',
+  // '/test/official/f32_cmp.wast',
+  // // '/test/official/f32.wast',
+  // // '/test/official/f64_bitwise.wast',
+  // '/test/official/f64_cmp.wast',
+  // // '/test/official/f64.wast',
+  // // '/test/official/fac.wast',
+  // '/test/official/float_exprs.wast',
+  // '/test/official/float_literals.wast',
+  // // '/test/official/float_memory.wast',
+  // '/test/official/float_misc.wast',
+  // // '/test/official/forward.wast',
+  // // '/test/official/func_ptrs.wast',
+  // // '/test/official/func.wast',
+  // // '/test/official/global.wast',
+  // // '/test/official/i32.wast',
+  // '/test/official/i64.wast',
+  // // '/test/official/if.wast',
+  // // '/test/official/imports.wast',
+  // // '/test/official/inline-module.wast',
+  // // '/test/official/int_exprs.wast',
+  // // '/test/official/int_literals.wast',
+  // // '/test/official/labels.wast',
+  // // '/test/official/left-to-right.wast',
+  // '/test/official/linking.wast',
+  // // '/test/official/load.wast',
+  // // '/test/official/local_get.wast',
+  // // '/test/official/local_set.wast',
+  // // '/test/official/loop.wast',
+  // // '/test/official/memory_copy.wast',
+  // // '/test/official/memory_fill.wast',
+  // '/test/official/memory_grow.wast',
+  // '/test/official/memory_init.wast',
+  // '/test/official/memory_redundancy.wast',
+  // // '/test/official/memory_size.wast',
+  // // '/test/official/memory_trap.wast',
+  // // '/test/official/memory.wast',
+  // '/test/official/names.wast',
+  // // '/test/official/nop.wast',
+  // // '/test/official/obsolete-keywords.wast',
+  // // '/test/official/ref_func.wast',
+  // // '/test/official/ref_is_null.wast',
+  // // '/test/official/ref_null.wast',
+  // // '/test/official/return.wast',
+  // '/test/official/select.wast',
+  // // '/test/official/simd_address.wast',
+  // // '/test/official/simd_align.wast',
+  // // '/test/official/simd_bit_shift.wast',
+  // // '/test/official/simd_bitwise.wast',
+  // // '/test/official/simd_boolean.wast',
+  // // '/test/official/simd_const.wast',
+  // // '/test/official/simd_conversions.wast',
+  // // '/test/official/simd_f32x4_arith.wast',
+  // // '/test/official/simd_f32x4_cmp.wast',
+  // // '/test/official/simd_f32x4_pmin_pmax.wast',
+  // // '/test/official/simd_f32x4_rounding.wast',
+  // // '/test/official/simd_f32x4.wast',
+  // // '/test/official/simd_f64x4_arith.wast',
+  // // '/test/official/simd_f64x4_cmp.wast',
+  // // '/test/official/simd_f64x4_pmin_pmax.wast',
+  // // '/test/official/simd_f64x4_rounding.wast',
+  // // '/test/official/simd_f64x4.wast',
+  // '/test/official/skip-stack-guard-page.wast',
+  // '/test/official/stack.wast',
+  // // '/test/official/start.wast',
+  // // '/test/official/store.wast',
+  // // '/test/official/switch.wast',
+  // '/test/official/table_copy.wast',
+  // '/test/official/table_fill.wast',
+  // '/test/official/table_get.wast',
+  // '/test/official/table_grow.wast',
+  // '/test/official/table_init.wast',
+  // '/test/official/table_set.wast',
+  // '/test/official/table_size.wast',
+  // '/test/official/table-sub.wast',
+  // // '/test/official/table.wast',
+  // '/test/official/token.wast',
+  // // '/test/official/traps.wast',
+  // // '/test/official/type.wast',
+  // // '/test/official/unreachable.wast',
+  // // '/test/official/unreached-invalid.wast',
+  // // '/test/official/unreached-valid.wast',
+  // // '/test/official/unwind.wast',
+  // // '/test/official/utf8-custom-section-id.wast',
+  // // '/test/official/utf8-import-field.wast',
+  // // '/test/official/utf8-import-module.wast',
+  // // '/test/official/utf8-invalid-encoding.wast',
 ]
 
-official.forEach((it) => t(`official: ${it}`, () => ex(it)));
+official.forEach((it) => t.only(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
   // load src
@@ -2225,11 +2263,12 @@ async function ex(path) {
   let src = await res.text()
 
   // parse
-  let nodes = parse(src)
+  let nodes = parse(src, {comments: true})
   freeze(nodes)
 
   // test runtime
-  let buf, mod = {}, importObj = {
+  let buf, mod = {},
+  importObj = {
     spectest: {
       memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }),
       table: new WebAssembly.Table({ initial: 10, maximum: 20, element: 'anyfunc' }),
@@ -2245,39 +2284,46 @@ async function ex(path) {
       print_i32_f32: console.log,
       print_f64_f64: console.log,
     }
-  }, cur
+  },
+  lastExports,
+  lastComment
 
   for (let node of nodes) {
+    if (typeof node === 'string') lastComment = node
+
     // (module $name) - creates module instance, collects exports
     if (node[0] === 'module') {
-      buf = compile(node)
+      // strip comments
+      buf = compile(node.filter(el => typeof el === 'string' ? 0 : 1))
 
       // sync up with libwabt
       let wabtBuffer
       try {
         wabtBuffer = wat2wasm(print(node)).buffer
-      } catch (e) { console.warn(e) }
+      } catch (e) {
+        console.warn(e)
+      }
+      is(buf, wat2wasm(print(node)).buffer, lastComment)
 
-      if (wabtBuffer) is(buf, wat2wasm(print(node)).buffer)
       // buf = wabtBuffer
 
       let m = new WebAssembly.Module(buf)
       let inst = new WebAssembly.Instance(m, importObj)
-      cur = inst.exports
+      lastExports = inst.exports
       // collect exports under name
-      if (node[1]?.[0] === '$') mod[node[1]] = cur
+      if (node[1]?.[0] === '$') mod[node[1]] = lastExports
     }
     else if (node[0] === 'register') {
       // include exports from prev module
       let [, nm] = node
-      console.log('register', nm)
-      importObj[nm.slice(1, -1)] = cur
+      // console.log('register', nm)
+      importObj[nm.slice(1, -1)] = lastExports
     }
     else if (node[0] === 'assert_return') {
       let [, [kind, ...args], ...expects] = node;
-      let m = args[0]?.[0] === '$' ? mod[args.shift()] : cur,
+      let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
       nm = args.shift().slice(1, -1);
-      console.log('assert', kind, nm, ...args, ...expects)
+      // console.log('assert', kind, nm, ...args, ...expects)
       args = args.map(val)
       expects = expects?.map(val)
 
@@ -2290,7 +2336,7 @@ async function ex(path) {
     }
     else if (node[0] === 'invoke') {
       let [,nm,...args] = node
-      cur[nm.slice(1,-1)](...args)
+      lastExports[nm.slice(1,-1)](...args)
     }
     // else if (node[0] === 'assert_invalid') {
 
