@@ -47,10 +47,11 @@
 * [ ] Optimizations
   * [x] split generic precompile into section builders as was in v1
   * [x] ~~introduce more complete ref/deref use~~ -> we can't really solve full hoisting issue (types, code refs)
-  * [ ] make IR: types indexing, code deferring
+  * [x] make IR: types indexing, code deferring
   * [ ] make generic consuming ops for instructions instead of condition checks
   * [x] make func init code immediately instead of duplicating code
   * [ ] make use of expr inside of code section, !mb instr groups?
+  * [ ] streamline sections parsing/build
 * [x] elem all use-cases
 * [ ] Print: make it as nice as AI
 * [ ] Feature: func-ref
@@ -58,7 +59,7 @@
 * [ ] Feature: gc
 * [ ] Official tests
   * [x] Include testsuite repo
-  * [ ] Complete custom test instructions
+  * [ ] Test instructions: assert_invalid etc
 * [x] Compiler: Named/multiple memory;
 * [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
