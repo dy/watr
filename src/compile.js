@@ -84,7 +84,6 @@ export default (nodes) => {
       node = [m, m]
     }
 
-
     // import increments corresponding section index
     // FIXME: can be turned into shallow node
     if (kind === 'import') {
@@ -97,14 +96,18 @@ export default (nodes) => {
     else if (kind === 'start') {name && node.unshift(name);}
 
     nodeGroups[kind].push(node)
+    sections[kind].length++ // predefine spot
   }
 
   // build sections binaries
-  for (let kind in SECTION) nodeGroups[kind].map((node,i) => !node ? [] : build[kind](i, node, sections))
+  for (let kind in SECTION) {
+    nodeGroups[kind].map((node,i) => !node ? [] : build[kind](i, node, sections))
+  }
 
   // build final binary
-  for (let secCode = 0; secCode < sections.length; secCode++) {
-    let items = sections[secCode], bytes = [], count = 0
+  for (let kind in SECTION) {
+    let secCode = SECTION[kind]
+    let items = sections[kind], bytes = [], count = 0
     for (let item of items) {
       if (!item) { continue } // ignore empty items (like import placeholders)
       count++ // count number of items in section
@@ -113,7 +116,7 @@ export default (nodes) => {
     // ignore empty sections
     if (!bytes.length) continue
     // skip start section count - write length
-    if (secCode !== 8) bytes.unshift(...uleb(count))
+    if (secCode !== SECTION.start && secCode !== SECTION.datacount) bytes.unshift(...uleb(count))
     binary.push(secCode, ...vec(bytes))
   }
 
@@ -138,7 +141,7 @@ const build = {
   },
 
   // (import "math" "add" (func|table|global|memory typedef?))
-  import(_, [mod, field, [kind, ...dfn]], ctx) {
+  import(idx, [mod, field, [kind, ...dfn]], ctx) {
     let details
 
     if (kind === 'func') {
@@ -157,7 +160,7 @@ const build = {
       details = [TYPE[dfn.pop()], ...limits(dfn)]
     }
 
-    ctx.import.push([...vec(str(mod.slice(1,-1))), ...vec(str(field.slice(1,-1))), KIND[kind], ...details])
+    ctx.import[idx] = ([...vec(str(mod.slice(1,-1))), ...vec(str(field.slice(1,-1))), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
@@ -227,15 +230,41 @@ const build = {
         opCode = null // ignore opcode
       }
 
-      // bulk memory: (memory.init) (memory.copy) etc
+      // bulk memory: (memory.init) (memory.copy) (data.drop) (memory.fill)
+      // table ops: (table.init|copy|grow|size|fill) (elem.drop)
       // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
       else if (opCode >= 0xfc) {
         immed = [0xfc, ...uleb(opCode -= 0xfc)]
-        // memory.init idx, memory.drop idx, table.init idx, table.drop idx
-        if (!(opCode & 0b10)) immed.push(...uleb(args.shift()))
-        else immed.push(0)
-        // even opCodes (memory.init, memory.copy, table.init, table.copy) have 2nd predefined immediate
-        if (!(opCode & 0b1)) immed.push(0)
+
+        // memory.init idx, data.drop idx,
+        if (opCode === 0x08 || opCode === 0x09) {
+          // toggle datacount section
+          if (ctx.data.length) ctx.datacount[0] ??= [ctx.data.length]
+          immed.push(...uleb(args[0][0] === '$' ? ctx.data[args.shift()] : +args.shift()))
+        }
+
+        // memory placeholders
+        if (opCode == 0x08 || opCode == 0x0b) immed.push(0)
+        else if (opCode === 0x0a) immed.push(0,0)
+
+        // elem.drop elemidx
+        if (opCode === 0x0d) {
+          immed.push(...uleb(args[0][0] === '$' ? ctx.elem[args.shift()] : +args.shift()))
+        }
+        // table.init tableidx? elemidx -> 0xfc 0x0c elemidx tableidx
+        // https://webassembly.github.io/spec/core/binary/instructions.html#table-instructions
+        else if (opCode === 0x0c) {
+          let tabidx = (args[1][0] === '$' || !isNaN(args[1])) ? (args[0][0] === '$' ? ctx.table[args.shift()] : +args.shift()) : 0
+          immed.push(...uleb(args[0][0] === '$' ? ctx.elem[args.shift()] : +args.shift()), ...uleb(tabidx))
+        }
+        // table.* tableidx?
+        // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
+        else if (opCode >= 0x0c) {
+          immed.push(...uleb(args[0][0] === '$' ? ctx.table[args.shift()] : !isNaN(args[0]) ? +args.shift() : 0))
+          // table.copy tableidx? tableidx?
+          if (opCode === 0x0e) immed.push(...uleb(args[0][0] === '$' ? ctx.table[args.shift()] : !isNaN(args[0]) ? +args.shift() : 0))
+        }
+
         opCode = null // ignore opcode
       }
 
@@ -365,7 +394,8 @@ const build = {
         immed.unshift(...uleb(immed.length - 1))
       }
 
-      // FIXME multiple memory (memory.grow $idx?)
+      // (memory.grow|size $idx?) - mandatory 0x00
+      // https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions
       else if (opCode == 0x3f || opCode == 0x40) {
         immed = [0]
       }
@@ -468,11 +498,11 @@ const build = {
     // reset to simplest mode if no actual elements
     if (!parts.length) mode &= 0b011
 
-    // simplify els
+    // simplify els sequence
     parts = parts.map(el => {
       if (el[0] === 'item') [, el] = el
       if (el[0] === 'ref.func') [, el] = el
-      // (ref.null func) and other expressions
+      // (ref.null func) and other expressions turn expr init mode
       if (typeof el !== 'string') mode |= 0b100
       return el
     })
@@ -511,13 +541,12 @@ const build = {
   // (data (memory ref) (offset (i32.const 0)) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
   data(idx, [...inits], ctx) {
-    let offset, mem = [0]
+    let offset, memidx = 0
 
     // (memory ref)?
     if (inits[0]?.[0] === 'memory') {
-      [, mem] = inits.shift()
-      mem = mem[0] === '$' ? ctx.memory[mem] : +mem
-      mem = !mem ? [0] : [2, ...uleb(mem)]
+      [, memidx] = inits.shift()
+      memidx = memidx[0] === '$' ? ctx.memory[memidx] : +memidx
     }
 
     // (offset (i32.const 0)) or (i32.const 0)
@@ -525,8 +554,18 @@ const build = {
       offset = inits.shift()
       if (offset[0] === 'offset') [, offset] = offset
     }
-    else offset = ['i32.const', 0]
-    ctx.data[idx] = [...mem, ...expr([...offset], ctx), 0x0b, ...vec(str(inits.map(i => i.slice(1, -1)).join('')))]
+
+    ctx.data[idx] = [
+      ...(
+        // active: 2, x=memidx, e=expr
+        memidx ? [2, ...uleb(memidx), ...expr([...offset], ctx), 0x0b] :
+        // active: 0, e=expr
+        offset ? [0, ...expr([...offset], ctx), 0x0b] :
+        // passive: 1
+        [1]
+      ),
+      ...vec(str(inits.map(i => i.slice(1, -1)).join('')))
+    ]
   }
 }
 

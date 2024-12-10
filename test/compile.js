@@ -2147,15 +2147,15 @@ t('example: wat-compiler', async () => {
 
 
 let official = [
-  // '/test/official/address.wast',
-  // '/test/official/align.wast',
+  '/test/official/address.wast',
+  '/test/official/align.wast',
   // '/test/official/binary-leb128.wast',
   // '/test/official/binary.wast',
   '/test/official/block.wast',
   '/test/official/br_if.wast',
   '/test/official/br_table.wast',
   '/test/official/br.wast',
-  // '/test/official/bulk.wast',
+  '/test/official/bulk.wast',
   // '/test/official/call_indirect.wast',
   // '/test/official/call.wast',
   // '/test/official/comments.wast',
@@ -2253,9 +2253,7 @@ let official = [
   // // '/test/official/utf8-import-field.wast',
   // // '/test/official/utf8-import-module.wast',
   // // '/test/official/utf8-invalid-encoding.wast',
-]
-
-official.forEach((it) => t.only(`official: ${it}`, () => ex(it)));
+].forEach((it) => t(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
   // load src
@@ -2294,7 +2292,9 @@ async function ex(path) {
     // (module $name) - creates module instance, collects exports
     if (node[0] === 'module') {
       // strip comments
-      buf = compile(node.filter(el => typeof el === 'string' ? 0 : 1))
+      node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
+
+      buf = compile(node)
 
       // sync up with libwabt
       let wabtBuffer
@@ -2303,7 +2303,7 @@ async function ex(path) {
       } catch (e) {
         console.warn(e)
       }
-      is(buf, wat2wasm(print(node)).buffer, lastComment)
+      if (wabtBuffer) is(buf, wabtBuffer, lastComment)
 
       // buf = wabtBuffer
 
@@ -2316,16 +2316,16 @@ async function ex(path) {
     else if (node[0] === 'register') {
       // include exports from prev module
       let [, nm] = node
-      // console.log('register', nm)
+      console.log('register', nm)
       importObj[nm.slice(1, -1)] = lastExports
     }
     else if (node[0] === 'assert_return') {
       let [, [kind, ...args], ...expects] = node;
       let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
       nm = args.shift().slice(1, -1);
-      // console.log('assert', kind, nm, ...args, ...expects)
       args = args.map(val)
       expects = expects?.map(val)
+      console.log('assert', kind, nm, ...args, ...expects)
 
       if (kind === 'invoke') {
         is(m[nm](...args), expects.length > 1 ? expects : expects[0])
@@ -2336,6 +2336,8 @@ async function ex(path) {
     }
     else if (node[0] === 'invoke') {
       let [,nm,...args] = node
+      args = args.map(val)
+      console.log('invoke', nm, ...args)
       lastExports[nm.slice(1,-1)](...args)
     }
     // else if (node[0] === 'assert_invalid') {
@@ -2351,7 +2353,8 @@ const val = ([t, v]) =>
     t === 'i64.const' ? (i64arr[0] = v, i64arr[0]) :
     t === 'f32.const' ? (f32arr[0] = v, f32arr[0]) :
     t === 'i32.const' ? (i32arr[0] = v, i32arr[0]) :
-    Number(v)
+    t === 'f64.const' ? +v:
+    v
 
 // save binary (asm buffer) to file
 const save = (buf) => {
