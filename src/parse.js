@@ -5,10 +5,11 @@ const OPAREN = 40, CPAREN = 41, OBRACK = 91, CBRACK = 93, SPACE = 32, DQUOTE = 3
  * Parses a wasm text string and constructs a nested array structure (AST).
  *
  * @param {string} str - The input string with WAT code to parse.
+ * @param {object} options - Parse options, like comments, etc.
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
-export default (str) => {
-  let i = 0, level = [], buf = ''
+export default (str, o={ comments: false }) => {
+  let i = 0, level = [], buf = '', comment = ''
 
   const commit = () => buf && (
     level.push(buf),
@@ -21,10 +22,10 @@ export default (str) => {
       c = str.charCodeAt(i)
       if (c === DQUOTE) commit(), buf = str.slice(i++, i = str.indexOf('"', i) + 1), commit()
       else if (c === OPAREN) {
-        if (str.charCodeAt(i + 1) === SEMIC) i = str.indexOf(';)', i) + 2 // (; ... ;)
+        if (str.charCodeAt(i + 1) === SEMIC) comment = str.slice(i, i = str.indexOf(';)', i) + 2), o.comments && level.push(comment) // (; ... ;)
         else commit(), i++, (root = level).push(level = []), parseLevel(), level = root
       }
-      else if (c === SEMIC) i = str.indexOf('\n', i) + 1 || str.length  // ; ...
+      else if (c === SEMIC) comment = str.slice(i, i = str.indexOf('\n', i) + 1 || str.length), o.comments && level.push(comment)  // ; ...
       else if (c <= SPACE) commit(), i++
       else if (c === CPAREN) return commit(), i++
       else buf += str[i++]
