@@ -453,13 +453,21 @@ const build = {
     else mode |= 0b001 // passive
 
     // funcref|externref|func
-    if (parts[0] === 'func') parts.shift()
-    else if (parts[0] === 'funcref') reftype = parts.shift(), mode |= 0b100
-    // NOTE: externref makes explicit table index (in wabt/browser, but not in standard)
-    else if (parts[0] === 'externref') reftype = parts.shift(), offset ||= ['i32.const', 0], mode = 0b110
+    if (parts[0]?.[0]!=='$') reftype = parts.shift()
+    // externref makes explicit table index
+    if (reftype === 'externref') offset ||= ['i32.const', 0], mode = 0b110
 
     // reset to simplest mode if no actual elements
     if (!parts.length) mode &= 0b011
+
+    // simplify els
+    parts = parts.map(el => {
+      if (el[0] === 'item') [, el] = el
+      if (el[0] === 'ref.func') [, el] = el
+      // (ref.null func) and other expressions
+      if (typeof el !== 'string') mode |= 0b100
+      return el
+    })
 
     ctx.elem[idx] = ([
       mode,
@@ -482,13 +490,12 @@ const build = {
                       [TYPE[reftype]]
       ),
       ...uleb(parts.length),
-      ...parts.flatMap(el => (
-        typeof el === 'string' ?
-          // $id0 1 2
-          uleb(el[0] === '$' ? ctx.func[el] : +el) :
-          // (ref.func a) (item (ref.func 2)) (item ref.func 2)
-          [...expr(el[0] === 'item' ? (el.length > 2 ? el.slice(1) : [...el[1]]) : [...el], ctx), 0x0b]
-      ))
+      ...parts.flatMap(mode & 0b100 ?
+        // ((ref.func y)end)*
+        el => [...expr(typeof el === 'string' ? ['ref.func', el] : [...el], ctx), 0x0b] :
+        // el*
+        el => uleb(el[0] === '$' ? ctx.func[el] : +el)
+      )
     ])
   },
 

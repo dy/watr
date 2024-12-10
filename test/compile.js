@@ -2217,7 +2217,7 @@ let official = [
   '/test/official/type.wast',
 ]
 
-official.forEach((it) => t.only(`official: ${it}`, () => ex(it)));
+official.forEach((it) => t(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
   // load src
@@ -2237,6 +2237,7 @@ async function ex(path) {
       global_i64: 666n,
       global_f32: 666.6,
       global_f64: 666.6,
+      print: console.log,
       print_i32: console.log,
       print_i64: console.log,
       print_f32: console.log,
@@ -2286,6 +2287,10 @@ async function ex(path) {
       else if (kind === 'get') {
         is(m[nm].value, expects[0])
       }
+    }
+    else if (node[0] === 'invoke') {
+      let [,nm,...args] = node
+      cur[nm.slice(1,-1)](...args)
     }
     // else if (node[0] === 'assert_invalid') {
 
