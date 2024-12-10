@@ -68,6 +68,15 @@ export default (nodes) => {
       nodeGroups.elem.push([['table', name || nodeGroups.table.length], ['i32.const', '0'],  typeof els[0] === 'string' ? 'func' : reftype, ...els])
     }
 
+    // data abbr
+    // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
+    if (node[0]?.[0] === 'data') {
+      let [,...data] = node.shift(), m = ''+Math.ceil(data.map(s => s.slice(1,-1)).join('').length / 65536) // FIXME: figure out actual data size
+      nodeGroups.data.push([['memory', idx], ['i32.const',0], ...data])
+      node = [m, m]
+    }
+
+
     // import increments corresponding section index
     // FIXME: can be turned into shallow node
     if (kind === 'import') {
@@ -392,13 +401,6 @@ const build = {
 
   // (memory id? export* min max shared)
   memory(idx, [...node], ctx) {
-    // FIXME: move away
-    // data abbr
-    if (node[0]?.[0] === 'data') {
-      let [,...data] = node.shift(), m = ''+Math.ceil(data.map(s => s.slice(1,-1)).join('').length / 65536) // FIXME: figure out actual data size
-      build.data(idx, [,['memory', idx],['i32.const',0], ...data], ctx), node = [m, m]
-    }
-
     ctx.memory[idx] = limits(node)
   },
 
