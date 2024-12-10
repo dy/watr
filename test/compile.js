@@ -2147,19 +2147,19 @@ t('example: wat-compiler', async () => {
 
 
 let official = [
-  '/test/official/address.wast',
-  '/test/official/align.wast',
-  // '/test/official/binary-leb128.wast',
-  // '/test/official/binary.wast',
-  '/test/official/block.wast',
-  '/test/official/br_if.wast',
-  '/test/official/br_table.wast',
-  '/test/official/br.wast',
-  '/test/official/bulk.wast',
+  // '/test/official/address.wast',
+  // '/test/official/align.wast',
+  // // '/test/official/binary-leb128.wast',
+  // // '/test/official/binary.wast',
+  // '/test/official/block.wast',
+  // '/test/official/br_if.wast',
+  // '/test/official/br_table.wast',
+  // '/test/official/br.wast',
+  // '/test/official/bulk.wast',
   // '/test/official/call_indirect.wast',
   // '/test/official/call.wast',
   // '/test/official/comments.wast',
-  // '/test/official/const.wast',
+  '/test/official/const.wast',
   // '/test/official/conversions.wast',
   // '/test/official/custom.wast',
   // '/test/official/data.wast',
@@ -2253,7 +2253,7 @@ let official = [
   // // '/test/official/utf8-import-field.wast',
   // // '/test/official/utf8-import-module.wast',
   // // '/test/official/utf8-invalid-encoding.wast',
-].forEach((it) => t(`official: ${it}`, () => ex(it)));
+].forEach((it) => t.only(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
   // load src
@@ -2351,10 +2351,21 @@ var f32arr = new Float32Array(1), i32arr = new Int32Array(1), i64arr = new BigIn
 const val = ([t, v]) =>
     t === 'ref.null' ? null :
     t === 'i64.const' ? (i64arr[0] = v, i64arr[0]) :
-    t === 'f32.const' ? (f32arr[0] = v, f32arr[0]) :
+    t === 'f32.const' ? (f32arr[0] = unhex(v), f32arr[0]) :
     t === 'i32.const' ? (i32arr[0] = v, i32arr[0]) :
-    t === 'f64.const' ? +v:
-    v
+    t === 'f64.const' ? unhex(v):
+    v;
+
+// 0x1.5p3
+const unhex = (input) => {
+  if (input.includes('0x')) {
+    let [sig, exp] = input.split(/p/i), [dec, fract] = sig.split('.'), sign = dec[0] === '-' ? -1 : 1
+    sig = parseInt(dec) * sign + (fract ? parseInt(fract, 16) / (16 ** fract.length) : 0)
+    return sign * (exp ? sig * 2 ** parseInt(exp, 10) : sig);
+  }
+  return +input
+}
+
 
 // save binary (asm buffer) to file
 const save = (buf) => {
