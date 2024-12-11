@@ -49,9 +49,10 @@
   * [x] ~~introduce more complete ref/deref use~~ -> we can't really solve full hoisting issue (types, code refs)
   * [x] make IR: types indexing, code deferring
   * [ ] make generic consuming ops for instructions instead of condition checks
+  * [ ] flatten (deabbr) ops
   * [x] make func init code immediately instead of duplicating code
   * [ ] make use of expr inside of code section, !mb instr groups?
-  * [ ] streamline sections parsing/build
+  * [ ] streamline sections parsing/build (no intermediary array)
 * [x] elem all use-cases
 * [ ] Print: make it as nice as AI
 * [ ] Feature: func-ref
@@ -64,14 +65,12 @@
 * [x] Compiler: Named/multiple memory;
 * [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
-  ~ many examples use loop ... end, br 0 and other simple inliners
-  ~ from code point things coming in loop/block node are not arguments, they're immediates-ish, or "body"
 * [ ] validation / errors: should be safe to type in anything
-* [ ] numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
-* [ ] extended-const (polyfill?) https://github.com/WebAssembly/extended-const
+* [ ] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
+* [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
 * [ ] Wasm3
 
-## [ ] REPL
+## REPL
 
 * [ ] compiler selector
 * [ ] examples
@@ -81,3 +80,11 @@
 ## Backlog
 
 * [ ] wat-based wat-compiler
+
+
+## Offering Qualifications
+
+* minimal & clever validator - basic checks via generic funcs
+* streamline, clear, lightweight algorithm - easy to remember
+* meaningful base of tests covered - not verbosities
+* clear, lightweight repl

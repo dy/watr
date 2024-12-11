@@ -2253,7 +2253,7 @@ let official = [
   // // '/test/official/utf8-import-field.wast',
   // // '/test/official/utf8-import-module.wast',
   // // '/test/official/utf8-invalid-encoding.wast',
-].forEach((it) => t.only(`official: ${it}`, () => ex(it)));
+].forEach((it) => t.todo(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
   // load src

@@ -1,3 +1,5 @@
+
+
 ## [x] IR -> we collect nodes into context with scopes, but it's still valid nodes
 
 * collect section names / indexes
@@ -115,7 +117,7 @@
 
 * object lookup is 3-5x times faster
 
-## [ ] typeuse: parse or compile-level? -> likely late binding
+## [x] typeuse: parse or compile-level? -> indexing nodes first, typeuse on bin build second
 
 1. Parse-level: must define all types
   * needs to scan tree, which is unnecessary
