@@ -4,13 +4,16 @@ import { SECTION, ALIGN, TYPE, KIND, INSTR } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
-INSTR.forEach((instr, i) => {
-  let [op, ...imm] = instr.split(':'), a, b
+INSTR.forEach((nm, i) => {
+  let [op, ...imm] = nm.split(':'), a, b
 
   // TODO
   // wrap codes
-  // const code = i >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc ? [0xfc, i - 0xfc] : i
+  const code = i// >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc ? [0xfc, i - 0xfc] : i
   INSTR[op] = i
+
+  // provide simple serializer for 0-immediate funcs
+  // if (!imm.length) INSTR[op] = (args, ctx) => [...instr(args, ctx), code]
 
   // // handle immediates
   // INSTR[op] = !imm.length ? () => code :
@@ -183,7 +186,8 @@ const build = {
       ctx.local.push(...types.map(t => TYPE[t]))
     }
 
-    const bytes = []
+    const bytes = []//instr(node, ctx)
+    // FIXME: make direct instr call
     while (node.length) bytes.push(...instr(node, ctx))
     bytes.push(0x0b)
 
@@ -335,7 +339,6 @@ const build = {
 }
 
 // convert sequence of instructions from input nodes to out bytes
-// FIXME: make external func
 const instr = (nodes, ctx) => {
   if (!nodes?.length) return []
 
@@ -350,7 +353,7 @@ const instr = (nodes, ctx) => {
 
   // FIXME: eventually all these should be functions
   if (typeof opCode === 'function') {
-
+    // return opCode(args, ctx)
   }
 
   // v128s: (v128.load x) etc
@@ -482,26 +485,12 @@ const instr = (nodes, ctx) => {
 
     // get type - can be either typeidx or valtype (numtype | reftype)
     // (result i32) - doesn't require registering type
-    if (args[0]?.[0] === 'result' && args[0].length < 3) {
-      let [, type] = args.shift()
-      immed = [TYPE[type]]
-    }
-    // (result i32 i32)
-    else if (args[0]?.[0] === 'result' || args[0]?.[0] === 'param') {
-      let [typeidx] = typeuse(args, ctx)
-      immed = uleb(typeidx)
-    }
-    // FIXME: that def can be done nicer
-    else if (args[0]?.[0] === 'type') {
-      let [typeidx, params, result] = typeuse(args, ctx)
-      if (!params.length && !result.length) immed = [TYPE.void]
-      else if (!param.length && result.length === 1) immed = [TYPE[result[0]]]
-      else immed = uleb(typeidx)
-    }
-    else {
-      immed = [TYPE.void]
-    }
+    if (args[0]?.[0] === 'result' && args[0].length == 2) immed = [TYPE[args.shift()[1]]]
+    // (type idx)? (param i32 i32)? (result i32 i32)
+    else if (['type', 'param', 'result'].includes(args[0]?.[0])) immed = uleb(typeuse(args, ctx)[0])
+    else immed = [TYPE.void]
 
+    // FIXME: replace nodes with args
     if (group) {
       // (block xxx) -> block xxx end
       nodes.unshift('end')
@@ -575,6 +564,9 @@ const instr = (nodes, ctx) => {
 
   if (opCode != null) out.push(opCode)
   if (immed) out.push(...immed)
+
+  // consume rest of instructions (non-group)
+  // while (args.length) out.push(...instr(args, ctx))
 
   return out
 }
