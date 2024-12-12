@@ -97,6 +97,7 @@ export default (nodes) => {
       node[2] = [kind, ...dfn]
     }
     else if (kind === 'start') {name && node.unshift(name);}
+    else if (kind === 'func') node = unfold(node) // plainify instructions
 
     nodeGroups[kind].push(node)
     sections[kind].length++ // predefine spot
@@ -128,6 +129,50 @@ export default (nodes) => {
 
 // consume $id
 const id = nodes => nodes[0]?.[0] === '$' && nodes.shift()
+
+// abbr for blocks, loops, ifs
+// https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
+const unfold = nodes => {
+  let out = [], node = []
+
+  // FIXME: we can collect types here btw and simplify typeuse not to create types on binary stage
+  for (let node of nodes) {
+    if (Array.isArray(node)) {
+      node = unfold(node)
+
+      // (block ...) -> block ... end
+      if (node[0] === 'block' || node[0] === 'loop') {
+        out.push(node.shift())
+        for (let n of node) out.push(n)
+        out.push('end')
+      }
+      // (if ...) -> if ... end
+      else if (node[0] === 'if') {
+        let thenelse = [], blocktype = [node.shift()]
+        // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
+        // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
+        if (node[node.length - 1]?.[0] === 'else') thenelse.unshift(...node.pop())
+        if (node[node.length - 1]?.[0] === 'then') thenelse.unshift(...node.pop())
+
+        // label?
+        let name = id(node)
+        if (name) blocktype.push(name)
+        // blocktype?
+        while (['type', 'param', 'result'].includes(node[0]?.[0])) blocktype.push(node.shift());
+
+        // ignore empty else
+        // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
+        if (thenelse[thenelse.length - 1] === 'else') thenelse.pop()
+
+        out.push(...node, ...blocktype, ...thenelse, 'end')
+      }
+      else out.push(node)
+    }
+    else out.push(node)
+  }
+
+  return out
+}
 
 // build section binary (non consuming)
 const build = {
@@ -342,50 +387,73 @@ const build = {
 const instr = (nodes, ctx) => {
   if (!nodes?.length) return []
 
-  let op = nodes.shift(), opCode, args = nodes, immed, id, group, out = []
+  let op = nodes.shift(), opCode, immed, group, out = []
 
   // flatten groups, eg. (cmd z w) -> z w cmd
   if (group = Array.isArray(op)) {
-    args = [...op] // op is immutable
-    opCode = INSTR[op = args.shift()]
+    nodes = [...op] // op is immutable
+    opCode = INSTR[op = nodes.shift()]
   }
   else opCode = INSTR[op]
 
-  // FIXME: eventually all these should be functions
-  if (typeof opCode === 'function') {
-    // return opCode(args, ctx)
+  // // FIXME: eventually all these should be functions
+  // if (typeof opCode === 'function') {
+  //   // return opCode(nodes, ctx)
+  // }
+
+  // control block abbrs
+  // (block ...), (loop ...), (if ...)
+  if (opCode === 2 || opCode === 3 || opCode === 4) {
+    ctx.block.push(opCode)
+
+    // (block $x) (loop $y)
+    let name = id(nodes)
+    if (name) ctx.block[name] = ctx.block.length
+
+    // get type - can be either typeidx or valtype (numtype | reftype)
+    // (result i32) - doesn't require registering type
+    if (nodes[0]?.[0] === 'result' && nodes[0].length == 2) immed = [TYPE[nodes.shift()[1]]]
+    // (type idx)? (param i32 i32)? (result i32 i32)
+    else if (['type', 'param', 'result'].includes(nodes[0]?.[0])) immed = uleb(typeuse(nodes, ctx)[0])
+    else immed = [TYPE.void]
+  }
+  // (else)
+  else if (opCode === 5) {}
+  // (then)
+  else if (opCode === 6) {
+    opCode = null // ignore opcode
   }
 
   // v128s: (v128.load x) etc
   // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
-  if (opCode >= 0x10f) {
+  else if (opCode >= 0x10f) {
     opCode -= 0x10f
     immed = [0xfd, ...uleb(opCode)]
     // (v128.load)
     if (opCode <= 0x0b) {
-      const o = memarg(args)
+      const o = memarg(nodes)
       immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
     }
     // (v128.load_lane offset? align? idx)
     else if (opCode >= 0x54 && opCode <= 0x5d) {
-      const o = memarg(args)
+      const o = memarg(nodes)
       immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
       // (v128.load_lane_zero)
-      if (opCode <= 0x5b) immed.push(...uleb(args.shift()))
+      if (opCode <= 0x5b) immed.push(...uleb(nodes.shift()))
     }
     // (i8x16.shuffle 0 1 ... 15 a b)
     else if (opCode === 0x0d) {
       // i8, i16, i32 - bypass the encoding
-      for (let i = 0; i < 16; i++) immed.push(encode.i32.parse(args.shift()))
+      for (let i = 0; i < 16; i++) immed.push(encode.i32.parse(nodes.shift()))
     }
     // (v128.const i32x4)
     else if (opCode === 0x0c) {
-      args.unshift(op)
-      immed = expr(args, ctx)
+      nodes.unshift(op)
+      immed = expr(nodes, ctx)
     }
     // (i8x16.extract_lane_s 0 ...)
     else if (opCode >= 0x15 && opCode <= 0x22) {
-      immed.push(...uleb(args.shift()))
+      immed.push(...uleb(nodes.shift()))
     }
     opCode = null // ignore opcode
   }
@@ -400,7 +468,7 @@ const instr = (nodes, ctx) => {
     if (opCode === 0x08 || opCode === 0x09) {
       // toggle datacount section
       if (ctx.data.length) ctx.datacount[0] ??= [ctx.data.length]
-      immed.push(...uleb(args[0][0] === '$' ? ctx.data[args.shift()] : +args.shift()))
+      immed.push(...uleb(nodes[0][0] === '$' ? ctx.data[nodes.shift()] : +nodes.shift()))
     }
 
     // memory placeholders
@@ -409,20 +477,20 @@ const instr = (nodes, ctx) => {
 
     // elem.drop elemidx
     if (opCode === 0x0d) {
-      immed.push(...uleb(args[0][0] === '$' ? ctx.elem[args.shift()] : +args.shift()))
+      immed.push(...uleb(nodes[0][0] === '$' ? ctx.elem[nodes.shift()] : +nodes.shift()))
     }
     // table.init tableidx? elemidx -> 0xfc 0x0c elemidx tableidx
     // https://webassembly.github.io/spec/core/binary/instructions.html#table-instructions
     else if (opCode === 0x0c) {
-      let tabidx = (args[1][0] === '$' || !isNaN(args[1])) ? (args[0][0] === '$' ? ctx.table[args.shift()] : +args.shift()) : 0
-      immed.push(...uleb(args[0][0] === '$' ? ctx.elem[args.shift()] : +args.shift()), ...uleb(tabidx))
+      let tabidx = (nodes[1][0] === '$' || !isNaN(nodes[1])) ? (nodes[0][0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()) : 0
+      immed.push(...uleb(nodes[0][0] === '$' ? ctx.elem[nodes.shift()] : +nodes.shift()), ...uleb(tabidx))
     }
     // table.* tableidx?
     // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
     else if (opCode >= 0x0c) {
-      immed.push(...uleb(args[0][0] === '$' ? ctx.table[args.shift()] : !isNaN(args[0]) ? +args.shift() : 0))
+      immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
       // table.copy tableidx? tableidx?
-      if (opCode === 0x0e) immed.push(...uleb(args[0][0] === '$' ? ctx.table[args.shift()] : !isNaN(args[0]) ? +args.shift() : 0))
+      if (opCode === 0x0e) immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
     }
 
     opCode = null // ignore opcode
@@ -430,11 +498,11 @@ const instr = (nodes, ctx) => {
 
   // ref.func $id
   else if (opCode == 0xd2) {
-    immed = uleb(args[0][0] === '$' ? ctx.func[args.shift()] : +args.shift())
+    immed = uleb(nodes[0][0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift())
   }
   // ref.null
   else if (opCode == 0xd0) {
-    immed = [TYPE[args.shift() + 'ref']] // func->funcref, extern->externref
+    immed = [TYPE[nodes.shift() + 'ref']] // func->funcref, extern->externref
   }
 
   // binary/unary (i32.add a b) - no immed
@@ -443,81 +511,39 @@ const instr = (nodes, ctx) => {
   // (i32.store align=n offset=m at value) etc
   else if (opCode >= 0x28 && opCode <= 0x3e) {
     // FIXME: figure out point in Math.log2 aligns
-    let o = memarg(args)
+    let o = memarg(nodes)
     immed = [Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0)]
   }
 
   // (i32.const 123), (f32.const 123.45) etc
   else if (opCode >= 0x41 && opCode <= 0x44) {
-    immed = encode[op.split('.')[0]](args.shift())
+    immed = encode[op.split('.')[0]](nodes.shift())
   }
 
   // (local.get $id), (local.tee $id x)
   else if (opCode >= 0x20 && opCode <= 0x22) {
-    immed = uleb(args[0]?.[0] === '$' ? ctx.param[id = args.shift()] ?? ctx.local[id] ?? err('Unknown local ' + id) : +args.shift())
+    let name = id(nodes)
+    immed = uleb(name ? ctx.param[name] ?? ctx.local[name] ?? err('Unknown local ' + name) : +nodes.shift())
   }
 
   // (global.get $id), (global.set $id)
   else if (opCode == 0x23 || opCode == 0x24) {
-    immed = uleb(args[0]?.[0] === '$' ? ctx.global[args.shift()] : +args.shift())
+    let name = id(nodes)
+    immed = uleb(name ? ctx.global[name] : +nodes.shift())
   }
 
   // (call id ...nodes)
   else if (opCode == 0x10) {
-    let fnName = args.shift()
-    immed = uleb(id = fnName[0] === '$' ? ctx.func[fnName] : +fnName);
+    let name = id(nodes)
+    immed = uleb(name ? ctx.func[name] : +nodes.shift());
     // FIXME: how to get signature of imported function
   }
 
   // (call_indirect tableIdx? (type $typeName) (idx) ...nodes)
   else if (opCode == 0x11) {
-    let tableidx = args[0]?.[0] === '$' ? ctx.table[args.shift()] : 0
-    let [typeidx] = typeuse(args, ctx)
+    let tableidx = nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : 0
+    let [typeidx] = typeuse(nodes, ctx)
     immed = [...uleb(typeidx), ...uleb(tableidx)]
-  }
-
-  // (block ...), (loop ...), (if ...)
-  else if (opCode === 2 || opCode === 3 || opCode === 4) {
-    ctx.block.push(opCode)
-
-    // (block $x) (loop $y)
-    if (args[0]?.[0] === '$') (ctx.block[args.shift()] = ctx.block.length)
-
-    // get type - can be either typeidx or valtype (numtype | reftype)
-    // (result i32) - doesn't require registering type
-    if (args[0]?.[0] === 'result' && args[0].length == 2) immed = [TYPE[args.shift()[1]]]
-    // (type idx)? (param i32 i32)? (result i32 i32)
-    else if (['type', 'param', 'result'].includes(args[0]?.[0])) immed = uleb(typeuse(args, ctx)[0])
-    else immed = [TYPE.void]
-
-    // FIXME: replace nodes with args
-    if (group) {
-      // (block xxx) -> block xxx end
-      nodes.unshift('end')
-
-      if (opCode < 4) while (args.length) nodes.unshift(args.pop())
-      // (if cond a) -> cond if a end
-      else if (args.length < 3) nodes.unshift(args.pop())
-      // (if cond (then a) (else b)) -> `cond if a else b end`
-      else {
-        nodes.unshift(args.pop())
-        // (if cond a b) -> (if cond a else b)
-        if (nodes[0][0] !== 'else') nodes.unshift('else')
-        // (if a b (else)) -> (if a b)
-        else if (nodes[0].length < 2) nodes.shift()
-        nodes.unshift(args.pop())
-      }
-    }
-  }
-
-  // (else)
-  else if (opCode === 5) {
-    // (else xxx) -> else xxx
-    if (group) while (args.length) nodes.unshift(args.pop())
-  }
-  // (then)
-  else if (opCode === 6) {
-    opCode = null // ignore opcode
   }
 
   // (end)
@@ -527,14 +553,14 @@ const instr = (nodes, ctx) => {
   // (br_if $label cond result?)
   else if (opCode == 0x0c || opCode == 0x0d) {
     // br index indicates how many block items to pop
-    immed = uleb(args[0]?.[0] === '$' ? ctx.block.length - ctx.block[args.shift()] : args.shift())
+    immed = uleb(nodes[0]?.[0] === '$' ? ctx.block.length - ctx.block[nodes.shift()] : nodes.shift())
   }
 
   // (br_table 1 2 3 4  0  selector result?)
   else if (opCode == 0x0e) {
     immed = []
-    while (args[0] && !Array.isArray(args[0])) {
-      id = args.shift()
+    while (nodes[0] && !Array.isArray(nodes[0])) {
+      let id = nodes.shift()
       immed.push(...uleb(id[0][0] === '$' ? ctx.block.length - ctx.block[id] : id))
     }
     immed.unshift(...uleb(immed.length - 1))
@@ -548,7 +574,7 @@ const instr = (nodes, ctx) => {
 
   // (table.get $id)
   else if (opCode == 0x25 || opCode == 0x26) {
-    immed = uleb(args[0]?.[0] === '$' ? ctx.table[args.shift()] : +args.shift())
+    immed = uleb(nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift())
   }
 
   // table.grow id, table.size id, table.fill id
@@ -558,15 +584,15 @@ const instr = (nodes, ctx) => {
 
   else if (opCode == null) err(`Unknown instruction \`${op}\``)
 
-  // if group (cmd im1 im2 arg1 arg2) - insert any remaining args first: arg1 arg2
+  // if group (cmd im1 im2 arg1 arg2) - insert any remaining nodes first: arg1 arg2
   // because inline case has them in stack already
-  if (group) while (args.length) out.push(...instr(args, ctx))
+  if (group) while (nodes.length) out.push(...instr(nodes, ctx))
 
   if (opCode != null) out.push(opCode)
   if (immed) out.push(...immed)
 
   // consume rest of instructions (non-group)
-  // while (args.length) out.push(...instr(args, ctx))
+  // while (nodes.length) out.push(...instr(nodes, ctx))
 
   return out
 }
