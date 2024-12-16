@@ -4,21 +4,11 @@ import { SECTION, ALIGN, TYPE, KIND, INSTR } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
-INSTR.forEach((nm, i) => {
-  let [op, ...imm] = nm.split(':'), a, b
-
+INSTR.forEach((op, i) => {
   // TODO
   // wrap codes
   const code = i// >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc ? [0xfc, i - 0xfc] : i
   INSTR[op] = i
-
-  // provide simple serializer for 0-immediate funcs
-  // if (!imm.length) INSTR[op] = (args, ctx) => [...instr(args, ctx), code]
-
-  // // handle immediates
-  // INSTR[op] = !imm.length ? () => code :
-  //   imm.length === 1 ? (a = immedname(imm[0]), nodes => [...code, ...a(nodes)]) :
-  //     (imm = imm.map(immedname), nodes => [...code, ...imm.flatMap(imm => imm(nodes))])
 })
 
 /**
@@ -130,10 +120,13 @@ export default (nodes) => {
 // consume $id
 const id = nodes => nodes[0]?.[0] === '$' && nodes.shift()
 
+// inject $id
+const deref = (nodes, dict) => nodes[0][0] === '$' ? dict[nodes.shift()] : +nodes.shift()
+
 // abbr for blocks, loops, ifs
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const unfold = nodes => {
-  let out = [], node = []
+  let out = []
 
   // FIXME: we can collect types here btw and simplify typeuse not to create types on binary stage
   for (let node of nodes) {
@@ -218,16 +211,15 @@ const build = {
     ctx.func[idx] = uleb(typeidx)
 
     // provide param/local in ctx
-    ctx.local = [] // list of local variables
+    ctx.local = param // list of params + local variables
     ctx.block = [] // control instructions / blocks stack
-    ctx.param = param
+
+    let locstart = param.length
 
     // collect locals
     while (node[0]?.[0] === 'local') {
-      let [, ...types] = node.shift(), name
-      if (types[0]?.[0] === '$')
-        param[name = types.shift()] ? err('Ambiguous name ' + name) : // FIXME: not supposed to happen
-          ctx.local[name] = param.length + ctx.local.length
+      let [, ...types] = node.shift()
+      if (types[0]?.[0] === '$') ctx.local[types.shift()] = ctx.local.length
       ctx.local.push(...types.map(t => TYPE[t]))
     }
 
@@ -237,13 +229,13 @@ const build = {
     bytes.push(0x0b)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
-    let loctypes = ctx.local.reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
+    let loctypes = ctx.local.slice(locstart).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
     ctx.code[idx] = vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes])
 
     // cleanup tmp state
-    ctx.local = ctx.block = ctx.param = null
+    ctx.local = ctx.block = null
   },
 
   // (table id? 1 2? funcref)
@@ -396,10 +388,8 @@ const instr = (nodes, ctx) => {
   }
   else opCode = INSTR[op]
 
-  // // FIXME: eventually all these should be functions
-  // if (typeof opCode === 'function') {
-  //   // return opCode(nodes, ctx)
-  // }
+  // eventually all these should be functions
+  if (typeof opCode === 'function') return opCode(nodes, ctx)
 
   // control block abbrs
   // (block ...), (loop ...), (if ...)
@@ -498,8 +488,9 @@ const instr = (nodes, ctx) => {
 
   // ref.func $id
   else if (opCode == 0xd2) {
-    immed = uleb(nodes[0][0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift())
+    immed = uleb(deref(nodes, ctx.func))
   }
+
   // ref.null
   else if (opCode == 0xd0) {
     immed = [TYPE[nodes.shift() + 'ref']] // func->funcref, extern->externref
@@ -522,14 +513,12 @@ const instr = (nodes, ctx) => {
 
   // (local.get $id), (local.tee $id x)
   else if (opCode >= 0x20 && opCode <= 0x22) {
-    let name = id(nodes)
-    immed = uleb(name ? ctx.param[name] ?? ctx.local[name] ?? err('Unknown local ' + name) : +nodes.shift())
+    immed = uleb(deref(nodes, ctx.local))
   }
 
   // (global.get $id), (global.set $id)
   else if (opCode == 0x23 || opCode == 0x24) {
-    let name = id(nodes)
-    immed = uleb(name ? ctx.global[name] : +nodes.shift())
+    immed = uleb(deref(nodes, ctx.global))
   }
 
   // (call id ...nodes)
