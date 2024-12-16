@@ -48,10 +48,10 @@
   * [x] split generic precompile into section builders as was in v1
   * [x] ~~introduce more complete ref/deref use~~ -> we can't really solve full hoisting issue (types, code refs)
   * [x] make IR: types indexing, code deferring
-  * [ ] make generic consuming ops for instructions instead of condition checks
-  * [ ] flatten (deabbr) ops
+  * [x] ~~make generic consuming ops for instructions instead of condition checks~~ -> it's too metaphysical & unclear how to handle generic cases
+  * [ ] flatten (deabbr) ops (if makes sense)
   * [x] make func init code immediately instead of duplicating code
-  * [ ] make use of expr inside of code section, !mb instr groups?
+  * [ ] make use of expr inside of code section, !mb instr groups? Or better use instr instead of expr for wider support (extrapolate standard)
   * [ ] streamline sections parsing/build (no intermediary array)
 * [x] elem all use-cases
 * [ ] Print: make it as nice as AI

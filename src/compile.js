@@ -22,7 +22,7 @@ export default (nodes) => {
   if (typeof nodes === 'string') nodes = parse(nodes); else nodes = [...nodes]
 
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
-  if (nodes[0] === 'module') nodes.shift(), id(nodes)
+  if (nodes[0] === 'module') nodes.shift(), typeof nodes[0] === 'string' && nodes.shift()
   // single node, not module
   else if (typeof nodes[0] === 'string') nodes = [nodes]
 
@@ -50,7 +50,7 @@ export default (nodes) => {
 
   for (let [kind, ...node] of nodes) {
     // index, alias
-    let name = id(node), idx = nodeGroups[kind].length;
+    let name = node[0]?.[0] === '$' ? node.shift() : null, idx = nodeGroups[kind].length;
     if (name) sections[kind][name] = idx; // save alias
 
     // export abbr
@@ -81,8 +81,7 @@ export default (nodes) => {
     // FIXME: can be turned into shallow node
     if (kind === 'import') {
       let [mod, field, [kind, ...dfn]] = node
-      let name = id(dfn)
-      if (name) sections[kind][name] = nodeGroups[kind].length
+      if (dfn[0]?.[0] === '$') sections[kind][dfn.shift()] = nodeGroups[kind].length
       nodeGroups[kind].length++
       node[2] = [kind, ...dfn]
     }
@@ -117,12 +116,6 @@ export default (nodes) => {
   return new Uint8Array(binary)
 }
 
-// consume $id
-const id = nodes => nodes[0]?.[0] === '$' && nodes.shift()
-
-// inject $id
-const deref = (nodes, dict) => nodes[0][0] === '$' ? dict[nodes.shift()] : +nodes.shift()
-
 // abbr for blocks, loops, ifs
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const unfold = nodes => {
@@ -148,8 +141,7 @@ const unfold = nodes => {
         if (node[node.length - 1]?.[0] === 'then') thenelse.unshift(...node.pop())
 
         // label?
-        let name = id(node)
-        if (name) blocktype.push(name)
+        if (node[0]?.[0] === '$') blocktype.push(node.shift())
         // blocktype?
         while (['type', 'param', 'result'].includes(node[0]?.[0])) blocktype.push(node.shift());
 
@@ -397,8 +389,7 @@ const instr = (nodes, ctx) => {
     ctx.block.push(opCode)
 
     // (block $x) (loop $y)
-    let name = id(nodes)
-    if (name) ctx.block[name] = ctx.block.length
+    if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
     // get type - can be either typeidx or valtype (numtype | reftype)
     // (result i32) - doesn't require registering type
@@ -488,7 +479,7 @@ const instr = (nodes, ctx) => {
 
   // ref.func $id
   else if (opCode == 0xd2) {
-    immed = uleb(deref(nodes, ctx.func))
+    immed = uleb(nodes[0][0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift())
   }
 
   // ref.null
@@ -513,18 +504,17 @@ const instr = (nodes, ctx) => {
 
   // (local.get $id), (local.tee $id x)
   else if (opCode >= 0x20 && opCode <= 0x22) {
-    immed = uleb(deref(nodes, ctx.local))
+    immed = uleb(nodes[0][0] === '$' ? ctx.local[nodes.shift()] : +nodes.shift())
   }
 
   // (global.get $id), (global.set $id)
   else if (opCode == 0x23 || opCode == 0x24) {
-    immed = uleb(deref(nodes, ctx.global))
+    immed = uleb(nodes[0][0] === '$' ? ctx.global[nodes.shift()] : +nodes.shift())
   }
 
   // (call id ...nodes)
   else if (opCode == 0x10) {
-    let name = id(nodes)
-    immed = uleb(name ? ctx.func[name] : +nodes.shift());
+    immed = uleb(nodes[0]?.[0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift());
     // FIXME: how to get signature of imported function
   }
 
