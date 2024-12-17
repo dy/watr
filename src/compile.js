@@ -1,6 +1,6 @@
 import * as encode from './encode.js'
 import { uleb } from './encode.js'
-import { SECTION, ALIGN, TYPE, KIND, INSTR } from './const.js'
+import { SECTION, TYPE, KIND, INSTR } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
@@ -383,12 +383,12 @@ const instr = (nodes, ctx) => {
     // (v128.load)
     if (code <= 0x0b) {
       const o = memarg(nodes)
-      immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
+      immed.push(Math.log2(o.align ?? align(op)), ...uleb(o.offset ?? 0))
     }
     // (v128.load_lane offset? align? idx)
     else if (code >= 0x54 && code <= 0x5d) {
       const o = memarg(nodes)
-      immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
+      immed.push(Math.log2(o.align ?? align(op)), ...uleb(o.offset ?? 0))
       // (v128.load_lane_zero)
       if (code <= 0x5b) immed.push(...uleb(nodes.shift()))
     }
@@ -523,7 +523,7 @@ const instr = (nodes, ctx) => {
   else if (code >= 0x28 && code <= 0x3e) {
     // FIXME: figure out point in Math.log2 aligns
     let o = memarg(nodes)
-    immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
+    immed.push(Math.log2(o.align ?? align(op)), ...uleb(o.offset ?? 0))
   }
 
   // (i32.const 123), (f32.const 123.45) etc
@@ -637,6 +637,23 @@ const memarg = (args) => {
   while (args[0]?.includes('=')) kv = args.shift().split('='), ao[kv[0]] = Number(kv[1])
   return ao
 }
+
+// ref:
+// const ALIGN = {
+//   'i32.load': 4, 'i64.load': 8, 'f32.load': 4, 'f64.load': 8,
+//   'i32.load8_s': 1, 'i32.load8_u': 1, 'i32.load16_s': 2, 'i32.load16_u': 2,
+//   'i64.load8_s': 1, 'i64.load8_u': 1, 'i64.load16_s': 2, 'i64.load16_u': 2, 'i64.load32_s': 4, 'i64.load32_u': 4, 'i32.store': 4,
+//   'i64.store': 8, 'f32.store': 4, 'f64.store': 8, 'i32.store8': 1, 'i32.store16': 2, 'i64.store8': 1, 'i64.store16': 2, 'i64.store32': 4,
+//   'v128.load': 16, 'v128.load8x8_s': 8, 'v128.load8x8_u': 8, 'v128.load16x4_s': 8, 'v128.load16x4_u': 8, 'v128.load32x2_s': 8, 'v128.load32x2_u': 8, 'v128.load8_splat': 1, 'v128.load16_splat': 2, 'v128.load32_splat': 4, 'v128.load64_splat': 8, 'v128.store': 16,
+//   'v128.load': 16, 'v128.load8_lane': 1, 'v128.load16_lane': 2, 'v128.load32_lane': 4, 'v128.load64_lane': 8, 'v128.store8_lane': 1, 'v128.store16_lane': 2, 'v128.store32_lane': 4, 'v128.store64_lane': 8, 'v128.load32_zero': 4, 'v128.load64_zero': 8
+// }
+const align = (op) => {
+  let [group, opname] = op.split('.'); // v128.load8x8_u -> gsize = 32, opname = load8_u
+  let [lsize] = (opname[0] === 'l' ? opname.slice(4) : opname.slice(5)).split('_') // load8x8_u -> lsize = 8x8
+  let [size, x] = lsize ? lsize.split('x') : [group.slice(1)] // 8x8 -> size = 8
+  return x ? 8 : +size / 8
+}
+
 
 // build limits sequence (non-consuming)
 const limits = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]

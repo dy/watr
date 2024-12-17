@@ -45,17 +45,4 @@ export const INSTR = [
 ],
   SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 },
   TYPE = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B, func: 0x60, funcref: 0x70, externref: 0x6F, extern: 0x6f },
-  KIND = { func: 0, table: 1, memory: 2, global: 3 },
-  // FIXME: replace with formula
-  ALIGN = {
-    'i32.load': 4, 'i64.load': 8, 'f32.load': 4, 'f64.load': 8,
-    'i32.load8_s': 1, 'i32.load8_u': 1, 'i32.load16_s': 2, 'i32.load16_u': 2,
-    'i64.load8_s': 1, 'i64.load8_u': 1, 'i64.load16_s': 2, 'i64.load16_u': 2, 'i64.load32_s': 4, 'i64.load32_u': 4, 'i32.store': 4,
-    'i64.store': 8, 'f32.store': 4, 'f64.store': 8,
-    'i32.store8': 1, 'i32.store16': 2, 'i64.store8': 1, 'i64.store16': 2, 'i64.store32': 4,
-
-    'v128.load': 16, 'v128.load8x8_s': 8, 'v128.load8x8_u': 8, 'v128.load16x4_s': 8, 'v128.load16x4_u': 8, 'v128.load32x2_s': 8, 'v128.load32x2_u': 8, 'v128.load8_splat': 1, 'v128.load16_splat': 2, 'v128.load32_splat': 4, 'v128.load64_splat': 8, 'v128.store': 16,
-    'v128.load': 16,
-
-    'v128.load8_lane': 1, 'v128.load16_lane': 2, 'v128.load32_lane': 4, 'v128.load64_lane': 8, 'v128.store8_lane': 1, 'v128.store16_lane': 2, 'v128.store32_lane': 4, 'v128.store64_lane': 8, 'v128.load32_zero': 4, 'v128.load64_zero': 8
-  }
+  KIND = { func: 0, table: 1, memory: 2, global: 3 }

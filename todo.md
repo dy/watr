@@ -52,8 +52,8 @@
   * [x] ~~flatten (deabbr) ops (if makes sense)~~ nah, we don't have fixed immeds
   * [x] make func init code immediately instead of duplicating code
   * [x] Use instr instead of expr for wider support (extrapolate standard)?
+  * [x] Do away with ALIGNS const, calc mem properly
   * [ ] streamline sections parsing/build (no intermediary array)
-  * [ ] Do away with ALIGNS const, calc mem properly
 * [x] elem all use-cases
 * [ ] Print: make it as nice as AI
 * [ ] Feature: func-ref
