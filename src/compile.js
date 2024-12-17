@@ -36,7 +36,7 @@ export default (nodes) => {
     0x01, 0x00, 0x00, 0x00, // version
   ]
 
-  // FIXME: maybe we should duplicate code here, since we build a separate section after
+  // FIXME: maybe we should duplicate code section here, since we build a separate section after
   for (let [kind, ...node] of nodes) {
     // index, alias
     let name = node[0]?.[0] === '$' ? node.shift() : null, idx = sections[kind].length;
@@ -60,31 +60,38 @@ export default (nodes) => {
 
     // data abbr
     // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
-    if (node[0]?.[0] === 'data') {
+    else if (node[0]?.[0] === 'data') {
       let [,...data] = node.shift(), m = ''+Math.ceil(data.map(s => s.slice(1,-1)).join('').length / 65536) // FIXME: figure out actual data size
       sections.data.push([['memory', idx], ['i32.const',0], ...data])
       node = [m, m]
     }
 
     // import increments corresponding section index
-    // FIXME: can be turned into shallow node
-    if (kind === 'import') {
+    else if (kind === 'import') {
       let [mod, field, [kind, ...dfn]] = node
       if (dfn[0]?.[0] === '$') sections[kind][dfn.shift()] = sections[kind].length
       sections[kind].length++
       node[2] = [kind, ...dfn]
     }
-    else if (kind === 'start') {name && node.unshift(name);}
-    else if (kind === 'func') node = unfold(node) // plainify instructions
+
+    // keep start name
+    else if (kind === 'start') name && node.push(name);
+
+    // plainify instructions
+    else if (kind === 'func') node = unfold(node)
 
     sections[kind].push(node)
   }
 
-  // build sections binaries
-  sections.map((nodes, kind) => nodes.map((node, i) => !node ? [] : build[kind]?.(i, node, sections)))
+  // convert nodes to binary
+  sections.map((nodes, kind) => {
+    // FIXME: try to see if we can return binary directly from build
+    nodes.map((node, i) => !node ? [] : build[kind]?.(i, node, sections))
+  })
 
-  // build final binary
+  // build sections binaries
   sections.map((items, kind) => {
+    // build final binary
     let bytes = [], count = 0
     for (let item of items) {
       if (!item) { continue } // ignore empty items (like import placeholders)
@@ -201,7 +208,7 @@ const build = [,
     }
 
     const bytes = []//instr(node, ctx)
-    // FIXME: make direct instr call
+    // FIXME: make direct instr call consuming all instructions
     while (node.length) bytes.push(...instr(node, ctx))
     bytes.push(0x0b)
 
@@ -483,7 +490,6 @@ const instr = (nodes, ctx) => {
   // (call id ...nodes)
   else if (code == 0x10) {
     immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift()))
-    // FIXME: how to get signature of imported function
   }
 
   // (call_indirect tableIdx? (type $typeName) (idx) ...nodes)
@@ -529,7 +535,6 @@ const instr = (nodes, ctx) => {
 
   // (i32.store align=n offset=m at value) etc
   else if (code >= 0x28 && code <= 0x3e) {
-    // FIXME: figure out point in Math.log2 aligns
     let o = memarg(nodes)
     immed.push(Math.log2(o.align ?? align(op)), ...uleb(o.offset ?? 0))
   }
@@ -558,6 +563,9 @@ const instr = (nodes, ctx) => {
   if (group) while (nodes.length) out.push(...instr(nodes, ctx))
 
   out.push(...immed)
+
+  // FIXME: make direct instr call consuming all instructions
+  // while (nodes.length) out.push(...instr(nodes, ctx))
 
   return out
 }
@@ -637,7 +645,6 @@ const align = (op) => {
   let [size, x] = lsize ? lsize.split('x') : [group.slice(1)] // 8x8 -> size = 8
   return x ? 8 : +size / 8
 }
-
 
 // build limits sequence (non-consuming)
 const limits = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]
