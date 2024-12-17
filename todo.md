@@ -49,10 +49,11 @@
   * [x] ~~introduce more complete ref/deref use~~ -> we can't really solve full hoisting issue (types, code refs)
   * [x] make IR: types indexing, code deferring
   * [x] ~~make generic consuming ops for instructions instead of condition checks~~ -> it's too metaphysical & unclear how to handle generic cases
-  * [ ] flatten (deabbr) ops (if makes sense)
+  * [x] ~~flatten (deabbr) ops (if makes sense)~~ nah, we don't have fixed immeds
   * [x] make func init code immediately instead of duplicating code
-  * [ ] make use of expr inside of code section, !mb instr groups? Or better use instr instead of expr for wider support (extrapolate standard)
+  * [x] Use instr instead of expr for wider support (extrapolate standard)?
   * [ ] streamline sections parsing/build (no intermediary array)
+  * [ ] Do away with ALIGNS const, calc mem properly
 * [x] elem all use-cases
 * [ ] Print: make it as nice as AI
 * [ ] Feature: func-ref

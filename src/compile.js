@@ -4,12 +4,7 @@ import { SECTION, ALIGN, TYPE, KIND, INSTR } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
-INSTR.forEach((op, i) => {
-  // TODO
-  // wrap codes
-  const code = i// >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc ? [0xfc, i - 0xfc] : i
-  INSTR[op] = i
-})
+INSTR.forEach((op, i) => INSTR[op] = i >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc ? [0xfc, i - 0xfc] : [i])
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
@@ -313,7 +308,7 @@ const build = {
           // 0b001 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive
           mode === 0b001 ? [0x00] :
             // 0b010 x:tabidx e:expr et:elkind y*:vec(funcidx)  | type=0x00, init ((ref.func y)end)*, active (table=x,offset=e)
-            mode === 0b010 ? [...uleb(tabidx || 0), ...expr(offset), 0x0b, 0x00] :
+            mode === 0b010 ? [...uleb(tabidx || 0), ...expr(offset, ctx), 0x0b, 0x00] :
               // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
               mode === 0b011 ? [0x00] :
                 // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
@@ -321,7 +316,7 @@ const build = {
                   // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
                   mode === 0b101 ? [TYPE[reftype]] :
                     // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
-                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset), 0x0b, TYPE[reftype]] :
+                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset, ctx), 0x0b, TYPE[reftype]] :
                       // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
                       [TYPE[reftype]]
       ),
@@ -371,239 +366,196 @@ const build = {
 const instr = (nodes, ctx) => {
   if (!nodes?.length) return []
 
-  let op = nodes.shift(), opCode, immed, group, out = []
-
   // flatten groups, eg. (cmd z w) -> z w cmd
-  if (group = Array.isArray(op)) {
-    nodes = [...op] // op is immutable
-    opCode = INSTR[op = nodes.shift()]
-  }
-  else opCode = INSTR[op]
+  let group = Array.isArray(nodes[0]);
+  if (group) nodes = [...nodes.shift()];
+  let op = nodes.shift(), code, immed, out = [];
 
-  // eventually all these should be functions
-  if (typeof opCode === 'function') return opCode(nodes, ctx)
+  [...immed] = INSTR[op] ?? err('Unknown instruction: ' + op);
+  [code] = immed
 
-  // control block abbrs
-  // (block ...), (loop ...), (if ...)
-  if (opCode === 2 || opCode === 3 || opCode === 4) {
-    ctx.block.push(opCode)
-
-    // (block $x) (loop $y)
-    if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
-
-    // get type - can be either typeidx or valtype (numtype | reftype)
-    // (result i32) - doesn't require registering type
-    if (nodes[0]?.[0] === 'result' && nodes[0].length == 2) immed = [TYPE[nodes.shift()[1]]]
-    // (type idx)? (param i32 i32)? (result i32 i32)
-    else if (['type', 'param', 'result'].includes(nodes[0]?.[0])) immed = uleb(typeuse(nodes, ctx)[0])
-    else immed = [TYPE.void]
-  }
-  // (else)
-  else if (opCode === 5) {}
-  // (then)
-  else if (opCode === 6) {
-    opCode = null // ignore opcode
-  }
 
   // v128s: (v128.load x) etc
   // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
-  else if (opCode >= 0x10f) {
-    opCode -= 0x10f
-    immed = [0xfd, ...uleb(opCode)]
+  if (code === 0xfd) {
+    [,code] = immed
+    immed = [0xfd, ...uleb(code)]
     // (v128.load)
-    if (opCode <= 0x0b) {
+    if (code <= 0x0b) {
       const o = memarg(nodes)
       immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
     }
     // (v128.load_lane offset? align? idx)
-    else if (opCode >= 0x54 && opCode <= 0x5d) {
+    else if (code >= 0x54 && code <= 0x5d) {
       const o = memarg(nodes)
       immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
       // (v128.load_lane_zero)
-      if (opCode <= 0x5b) immed.push(...uleb(nodes.shift()))
+      if (code <= 0x5b) immed.push(...uleb(nodes.shift()))
     }
     // (i8x16.shuffle 0 1 ... 15 a b)
-    else if (opCode === 0x0d) {
+    else if (code === 0x0d) {
       // i8, i16, i32 - bypass the encoding
       for (let i = 0; i < 16; i++) immed.push(encode.i32.parse(nodes.shift()))
     }
     // (v128.const i32x4)
-    else if (opCode === 0x0c) {
-      nodes.unshift(op)
-      immed = expr(nodes, ctx)
+    else if (code === 0x0c) {
+      immed.push(...v128(nodes))
     }
     // (i8x16.extract_lane_s 0 ...)
-    else if (opCode >= 0x15 && opCode <= 0x22) {
+    else if (code >= 0x15 && code <= 0x22) {
       immed.push(...uleb(nodes.shift()))
     }
-    opCode = null // ignore opcode
   }
 
   // bulk memory: (memory.init) (memory.copy) (data.drop) (memory.fill)
   // table ops: (table.init|copy|grow|size|fill) (elem.drop)
   // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
-  else if (opCode >= 0xfc) {
-    immed = [0xfc, ...uleb(opCode -= 0xfc)]
+  else if (code == 0xfc) {
+    [,code] = immed
 
     // memory.init idx, data.drop idx,
-    if (opCode === 0x08 || opCode === 0x09) {
+    if (code === 0x08 || code === 0x09) {
       // toggle datacount section
       if (ctx.data.length) ctx.datacount[0] ??= [ctx.data.length]
       immed.push(...uleb(nodes[0][0] === '$' ? ctx.data[nodes.shift()] : +nodes.shift()))
     }
 
     // memory placeholders
-    if (opCode == 0x08 || opCode == 0x0b) immed.push(0)
-    else if (opCode === 0x0a) immed.push(0,0)
+    if (code == 0x08 || code == 0x0b) immed.push(0)
+    else if (code === 0x0a) immed.push(0,0)
 
     // elem.drop elemidx
-    if (opCode === 0x0d) {
+    if (code === 0x0d) {
       immed.push(...uleb(nodes[0][0] === '$' ? ctx.elem[nodes.shift()] : +nodes.shift()))
     }
     // table.init tableidx? elemidx -> 0xfc 0x0c elemidx tableidx
     // https://webassembly.github.io/spec/core/binary/instructions.html#table-instructions
-    else if (opCode === 0x0c) {
+    else if (code === 0x0c) {
       let tabidx = (nodes[1][0] === '$' || !isNaN(nodes[1])) ? (nodes[0][0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()) : 0
       immed.push(...uleb(nodes[0][0] === '$' ? ctx.elem[nodes.shift()] : +nodes.shift()), ...uleb(tabidx))
     }
     // table.* tableidx?
     // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
-    else if (opCode >= 0x0c) {
+    else if (code >= 0x0c) {
       immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
       // table.copy tableidx? tableidx?
-      if (opCode === 0x0e) immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
+      if (code === 0x0e) immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
     }
-
-    opCode = null // ignore opcode
   }
+    // control block abbrs
+  // (block ...), (loop ...), (if ...)
+  else if (code === 2 || code === 3 || code === 4) {
+    ctx.block.push(code)
 
-  // ref.func $id
-  else if (opCode == 0xd2) {
-    immed = uleb(nodes[0][0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift())
+    // (block $x) (loop $y)
+    if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
+
+    // get type - can be either typeidx or valtype (numtype | reftype)
+    // (result i32) - doesn't require registering type
+    if (nodes[0]?.[0] === 'result' && nodes[0].length == 2) immed.push(TYPE[nodes.shift()[1]])
+    // (type idx)? (param i32 i32)? (result i32 i32)
+    else if (['type', 'param', 'result'].includes(nodes[0]?.[0])) immed.push(...uleb(typeuse(nodes, ctx)[0]))
+    else immed.push(TYPE.void)
   }
-
-  // ref.null
-  else if (opCode == 0xd0) {
-    immed = [TYPE[nodes.shift() + 'ref']] // func->funcref, extern->externref
-  }
-
-  // binary/unary (i32.add a b) - no immed
-  else if (opCode >= 0x45) { }
-
-  // (i32.store align=n offset=m at value) etc
-  else if (opCode >= 0x28 && opCode <= 0x3e) {
-    // FIXME: figure out point in Math.log2 aligns
-    let o = memarg(nodes)
-    immed = [Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0)]
-  }
-
-  // (i32.const 123), (f32.const 123.45) etc
-  else if (opCode >= 0x41 && opCode <= 0x44) {
-    immed = encode[op.split('.')[0]](nodes.shift())
-  }
+  // (else)
+  else if (code === 5) {}
+  // (then)
+  else if (code === 6) immed = [] // ignore
 
   // (local.get $id), (local.tee $id x)
-  else if (opCode >= 0x20 && opCode <= 0x22) {
-    immed = uleb(nodes[0][0] === '$' ? ctx.local[nodes.shift()] : +nodes.shift())
+  else if (code == 0x20 || code == 0x21 || code == 0x22) {
+    immed.push(...uleb(nodes[0][0] === '$' ? ctx.local[nodes.shift()] : +nodes.shift()))
   }
 
   // (global.get $id), (global.set $id)
-  else if (opCode == 0x23 || opCode == 0x24) {
-    immed = uleb(nodes[0][0] === '$' ? ctx.global[nodes.shift()] : +nodes.shift())
+  else if (code == 0x23 || code == 0x24) {
+    immed.push(...uleb(nodes[0][0] === '$' ? ctx.global[nodes.shift()] : +nodes.shift()))
   }
 
   // (call id ...nodes)
-  else if (opCode == 0x10) {
-    immed = uleb(nodes[0]?.[0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift());
+  else if (code == 0x10) {
+    immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift()))
     // FIXME: how to get signature of imported function
   }
 
   // (call_indirect tableIdx? (type $typeName) (idx) ...nodes)
-  else if (opCode == 0x11) {
+  else if (code == 0x11) {
     let tableidx = nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : 0
     let [typeidx] = typeuse(nodes, ctx)
-    immed = [...uleb(typeidx), ...uleb(tableidx)]
+    immed.push(...uleb(typeidx), ...uleb(tableidx))
   }
 
   // (end)
-  else if (opCode == 0x0b) ctx.block.pop()
+  else if (code == 0x0b) ctx.block.pop()
 
   // (br $label result?)
   // (br_if $label cond result?)
-  else if (opCode == 0x0c || opCode == 0x0d) {
+  else if (code == 0x0c || code == 0x0d) {
     // br index indicates how many block items to pop
-    immed = uleb(nodes[0]?.[0] === '$' ? ctx.block.length - ctx.block[nodes.shift()] : nodes.shift())
+    immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.block.length - ctx.block[nodes.shift()] : nodes.shift()))
   }
 
   // (br_table 1 2 3 4  0  selector result?)
-  else if (opCode == 0x0e) {
-    immed = []
+  else if (code == 0x0e) {
+    let args = []
     while (nodes[0] && !Array.isArray(nodes[0])) {
       let id = nodes.shift()
-      immed.push(...uleb(id[0][0] === '$' ? ctx.block.length - ctx.block[id] : id))
+      args.push(...uleb(id[0][0] === '$' ? ctx.block.length - ctx.block[id] : id))
     }
-    immed.unshift(...uleb(immed.length - 1))
+    args.unshift(...uleb(args.length - 1))
+    immed.push(...args)
+  }
+
+  // ref.func $id
+  else if (code == 0xd2) {
+    immed.push(...uleb(nodes[0][0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift()))
+  }
+
+  // ref.null
+  else if (code == 0xd0) {
+    immed.push(TYPE[nodes.shift() + 'ref']) // func->funcref, extern->externref
+  }
+
+  // binary/unary (i32.add a b) - no immed
+  else if (code >= 0x45) { }
+
+  // (i32.store align=n offset=m at value) etc
+  else if (code >= 0x28 && code <= 0x3e) {
+    // FIXME: figure out point in Math.log2 aligns
+    let o = memarg(nodes)
+    immed.push(Math.log2(o.align ?? ALIGN[op]), ...uleb(o.offset ?? 0))
+  }
+
+  // (i32.const 123), (f32.const 123.45) etc
+  else if (code >= 0x41 && code <= 0x44) {
+    immed.push(...encode[op.split('.')[0]](nodes.shift()))
   }
 
   // (memory.grow|size $idx?) - mandatory 0x00
   // https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions
-  else if (opCode == 0x3f || opCode == 0x40) {
-    immed = [0]
+  else if (code == 0x3f || code == 0x40) {
+    immed.push(0)
   }
 
   // (table.get $id)
-  else if (opCode == 0x25 || opCode == 0x26) {
-    immed = uleb(nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift())
+  else if (code == 0x25 || code == 0x26) {
+    immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()))
   }
 
   // table.grow id, table.size id, table.fill id
-  else if (opCode >= 0x0f && opCode <= 0x11) {
-    immed = []
+  else if (code >= 0x0f && code <= 0x11) {
   }
 
-  else if (opCode == null) err(`Unknown instruction \`${op}\``)
-
   // if group (cmd im1 im2 arg1 arg2) - insert any remaining nodes first: arg1 arg2
-  // because inline case has them in stack already
   if (group) while (nodes.length) out.push(...instr(nodes, ctx))
 
-  if (opCode != null) out.push(opCode)
-  if (immed) out.push(...immed)
-
-  // consume rest of instructions (non-group)
-  // while (nodes.length) out.push(...instr(nodes, ctx))
+  out.push(...immed)
 
   return out
 }
 
-// instantiation time const initializer (consuming)
-const expr = (node, ctx) => {
-  let op = node.shift(), [type, cmd] = op.split('.')
-
-  // (global.get idx)
-  if (type === 'global') return [0x23, ...uleb(node[0][0] === '$' ? ctx.global[node[0]] : +node)]
-
-  // (v128.const i32x4 1 2 3 4)
-  if (type === 'v128') return [0xfd, 0x0c, ...v128(node)]
-
-  // (i32.const 1)
-  if (cmd === 'const') return [0x41 + ['i32', 'i64', 'f32', 'f64'].indexOf(type), ...encode[type](node[0])]
-
-  // (ref.func $x) or (ref.null func|extern)
-  if (type === 'ref') {
-    return cmd === 'func' ?
-      [0xd2, ...uleb(node[0][0] === '$' ? ctx.func[node[0]] : +node)] :
-      // heaptype
-      [0xd0, TYPE[node[0] + 'ref']] // func->funcref, extern->externref
-  }
-
-  // (i32.add a b), (i32.mult a b) etc
-  return [
-    ...expr(node.shift(), ctx),
-    ...expr(node.shift(), ctx),
-    INSTR[op]
-  ]
-}
+// instantiation time const initializer (consuming) - we redirect to instr
+const expr = (node, ctx) => instr([node], ctx)
 
 // (v128.const i32x4 1 2 3 4)
 const v128 = (args) => {
