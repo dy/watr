@@ -108,7 +108,7 @@ export default (nodes) => {
   return new Uint8Array(binary)
 }
 
-// abbr blocks, loops, ifs
+// abbr blocks, loops, ifs - plainify
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const unfold = nodes => {
   let out = []
@@ -189,8 +189,8 @@ const build = [,
   },
 
   // (func $name? ...params result ...body)
-  (idx, [...node], ctx) => {
-    const [typeidx, param, result] = typeuse(node, ctx)
+  (idx, [...body], ctx) => {
+    const [typeidx, param, result] = typeuse(body, ctx)
 
     ctx.func[idx] = uleb(typeidx)
 
@@ -201,15 +201,14 @@ const build = [,
     let locstart = param.length
 
     // collect locals
-    while (node[0]?.[0] === 'local') {
-      let [, ...types] = node.shift()
+    while (body[0]?.[0] === 'local') {
+      let [, ...types] = body.shift()
       if (types[0]?.[0] === '$') ctx.local[types.shift()] = ctx.local.length
       ctx.local.push(...types.map(t => TYPE[t]))
     }
 
-    const bytes = []//instr(node, ctx)
-    // FIXME: make direct instr call consuming all instructions
-    while (node.length) bytes.push(...instr(node, ctx))
+    const bytes = []//instr(body, ctx)
+    while  (body.length) bytes.push(...instr(body, ctx))
     bytes.push(0x0b)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
@@ -362,18 +361,22 @@ const build = [,
   }
 ]
 
-// convert sequence of instructions from input nodes to out bytes
+// consume one instruction from nodes sequence
 const instr = (nodes, ctx) => {
   if (!nodes?.length) return []
 
-  // flatten groups, eg. (cmd z w) -> z w cmd
-  let group = Array.isArray(nodes[0]);
-  if (group) nodes = [...nodes.shift()];
-  let op = nodes.shift(), code, immed, out = [];
+  let out = [], op = nodes.shift(), immed, code
 
-  [...immed] = INSTR[op] ?? err('Unknown instruction: ' + op);
-  [code] = immed
+  // consume group
+  if (Array.isArray(op)) {
+    immed = instr(op, ctx)
+    while (op.length) out.push(...instr(op, ctx))
+    out.push(...immed)
+    return out
+  }
 
+  [...immed] = INSTR[op] ?? err('Unknown instruction: ' + op)
+  code = immed[0]
 
   // v128s: (v128.load x) etc
   // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
@@ -471,6 +474,9 @@ const instr = (nodes, ctx) => {
     // (type idx)? (param i32 i32)? (result i32 i32)
     else if (['type', 'param', 'result'].includes(nodes[0]?.[0])) immed.push(...uleb(typeuse(nodes, ctx)[0]))
     else immed.push(TYPE.void)
+
+    // unlike others, block consumes all instructions after
+    while (nodes.length) immed.push(...instr(nodes, ctx))
   }
   // (else)
   else if (code === 5) {}
@@ -559,13 +565,7 @@ const instr = (nodes, ctx) => {
   else if (code >= 0x0f && code <= 0x11) {
   }
 
-  // if group (cmd im1 im2 arg1 arg2) - insert any remaining nodes first: arg1 arg2
-  if (group) while (nodes.length) out.push(...instr(nodes, ctx))
-
   out.push(...immed)
-
-  // FIXME: make direct instr call consuming all instructions
-  // while (nodes.length) out.push(...instr(nodes, ctx))
 
   return out
 }
