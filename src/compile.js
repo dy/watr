@@ -22,35 +22,29 @@ export default (nodes) => {
   else if (typeof nodes[0] === 'string') nodes = [nodes]
 
   // binary abbr "\00" "\0x61" ...
-  // FIXME: be slightly smarter here: parse by sections, optimize them in default way
   if (nodes[0] === 'binary') {
     nodes.shift()
     return new Uint8Array(str(nodes.map(i => i.slice(1, -1)).join('')))
   }
 
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
-  // FIXME: make direct binary instead (faster)
   const sections = []
-  for (let kind in SECTION) sections.push(sections[kind] = [])
+  for (let kind in SECTION) sections[SECTION[kind]] = sections[kind] = []
 
   const binary = [
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
   ]
 
-  // sort nodes by sections
-  // TODO: make this more elegant
-  let nodeGroups = []
-  for (let kind in SECTION) nodeGroups.push(nodeGroups[kind] = [])
-
+  // FIXME: maybe we should duplicate code here, since we build a separate section after
   for (let [kind, ...node] of nodes) {
     // index, alias
-    let name = node[0]?.[0] === '$' ? node.shift() : null, idx = nodeGroups[kind].length;
+    let name = node[0]?.[0] === '$' ? node.shift() : null, idx = sections[kind].length;
     if (name) sections[kind][name] = idx; // save alias
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    while (node[0]?.[0] === 'export') nodeGroups.export.push([node.shift()[1], [kind, idx]])
+    while (node[0]?.[0] === 'export') sections.export.push([node.shift()[1], [kind, idx]])
 
     // import abbr
     // (table|memory|global|func id? (import m n) type) -> (import m n (table|memory|global|func id? type))
@@ -61,14 +55,14 @@ export default (nodes) => {
     if (node[1]?.[0] === 'elem') {
       let [reftype, [, ...els]] = node
       node = [els.length, els.length, reftype]
-      nodeGroups.elem.push([['table', name || nodeGroups.table.length], ['i32.const', '0'],  typeof els[0] === 'string' ? 'func' : reftype, ...els])
+      sections.elem.push([['table', name || sections.table.length], ['i32.const', '0'],  typeof els[0] === 'string' ? 'func' : reftype, ...els])
     }
 
     // data abbr
     // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
     if (node[0]?.[0] === 'data') {
       let [,...data] = node.shift(), m = ''+Math.ceil(data.map(s => s.slice(1,-1)).join('').length / 65536) // FIXME: figure out actual data size
-      nodeGroups.data.push([['memory', idx], ['i32.const',0], ...data])
+      sections.data.push([['memory', idx], ['i32.const',0], ...data])
       node = [m, m]
     }
 
@@ -76,42 +70,38 @@ export default (nodes) => {
     // FIXME: can be turned into shallow node
     if (kind === 'import') {
       let [mod, field, [kind, ...dfn]] = node
-      if (dfn[0]?.[0] === '$') sections[kind][dfn.shift()] = nodeGroups[kind].length
-      nodeGroups[kind].length++
+      if (dfn[0]?.[0] === '$') sections[kind][dfn.shift()] = sections[kind].length
+      sections[kind].length++
       node[2] = [kind, ...dfn]
     }
     else if (kind === 'start') {name && node.unshift(name);}
     else if (kind === 'func') node = unfold(node) // plainify instructions
 
-    nodeGroups[kind].push(node)
-    sections[kind].length++ // predefine spot
+    sections[kind].push(node)
   }
 
   // build sections binaries
-  for (let kind in SECTION) {
-    nodeGroups[kind].map((node,i) => !node ? [] : build[kind](i, node, sections))
-  }
+  sections.map((nodes, kind) => nodes.map((node, i) => !node ? [] : build[kind]?.(i, node, sections)))
 
   // build final binary
-  for (let kind in SECTION) {
-    let secCode = SECTION[kind]
-    let items = sections[kind], bytes = [], count = 0
+  sections.map((items, kind) => {
+    let bytes = [], count = 0
     for (let item of items) {
       if (!item) { continue } // ignore empty items (like import placeholders)
       count++ // count number of items in section
       bytes.push(...item)
     }
     // ignore empty sections
-    if (!bytes.length) continue
+    if (!bytes.length) return
     // skip start section count - write length
-    if (secCode !== SECTION.start && secCode !== SECTION.datacount) bytes.unshift(...uleb(count))
-    binary.push(secCode, ...vec(bytes))
-  }
+    if (kind !== SECTION.start && kind !== SECTION.datacount) bytes.unshift(...uleb(count))
+    binary.push(kind, ...vec(bytes))
+  })
 
   return new Uint8Array(binary)
 }
 
-// abbr for blocks, loops, ifs
+// abbr blocks, loops, ifs
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const unfold = nodes => {
   let out = []
@@ -154,11 +144,11 @@ const unfold = nodes => {
   return out
 }
 
-// build section binary (non consuming)
-const build = {
+// build section binary [by section codes] (non consuming)
+const build = [,
   // (type $id? (func params result))
   // we cannot squash types since indices can refer to them
-  type(idx, [...node], ctx) {
+  (idx, [...node], ctx) => {
     let [, ...sig] = node?.[0] || [], [param, result] = paramres(sig)
 
     ctx.type[idx] = Object.assign(
@@ -169,7 +159,7 @@ const build = {
   },
 
   // (import "math" "add" (func|table|global|memory typedef?))
-  import(idx, [mod, field, [kind, ...dfn]], ctx) {
+  (idx, [mod, field, [kind, ...dfn]], ctx) => {
     let details
 
     if (kind === 'func') {
@@ -192,7 +182,7 @@ const build = {
   },
 
   // (func $name? ...params result ...body)
-  func(idx, [...node], ctx) {
+  (idx, [...node], ctx) => {
     const [typeidx, param, result] = typeuse(node, ctx)
 
     ctx.func[idx] = uleb(typeidx)
@@ -226,17 +216,17 @@ const build = {
   },
 
   // (table id? 1 2? funcref)
-  table(idx, [...node], ctx) {
+  (idx, [...node], ctx) => {
     ctx.table[idx] = [TYPE[node.pop()], ...limits(node)]
   },
 
   // (memory id? export* min max shared)
-  memory(idx, [...node], ctx) {
+  (idx, [...node], ctx) => {
     ctx.memory[idx] = limits(node)
   },
 
   // (global $id? (mut i32) (i32.const 42))
-  global(idx, [...node], ctx) {
+  (idx, [...node], ctx) => {
     let [type] = node, mut = type[0] === 'mut' ? 1 : 0
 
     let [, [...init]] = node
@@ -244,14 +234,14 @@ const build = {
   },
 
   //  (export "name" (func|table|mem $name|idx))
-  export(_, [nm, [kind, id]], ctx) {
+  (i, [nm, [kind, id]], ctx) => {
     // put placeholder to future-init
     let idx = id[0] === '$' ? ctx[kind][id] : +id
-    ctx.export.push([...vec(str(nm.slice(1,-1))), KIND[kind], ...uleb(idx)])
+    ctx.export[i] = [...vec(str(nm.slice(1,-1))), KIND[kind], ...uleb(idx)]
   },
 
   // (start $main)
-  start(_,[id], ctx) {
+  (_,[id], ctx) => {
     id = id[0] === '$' ? ctx.func[id] : +id
     ctx.start[0] = uleb(id)
   },
@@ -262,7 +252,7 @@ const build = {
   // active: (elem (table idx)? (offset expr)|(expr) elem*)
   // elems: funcref|externref (item expr)|expr (item expr)|expr
   // idxs: func? $id0 $id1
-  elem(idx,[...parts], ctx) {
+  (idx,[...parts], ctx) => {
     let tabidx, offset, mode = 0b000, reftype
 
     // declare?
@@ -330,10 +320,13 @@ const build = {
     ])
   },
 
+  // (code)
+  ,
+
   // (data (i32.const 0) "\aa" "\bb"?)
   // (data (memory ref) (offset (i32.const 0)) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
-  data(idx, [...inits], ctx) {
+  (idx, [...inits], ctx) => {
     let offset, memidx = 0
 
     // (memory ref)?
@@ -360,7 +353,7 @@ const build = {
       ...vec(str(inits.map(i => i.slice(1, -1)).join('')))
     ]
   }
-}
+]
 
 // convert sequence of instructions from input nodes to out bytes
 const instr = (nodes, ctx) => {
@@ -397,9 +390,24 @@ const instr = (nodes, ctx) => {
       // i8, i16, i32 - bypass the encoding
       for (let i = 0; i < 16; i++) immed.push(encode.i32.parse(nodes.shift()))
     }
-    // (v128.const i32x4)
+    // (v128.const i32x4 1 2 3 4)
     else if (code === 0x0c) {
-      immed.push(...v128(nodes))
+      let [t, n] = nodes.shift().split('x'), stride = t.slice(1) >>> 3 // i16 -> 2, f32 -> 4
+      n = +n
+      // i8, i16, i32 - bypass the encoding
+      if (t[0] === 'i') {
+        let arr = n === 16 ? new Uint8Array(16) : n === 8 ? new Uint16Array(8) : n === 4 ? new Uint32Array(4) : new BigInt64Array(2)
+        for (let i = 0; i < n; i++) {
+          arr[i] = encode[t].parse(nodes.shift())
+        }
+        immed.push(...(new Uint8Array(arr.buffer)))
+      }
+      // f32, f64 - encode
+      else {
+        let arr = new Uint8Array(16)
+        for (let i = 0; i < n; i++) arr.set(encode[t](nodes.shift()), i * stride)
+        immed.push(...arr)
+      }
     }
     // (i8x16.extract_lane_s 0 ...)
     else if (code >= 0x15 && code <= 0x22) {
@@ -554,33 +562,9 @@ const instr = (nodes, ctx) => {
   return out
 }
 
-// instantiation time const initializer (consuming) - we redirect to instr
+// instantiation time value initializer (consuming) - we redirect to instr
 const expr = (node, ctx) => instr([node], ctx)
 
-// (v128.const i32x4 1 2 3 4)
-const v128 = (args) => {
-  let [t, n] = args.shift().split('x'),
-    stride = t.slice(1) >>> 3 // i16 -> 2, f32 -> 4
-
-  n = +n
-
-  // i8, i16, i32 - bypass the encoding
-  if (t[0] === 'i') {
-    let arr = n === 16 ? new Uint8Array(16) : n === 8 ? new Uint16Array(8) : n === 4 ? new Uint32Array(4) : new BigInt64Array(2)
-    for (let i = 0; i < n; i++) {
-      arr[i] = encode[t].parse(args.shift())
-    }
-    return new Uint8Array(arr.buffer)
-  }
-
-  // f32, f64 - encode
-  let arr = new Uint8Array(16)
-  for (let i = 0; i < n; i++) {
-    arr.set(encode[t](args.shift()), i * stride)
-  }
-
-  return arr
-}
 
 // https://webassembly.github.io/spec/core/text/modules.html#type-uses
 // consume (type $id|id) (param t+)* (result t+)*
@@ -604,7 +588,7 @@ const typeuse = (nodes, ctx) => {
   ;[param, result] = paramres(nodes), alias = param + '>' + result
   // or register new type
   if (ctx.type[alias] == null) {
-    build.type(ctx.type.length, [[, ['param', ...param], ['result', ...result]]], ctx)
+    build[SECTION.type](ctx.type.length, [[, ['param', ...param], ['result', ...result]]], ctx)
   }
 
   return [ctx.type[alias], param, result]
