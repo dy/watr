@@ -76,8 +76,10 @@ export default (nodes) => {
     // keep start name
     else if (kind === 'start') name && node.push(name);
 
-    // plainify instructions, dupe to code section
-    else if (kind === 'func') node = unfold(node), sections.code.push(node)
+    // dupe to code section
+    else if (kind === 'func') nodes.push(['code', ...node])
+    // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
+    else if (kind === 'code') node = unfold(node)
 
     sections[kind].push(node)
   }
