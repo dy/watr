@@ -36,7 +36,6 @@ export default (nodes) => {
     0x01, 0x00, 0x00, 0x00, // version
   ]
 
-  // FIXME: maybe we should duplicate code section here, since we build a separate section after
   for (let [kind, ...node] of nodes) {
     // index, alias
     let name = node[0]?.[0] === '$' ? node.shift() : null, idx = sections[kind].length;
@@ -77,8 +76,8 @@ export default (nodes) => {
     // keep start name
     else if (kind === 'start') name && node.push(name);
 
-    // plainify instructions
-    else if (kind === 'func') node = unfold(node)
+    // plainify instructions, dupe to code section
+    else if (kind === 'func') node = unfold(node), sections.code.push(node)
 
     sections[kind].push(node)
   }
@@ -190,35 +189,9 @@ const build = [,
 
   // (func $name? ...params result ...body)
   (idx, [...body], ctx) => {
-    const [typeidx, param, result] = typeuse(body, ctx)
+    const [typeidx] = typeuse(body, ctx)
 
     ctx.func[idx] = uleb(typeidx)
-
-    // provide param/local in ctx
-    ctx.local = param // list of params + local variables
-    ctx.block = [] // control instructions / blocks stack
-
-    let locstart = param.length
-
-    // collect locals
-    while (body[0]?.[0] === 'local') {
-      let [, ...types] = body.shift()
-      if (types[0]?.[0] === '$') ctx.local[types.shift()] = ctx.local.length
-      ctx.local.push(...types.map(t => TYPE[t]))
-    }
-
-    const bytes = []//instr(body, ctx)
-    while  (body.length) bytes.push(...instr(body, ctx))
-    bytes.push(0x0b)
-
-    // squash locals into (n:u32 t:valtype)*, n is number and t is type
-    let loctypes = ctx.local.slice(locstart).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
-
-    // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    ctx.code[idx] = vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes])
-
-    // cleanup tmp state
-    ctx.local = ctx.block = null
   },
 
   // (table id? 1 2? funcref)
@@ -327,7 +300,35 @@ const build = [,
   },
 
   // (code)
-  ,
+  (idx, body, ctx) => {
+    const [type, param, result] = typeuse(body, ctx)
+
+    // provide param/local in ctx
+    ctx.local = param // list of params + local variables
+    ctx.block = [] // control instructions / blocks stack
+
+    let locstart = param.length
+
+    // collect locals
+    while (body[0]?.[0] === 'local') {
+      let [, ...types] = body.shift()
+      if (types[0]?.[0] === '$') ctx.local[types.shift()] = ctx.local.length
+      ctx.local.push(...types.map(t => TYPE[t]))
+    }
+
+    const bytes = []//instr(body, ctx)
+    while  (body.length) bytes.push(...instr(body, ctx))
+    bytes.push(0x0b)
+
+    // squash locals into (n:u32 t:valtype)*, n is number and t is type
+    let loctypes = ctx.local.slice(locstart).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
+
+    // cleanup tmp state
+    ctx.local = ctx.block = null
+
+    // https://webassembly.github.io/spec/core/binary/modules.html#code-section
+    ctx.code[idx] = vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes])
+  },
 
   // (data (i32.const 0) "\aa" "\bb"?)
   // (data (memory ref) (offset (i32.const 0)) "\aa" "\bb"?)
