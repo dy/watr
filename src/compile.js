@@ -79,7 +79,7 @@ export default (nodes) => {
     // dupe to code section
     else if (kind === 'func') nodes.push(['code', ...node])
     // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
-    else if (kind === 'code') node = unfold([...node], sections) // FIXME: this must init extra types
+    else if (kind === 'code') node = plain([...node], sections) // FIXME: this must init extra types
 
     sections[kind].push(node)
   }
@@ -109,9 +109,9 @@ export default (nodes) => {
   return new Uint8Array(binary)
 }
 
-// abbr blocks, loops, ifs - plainify
+// abbr blocks, loops, ifs - unfold
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
-const unfold = (nodes, ctx) => {
+const plain = (nodes, ctx) => {
   let out = []
 
   // FIXME: we can collect types here btw and simplify typeuse not to create types on binary stage
@@ -120,13 +120,13 @@ const unfold = (nodes, ctx) => {
 
     // (block ...) -> block ... end
     else if (node[0] === 'block' || node[0] === 'loop') {
-      node = unfold(node, ctx)
+      node = plain(node, ctx)
       out.push(...node, 'end')
     }
 
     // (if ...) -> if ... end
     else if (node[0] === 'if') {
-      node = unfold(node, ctx)
+      node = plain(node, ctx)
 
       let thenelse = [], blocktype = [node.shift()]
       // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
@@ -148,7 +148,7 @@ const unfold = (nodes, ctx) => {
     }
 
     // (instr *) -> unfold internals
-    else out.push(unfold([...node], ctx))
+    else out.push(plain([...node], ctx))
   }
 
   return out
