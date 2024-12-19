@@ -79,7 +79,7 @@ export default (nodes) => {
     // dupe to code section
     else if (kind === 'func') nodes.push(['code', ...node])
     // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
-    else if (kind === 'code') node = unfold(node)
+    else if (kind === 'code') node = unfold([...node], sections) // FIXME: this must init extra types
 
     sections[kind].push(node)
   }
@@ -111,42 +111,44 @@ export default (nodes) => {
 
 // abbr blocks, loops, ifs - plainify
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
-const unfold = nodes => {
+const unfold = (nodes, ctx) => {
   let out = []
 
   // FIXME: we can collect types here btw and simplify typeuse not to create types on binary stage
   for (let node of nodes) {
-    if (Array.isArray(node)) {
-      node = unfold(node)
+    if (typeof node === 'string') out.push(node)
 
-      // (block ...) -> block ... end
-      if (node[0] === 'block' || node[0] === 'loop') {
-        out.push(node.shift())
-        for (let n of node) out.push(n)
-        out.push('end')
-      }
-      // (if ...) -> if ... end
-      else if (node[0] === 'if') {
-        let thenelse = [], blocktype = [node.shift()]
-        // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
-        // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
-        if (node[node.length - 1]?.[0] === 'else') thenelse.unshift(...node.pop())
-        if (node[node.length - 1]?.[0] === 'then') thenelse.unshift(...node.pop())
-
-        // label?
-        if (node[0]?.[0] === '$') blocktype.push(node.shift())
-        // blocktype?
-        while (['type', 'param', 'result'].includes(node[0]?.[0])) blocktype.push(node.shift());
-
-        // ignore empty else
-        // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
-        if (thenelse[thenelse.length - 1] === 'else') thenelse.pop()
-
-        out.push(...node, ...blocktype, ...thenelse, 'end')
-      }
-      else out.push(node)
+    // (block ...) -> block ... end
+    else if (node[0] === 'block' || node[0] === 'loop') {
+      node = unfold(node, ctx)
+      out.push(...node, 'end')
     }
-    else out.push(node)
+
+    // (if ...) -> if ... end
+    else if (node[0] === 'if') {
+      node = unfold(node, ctx)
+
+      let thenelse = [], blocktype = [node.shift()]
+      // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
+      // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
+      if (node[node.length - 1]?.[0] === 'else') thenelse.unshift(...node.pop())
+      if (node[node.length - 1]?.[0] === 'then') thenelse.unshift(...node.pop())
+
+      // label?
+      if (node[0]?.[0] === '$') blocktype.push(node.shift())
+
+      // blocktype?
+      while (['type', 'param', 'result'].includes(node[0]?.[0])) blocktype.push(node.shift());
+
+      // ignore empty else
+      // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
+      if (thenelse[thenelse.length - 1] === 'else') thenelse.pop()
+
+      out.push(...node, ...blocktype, ...thenelse, 'end')
+    }
+
+    // (instr *) -> unfold internals
+    else out.push(unfold([...node], ctx))
   }
 
   return out
@@ -192,7 +194,6 @@ const build = [,
   // (func $name? ...params result ...body)
   (idx, [...body], ctx) => {
     const [typeidx] = typeuse(body, ctx)
-
     ctx.func[idx] = uleb(typeidx)
   },
 
@@ -463,7 +464,7 @@ const instr = (nodes, ctx) => {
       if (code === 0x0e) immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
     }
   }
-    // control block abbrs
+  // control block abbrs
   // (block ...), (loop ...), (if ...)
   else if (code === 2 || code === 3 || code === 4) {
     ctx.block.push(code)
