@@ -76,11 +76,13 @@ export default (nodes) => {
     else if (kind === 'start') name && node.push(name);
 
     // dupe to code section
-    else if (kind === 'func') !imported && nodes.push(['code', ...node]) // FIXME: consume type info and insert type reference; extra type is injected by code;
+    else if (kind === 'func') nodes.push(['code', imported, ...node]) // FIXME: consume type info and insert type reference; extra type is injected by code;
 
     // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
     else if (kind === 'code') {
-      node = plain(node, sections) // FIXME: this must init extra types
+      let imported = node.shift()
+      if (!imported) node = plain(node, sections) // FIXME: this must init extra types
+      else node = null
     }
 
     // FIXME: implicit type added via typeuse (import, func or plain)?
