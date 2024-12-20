@@ -41,7 +41,7 @@ export default (nodes) => {
 
     // import abbr
     // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
-    if (kind === 'import') imported = [], [imported[0], imported[1], [kind, ...node]] = node
+    if (kind === 'import') imported = node, [kind, ...node] = node.pop()
 
     // index, alias
     // FIXME: merge name & idx
