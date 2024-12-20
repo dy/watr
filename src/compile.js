@@ -37,17 +37,28 @@ export default (nodes) => {
   ]
 
   for (let [kind, ...node] of nodes) {
+    let imprt // if node needs to be imported
+
+    // import abbr
+    // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
+    if (kind === 'import') {
+      let [mod, field, dfn] = node;
+      [kind,...node] = dfn
+      imprt = [mod, field]
+    }
+
     // index, alias
-    let name = node[0]?.[0] === '$' ? node.shift() : null, idx = sections[kind].length;
+    // FIXME: merge name & idx
+    let name = node[0]?.[0] === '$' ? node.shift() : null,
+        idx = sections[kind].length;
     if (name) sections[kind][name] = idx; // save alias
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
     while (node[0]?.[0] === 'export') sections.export.push([node.shift()[1], [kind, idx]])
 
-    // import abbr
-    // (table|memory|global|func id? (import m n) type) -> (import m n (table|memory|global|func id? type))
-    if (node[0]?.[0] === 'import') node = [...node.shift(), [kind, ...(name ? [name] : []), ...node]], kind = node.shift()
+    // for import nodes - redirect output to import
+    if (node[0]?.[0] === 'import') [,...imprt] = node.shift()
 
     // table abbr
     // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
@@ -65,22 +76,23 @@ export default (nodes) => {
       node = [m, m]
     }
 
-    // import increments corresponding section index
-    else if (kind === 'import') {
-      let [mod, field, [kind, ...dfn]] = node
-      if (dfn[0]?.[0] === '$') sections[kind][dfn.shift()] = sections[kind].length
-      sections[kind].length++
-      node[2] = [kind, ...dfn]
-    }
-
     // keep start name
     else if (kind === 'start') name && node.push(name);
 
     // dupe to code section
-    else if (kind === 'func') nodes.push(['code', ...node])
-    // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
-    else if (kind === 'code') node = plain([...node], sections) // FIXME: this must init extra types
+    else if (kind === 'func') !imprt && nodes.push(['code', ...node]) // FIXME: consume type info and insert type reference; extra type is injected by code;
 
+    // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
+    else if (kind === 'code') {
+      node = plain([...node], sections) // FIXME: this must init extra types
+    }
+
+    // FIXME: implicit type added via typeuse (import, func or plain)?
+
+    // if (kind === 'type' && name[0] === '#')
+    if (imprt) sections.import.push([...imprt, [kind, ...node]]), node = null
+
+    // FIXME: ignore duplicate name dfn?, like type or start?
     sections[kind].push(node)
   }
 
