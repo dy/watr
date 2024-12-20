@@ -37,14 +37,14 @@ export default (nodes) => {
   ]
 
   for (let [kind, ...node] of nodes) {
-    let imprt // if node needs to be imported
+    let imported // if node needs to be imported
 
     // import abbr
     // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
     if (kind === 'import') {
       let [mod, field, dfn] = node;
       [kind,...node] = dfn
-      imprt = [mod, field]
+      imported = [mod, field]
     }
 
     // index, alias
@@ -58,7 +58,7 @@ export default (nodes) => {
     while (node[0]?.[0] === 'export') sections.export.push([node.shift()[1], [kind, idx]])
 
     // for import nodes - redirect output to import
-    if (node[0]?.[0] === 'import') [,...imprt] = node.shift()
+    if (node[0]?.[0] === 'import') [,...imported] = node.shift()
 
     // table abbr
     // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
@@ -80,17 +80,17 @@ export default (nodes) => {
     else if (kind === 'start') name && node.push(name);
 
     // dupe to code section
-    else if (kind === 'func') !imprt && nodes.push(['code', ...node]) // FIXME: consume type info and insert type reference; extra type is injected by code;
+    else if (kind === 'func') !imported && nodes.push(['code', ...node]) // FIXME: consume type info and insert type reference; extra type is injected by code;
 
     // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
     else if (kind === 'code') {
-      node = plain([...node], sections) // FIXME: this must init extra types
+      node = plain(node, sections) // FIXME: this must init extra types
     }
 
     // FIXME: implicit type added via typeuse (import, func or plain)?
 
     // if (kind === 'type' && name[0] === '#')
-    if (imprt) sections.import.push([...imprt, [kind, ...node]]), node = null
+    if (imported) sections.import.push([...imported, [kind, ...node]]), node = null
 
     // FIXME: ignore duplicate name dfn?, like type or start?
     sections[kind].push(node)
@@ -160,7 +160,7 @@ const plain = (nodes, ctx) => {
     }
 
     // (instr *) -> unfold internals
-    else out.push(plain([...node], ctx))
+    else out.push(plain(node, ctx))
   }
 
   return out
