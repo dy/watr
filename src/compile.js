@@ -75,12 +75,12 @@ export default (nodes) => {
     else if (kind === 'start') name && node.push(name);
 
     // [func, [param, result]] -> [param, result], alias
-    else if (kind === 'type') node = paramres(node[0]), sections.type['$'+node.join('>')] = idx
+    else if (kind === 'type') node = paramres([node[0][1]]), sections.type['$'+node.join('>')] = idx
 
     // dupe to code section
     // we insert type by id or alias for implicit types - will be checked after
     else if (kind === 'func') {
-      let [idx, ...pr] = type(node, sections)
+      let [idx, ...pr] = typeuse(node, sections)
       !imported && nodes.push(['code', pr, ...node])
       node.unshift(['type', idx ?? '$'+(sections._['$'+pr.join('>')] ??= pr).join('>')])
     }
@@ -134,20 +134,20 @@ const plain = ([...nodes], ctx) => {
     if (node === 'block' || node === 'loop' || node === 'if') {
       out.push(node)
 
-      let [idx, param, result] = type(nodes, ctx)
+      let [idx, param, result] = typeuse(nodes, ctx)
 
       // get type - can be either idx or valtype (numtype | reftype)
       if (!param.length && !result.length);
       // (result i32) - doesn't require registering type
-      if (!param.length && result.length === 1) out.push(result)
+      else if (!param.length && result.length === 1) out.push(['result', result])
       // (type idx)? (param i32 i32)? (result i32 i32)
       else out.push(['type', idx ?? '$'+(ctx._['$'+param+'>'+result] = [param, result]).join('>')])
     }
     else if (node === 'call_indirect') {
       out.push(node)
       if (typeof nodes[0] === 'string') out.push(nodes.shift())
-      let [idx, param, result] = type(nodes, ctx)
-      nodes.unshift(['type', idx ?? '$'+(ctx._['$'+param+'>'+result] = [param, result]).join('>')])
+      let [idx, param, result] = typeuse(nodes, ctx)
+      out.push(['type', idx ?? '$'+(ctx._['$'+param+'>'+result] = [param, result]).join('>')])
     }
 
     else if (typeof node === 'string') out.push(node)
@@ -189,7 +189,8 @@ const plain = ([...nodes], ctx) => {
 }
 
 // consume typeuse nodes, return type index/params, or null idx if no type
-const type = (nodes, ctx) => {
+// https://webassembly.github.io/spec/core/text/modules.html#type-uses
+const typeuse = (nodes, ctx) => {
   let idx, parres
 
   // explicit type (type 0|$name)
@@ -204,6 +205,27 @@ const type = (nodes, ctx) => {
   parres = paramres(nodes)
 
   return [, ...parres]
+}
+
+// consume (param t+)* (result t+)* sequence
+const paramres = (nodes) => {
+  let param = [], result = []
+
+  // collect param (param i32 i64) (param $x? i32)
+  while (nodes[0]?.[0] === 'param') {
+    let [, ...args] = nodes.shift()
+    let name = args[0]?.[0] === '$' && args.shift()
+    if (name) param[name] = param.length // expose name refs
+    param.push(...args)
+  }
+
+  // collect result eg. (result f64 f32)(result i32)
+  while (nodes[0]?.[0] === 'result') {
+    let [, ...args] = nodes.shift()
+    result.push(...args)
+  }
+
+  return [param, result]
 }
 
 // build section binary [by section codes] (non consuming)
@@ -517,13 +539,10 @@ const instr = (nodes, ctx) => {
     // (block $x) (loop $y)
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
-    let [,typeidx] = block.shift(), type = ctx.type[typeidx]
-
-    // get type - can be either typeidx or valtype (numtype | reftype)
     // (result i32) - doesn't require registering type
-    if (nodes[0]?.[0] === 'result' && nodes[0].length == 2) immed.push(TYPE[nodes.shift()[1]])
-    // (type idx)? (param i32 i32)? (result i32 i32)
-    else if (['type', 'param', 'result'].includes(nodes[0]?.[0])) immed.push(...uleb(typeuse(nodes, ctx)[0]))
+    if (nodes[0]?.[0] === 'result') immed.push(TYPE[nodes.shift()[1]])
+    // (type idx)
+    else if (nodes[0]?.[0] === 'type') immed.push(...uleb( nodes[0][1][0] === '$' ? ctx.type[nodes.shift()[1]] : +nodes.shift()[1] ))
     else immed.push(TYPE.void)
 
     // unlike others, block consumes all instructions after
@@ -552,8 +571,8 @@ const instr = (nodes, ctx) => {
   // (call_indirect tableIdx? (type $typeName) (idx) ...nodes)
   else if (code == 0x11) {
     let tableidx = typeof nodes[0] === 'string' ? (nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()) : 0
-    let [,typeidx] = nodes.shift()
-    immed.push(...uleb(typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx), ...uleb(tableidx))
+    let typeidx = nodes[0][1][0] === '$' ? ctx.type[nodes.shift()[1]] : +nodes.shift()[1]
+    immed.push(...uleb(typeidx), ...uleb(tableidx))
   }
 
   // (end)
@@ -623,56 +642,6 @@ const instr = (nodes, ctx) => {
 
 // instantiation time value initializer (consuming) - we redirect to instr
 const expr = (node, ctx) => instr([node], ctx)
-
-
-// https://webassembly.github.io/spec/core/text/modules.html#type-uses
-// consume (type $id|id) (param t+)* (result t+)*
-const typeuse = (nodes, ctx) => {
-  let idx, param, result, alias
-
-  // existing/new type (type 0|$name)
-  if (nodes[0]?.[0] === 'type') {
-    [, idx] = nodes.shift();
-
-    // (type 0), (type $n) - existing type
-    if (ctx.type[idx] != null) {
-      paramres(nodes);
-      if (idx[0] === '$') idx = ctx.type[idx];
-      ({ param, result } = ctx.type[idx] ?? err('Bad type ' + idx));
-      return [+idx, param, result]
-    }
-  }
-
-  // if new type - find existing match
-  ;[param, result] = paramres(nodes), alias = param + '>' + result
-  // or register new type
-  if (ctx.type[alias] == null) {
-    build[SECTION.type](ctx.type.length, [[, ['param', ...param], ['result', ...result]]], ctx)
-  }
-
-  return [ctx.type[alias], param, result]
-}
-
-// consume (param t+)* (result t+)* sequence
-const paramres = (nodes) => {
-  let param = [], result = []
-
-  // collect param (param i32 i64) (param $x? i32)
-  while (nodes[0]?.[0] === 'param') {
-    let [, ...args] = nodes.shift()
-    let name = args[0]?.[0] === '$' && args.shift()
-    if (name) param[name] = param.length // expose name refs
-    param.push(...args)
-  }
-
-  // collect result eg. (result f64 f32)(result i32)
-  while (nodes[0]?.[0] === 'result') {
-    let [, ...args] = nodes.shift()
-    result.push(...args)
-  }
-
-  return [param, result]
-}
 
 // consume align/offset/etc params
 const memarg = (args) => {
