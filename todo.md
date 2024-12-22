@@ -53,12 +53,21 @@
   * [x] make func init code immediately instead of duplicating code
   * [x] Use instr instead of expr for wider support (extrapolate standard)?
   * [x] Do away with ALIGNS const, calc mem properly
-  * [ ] streamline sections parsing/build (no intermediary array)
+  * [x] streamline sections parsing/build (no intermediary array)
+* [x] Streamline building:
+  * [x] Split func into code/func to build sections separately
+  * [x] Turn import into shallow node of a kind: name alias, typeuse, replace with null
+    ? how will it help making typeuse at the end, like func->code dodes?
+  * [x] Try detecting typeuse in sorting stage -> append all extra type nodes at the end
+    - We should have all used types ready by momemt of binary build
+      ~+ code section with import
+    - traverse difficulty: we plainify nested nodes first, and detecting nested types first is wrong order
+      ~+ unless we adjust traverse order
+    - we should not register type if that's simple result or none: that would duplicate logic
+      ~+ unless we normalize marker to `(result i32)`|`(type $id)`|`empty`
+  * [x] remove typeuses
+  * [x] Return binary directly from build
 * [x] elem all use-cases
-* [ ] Print: make it as nice as AI
-* [ ] Feature: func-ref
-* [ ] Feature: ref-types
-* [ ] Feature: gc
 * [ ] Official tests
   * [x] Include testsuite repo
   * [ ] All test instructions: assert_invalid
@@ -67,16 +76,19 @@
 * [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
 * [ ] validation / errors: should be safe to type in anything
-* [ ] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
-* [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
-* [ ] Wasm3
+* [ ] Print: make it as nice as AI
+* [ ] Features
+  * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
+  * [ ] All main ones (readme)
+  * [ ] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
+  * [ ] Wasm3
 
 ## REPL
 
 * [ ] compiler selector
 * [ ] examples
 * [ ] perf stats
-* [ ] prettifier
+* [ ] prettifier flag
 
 ## Backlog
 
@@ -86,6 +98,6 @@
 ## Offering Qualifications
 
 * minimal & clever validator - basic checks via generic funcs
-* streamline, clear, lightweight algorithm - easy to remember
+* streamline, clear, lightweight algorithm - easy to remember & understand
 * meaningful base of tests covered - not verbosities
 * clear, lightweight repl

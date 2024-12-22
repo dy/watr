@@ -32,11 +32,6 @@ export default (nodes) => {
   for (let kind in SECTION) sections[SECTION[kind]] = sections[kind] = []
   sections._ = {} // implicit types
 
-  const binary = [
-    0x00, 0x61, 0x73, 0x6d, // magic
-    0x01, 0x00, 0x00, 0x00, // version
-  ]
-
   for (let [kind, ...node] of nodes) {
     let imported // if node needs to be imported
 
@@ -98,26 +93,23 @@ export default (nodes) => {
   for (let n in sections._) sections.type[n] ??= sections.type.push(sections._[n]) - 1
 
   // convert nodes to binary
-  sections.map((nodes, kind) => {
-    // FIXME: try to see if we can return binary directly from build
-    nodes.map((node, i) => !node ? [] : build[kind]?.(i, node, sections))
-  })
+  const binary = [
+    0x00, 0x61, 0x73, 0x6d, // magic
+    0x01, 0x00, 0x00, 0x00, // version
+  ]
 
-  // build sections binaries
-  sections.map((items, kind) => {
+  sections
+    // convert nodes to binaries (skip placeholders)
+    .map((nodes, kind) => nodes.filter(Boolean).map((node) => build[kind]?.(node, sections)))
+
     // build final binary
-    let bytes = [], count = 0
-    for (let item of items) {
-      if (!item) { continue } // ignore empty items (like import placeholders)
-      count++ // count number of items in section
-      bytes.push(...item)
-    }
-    // ignore empty sections
-    if (!bytes.length) return
-    // skip start section count - write length
-    if (kind !== SECTION.start && kind !== SECTION.datacount) bytes.unshift(...uleb(count))
-    binary.push(kind, ...vec(bytes))
-  })
+    .map((items, kind) => {
+      if (!items.length) return
+      let bytes = items.flatMap(items => items)
+      // skip start section count - write length
+      if (kind !== SECTION.start && kind !== SECTION.datacount) bytes.unshift(...uleb(items.length))
+      binary.push(kind, ...vec(bytes))
+    })
 
   return new Uint8Array(binary)
 }
@@ -231,13 +223,10 @@ const paramres = (nodes) => {
 // build section binary [by section codes] (non consuming)
 const build = [,
   // (type $id? (func params result))
-  // we cannot squash types since indices can refer to them
-  (idx, [param, result], ctx) => {
-    ctx.type[idx] = [TYPE.func, ...vec(param.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))]
-  },
+  ([param, result], ctx) => ([TYPE.func, ...vec(param.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))]),
 
   // (import "math" "add" (func|table|global|memory typedef?))
-  (idx, [mod, field, [kind, ...dfn]], ctx) => {
+  ([mod, field, [kind, ...dfn]], ctx) => {
     let details
 
     if (kind === 'func') {
@@ -256,44 +245,31 @@ const build = [,
       details = [TYPE[dfn.pop()], ...limits(dfn)]
     }
 
-    ctx.import[idx] = ([...vec(str(mod.slice(1,-1))), ...vec(str(field.slice(1,-1))), KIND[kind], ...details])
+    return ([...vec(str(mod.slice(1,-1))), ...vec(str(field.slice(1,-1))), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
-  (idx, [[,typeidx]], ctx) => {
-    ctx.func[idx] = uleb(typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx)
-  },
+  ([[,typeidx]], ctx) => (uleb(typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx)),
 
   // (table id? 1 2? funcref)
-  (idx, [...node], ctx) => {
-    ctx.table[idx] = [TYPE[node.pop()], ...limits(node)]
-  },
+  ([...node], ctx) => ([TYPE[node.pop()], ...limits(node)]),
 
   // (memory id? export* min max shared)
-  (idx, [...node], ctx) => {
-    ctx.memory[idx] = limits(node)
-  },
+  ([...node], ctx) => limits(node),
 
   // (global $id? (mut i32) (i32.const 42))
-  (idx, [...node], ctx) => {
+  ([...node], ctx) => {
     let [type] = node, mut = type[0] === 'mut' ? 1 : 0
 
     let [, [...init]] = node
-    ctx.global[idx] = [TYPE[mut ? type[1] : type], mut, ...expr(init, ctx), 0x0b]
+    return ([TYPE[mut ? type[1] : type], mut, ...expr(init, ctx), 0x0b])
   },
 
   //  (export "name" (func|table|mem $name|idx))
-  (i, [nm, [kind, id]], ctx) => {
-    // put placeholder to future-init
-    let idx = id[0] === '$' ? ctx[kind][id] : +id
-    ctx.export[i] = [...vec(str(nm.slice(1,-1))), KIND[kind], ...uleb(idx)]
-  },
+  ([nm, [kind, id]], ctx) => ([...vec(str(nm.slice(1,-1))), KIND[kind], ...uleb(id[0] === '$' ? ctx[kind][id] : +id)]),
 
   // (start $main)
-  (_,[id], ctx) => {
-    id = id[0] === '$' ? ctx.func[id] : +id
-    ctx.start[0] = uleb(id)
-  },
+  ([id], ctx) => (uleb(id[0] === '$' ? ctx.func[id] : +id)),
 
   // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
   // passive: (elem elem*)
@@ -301,7 +277,7 @@ const build = [,
   // active: (elem (table idx)? (offset expr)|(expr) elem*)
   // elems: funcref|externref (item expr)|expr (item expr)|expr
   // idxs: func? $id0 $id1
-  (idx,[...parts], ctx) => {
+  ([...parts], ctx) => {
     let tabidx, offset, mode = 0b000, reftype
 
     // declare?
@@ -339,7 +315,7 @@ const build = [,
       return el
     })
 
-    ctx.elem[idx] = ([
+    return ([
       mode,
       ...(
         // 0b000 e:expr y*:vec(funcidx)                     | type=funcref, init ((ref.func y)end)*, active (table=0,offset=e)
@@ -370,7 +346,7 @@ const build = [,
   },
 
   // (code)
-  (idx, body, ctx) => {
+  (body, ctx) => {
     const [param, result] = body.shift()
 
     // provide param/local in ctx
@@ -397,13 +373,13 @@ const build = [,
     ctx.local = ctx.block = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    ctx.code[idx] = vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes])
+    return (vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes]))
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
   // (data (memory ref) (offset (i32.const 0)) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
-  (idx, [...inits], ctx) => {
+  ([...inits], ctx) => {
     let offset, memidx = 0
 
     // (memory ref)?
@@ -418,7 +394,7 @@ const build = [,
       if (offset[0] === 'offset') [, offset] = offset
     }
 
-    ctx.data[idx] = [
+    return ([
       ...(
         // active: 2, x=memidx, e=expr
         memidx ? [2, ...uleb(memidx), ...expr([...offset], ctx), 0x0b] :
@@ -428,7 +404,7 @@ const build = [,
         [1]
       ),
       ...vec(str(inits.map(i => i.slice(1, -1)).join('')))
-    ]
+    ])
   }
 ]
 
