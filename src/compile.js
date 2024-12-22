@@ -30,6 +30,7 @@ export default (nodes) => {
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
   const sections = []
   for (let kind in SECTION) sections[SECTION[kind]] = sections[kind] = []
+  sections._ = {} // implicit types
 
   const binary = [
     0x00, 0x61, 0x73, 0x6d, // magic
@@ -44,9 +45,7 @@ export default (nodes) => {
     if (kind === 'import') [kind, ...node] = (imported = node).pop()
 
     // index, alias
-    // FIXME: merge name & idx
-    let name = node[0]?.[0] === '$' ? node.shift() : null,
-        idx = sections[kind].length;
+    let name = node[0]?.[0] === '$' && node.shift(), idx = sections[kind].length;
     if (name) sections[kind][name] = idx; // save alias
 
     // export abbr
@@ -75,24 +74,28 @@ export default (nodes) => {
     // keep start name
     else if (kind === 'start') name && node.push(name);
 
-    // dupe to code section
-    else if (kind === 'func') nodes.push(['code', imported, ...node]) // FIXME: consume type info and insert type reference; extra type is injected by code;
+    // [func, [param, result]] -> [param, result], alias
+    else if (kind === 'type') node = paramres(node[0]), sections.type['$'+node.join('>')] = idx
 
-    // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
-    else if (kind === 'code') {
-      let imported = node.shift()
-      if (!imported) node = plain(node, sections) // FIXME: this must init extra types
-      else node = null
+    // dupe to code section
+    // we insert type by id or alias for implicit types - will be checked after
+    else if (kind === 'func') {
+      let [idx, ...pr] = type(node, sections)
+      !imported && nodes.push(['code', pr, ...node])
+      node.unshift(['type', idx ?? '$'+(sections._['$'+pr.join('>')] ??= pr).join('>')])
     }
 
-    // FIXME: implicit type added via typeuse (import, func or plain)?
+    // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
+    else if (kind === 'code') node = [node.shift(), ...plain(node, sections)]
 
-    // if (kind === 'type' && name[0] === '#')
+    // import writes to import section amd adds placeholder for (kind) section
     if (imported) sections.import.push([...imported, [kind, ...node]]), node = null
 
-    // FIXME: ignore duplicate name dfn?, like type or start?
     sections[kind].push(node)
   }
+
+  // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
+  for (let n in sections._) sections.type[n] ??= sections.type.push(sections._[n]) - 1
 
   // convert nodes to binary
   sections.map((nodes, kind) => {
@@ -121,12 +124,33 @@ export default (nodes) => {
 
 // abbr blocks, loops, ifs - unfold
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
-const plain = (nodes, ctx) => {
+const plain = ([...nodes], ctx) => {
   let out = []
 
-  // FIXME: we can collect types here btw and simplify typeuse not to create types on binary stage
-  for (let node of nodes) {
-    if (typeof node === 'string') out.push(node)
+  while (nodes.length) {
+    let node = nodes.shift()
+
+    // consume type
+    if (node === 'block' || node === 'loop' || node === 'if') {
+      out.push(node)
+
+      let [idx, param, result] = type(nodes, ctx)
+
+      // get type - can be either idx or valtype (numtype | reftype)
+      if (!param.length && !result.length);
+      // (result i32) - doesn't require registering type
+      if (!param.length && result.length === 1) out.push(result)
+      // (type idx)? (param i32 i32)? (result i32 i32)
+      else out.push(['type', idx ?? '$'+(ctx._['$'+param+'>'+result] = [param, result]).join('>')])
+    }
+    else if (node === 'call_indirect') {
+      out.push(node)
+      if (typeof nodes[0] === 'string') out.push(nodes.shift())
+      let [idx, param, result] = type(nodes, ctx)
+      nodes.unshift(['type', idx ?? '$'+(ctx._['$'+param+'>'+result] = [param, result]).join('>')])
+    }
+
+    else if (typeof node === 'string') out.push(node)
 
     // (block ...) -> block ... end
     else if (node[0] === 'block' || node[0] === 'loop') {
@@ -147,8 +171,8 @@ const plain = (nodes, ctx) => {
       // label?
       if (node[0]?.[0] === '$') blocktype.push(node.shift())
 
-      // blocktype?
-      while (['type', 'param', 'result'].includes(node[0]?.[0])) blocktype.push(node.shift());
+      // blocktype? - (param) are removed already
+      if (node[0]?.[0] === 'type' || node[0]?.[0] === 'result') blocktype.push(node.shift());
 
       // ignore empty else
       // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
@@ -164,18 +188,30 @@ const plain = (nodes, ctx) => {
   return out
 }
 
+// consume typeuse nodes, return type index/params, or null idx if no type
+const type = (nodes, ctx) => {
+  let idx, parres
+
+  // explicit type (type 0|$name)
+  if (nodes[0]?.[0] === 'type') {
+    [, idx] = nodes.shift();
+    paramres(nodes)
+    parres = ctx.type[idx[0] === '$' ? ctx.type[idx] : +idx]
+    return [idx, ...parres]
+  }
+
+  // implicit type (param i32 i32)(result i32)
+  parres = paramres(nodes)
+
+  return [, ...parres]
+}
+
 // build section binary [by section codes] (non consuming)
 const build = [,
   // (type $id? (func params result))
   // we cannot squash types since indices can refer to them
-  (idx, [...node], ctx) => {
-    let [, ...sig] = node?.[0] || [], [param, result] = paramres(sig)
-
-    ctx.type[idx] = Object.assign(
-      [TYPE.func, ...vec(param.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))],
-      { param, result } // save params for the type name
-    )
-    ctx.type[param + '>' + result] ??= idx // alias for quick search (don't increment if exists)
+  (idx, [param, result], ctx) => {
+    ctx.type[idx] = [TYPE.func, ...vec(param.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))]
   },
 
   // (import "math" "add" (func|table|global|memory typedef?))
@@ -184,8 +220,8 @@ const build = [,
 
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
-      let [typeIdx] = typeuse(dfn, ctx)
-      details = uleb(typeIdx)
+      let [[,typeidx]] = dfn
+      details = uleb(typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx)
     }
     else if (kind === 'memory') {
       details = limits(dfn)
@@ -202,9 +238,8 @@ const build = [,
   },
 
   // (func $name? ...params result ...body)
-  (idx, [...body], ctx) => {
-    const [typeidx] = typeuse(body, ctx)
-    ctx.func[idx] = uleb(typeidx)
+  (idx, [[,typeidx]], ctx) => {
+    ctx.func[idx] = uleb(typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx)
   },
 
   // (table id? 1 2? funcref)
@@ -314,7 +349,7 @@ const build = [,
 
   // (code)
   (idx, body, ctx) => {
-    const [type, param, result] = typeuse(body, ctx)
+    const [param, result] = body.shift()
 
     // provide param/local in ctx
     ctx.local = param // list of params + local variables
@@ -482,6 +517,8 @@ const instr = (nodes, ctx) => {
     // (block $x) (loop $y)
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
+    let [,typeidx] = block.shift(), type = ctx.type[typeidx]
+
     // get type - can be either typeidx or valtype (numtype | reftype)
     // (result i32) - doesn't require registering type
     if (nodes[0]?.[0] === 'result' && nodes[0].length == 2) immed.push(TYPE[nodes.shift()[1]])
@@ -514,9 +551,9 @@ const instr = (nodes, ctx) => {
 
   // (call_indirect tableIdx? (type $typeName) (idx) ...nodes)
   else if (code == 0x11) {
-    let tableidx = nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : 0
-    let [typeidx] = typeuse(nodes, ctx)
-    immed.push(...uleb(typeidx), ...uleb(tableidx))
+    let tableidx = typeof nodes[0] === 'string' ? (nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()) : 0
+    let [,typeidx] = nodes.shift()
+    immed.push(...uleb(typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx), ...uleb(tableidx))
   }
 
   // (end)
