@@ -129,18 +129,20 @@ const plain = (nodes, ctx) => {
 
       let [idx, param, result] = typeuse(nodes, ctx)
 
+      // direct idx (no params/result needed)
+      if (idx != null) out.push(['type', idx])
       // get type - can be either idx or valtype (numtype | reftype)
-      if (!param.length && !result.length);
+      else if (!param.length && !result.length);
       // (result i32) - doesn't require registering type
       else if (!param.length && result.length === 1) out.push(['result', result])
       // (type idx)? (param i32 i32)? (result i32 i32)
-      else out.push(['type', idx ?? '$'+(ctx._['$'+param+'>'+result] = [param, result]).join('>')])
+      else ctx._[idx = '$'+param+'>'+result] = [param, result], out.push(['type', idx])
     }
     else if (node === 'call_indirect') {
       out.push(node)
       if (typeof nodes[0] === 'string') out.push(nodes.shift())
       let [idx, param, result] = typeuse(nodes, ctx)
-      out.push(['type', idx ?? '$'+(ctx._['$'+param+'>'+result] = [param, result]).join('>')])
+      out.push(['type', idx ?? (ctx._[idx = '$'+param+'>'+result] = [param, result], idx)])
     }
 
     else if (typeof node === 'string') out.push(node)
