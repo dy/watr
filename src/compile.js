@@ -14,7 +14,8 @@ INSTR.forEach((op, i) => INSTR[op] = i >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc 
  */
 export default (nodes) => {
   // normalize to (module ...) form
-  if (typeof nodes === 'string') nodes = parse(nodes); else nodes = [...nodes]
+  if (typeof nodes === 'string') nodes = parse(nodes);
+  else nodes = clone(nodes)
 
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
   if (nodes[0] === 'module') nodes.shift(), typeof nodes[0] === 'string' && nodes.shift()
@@ -116,7 +117,7 @@ export default (nodes) => {
 
 // abbr blocks, loops, ifs - unfold
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
-const plain = ([...nodes], ctx) => {
+const plain = (nodes, ctx) => {
   let out = []
 
   while (nodes.length) {
@@ -252,16 +253,16 @@ const build = [,
   ([[,typeidx]], ctx) => (uleb(typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx)),
 
   // (table id? 1 2? funcref)
-  ([...node], ctx) => ([TYPE[node.pop()], ...limits(node)]),
+  (node, ctx) => ([TYPE[node.pop()], ...limits(node)]),
 
   // (memory id? export* min max shared)
-  ([...node], ctx) => limits(node),
+  (node, ctx) => limits(node),
 
   // (global $id? (mut i32) (i32.const 42))
-  ([...node], ctx) => {
+  (node, ctx) => {
     let [type] = node, mut = type[0] === 'mut' ? 1 : 0
 
-    let [, [...init]] = node
+    let [, init] = node
     return ([TYPE[mut ? type[1] : type], mut, ...expr(init, ctx), 0x0b])
   },
 
@@ -277,7 +278,7 @@ const build = [,
   // active: (elem (table idx)? (offset expr)|(expr) elem*)
   // elems: funcref|externref (item expr)|expr (item expr)|expr
   // idxs: func? $id0 $id1
-  ([...parts], ctx) => {
+  (parts, ctx) => {
     let tabidx, offset, mode = 0b000, reftype
 
     // declare?
@@ -293,8 +294,8 @@ const build = [,
 
     // (offset expr)|expr
     if (parts[0]?.[0] === 'offset' || (Array.isArray(parts[0]) && parts[0][0] !== 'item' && !parts[0][0].startsWith('ref'))) {
-      [...offset] = parts.shift()
-      if (offset[0] === 'offset') [, [...offset]] = offset
+      offset = parts.shift()
+      if (offset[0] === 'offset') [, offset] = offset
     }
     else mode |= 0b001 // passive
 
@@ -338,7 +339,7 @@ const build = [,
       ...uleb(parts.length),
       ...parts.flatMap(mode & 0b100 ?
         // ((ref.func y)end)*
-        el => [...expr(typeof el === 'string' ? ['ref.func', el] : [...el], ctx), 0x0b] :
+        el => [...expr(typeof el === 'string' ? ['ref.func', el] : el, ctx), 0x0b] :
         // el*
         el => uleb(el[0] === '$' ? ctx.func[el] : +el)
       )
@@ -379,7 +380,7 @@ const build = [,
   // (data (i32.const 0) "\aa" "\bb"?)
   // (data (memory ref) (offset (i32.const 0)) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
-  ([...inits], ctx) => {
+  (inits, ctx) => {
     let offset, memidx = 0
 
     // (memory ref)?
@@ -397,9 +398,9 @@ const build = [,
     return ([
       ...(
         // active: 2, x=memidx, e=expr
-        memidx ? [2, ...uleb(memidx), ...expr([...offset], ctx), 0x0b] :
+        memidx ? [2, ...uleb(memidx), ...expr(offset, ctx), 0x0b] :
         // active: 0, e=expr
-        offset ? [0, ...expr([...offset], ctx), 0x0b] :
+        offset ? [0, ...expr(offset, ctx), 0x0b] :
         // passive: 1
         [1]
       ),
@@ -663,3 +664,5 @@ const str = str => {
 const vec = a => [...uleb(a.length), ...a]
 
 const err = text => { throw Error(text) }
+
+const clone = items => items.map(item => Array.isArray(item) ? clone(item) : item)

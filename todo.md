@@ -67,6 +67,7 @@
       ~+ unless we normalize marker to `(result i32)`|`(type $id)`|`empty`
   * [x] remove typeuses
   * [x] Return binary directly from build
+* [x] Separate slicing concert, remove unnecessary slices
 * [x] elem all use-cases
 * [ ] Official tests
   * [x] Include testsuite repo
