@@ -71,7 +71,7 @@ export default (nodes) => {
     else if (kind === 'start') name && node.push(name);
 
     // [func, [param, result]] -> [param, result], alias
-    else if (kind === 'type') node = paramres([node[0][1]]), sections.type['$'+node.join('>')] = idx
+    else if (kind === 'type') node[0].shift(), node = paramres(node[0]),  sections.type['$'+node.join('>')] = idx
 
     // dupe to code section
     // we insert type by id or alias for implicit types - will be checked after
