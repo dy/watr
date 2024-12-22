@@ -77,8 +77,9 @@ export default (nodes) => {
     // we insert type by id or alias for implicit types - will be checked after
     else if (kind === 'func') {
       let [idx, ...pr] = typeuse(node, sections)
-      !imported && nodes.push(['code', pr, ...node])
-      node.unshift(['type', idx ?? '$'+(sections._['$'+pr.join('>')] ??= pr).join('>')])
+      idx ?? (sections._[idx = '$'+pr.join('>')] = pr);
+      !imported && nodes.push(['code', ['type', idx], ...node])
+      node.unshift(['type', idx])
     }
 
     // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
@@ -192,8 +193,7 @@ const typeuse = (nodes, ctx) => {
   if (nodes[0]?.[0] === 'type') {
     [, idx] = nodes.shift();
     paramres(nodes)
-    parres = ctx.type[idx[0] === '$' ? ctx.type[idx] : +idx]
-    return [idx, ...parres]
+    return [idx]
   }
 
   // implicit type (param i32 i32)(result i32)
@@ -350,7 +350,8 @@ const build = [,
 
   // (code)
   (body, ctx) => {
-    const [param, result] = body.shift()
+    const [,typeidx] = body.shift()
+    const [param,result] = ctx.type[typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx]
 
     // provide param/local in ctx
     ctx.local = param // list of params + local variables
