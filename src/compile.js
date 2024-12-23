@@ -78,12 +78,9 @@ export default (nodes) => {
     else if (kind === 'func') {
       let [idx, ...pr] = typeuse(node, sections)
       idx ?? (sections._[idx = '$'+pr.join('>')] = pr);
-      !imported && nodes.push(['code', ['type', idx], ...node])
+      !imported && nodes.push(['code', ['type', idx], ...plain(node, sections)])
       node.unshift(['type', idx])
     }
-
-    // plainify blocks, loops, ifs; collect extra types (since code sections come after all else it's safe to add types)
-    else if (kind === 'code') node = [node.shift(), ...plain(node, sections)]
 
     // import writes to import section amd adds placeholder for (kind) section
     if (imported) sections.import.push([...imported, [kind, ...node]]), node = null
@@ -136,7 +133,7 @@ const plain = (nodes, ctx) => {
       else if (!param.length && !result.length);
       // (result i32) - doesn't require registering type
       else if (!param.length && result.length === 1) out.push(['result', result])
-      // (type idx)? (param i32 i32)? (result i32 i32)
+      // (param i32 i32)? (result i32 i32) - implicit type
       else ctx._[idx = '$'+param+'>'+result] = [param, result], out.push(['type', idx])
     }
     else if (node === 'call_indirect') {
@@ -351,13 +348,11 @@ const build = [,
   // (code)
   (body, ctx) => {
     const [,typeidx] = body.shift()
-    const [param,result] = ctx.type[typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx]
+    const [param, result] = ctx.type[typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx]
 
     // provide param/local in ctx
-    ctx.local = param // list of params + local variables
+    ctx.local = Object.create(param) // list of params + local variables
     ctx.block = [] // control instructions / blocks stack
-
-    let locstart = param.length
 
     // collect locals
     while (body[0]?.[0] === 'local') {
@@ -371,7 +366,7 @@ const build = [,
     bytes.push(0x0b)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
-    let loctypes = ctx.local.slice(locstart).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
+    let loctypes = ctx.local.slice(param.length).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
 
     // cleanup tmp state
     ctx.local = ctx.block = null
@@ -519,11 +514,16 @@ const instr = (nodes, ctx) => {
     // (block $x) (loop $y)
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
+    let type = nodes[0]?.[0] === 'type' && nodes.shift()
+    let typeidx = type?.[1]?.[0] === '$' ? ctx.type[type[1]] : type?.[1]
+    let [param, result] = type ? ctx.type[typeidx] : nodes[0]?.[0] === 'result' ? [,[nodes.shift()[1]]] : []
+
+    // void
+    if (!param?.length && !result?.length) immed.push(TYPE.void)
     // (result i32) - doesn't require registering type
-    if (nodes[0]?.[0] === 'result') immed.push(TYPE[nodes.shift()[1]])
+    else if (!param?.length && result.length === 1) immed.push(TYPE[result[0]])
     // (type idx)
-    else if (nodes[0]?.[0] === 'type') immed.push(...uleb( nodes[0][1][0] === '$' ? ctx.type[nodes.shift()[1]] : +nodes.shift()[1] ))
-    else immed.push(TYPE.void)
+    else immed.push(...uleb( typeidx ))
 
     // unlike others, block consumes all instructions after
     while (nodes.length) immed.push(...instr(nodes, ctx))
