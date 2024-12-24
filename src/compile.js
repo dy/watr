@@ -91,26 +91,33 @@ export default (nodes) => {
   // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
   for (let n in sections._) sections.type[n] ??= sections.type.push(sections._[n]) - 1
 
-  // convert nodes to binary
-  const binary = [
+  // patch datacount if data === 0
+  if (sections.datacount && !sections.data.length) sections.datacount[0] = null
+
+  // convert nodes to bytes
+  const bin = (kind, count=true) => {
+    let items = sections[kind].filter(Boolean).map(item => build[kind](item, sections))
+    return !items.length ? [] : [kind, ...vec([...(count ? uleb(items.length) : []), ...items.flat()])]
+  }
+
+  // build final binary
+  return new Uint8Array([
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
-  ]
-
-  sections
-    // convert nodes to binaries (skip placeholders)
-    .map((nodes, kind) => nodes.filter(Boolean).map((node) => build[kind]?.(node, sections)))
-
-    // build final binary
-    .map((items, kind) => {
-      if (!items.length) return
-      let bytes = items.flatMap(items => items)
-      // skip start section count - write length
-      if (kind !== SECTION.start && kind !== SECTION.datacount) bytes.unshift(...uleb(items.length))
-      binary.push(kind, ...vec(bytes))
-    })
-
-  return new Uint8Array(binary)
+    ...bin(SECTION.custom),
+    ...bin(SECTION.type),
+    ...bin(SECTION.import),
+    ...bin(SECTION.func),
+    ...bin(SECTION.table),
+    ...bin(SECTION.memory),
+    ...bin(SECTION.global),
+    ...bin(SECTION.export),
+    ...bin(SECTION.start, false),
+    ...bin(SECTION.elem),
+    ...bin(SECTION.datacount, false),
+    ...bin(SECTION.code),
+    ...bin(SECTION.data)
+  ])
 }
 
 // abbr blocks, loops, ifs - unfold
@@ -136,6 +143,13 @@ const plain = (nodes, ctx) => {
       // (param i32 i32)? (result i32 i32) - implicit type
       else ctx._[idx = '$'+param+'>'+result] = [param, result], out.push(['type', idx])
     }
+
+    // mark datacount section as required
+    else if (node === 'memory.init' || node === 'data.drop') {
+      out.push(node)
+      ctx.datacount[0] = []
+    }
+
     else if (node === 'call_indirect') {
       out.push(node)
       if (typeof nodes[0] === 'string') out.push(nodes.shift())
@@ -404,7 +418,10 @@ const build = [,
       ),
       ...vec(str(inits.map(i => i.slice(1, -1)).join('')))
     ])
-  }
+  },
+
+  // datacount
+  (nodes, ctx) => uleb(ctx.data.length)
 ]
 
 // consume one instruction from nodes sequence
@@ -479,8 +496,6 @@ const instr = (nodes, ctx) => {
 
     // memory.init idx, data.drop idx,
     if (code === 0x08 || code === 0x09) {
-      // toggle datacount section
-      if (ctx.data.length) ctx.datacount[0] ??= [ctx.data.length]
       immed.push(...uleb(nodes[0][0] === '$' ? ctx.data[nodes.shift()] : +nodes.shift()))
     }
 
