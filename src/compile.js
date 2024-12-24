@@ -506,6 +506,7 @@ const instr = (nodes, ctx) => {
       if (code === 0x0e) immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
     }
   }
+
   // control block abbrs
   // (block ...), (loop ...), (if ...)
   else if (code === 2 || code === 3 || code === 4) {
@@ -568,9 +569,9 @@ const instr = (nodes, ctx) => {
   // (br_table 1 2 3 4  0  selector result?)
   else if (code == 0x0e) {
     let args = []
-    while (nodes[0] && !Array.isArray(nodes[0])) {
+    while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
       let id = nodes.shift()
-      args.push(...uleb(id[0][0] === '$' ? ctx.block.length - ctx.block[id] : id))
+      args.push(...uleb(id[0][0] === '$' ? ctx.block.length - ctx.block[id] : +id))
     }
     args.unshift(...uleb(args.length - 1))
     immed.push(...args)
