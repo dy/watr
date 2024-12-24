@@ -71,7 +71,7 @@ export default (nodes) => {
     else if (kind === 'start') name && node.push(name);
 
     // [func, [param, result]] -> [param, result], alias
-    else if (kind === 'type') node[0].shift(), node = paramres(node[0]),  sections.type['$'+node.join('>')] = idx
+    else if (kind === 'type') node[0].shift(), node = paramres(node[0]),  sections.type['$'+node.join('>')] ??= idx
 
     // dupe to code section
     // we insert type by id or alias for implicit types - will be checked after
@@ -152,8 +152,8 @@ const plain = (nodes, ctx) => {
 
     else if (node === 'call_indirect') {
       out.push(node)
-      if (typeof nodes[0] === 'string') out.push(nodes.shift())
-      let [idx, param, result] = typeuse(nodes, ctx)
+      if (typeof nodes[0] === 'string' && (nodes[0][0] === '$' || !isNaN(nodes[0]))) out.push(nodes.shift())
+        let [idx, param, result] = typeuse(nodes, ctx)
       out.push(['type', idx ?? (ctx._[idx = '$'+param+'>'+result] = [param, result], idx)])
     }
 
@@ -564,9 +564,9 @@ const instr = (nodes, ctx) => {
     immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift()))
   }
 
-  // (call_indirect tableIdx? (type $typeName) (idx) ...nodes)
+  // (call_indirect tableIdx? (type $typeName)? ...nodes)
   else if (code == 0x11) {
-    let tableidx = typeof nodes[0] === 'string' ? (nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()) : 0
+    let tableidx = typeof nodes[0] === 'string' ? (nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0) : 0
     let typeidx = nodes[0][1][0] === '$' ? ctx.type[nodes.shift()[1]] : +nodes.shift()[1]
     immed.push(...uleb(typeidx), ...uleb(tableidx))
   }
