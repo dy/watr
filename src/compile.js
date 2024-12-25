@@ -592,12 +592,12 @@ const instr = (nodes, ctx) => {
     immed.push(...args)
   }
 
-  // ref.func $id
+  // (ref.func $id)
   else if (code == 0xd2) {
     immed.push(...uleb(nodes[0][0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift()))
   }
 
-  // ref.null
+  // (ref.null func)
   else if (code == 0xd0) {
     immed.push(TYPE[nodes.shift() + 'ref']) // func->funcref, extern->externref
   }

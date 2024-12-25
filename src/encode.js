@@ -107,18 +107,30 @@ export function f64(input, value, idx) {
   ];
 }
 
-f32.parse = f64.parse = input => {
+f64.parse = (input, max=Number.MAX_VALUE) => {
+  input = input.replaceAll('_', '')
+
   if (input.includes('nan')) return input[0] === '-' ? -NaN : NaN;
   if (input.includes('inf')) return input[0] === '-' ? -Infinity : Infinity;
 
-  input = input.replaceAll('_', '')
-
   // 0x1.5p3
   if (input.includes('0x')) {
-    let [sig, exp] = input.split(/p/i), [dec, fract] = sig.split('.'), sign = dec[0] === '-' ? -1 : 1
-    sig = parseInt(dec) * sign + (fract ? parseInt(fract, 16) / (16 ** fract.length) : 0)
-    return sign * (exp ? sig * 2 ** parseInt(exp, 10) : sig);
+    let [sig, exp] = input.split(/p/i),
+        [dec, fract] = sig.split('.'),
+        sign = dec[0] === '-' ? -1 : 1;
+
+    dec = parseInt(dec, 16), fract = fract ? parseInt(fract, 16) / (16 ** fract.length) : 0
+    sig = dec * sign + fract
+
+    let value = sign * (exp ? sig * 2 ** parseInt(exp, 10) : sig)
+
+    // make sure it is not Infinity
+    value = Math.max(-max, Math.min(max, value))
+
+    return value
   }
 
   return parseFloat(input)
 }
+
+f32.parse = input => f64.parse(input, 3.4028234663852886e+38)
