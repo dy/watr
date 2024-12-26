@@ -146,6 +146,9 @@ const plain = (nodes, ctx) => {
       else ctx._[idx = '$'+param+'>'+result] = [param, result], out.push(['type', idx])
     }
 
+    // else $label, end $label
+    else if (node === 'else' || node === 'end') out.push(node), nodes[0]?.[0] === '$' && nodes.shift()
+
     // mark datacount section as required
     else if (node === 'memory.init' || node === 'data.drop') {
       out.push(node)
@@ -442,6 +445,7 @@ const instr = (nodes, ctx) => {
     out.push(...immed)
     return out
   }
+
 
   [...immed] = INSTR[op] ?? err('Unknown instruction: ' + op)
   code = immed[0]
