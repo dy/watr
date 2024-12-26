@@ -17,8 +17,9 @@ export default function watr (nodes) {
   if (typeof nodes === 'string') nodes = parse(nodes);
   else nodes = clone(nodes)
 
+  console.log(nodes)
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
-  if (nodes[0] === 'module') nodes.shift(), typeof nodes[0] === 'string' && nodes.shift()
+  if (nodes[0] === 'module') nodes.shift(), nodes[0][0] === '$' && nodes.shift()
   // single node, not module
   else if (typeof nodes[0] === 'string') nodes = [nodes]
 
@@ -119,7 +120,7 @@ export default function watr (nodes) {
   ])
 }
 
-// abbr blocks, loops, ifs - unfold
+// abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const plain = (nodes, ctx) => {
   let out = []
