@@ -197,3 +197,8 @@ t('parse: immediate comment end', () => {
   let tokens = parse(`(i32.const 0);;`)
   is(tokens, ['i32.const', '0'])
 })
+
+t('parse: export name', () => {
+  let tokens = parse(`(func (export "~!@#$%^&*()_+\`-={}|[]\\\\:\\\";'<>?,./ \\\\") (result i32) (i32.const 6))`)
+  is(tokens, ['func', ['export', '"~!@#$%^&*()_+`-={}|[]\\\\:\\\";\'<>?,./ \\\\"'], ['result', 'i32'], ['i32.const', '6']])
+})

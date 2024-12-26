@@ -17,9 +17,8 @@ export default function watr (nodes) {
   if (typeof nodes === 'string') nodes = parse(nodes);
   else nodes = clone(nodes)
 
-  console.log(nodes)
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
-  if (nodes[0] === 'module') nodes.shift(), nodes[0][0] === '$' && nodes.shift()
+  if (nodes[0] === 'module') nodes.shift(), nodes[0]?.[0] === '$' && nodes.shift()
   // single node, not module
   else if (typeof nodes[0] === 'string') nodes = [nodes]
 
@@ -150,7 +149,7 @@ const plain = (nodes, ctx) => {
     // mark datacount section as required
     else if (node === 'memory.init' || node === 'data.drop') {
       out.push(node)
-      ctx.datacount[0] = null // mark datacount element
+      ctx.datacount[0] = true // mark datacount element
     }
 
     else if (node === 'call_indirect') {
