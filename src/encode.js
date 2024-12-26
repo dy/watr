@@ -107,30 +107,34 @@ export function f64(input, value, idx) {
   ];
 }
 
-f64.parse = (input, max=Number.MAX_VALUE) => {
+f64.parse = (input, max=Number.MAX_VALUE, eps=Number.EPSILON) => {
   input = input.replaceAll('_', '')
 
-  if (input.includes('nan')) return input[0] === '-' ? -NaN : NaN;
-  if (input.includes('inf')) return input[0] === '-' ? -Infinity : Infinity;
+  let sign = 1;
+  if (input[0] === '-' || input[0] === '+') sign = Number(input[0]+1), input = input.slice(1);
 
   // 0x1.5p3
-  if (input.includes('0x')) {
-    let [sig, exp] = input.split(/p/i),
-        [dec, fract] = sig.split('.'),
-        sign = dec[0] === '-' ? -1 : 1;
+  if (input[1] === 'x') {
+    let [sig, exp='0'] = input.split(/p/i); // Split into significand and exponent
+    let [int, fract] = sig.split('.'); // Split significand into integer and fractional parts
+    let flen = fract?.length ?? 0;
 
-    dec = parseInt(dec, 16), fract = fract ? parseInt(fract, 16) / (16 ** fract.length) : 0
-    sig = dec * sign + fract
+    sig = parseInt(int + fract); // int has 0x prefix - defines base 16 automatically
+    exp = parseInt(exp, 10);
 
-    let value = sign * (exp ? sig * 2 ** parseInt(exp, 10) : sig)
+    // 0x10a.fbc = 0x10afbc * 16⁻³ = 266.9833984375
+    let value = (sig * (16 ** -flen)) * (2 ** exp);
 
     // make sure it is not Infinity
     value = Math.max(-max, Math.min(max, value))
 
-    return value
+    return sign * value
   }
 
-  return parseFloat(input)
+  if (input.includes('nan')) return sign < 0 ? -NaN : NaN;
+  if (input.includes('inf')) return sign * Infinity;
+
+  return sign * parseFloat(input)
 }
 
-f32.parse = input => f64.parse(input, 3.4028234663852886e+38)
+f32.parse = input => f64.parse(input, 3.4028234663852886e+38, 1.1920928955078125e-7)
