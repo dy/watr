@@ -120,6 +120,7 @@ f64.parse = (input, max=Number.MAX_VALUE) => {
     let [int, fract] = sig.split('.'); // integer and fractional parts
     let flen = fract?.length ?? 0;
 
+    // FIXME: this is not accurate, it must be byte-perfect
     sig = parseInt(int + fract); // 0x is included in int
     exp = parseInt(exp, 10);
 

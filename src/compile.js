@@ -12,7 +12,7 @@ INSTR.forEach((op, i) => INSTR[op] = i >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc 
  * @param {string|Array} nodes - The WAT tree or string to be compiled to WASM binary.
  * @returns {Uint8Array} The compiled WASM binary data.
  */
-export default (nodes) => {
+export default function watr (nodes) {
   // normalize to (module ...) form
   if (typeof nodes === 'string') nodes = parse(nodes);
   else nodes = clone(nodes)
@@ -76,9 +76,9 @@ export default (nodes) => {
     // dupe to code section
     // we insert type by id or alias for implicit types - will be checked after
     else if (kind === 'func') {
-      let [idx, ...pr] = typeuse(node, sections)
-      idx ?? (sections._[idx = '$'+pr.join('>')] = pr);
-      !imported && nodes.push(['code', ['type', idx], ...plain(node, sections)])
+      let [idx, param, result] = typeuse(node, sections);
+      idx ?? (sections._[idx = '$'+param+'>'+result] = [param, result]);
+      !imported && nodes.push(['code', [idx, param, result], ...plain(node, sections)]) // pass param since they may have names
       node.unshift(['type', idx])
     }
 
@@ -131,6 +131,9 @@ const plain = (nodes, ctx) => {
     // consume type
     if (node === 'block' || node === 'loop' || node === 'if') {
       out.push(node)
+
+      // (loop $l?)
+      if (nodes[0]?.[0] === '$') out.push(nodes.shift())
 
       let [idx, param, result] = typeuse(nodes, ctx)
 
@@ -361,11 +364,11 @@ const build = [,
 
   // (code)
   (body, ctx) => {
-    const [,typeidx] = body.shift()
-    const [param, result] = ctx.type[typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx]
+    let [typeidx, param] = body.shift()
+    if (!param) [param] = ctx.type[typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx]
 
     // provide param/local in ctx
-    ctx.local = Object.create(param) // list of params + local variables
+    ctx.local = Object.create(param) // list of local variables - some of them are params
     ctx.block = [] // control instructions / blocks stack
 
     // collect locals
@@ -380,6 +383,7 @@ const build = [,
     bytes.push(0x0b)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
+    // we skip locals provided by params
     let loctypes = ctx.local.slice(param.length).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
 
     // cleanup tmp state
@@ -542,6 +546,7 @@ const instr = (nodes, ctx) => {
     else immed.push(...uleb( typeidx ))
 
     // unlike others, block consumes all instructions after
+    // FIXME: do we need it?
     while (nodes.length) immed.push(...instr(nodes, ctx))
   }
   // (else)
