@@ -2283,7 +2283,7 @@ let official = [
   // // '/test/official/table_size.wast',
   // '/test/official/table-sub.wast',
   // '/test/official/table.wast',
-  // // '/test/official/token.wast',
+  // '/test/official/token.wast',
   // '/test/official/traps.wast',
   // '/test/official/type.wast',
   // '/test/official/unreachable.wast',

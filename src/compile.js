@@ -319,8 +319,8 @@ const build = [,
     }
     else mode |= 0b001 // passive
 
-    // funcref|externref|func
-    if (parts[0]?.[0]!=='$') reftype = parts.shift()
+    // funcref|externref|func, func ... === funcref ...
+    if (parts[0] === 'func' || parts[0] === 'funcref' || parts[0] === 'externref') reftype = parts.shift()
     // externref makes explicit table index
     if (reftype === 'externref') offset ||= ['i32.const', 0], mode = 0b110
 
