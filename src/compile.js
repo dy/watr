@@ -527,7 +527,7 @@ const instr = (nodes, ctx) => {
     // table.init tableidx? elemidx -> 0xfc 0x0c elemidx tableidx
     // https://webassembly.github.io/spec/core/binary/instructions.html#table-instructions
     else if (code === 0x0c) {
-      let tabidx = (nodes[0][0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift())
+      let tabidx = (nodes[1][0] === '$' || !isNaN(nodes[1])) ? (nodes[0][0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()) : 0
       immed.push(...uleb(nodes[0][0] === '$' ? ctx.elem[nodes.shift()] : +nodes.shift()), ...uleb(tabidx))
     }
     // table.* tableidx?
