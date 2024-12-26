@@ -116,10 +116,10 @@ f64.parse = (input, max=Number.MAX_VALUE, eps=Number.EPSILON) => {
   // 0x1.5p3
   if (input[1] === 'x') {
     let [sig, exp='0'] = input.split(/p/i); // Split into significand and exponent
-    let [int, fract] = sig.split('.'); // Split significand into integer and fractional parts
+    let [int, fract] = sig.slice(2).split('.'); // Split significand into integer and fractional parts
     let flen = fract?.length ?? 0;
 
-    sig = parseInt(int + fract); // int has 0x prefix - defines base 16 automatically
+    sig = parseInt(int + fract, 16);
     exp = parseInt(exp, 10);
 
     // 0x10a.fbc = 0x10afbc * 16⁻³ = 266.9833984375
