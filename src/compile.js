@@ -160,6 +160,7 @@ const plain = (nodes, ctx) => {
       out.push(['type', idx ?? (ctx._[idx = '$'+param+'>'+result] = [param, result], idx)])
     }
 
+    // plain instr
     else if (typeof node === 'string') out.push(node)
 
     // (block ...) -> block ... end
@@ -527,7 +528,7 @@ const instr = (nodes, ctx) => {
   }
 
   // control block abbrs
-  // (block ...), (loop ...), (if ...)
+  // block ..., loop ..., if ...
   else if (code === 2 || code === 3 || code === 4) {
     ctx.block.push(code)
 
@@ -545,44 +546,44 @@ const instr = (nodes, ctx) => {
     // (type idx)
     else immed.push(...uleb( typeidx ))
   }
-  // (else)
+  // else
   else if (code === 5) {}
-  // (then)
+  // then
   else if (code === 6) immed = [] // ignore
 
-  // (local.get $id), (local.tee $id x)
+  // local.get $id, local.tee $id x
   else if (code == 0x20 || code == 0x21 || code == 0x22) {
     immed.push(...uleb(nodes[0][0] === '$' ? ctx.local[nodes.shift()] : +nodes.shift()))
   }
 
-  // (global.get $id), (global.set $id)
+  // global.get $id, global.set $id
   else if (code == 0x23 || code == 0x24) {
     immed.push(...uleb(nodes[0][0] === '$' ? ctx.global[nodes.shift()] : +nodes.shift()))
   }
 
-  // (call id ...nodes)
+  // call id ...nodes
   else if (code == 0x10) {
     immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift()))
   }
 
-  // (call_indirect tableIdx? (type $typeName)? ...nodes)
+  // call_indirect tableIdx? (type $typeName)? ...nodes
   else if (code == 0x11) {
     let tableidx = nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()
     let typeidx = nodes[0][1][0] === '$' ? ctx.type[nodes.shift()[1]] : +nodes.shift()[1]
     immed.push(...uleb(typeidx), ...uleb(tableidx))
   }
 
-  // (end)
+  // end
   else if (code == 0x0b) ctx.block.pop()
 
-  // (br $label result?)
-  // (br_if $label cond result?)
+  // br $label result?
+  // br_if $label cond result?
   else if (code == 0x0c || code == 0x0d) {
     // br index indicates how many block items to pop
     immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.block.length - ctx.block[nodes.shift()] : nodes.shift()))
   }
 
-  // (br_table 1 2 3 4  0  selector result?)
+  // br_table 1 2 3 4  0  selector result?
   else if (code == 0x0e) {
     let args = []
     while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
@@ -593,12 +594,21 @@ const instr = (nodes, ctx) => {
     immed.push(...args)
   }
 
-  // (ref.func $id)
+  // select (result t+)?
+  else if (code == 0x1b) {
+    let [param, result] = paramres(nodes)
+    if (result.length) {
+      // 0x1b -> 0x1c
+      immed.push(immed.pop()+1, ...uleb(result.length), ...result.map(t => TYPE[t]))
+    }
+  }
+
+  // ref.func $id
   else if (code == 0xd2) {
     immed.push(...uleb(nodes[0][0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift()))
   }
 
-  // (ref.null func)
+  // ref.null func
   else if (code == 0xd0) {
     immed.push(TYPE[nodes.shift() + 'ref']) // func->funcref, extern->externref
   }
@@ -606,24 +616,24 @@ const instr = (nodes, ctx) => {
   // binary/unary (i32.add a b) - no immed
   else if (code >= 0x45) { }
 
-  // (i32.store align=n offset=m at value) etc
+  // i32.store align=n offset=m
   else if (code >= 0x28 && code <= 0x3e) {
     let o = memarg(nodes)
     immed.push(Math.log2(o.align ?? align(op)), ...uleb(o.offset ?? 0))
   }
 
-  // (i32.const 123), (f32.const 123.45) etc
+  // i32.const 123, f32.const 123.45
   else if (code >= 0x41 && code <= 0x44) {
     immed.push(...encode[op.split('.')[0]](nodes.shift()))
   }
 
-  // (memory.grow|size $idx?) - mandatory 0x00
+  // memory.grow|size $idx? - mandatory 0x00
   // https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions
   else if (code == 0x3f || code == 0x40) {
     immed.push(0)
   }
 
-  // (table.get $id)
+  // table.get $id
   else if (code == 0x25 || code == 0x26) {
     immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()))
   }
