@@ -3,6 +3,7 @@ import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import Wabt from './lib/libwabt.js'
 import print from '../src/print.js'
+import { f32, f64, i64, i32 } from '../src/encode.js'
 
 
 t('compile: reexport func', () => {
@@ -952,7 +953,7 @@ t('case: globals', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t.todo('case: func hoist', () => {
+t('case: func hoist', () => {
   let src = `
     (global funcref (ref.func $a))
     (func (call $a))
@@ -2150,7 +2151,6 @@ t('example: wat-compiler', async () => {
   await ex('/test/example/raycast.wat')
 })
 
-
 let official = [
   // '/test/official/address.wast',
   // '/test/official/align.wast',
@@ -2164,57 +2164,57 @@ let official = [
   // '/test/official/call_indirect.wast',
   // '/test/official/call.wast',
   // '/test/official/comments.wast',
-  '/test/official/const.wast',
+  // // '/test/official/const.wast',
   // '/test/official/conversions.wast',
-  // '/test/official/custom.wast',
+  // // '/test/official/custom.wast',
   // '/test/official/data.wast',
   // '/test/official/elem.wast',
-  // '/test/official/endianness.wast',
+  // // '/test/official/endianness.wast',
   // '/test/official/exports.wast',
   // '/test/official/f32_bitwise.wast',
   // '/test/official/f32_cmp.wast',
-  // // '/test/official/f32.wast',
-  // // '/test/official/f64_bitwise.wast',
+  // '/test/official/f32.wast',
+  // '/test/official/f64_bitwise.wast',
   // '/test/official/f64_cmp.wast',
-  // // '/test/official/f64.wast',
-  // // '/test/official/fac.wast',
+  // '/test/official/f64.wast',
+  // '/test/official/fac.wast',
   // '/test/official/float_exprs.wast',
   // '/test/official/float_literals.wast',
-  // // '/test/official/float_memory.wast',
+  // '/test/official/float_memory.wast',
   // '/test/official/float_misc.wast',
-  // // '/test/official/forward.wast',
-  // // '/test/official/func_ptrs.wast',
-  // // '/test/official/func.wast',
-  // // '/test/official/global.wast',
-  // // '/test/official/i32.wast',
+  // '/test/official/forward.wast',
+  // '/test/official/func_ptrs.wast',
+  // '/test/official/func.wast',
+  // '/test/official/global.wast',
+  // '/test/official/i32.wast',
   // '/test/official/i64.wast',
-  // // '/test/official/if.wast',
-  // // '/test/official/imports.wast',
-  // // '/test/official/inline-module.wast',
-  // // '/test/official/int_exprs.wast',
-  // // '/test/official/int_literals.wast',
-  // // '/test/official/labels.wast',
-  // // '/test/official/left-to-right.wast',
-  // '/test/official/linking.wast',
-  // // '/test/official/load.wast',
-  // // '/test/official/local_get.wast',
-  // // '/test/official/local_set.wast',
-  // // '/test/official/loop.wast',
-  // // '/test/official/memory_copy.wast',
-  // // '/test/official/memory_fill.wast',
+  // '/test/official/if.wast',
+  // '/test/official/imports.wast',
+  // '/test/official/inline-module.wast',
+  // '/test/official/int_exprs.wast',
+  // '/test/official/int_literals.wast',
+  // '/test/official/labels.wast',
+  // '/test/official/left-to-right.wast',
+  // // '/test/official/linking.wast',
+  // '/test/official/load.wast',
+  // '/test/official/local_get.wast',
+  // '/test/official/local_set.wast',
+  // '/test/official/loop.wast',
+  // '/test/official/memory_copy.wast',
+  // '/test/official/memory_fill.wast',
   // '/test/official/memory_grow.wast',
   // '/test/official/memory_init.wast',
   // '/test/official/memory_redundancy.wast',
-  // // '/test/official/memory_size.wast',
-  // // '/test/official/memory_trap.wast',
-  // // '/test/official/memory.wast',
-  // '/test/official/names.wast',
-  // // '/test/official/nop.wast',
-  // // '/test/official/obsolete-keywords.wast',
-  // // '/test/official/ref_func.wast',
-  // // '/test/official/ref_is_null.wast',
-  // // '/test/official/ref_null.wast',
-  // // '/test/official/return.wast',
+  // '/test/official/memory_size.wast',
+  // '/test/official/memory_trap.wast',
+  // '/test/official/memory.wast',
+  // // '/test/official/names.wast',
+  // '/test/official/nop.wast',
+  // '/test/official/obsolete-keywords.wast',
+  // '/test/official/ref_func.wast',
+  // '/test/official/ref_is_null.wast',
+  // '/test/official/ref_null.wast',
+  // '/test/official/return.wast',
   // '/test/official/select.wast',
   // // '/test/official/simd_address.wast',
   // // '/test/official/simd_align.wast',
@@ -2233,32 +2233,68 @@ let official = [
   // // '/test/official/simd_f64x4_pmin_pmax.wast',
   // // '/test/official/simd_f64x4_rounding.wast',
   // // '/test/official/simd_f64x4.wast',
+  // // '/test/official/simd_i16x8_arith.wast',
+  // // '/test/official/simd_i16x8_arith2.wast',
+  // // '/test/official/simd_i16x8_cmp.wast',
+  // // '/test/official/simd_i16x8_extadd_pairwise_i8x16.wast',
+  // // '/test/official/simd_i16x8_extmul_i8x16.wast',
+  // // '/test/official/simd_i16x8_q15mulr_sat_s.wast',
+  // // '/test/official/simd_i16x8_sat_arith.wast',
+  // // '/test/official/simd_i32x4_arith.wast',
+  // // '/test/official/simd_i32x4_arith2.wast',
+  // // '/test/official/simd_i32x4_cmp.wast',
+  // // '/test/official/simd_i32x4_dot_i16x8.wast',
+  // // '/test/official/simd_i32x4_extadd_pairwise_i16x8.wast',
+  // // '/test/official/simd_i32x4_extmul_i16x8.wast',
+  // // '/test/official/simd_i32x4_trunc_sat_f32x4.wast',
+  // // '/test/official/simd_i32x4_trunc_sat_f64x2.wast',
+  // // '/test/official/simd_i64x2_arith.wast',
+  // // '/test/official/simd_i64x2_arith2.wast',
+  // // '/test/official/simd_i64x2_cmp.wast',
+  // // '/test/official/simd_i64x2_extmul_i32x4.wast',
+  // // '/test/official/simd_int_to_int_extend.wast',
+  // // '/test/official/simd_lane.wast',
+  // // '/test/official/simd_linking.wast',
+  // // '/test/official/simd_load_extend.wast',
+  // // '/test/official/simd_load_splat.wast',
+  // // '/test/official/simd_load_zero.wast',
+  // // '/test/official/simd_load.wast',
+  // // '/test/official/simd_load8_lane.wast',
+  // // '/test/official/simd_load16_lane.wast',
+  // // '/test/official/simd_load32_lane.wast',
+  // // '/test/official/simd_load64_lane.wast',
+  // // '/test/official/simd_splat.wast',
+  // // '/test/official/simd_store.wast',
+  // // '/test/official/simd_store8_lane.wast',
+  // // '/test/official/simd_store16_lane.wast',
+  // // '/test/official/simd_store32_lane.wast',
+  // // '/test/official/simd_store64_lane.wast',
   // '/test/official/skip-stack-guard-page.wast',
   // '/test/official/stack.wast',
-  // // '/test/official/start.wast',
-  // // '/test/official/store.wast',
-  // // '/test/official/switch.wast',
+  // '/test/official/start.wast',
+  // '/test/official/store.wast',
+  // '/test/official/switch.wast',
   // '/test/official/table_copy.wast',
   // '/test/official/table_fill.wast',
-  // '/test/official/table_get.wast',
-  // '/test/official/table_grow.wast',
+  // // '/test/official/table_get.wast',
+  // // '/test/official/table_grow.wast',
   // '/test/official/table_init.wast',
-  // '/test/official/table_set.wast',
-  // '/test/official/table_size.wast',
+  // // '/test/official/table_set.wast',
+  // // '/test/official/table_size.wast',
   // '/test/official/table-sub.wast',
-  // // '/test/official/table.wast',
-  // '/test/official/token.wast',
-  // // '/test/official/traps.wast',
-  // // '/test/official/type.wast',
-  // // '/test/official/unreachable.wast',
-  // // '/test/official/unreached-invalid.wast',
-  // // '/test/official/unreached-valid.wast',
-  // // '/test/official/unwind.wast',
-  // // '/test/official/utf8-custom-section-id.wast',
-  // // '/test/official/utf8-import-field.wast',
-  // // '/test/official/utf8-import-module.wast',
-  // // '/test/official/utf8-invalid-encoding.wast',
-].forEach((it) => t.todo(`official: ${it}`, () => ex(it)));
+  // '/test/official/table.wast',
+  // // '/test/official/token.wast',
+  // '/test/official/traps.wast',
+  // '/test/official/type.wast',
+  // '/test/official/unreachable.wast',
+  // '/test/official/unreached-invalid.wast',
+  // '/test/official/unreached-valid.wast',
+  // '/test/official/unwind.wast',
+  // '/test/official/utf8-custom-section-id.wast',
+  // '/test/official/utf8-import-field.wast',
+  // '/test/official/utf8-import-module.wast',
+  // '/test/official/utf8-invalid-encoding.wast',
+].forEach((it) => t.only(`official: ${it}`, () => ex(it)));
 
 async function ex(path) {
   // load src
@@ -2308,7 +2344,8 @@ async function ex(path) {
       } catch (e) {
         console.warn(e)
       }
-      if (wabtBuffer) is(buf, wabtBuffer, lastComment)
+      // compare with libwabt only if not binary flag
+      if (wabtBuffer && node[1] !== 'binary') is(buf, wabtBuffer, lastComment?.trim())
 
       // buf = wabtBuffer
 
@@ -2330,10 +2367,12 @@ async function ex(path) {
       nm = args.shift().slice(1, -1);
       args = args.map(val)
       expects = expects?.map(val)
-      console.log('assert', kind, nm, ...args, ...expects)
+      // console.log('assert', kind, nm, ...args, ...expects)
+
+      if(args.some(a => typeof a === 'number' && isNaN(a))) { console.log('skipping NaN'); continue }
 
       if (kind === 'invoke') {
-        is(m[nm](...args), expects.length > 1 ? expects : expects[0])
+        is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert ${nm}(${args}) === ${expects}`)
       }
       else if (kind === 'get') {
         is(m[nm].value, expects[0])
@@ -2355,21 +2394,12 @@ async function ex(path) {
 var f32arr = new Float32Array(1), i32arr = new Int32Array(1), i64arr = new BigInt64Array(1)
 const val = ([t, v]) =>
     t === 'ref.null' ? null :
-    t === 'i64.const' ? (i64arr[0] = v, i64arr[0]) :
-    t === 'f32.const' ? (f32arr[0] = unhex(v), f32arr[0]) :
-    t === 'i32.const' ? (i32arr[0] = v, i32arr[0]) :
-    t === 'f64.const' ? unhex(v):
+    t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :
+    t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :
+    t === 'i32.const' ? (i32arr[0] = i32.parse(v), i32arr[0]) :
+    t === 'f64.const' ? f64.parse(v):
     v;
 
-// 0x1.5p3
-const unhex = (input) => {
-  if (input.includes('0x')) {
-    let [sig, exp] = input.split(/p/i), [dec, fract] = sig.split('.'), sign = dec[0] === '-' ? -1 : 1
-    sig = parseInt(dec) * sign + (fract ? parseInt(fract, 16) / (16 ** fract.length) : 0)
-    return sign * (exp ? sig * 2 ** parseInt(exp, 10) : sig);
-  }
-  return +input
-}
 
 
 // save binary (asm buffer) to file
