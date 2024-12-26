@@ -73,8 +73,7 @@ export default function watr (nodes) {
     // [func, [param, result]] -> [param, result], alias
     else if (kind === 'type') node[0].shift(), node = paramres(node[0]),  sections.type['$'+node.join('>')] ??= idx
 
-    // dupe to code section
-    // we insert type by id or alias for implicit types - will be checked after
+    // dupe to code section, save implicit type
     else if (kind === 'func') {
       let [idx, param, result] = typeuse(node, sections);
       idx ?? (sections._[idx = '$'+param+'>'+result] = [param, result]);
@@ -92,7 +91,7 @@ export default function watr (nodes) {
   for (let n in sections._) sections.type[n] ??= sections.type.push(sections._[n]) - 1
 
   // patch datacount if data === 0
-  if (sections.datacount && !sections.data.length) sections.datacount[0] = null
+  if (!sections.data.length) sections.datacount.length = 0
 
   // convert nodes to bytes
   const bin = (kind, count=true) => {
@@ -150,12 +149,13 @@ const plain = (nodes, ctx) => {
     // mark datacount section as required
     else if (node === 'memory.init' || node === 'data.drop') {
       out.push(node)
-      ctx.datacount[0] = []
+      ctx.datacount[0] = null // mark datacount element
     }
 
     else if (node === 'call_indirect') {
       out.push(node)
       if (typeof nodes[0] === 'string' && (nodes[0][0] === '$' || !isNaN(nodes[0]))) out.push(nodes.shift())
+        else out.push('0')
         let [idx, param, result] = typeuse(nodes, ctx)
       out.push(['type', idx ?? (ctx._[idx = '$'+param+'>'+result] = [param, result], idx)])
     }
@@ -567,7 +567,7 @@ const instr = (nodes, ctx) => {
 
   // (call_indirect tableIdx? (type $typeName)? ...nodes)
   else if (code == 0x11) {
-    let tableidx = typeof nodes[0] === 'string' ? (nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0) : 0
+    let tableidx = nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()
     let typeidx = nodes[0][1][0] === '$' ? ctx.type[nodes.shift()[1]] : +nodes.shift()[1]
     immed.push(...uleb(typeidx), ...uleb(tableidx))
   }
