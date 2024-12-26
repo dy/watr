@@ -544,10 +544,6 @@ const instr = (nodes, ctx) => {
     else if (!param?.length && result.length === 1) immed.push(TYPE[result[0]])
     // (type idx)
     else immed.push(...uleb( typeidx ))
-
-    // unlike others, block consumes all instructions after
-    // FIXME: do we need it?
-    while (nodes.length) immed.push(...instr(nodes, ctx))
   }
   // (else)
   else if (code === 5) {}
