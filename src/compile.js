@@ -127,44 +127,52 @@ const plain = (nodes, ctx) => {
   while (nodes.length) {
     let node = nodes.shift()
 
-    // consume type
-    if (node === 'block' || node === 'loop' || node === 'if') {
-      out.push(node)
+    if (typeof node === 'string') {
+      // block typeuse?
+      if (node === 'block' || node === 'loop' || node === 'if') {
+        out.push(node)
 
-      // (loop $l?)
-      if (nodes[0]?.[0] === '$') out.push(nodes.shift())
+        // (loop $l?)
+        if (nodes[0]?.[0] === '$') out.push(nodes.shift())
 
-      let [idx, param, result] = typeuse(nodes, ctx)
-
-      // direct idx (no params/result needed)
-      if (idx != null) out.push(['type', idx])
-      // get type - can be either idx or valtype (numtype | reftype)
-      else if (!param.length && !result.length);
-      // (result i32) - doesn't require registering type
-      else if (!param.length && result.length === 1) out.push(['result', result])
-      // (param i32 i32)? (result i32 i32) - implicit type
-      else ctx._[idx = '$'+param+'>'+result] = [param, result], out.push(['type', idx])
-    }
-
-    // else $label, end $label
-    else if (node === 'else' || node === 'end') out.push(node), nodes[0]?.[0] === '$' && nodes.shift()
-
-    // mark datacount section as required
-    else if (node === 'memory.init' || node === 'data.drop') {
-      out.push(node)
-      ctx.datacount[0] = true // mark datacount element
-    }
-
-    else if (node === 'call_indirect') {
-      out.push(node)
-      if (typeof nodes[0] === 'string' && (nodes[0][0] === '$' || !isNaN(nodes[0]))) out.push(nodes.shift())
-        else out.push('0')
         let [idx, param, result] = typeuse(nodes, ctx)
-      out.push(['type', idx ?? (ctx._[idx = '$'+param+'>'+result] = [param, result], idx)])
-    }
 
-    // plain instr
-    else if (typeof node === 'string') out.push(node)
+        // direct idx (no params/result needed)
+        if (idx != null) out.push(['type', idx])
+        // get type - can be either idx or valtype (numtype | reftype)
+        else if (!param.length && !result.length);
+        // (result i32) - doesn't require registering type
+        else if (!param.length && result.length === 1) out.push(['result', result])
+        // (param i32 i32)? (result i32 i32) - implicit type
+        else ctx._[idx = '$'+param+'>'+result] = [param, result], out.push(['type', idx])
+      }
+
+      // else $label, end $label
+      else if (node === 'else' || node === 'end') out.push(node), nodes[0]?.[0] === '$' && nodes.shift()
+
+      // mark datacount section as required
+      else if (node === 'memory.init' || node === 'data.drop') {
+        out.push(node)
+        ctx.datacount[0] = true // mark datacount element
+      }
+
+      else if (node === 'call_indirect') {
+        out.push(node)
+        if (typeof nodes[0] === 'string' && (nodes[0][0] === '$' || !isNaN(nodes[0]))) out.push(nodes.shift())
+          else out.push('0')
+          let [idx, param, result] = typeuse(nodes, ctx)
+        out.push(['type', idx ?? (ctx._[idx = '$'+param+'>'+result] = [param, result], idx)])
+      }
+
+      // abbr table.* idx?
+      else if (node.startsWith('table.')) {
+        out.push(node)
+        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : '0')
+      }
+
+      // plain instr
+      else out.push(node)
+    }
 
     // (block ...) -> block ... end
     else if (node[0] === 'block' || node[0] === 'loop') {
@@ -519,13 +527,13 @@ const instr = (nodes, ctx) => {
     // table.init tableidx? elemidx -> 0xfc 0x0c elemidx tableidx
     // https://webassembly.github.io/spec/core/binary/instructions.html#table-instructions
     else if (code === 0x0c) {
-      let tabidx = (nodes[1][0] === '$' || !isNaN(nodes[1])) ? (nodes[0][0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()) : 0
+      let tabidx = (nodes[0][0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift())
       immed.push(...uleb(nodes[0][0] === '$' ? ctx.elem[nodes.shift()] : +nodes.shift()), ...uleb(tabidx))
     }
     // table.* tableidx?
     // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
     else if (code >= 0x0c) {
-      immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
+      immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()))
       // table.copy tableidx? tableidx?
       if (code === 0x0e) immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
     }
