@@ -2118,41 +2118,45 @@ t('feature: extended const', () => {
 
 
 // examples
-t('/test/example/table.wat', async function() { await ex(this.name) })
-t('/test/example/types.wat', async function() { await ex(this.name, {console}) })
+t('/test/example/table.wat', async function () { await ex(this.name) })
+t('/test/example/types.wat', async function () { await ex(this.name, { console }) })
 
-t('/test/example/global.wat', async function() { await ex(this.name) })
-t('/test/example/multivar.wat', async function() { await ex(this.name, {
-  console, js:{
-    mem: new WebAssembly.Memory({ initial: 1, maximum: 2 }),
-    blockSize: new WebAssembly.Global({ value: 'i32', mutable: true }, 0)
-  }
-}) })
-t('/test/example/amp.wat', async function() { await ex(this.name, {
-  console,
-  js:{
-    mem: new WebAssembly.Memory({ initial: 1, maximum: 2 }),
-    blockSize: new WebAssembly.Global({ value: 'i32', mutable: true }, 0)
-  }
-})})
+t('/test/example/global.wat', async function () { await ex(this.name) })
+t('/test/example/multivar.wat', async function () {
+  await ex(this.name, {
+    console, js: {
+      mem: new WebAssembly.Memory({ initial: 1, maximum: 2 }),
+      blockSize: new WebAssembly.Global({ value: 'i32', mutable: true }, 0)
+    }
+  })
+})
+t('/test/example/amp.wat', async function () {
+  await ex(this.name, {
+    console,
+    js: {
+      mem: new WebAssembly.Memory({ initial: 1, maximum: 2 }),
+      blockSize: new WebAssembly.Global({ value: 'i32', mutable: true }, 0)
+    }
+  })
+})
 
-t('/test/example/malloc.wat', async function() { await ex(this.name) })
-t('/test/example/brownian.wat', async function() { await ex(this.name) })
-t('/test/example/quine.wat', async function() { await ex(this.name) })
-t('/test/example/containers.wat', async function() { await ex(this.name) })
-t('/test/example/fire.wat', async function() { await ex(this.name) })
-t('/test/example/snake.wat', async function() { await ex(this.name) })
-t('/test/example/dino.wat', async function() { await ex(this.name) })
-t('/test/example/raytrace.wat', async function() { await ex(this.name) })
-t('/test/example/maze.wat', async function() { await ex(this.name) })
-t('/test/example/metaball.wat', async function() { await ex(this.name) })
-t('/test/example/loops.wat', async function() { await ex(this.name) })
-t('/test/example/memory.wat', async function() { await ex(this.name) })
-t('/test/example/stack.wat', async function() { await ex(this.name) })
-t('/test/example/raycast.wat', async function() { await ex(this.name, {console, Math}) })
+t('/test/example/malloc.wat', async function () { await ex(this.name) })
+t('/test/example/brownian.wat', async function () { await ex(this.name) })
+t('/test/example/quine.wat', async function () { await ex(this.name) })
+t('/test/example/containers.wat', async function () { await ex(this.name) })
+t('/test/example/fire.wat', async function () { await ex(this.name) })
+t('/test/example/snake.wat', async function () { await ex(this.name) })
+t('/test/example/dino.wat', async function () { await ex(this.name) })
+t('/test/example/raytrace.wat', async function () { await ex(this.name) })
+t('/test/example/maze.wat', async function () { await ex(this.name) })
+t('/test/example/metaball.wat', async function () { await ex(this.name) })
+t('/test/example/loops.wat', async function () { await ex(this.name) })
+t('/test/example/memory.wat', async function () { await ex(this.name) })
+t('/test/example/stack.wat', async function () { await ex(this.name) })
+t('/test/example/raycast.wat', async function () { await ex(this.name, { console, Math }) })
 
 // officials
-const spectest= {
+const spectest = {
   memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }),
   table: new WebAssembly.Table({ initial: 10, maximum: 20, element: 'anyfunc' }),
   global_i32: 666,
@@ -2167,229 +2171,238 @@ const spectest= {
   print_i32_f32: console.log,
   print_f64_f64: console.log,
 }
-t('/test/official/address.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/align.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/binary-leb128.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/binary.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/block.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/br_if.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/br_table.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/br.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/bulk.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/call_indirect.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/call.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/comments.wast', async function() { await ex(this.name, {spectest}) })
-t.todo('/test/official/const.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/conversions.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/custom.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/data.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/elem.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/endianness.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/exports.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/f32_bitwise.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/f32_cmp.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/f32.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/f64_bitwise.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/f64_cmp.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/f64.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/fac.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/float_exprs.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/float_literals.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/float_memory.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/float_misc.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/forward.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/func_ptrs.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/func.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/global.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/i32.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/i64.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/if.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/imports.wast', async function() { await ex(this.name, {spectest: {...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 })}}) })
-t('/test/official/inline-module.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/int_exprs.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/int_literals.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/labels.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/left-to-right.wast', async function() { await ex(this.name, {spectest}) })
-t.todo('/test/official/linking.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/load.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/local_get.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/local_set.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/loop.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/memory_copy.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/memory_fill.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/memory_grow.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/memory_init.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/memory_redundancy.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/memory_size.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/memory_trap.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/memory.wast', async function() { await ex(this.name, {spectest}) })
-t.todo('/test/official/names.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/nop.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/obsolete-keywords.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/ref_func.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/ref_is_null.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/ref_null.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/return.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/select.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_address.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_align.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_bit_shift.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_bitwise.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_boolean.wast', async function() { await ex(this.name, {spectest}) })
-t.todo('/test/official/simd_const.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_conversions.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_f32x4_arith.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_f32x4_cmp.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_f32x4_pmin_pmax.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_f32x4_rounding.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_f32x4.wast', async function() { await ex(this.name, {spectest}) })
-t.todo('/test/official/simd_f64x2_arith.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_f64x2_cmp.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_f64x2_pmin_pmax.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_f64x2_rounding.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_f64x2.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i16x8_arith.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i16x8_arith2.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i16x8_cmp.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i16x8_extadd_pairwise_i8x16.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i16x8_extmul_i8x16.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i16x8_q15mulr_sat_s.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i16x8_sat_arith.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i32x4_arith.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i32x4_arith2.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i32x4_cmp.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i32x4_dot_i16x8.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i32x4_extadd_pairwise_i16x8.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i32x4_extmul_i16x8.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i32x4_trunc_sat_f32x4.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i32x4_trunc_sat_f64x2.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i64x2_arith.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i64x2_arith2.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i64x2_cmp.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_i64x2_extmul_i32x4.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_int_to_int_extend.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_lane.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_linking.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_load_extend.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_load_splat.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_load_zero.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_load.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_load8_lane.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_load16_lane.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_load32_lane.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_load64_lane.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_splat.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_store.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_store8_lane.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_store16_lane.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_store32_lane.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/simd_store64_lane.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/skip-stack-guard-page.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/stack.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/start.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/store.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/switch.wast', async function() { await ex(this.name, {spectest}) })
-t.skip('/test/official/table_copy.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/table_fill.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/table_get.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/table_grow.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/table_init.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/table_set.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/table_size.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/table-sub.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/table.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/token.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/traps.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/type.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/unreachable.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/unreached-invalid.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/unreached-valid.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/unwind.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/utf8-custom-section-id.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/utf8-import-field.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/utf8-import-module.wast', async function() { await ex(this.name, {spectest}) })
-t('/test/official/utf8-invalid-encoding.wast', async function() { await ex(this.name, {spectest}) })
+t('/test/official/address.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/align.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/binary-leb128.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/binary.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/block.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/br_if.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/br_table.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/br.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/bulk.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/call_indirect.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/call.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/comments.wast', async function () { await ex(this.name, { spectest }) })
+t.todo('/test/official/const.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/conversions.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/custom.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/data.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/elem.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/endianness.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/exports.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/f32_bitwise.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/f32_cmp.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/f32.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/f64_bitwise.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/f64_cmp.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/f64.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/fac.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/float_exprs.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/float_literals.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/float_memory.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/float_misc.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/forward.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/func_ptrs.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/func.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/global.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/i32.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/i64.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/if.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/imports.wast', async function () { await ex(this.name, { spectest: { ...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }) } }) })
+t('/test/official/inline-module.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/int_exprs.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/int_literals.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/labels.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/left-to-right.wast', async function () { await ex(this.name, { spectest }) })
+t.todo('/test/official/linking.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/load.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/local_get.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/local_set.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/loop.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/memory_copy.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/memory_fill.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/memory_grow.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/memory_init.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/memory_redundancy.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/memory_size.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/memory_trap.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/memory.wast', async function () { await ex(this.name, { spectest }) })
+t.todo('/test/official/names.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/nop.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/obsolete-keywords.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/ref_func.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/ref_is_null.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/ref_null.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/return.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/select.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_address.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_align.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_bit_shift.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_bitwise.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_boolean.wast', async function () { await ex(this.name, { spectest }) })
+t.todo('/test/official/simd_const.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_conversions.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f32x4_arith.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f32x4_cmp.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f32x4_pmin_pmax.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f32x4_rounding.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f32x4.wast', async function () { await ex(this.name, { spectest }) })
+t.todo('/test/official/simd_f64x2_arith.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f64x2_cmp.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f64x2_pmin_pmax.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f64x2_rounding.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f64x2.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i16x8_arith.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i16x8_arith2.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i16x8_cmp.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i16x8_extadd_pairwise_i8x16.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i16x8_extmul_i8x16.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i16x8_q15mulr_sat_s.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i16x8_sat_arith.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i32x4_arith.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i32x4_arith2.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i32x4_cmp.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i32x4_dot_i16x8.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i32x4_extadd_pairwise_i16x8.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i32x4_extmul_i16x8.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i32x4_trunc_sat_f32x4.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i32x4_trunc_sat_f64x2.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i64x2_arith.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i64x2_arith2.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i64x2_cmp.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_i64x2_extmul_i32x4.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_int_to_int_extend.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_lane.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_linking.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_load_extend.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_load_splat.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_load_zero.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_load.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_load8_lane.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_load16_lane.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_load32_lane.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_load64_lane.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_splat.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_store.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_store8_lane.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_store16_lane.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_store32_lane.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_store64_lane.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/skip-stack-guard-page.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/stack.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/start.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/store.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/switch.wast', async function () { await ex(this.name, { spectest }) })
+t.skip('/test/official/table_copy.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/table_fill.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/table_get.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/table_grow.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/table_init.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/table_set.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/table_size.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/table-sub.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/table.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/token.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/traps.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/type.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/unreachable.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/unreached-invalid.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/unreached-valid.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/unwind.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/utf8-custom-section-id.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/utf8-import-field.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/utf8-import-module.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/utf8-invalid-encoding.wast', async function () { await ex(this.name, { spectest }) })
 
 
 // execute test case
-async function ex(path, imports={}) {
+async function ex(path, imports = {}) {
   // load src
   let res = await fetch(path)
   let src = await res.text()
 
   // parse
-  let nodes = parse(src, {comments: true})
+  let nodes = parse(src, { comments: true })
   freeze(nodes)
 
   // test runtime
   let buf, mod = {},
-  importObj = {...imports},
-  lastExports,
-  lastComment
+    importObj = { ...imports },
+    lastExports,
+    lastComment
 
   for (let node of nodes) {
     if (typeof node === 'string') lastComment = node
 
     // (module $name) - creates module instance, collects exports
-    if (node[0] === 'module') {
-      // strip comments
-      node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
+    switch (node[0]) {
+      case ('module'): {
+        // strip comments
+        node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
 
-      buf = compile(node)
+        buf = compile(node)
 
-      // sync up with libwabt
-      let wabtBuffer
-      try {
-        wabtBuffer = wat2wasm(print(node)).buffer
-        // compare with libwabt only if not binary flag
-        if (wabtBuffer && node[1] !== 'binary') is(buf, wabtBuffer, lastComment?.trim())
-      } catch (e) {
-        console.error(e.message, {...e})
+        // sync up with libwabt
+        let wabtBuffer
+        try {
+          wabtBuffer = wat2wasm(print(node)).buffer
+          // compare with libwabt only if not binary flag
+          if (wabtBuffer && node[1] !== 'binary') is(buf, wabtBuffer, lastComment?.trim())
+        } catch (e) {
+          console.error(e.message, { ...e })
+        }
+        // buf = wabtBuffer
+
+        let m = new WebAssembly.Module(buf)
+        let inst = new WebAssembly.Instance(m, importObj)
+        lastExports = inst.exports
+        // collect exports under name
+        if (node[1]?.[0] === '$') mod[node[1]] = lastExports
+        break;
       }
-      // buf = wabtBuffer
-
-      let m = new WebAssembly.Module(buf)
-      let inst = new WebAssembly.Instance(m, importObj)
-      lastExports = inst.exports
-      // collect exports under name
-      if (node[1]?.[0] === '$') mod[node[1]] = lastExports
-    }
-    else if (node[0] === 'register') {
-      // include exports from prev module
-      let [, nm] = node
-      console.log('register', nm)
-      importObj[nm.slice(1, -1)] = lastExports
-    }
-    else if (node[0] === 'assert_return') {
-      let [, [kind, ...args], ...expects] = node;
-      let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
-      nm = args.shift().slice(1, -1);
-
-      // console.log('assert', kind, nm, 'args:', ...args, 'expects:', ...expects)
-
-      if (expects.some(v => v[0] === 'v128.const') || args.some(v => v[0] === 'v128.const'))  { console.warn('skipping v128'); continue }
-
-      args = args.map(val)
-      expects = expects?.map(val)
-
-      if (args.some(isNaNValue) || expects.some(isNaNValue)) { console.warn('skipping NaN'); continue }
-
-      if (kind === 'invoke') {
-        is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert ${nm}(${args}) === ${expects}`)
+      case ('register'): {
+        // include exports from prev module
+        let [, nm] = node
+        console.log('register', nm)
+        importObj[nm.slice(1, -1)] = lastExports
+        break;
       }
-      else if (kind === 'get') {
-        is(m[nm].value, expects[0])
-      }
-    }
-    else if (node[0] === 'invoke') {
-      let [,nm,...args] = node
-      args = args.map(val)
-      console.log('invoke', nm, ...args)
-      lastExports[nm.slice(1,-1)](...args)
-    }
-    // else if (node[0] === 'assert_invalid') {
+      case ('assert_return'): {
+        let [, [kind, ...args], ...expects] = node;
+        let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
+          nm = args.shift().slice(1, -1);
 
-    // }
+        // console.log('assert_return', kind, nm, 'args:', ...args, 'expects:', ...expects)
+
+        if (expects.some(v => v[0] === 'v128.const') || args.some(v => v[0] === 'v128.const')) { console.warn('skipping v128'); continue }
+
+        args = args.map(val)
+        expects = expects?.map(val)
+
+        if (args.some(isNaNValue) || expects.some(isNaNValue)) { console.warn('skipping NaN'); continue }
+
+        if (kind === 'invoke') {
+          is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert ${nm}(${args}) === ${expects}`)
+        }
+        else if (kind === 'get') {
+          is(m[nm].value, expects[0])
+        }
+        break;
+      }
+      case ('invoke'): {
+        let [, nm, ...args] = node
+        args = args.map(val)
+        console.log('invoke', nm, ...args)
+        lastExports[nm.slice(1, -1)](...args)
+        break;
+      }
+      case ('assert_trap'): {
+        console.log('trap', node)
+      }
+      // case ('assert_invalid') {
+
+      // }
+    }
   }
 }
 
@@ -2399,13 +2412,13 @@ const isNaNValue = a => (typeof a === 'number' && isNaN(a)) || a === 2143289344 
 // get value from [type, value] args
 var f32arr = new Float32Array(1), i32arr = new Int32Array(1), i64arr = new BigInt64Array(1)
 const val = ([t, v]) =>
-    t === 'v128.const' ? v :
+  t === 'v128.const' ? v :
     t === 'ref.null' ? null :
-    t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :
-    t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :
-    t === 'i32.const' ? (i32arr[0] = i32.parse(v), i32arr[0]) :
-    t === 'f64.const' ? f64.parse(v):
-    v;
+      t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :
+        t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :
+          t === 'i32.const' ? (i32arr[0] = i32.parse(v), i32arr[0]) :
+            t === 'f64.const' ? f64.parse(v) :
+              v;
 
 
 
