@@ -2355,7 +2355,7 @@ export function wat2wasm(code, config) {
 
 // run test case inline
 // FIXME: rename to something more meaningful? testCase?
-function inline (src, importObj) {
+function inline(src, importObj) {
   let tree = parse(src)
   // in order to make sure tree is not messed up we freeze it
   freeze(tree)
@@ -2387,88 +2387,95 @@ async function file(path, imports = {}) {
 
   for (let node of nodes) {
     if (typeof node === 'string') lastComment = node
-    exnode(node)
+    ex(node)
   }
 
-
-  function exnode(node) {
+  // execute node
+  function ex(node) {
     // (module $name) - creates module instance, collects exports
-    switch (node[0]) {
-      case ('module'): {
-        // strip comments
-        node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
-        buf = compile(node)
+    if (node[0] === 'module') {
+      // strip comments
+      node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
+      buf = compile(node)
 
-        // sync up with libwabt
-        let wabtBuffer
-        try {
-          wabtBuffer = wat2wasm(print(node)).buffer
-          // compare with libwabt only if not binary flag
-          if (wabtBuffer && node[1] !== 'binary') is(buf, wabtBuffer, lastComment?.trim())
-        } catch (e) {
-          console.error(e.message, { ...e })
-        }
-        // buf = wabtBuffer
-
-        let m = new WebAssembly.Module(buf)
-        let inst = new WebAssembly.Instance(m, importObj)
-        lastExports = inst.exports
-        // collect exports under name
-        if (node[1]?.[0] === '$') mod[node[1]] = lastExports
-        break;
+      // sync up with libwabt
+      let wabtBuffer
+      try {
+        wabtBuffer = wat2wasm(print(node)).buffer
+        // compare with libwabt only if not binary flag
+        if (wabtBuffer && node[1] !== 'binary') is(buf, wabtBuffer, lastComment?.trim())
+      } catch (e) {
+        console.error(e.message, { ...e })
       }
-      case ('register'): {
-        // include exports from prev module
-        let [, nm] = node
-        console.log('register', nm)
-        importObj[nm.slice(1, -1)] = lastExports
-        break;
+      // buf = wabtBuffer
+
+      let m = new WebAssembly.Module(buf)
+      let inst = new WebAssembly.Instance(m, importObj)
+      lastExports = inst.exports
+      // collect exports under name
+      if (node[1]?.[0] === '$') mod[node[1]] = lastExports
+
+    }
+    if (node[0] === 'register') {
+      // include exports from prev module
+      let [, nm] = node
+      console.log('register', nm)
+      importObj[nm.slice(1, -1)] = lastExports
+
+    }
+    if (node[0] === 'assert_return') {
+      let [, [kind, ...args], ...expects] = node;
+      let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
+        nm = args.shift().slice(1, -1);
+
+      // console.log('assert_return', kind, nm, 'args:', ...args, 'expects:', ...expects)
+
+      if (expects.some(v => v[0] === 'v128.const') || args.some(v => v[0] === 'v128.const')) return console.warn('skipping v128');
+
+      args = args.map(val)
+      expects = expects?.map(val)
+
+      if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('skipping NaN');
+
+      if (kind === 'invoke') {
+        is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert ${nm}(${args}) === ${expects}`)
       }
-      case ('assert_return'): {
-        let [, [kind, ...args], ...expects] = node;
-        let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
-          nm = args.shift().slice(1, -1);
-
-        // console.log('assert_return', kind, nm, 'args:', ...args, 'expects:', ...expects)
-
-        if (expects.some(v => v[0] === 'v128.const') || args.some(v => v[0] === 'v128.const')) return console.warn('skipping v128');
-
-        args = args.map(val)
-        expects = expects?.map(val)
-
-        if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('skipping NaN');
-
-        if (kind === 'invoke') {
-          is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert ${nm}(${args}) === ${expects}`)
-        }
-        else if (kind === 'get') {
-          is(m[nm].value, expects[0])
-        }
-        break;
+      else if (kind === 'get') {
+        is(m[nm].value, expects[0])
       }
-      case ('invoke'): {
-        let [, ...args] = node
-        let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
-          nm = args.shift().slice(1, -1);
-        args = args.map(val)
-        console.log('invoke', nm, ...args)
-        m[nm](...args)
-        break;
-      }
-      case ('assert_trap'): {
-        console.group('trap', ...node)
-        let [, nodes, msg] = node
-        try {
-          exnode(nodes)
-        } catch (e) {
-          // console.log('trap error', e, msg)
-          ok(e.message, msg)
-        }
-        console.groupEnd()
-      }
-      // case ('assert_invalid') {
 
+    }
+    if (node[0] === 'invoke') {
+      let [, ...args] = node
+      let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
+        nm = args.shift().slice(1, -1);
+      args = args.map(val)
+      console.log('invoke', nm, ...args)
+      m[nm](...args)
+
+    }
+    if (node[0] === 'assert_trap') {
+      // console.group('trap', ...node)
+      let [, nodes, msg] = node
+      try {
+        ex(nodes)
+      } catch (e) {
+        // console.log('trap error', e, msg)
+        ok(e.message, msg)
+      }
+      // console.groupEnd()
+    }
+    if (node[0] === 'assert_invalid') {
+      // console.log('assert_invalid', ...node)
+      // let [, nodes, msg] = node
+      // let err
+      // try {
+      //   ex(nodes)
+      // } catch (e) {
+      //   console.warn('invalid error', e)
+      //   err = e.message
       // }
+      // ok(err, msg)
     }
   }
 }
