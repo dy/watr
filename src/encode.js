@@ -59,7 +59,7 @@ i64.parse = n => {
   return n = byteView.getBigInt64(0)
 }
 
-const byteView = new DataView(new BigInt64Array(1).buffer)
+const byteView = new DataView(new Float64Array(1).buffer)
 
 const F32_SIGN = 0x80000000, F32_NAN = 0x7f800000
 export function f32(input, value, idx) {
@@ -95,7 +95,7 @@ export function f64(input, value, idx) {
     byteView.setFloat64(0, value);
   }
 
-  return [
+  return ([
     byteView.getUint8(7),
     byteView.getUint8(6),
     byteView.getUint8(5),
@@ -104,7 +104,7 @@ export function f64(input, value, idx) {
     byteView.getUint8(2),
     byteView.getUint8(1),
     byteView.getUint8(0)
-  ];
+  ]);
 }
 
 f64.parse = (input, max=Number.MAX_VALUE) => {
