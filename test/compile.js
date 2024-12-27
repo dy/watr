@@ -2214,7 +2214,7 @@ t('/test/official/int_exprs.wast', async function () { await ex(this.name, { spe
 t('/test/official/int_literals.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/labels.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/left-to-right.wast', async function () { await ex(this.name, { spectest }) })
-t.todo('/test/official/linking.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/linking.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/load.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/local_get.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/local_set.wast', async function () { await ex(this.name, { spectest }) })
@@ -2247,7 +2247,7 @@ t('/test/official/simd_f32x4_cmp.wast', async function () { await ex(this.name, 
 t('/test/official/simd_f32x4_pmin_pmax.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/simd_f32x4_rounding.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/simd_f32x4.wast', async function () { await ex(this.name, { spectest }) })
-t.todo('/test/official/simd_f64x2_arith.wast', async function () { await ex(this.name, { spectest }) })
+t('/test/official/simd_f64x2_arith.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/simd_f64x2_cmp.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/simd_f64x2_pmin_pmax.wast', async function () { await ex(this.name, { spectest }) })
 t('/test/official/simd_f64x2_rounding.wast', async function () { await ex(this.name, { spectest }) })
@@ -2333,13 +2333,16 @@ async function ex(path, imports = {}) {
 
   for (let node of nodes) {
     if (typeof node === 'string') lastComment = node
+    exnode(node)
+  }
 
+
+  function exnode(node) {
     // (module $name) - creates module instance, collects exports
     switch (node[0]) {
       case ('module'): {
         // strip comments
         node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
-
         buf = compile(node)
 
         // sync up with libwabt
@@ -2374,12 +2377,12 @@ async function ex(path, imports = {}) {
 
         // console.log('assert_return', kind, nm, 'args:', ...args, 'expects:', ...expects)
 
-        if (expects.some(v => v[0] === 'v128.const') || args.some(v => v[0] === 'v128.const')) { console.warn('skipping v128'); continue }
+        if (expects.some(v => v[0] === 'v128.const') || args.some(v => v[0] === 'v128.const')) return console.warn('skipping v128');
 
         args = args.map(val)
         expects = expects?.map(val)
 
-        if (args.some(isNaNValue) || expects.some(isNaNValue)) { console.warn('skipping NaN'); continue }
+        if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('skipping NaN');
 
         if (kind === 'invoke') {
           is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert ${nm}(${args}) === ${expects}`)
@@ -2390,14 +2393,24 @@ async function ex(path, imports = {}) {
         break;
       }
       case ('invoke'): {
-        let [, nm, ...args] = node
+        let [, ...args] = node
+        let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
+          nm = args.shift().slice(1, -1);
         args = args.map(val)
         console.log('invoke', nm, ...args)
-        lastExports[nm.slice(1, -1)](...args)
+        m[nm](...args)
         break;
       }
       case ('assert_trap'): {
-        console.log('trap', node)
+        console.group('trap', ...node)
+        let [, nodes, msg] = node
+        try {
+          exnode(nodes)
+        } catch (e) {
+          // console.log('trap error', e, msg)
+          ok(e.message, msg)
+        }
+        console.groupEnd()
       }
       // case ('assert_invalid') {
 
@@ -2493,4 +2506,5 @@ const run = (src, importObj) => {
   return new WebAssembly.Instance(mod, importObj)
 }
 
+// lock array to make sure watr doesn't modify it
 const freeze = node => Array.isArray(node) && (Object.freeze(node), node.forEach(freeze))
