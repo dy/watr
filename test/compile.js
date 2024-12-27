@@ -2151,151 +2151,149 @@ t('example: wat-compiler', async () => {
   await ex('/test/example/raycast.wat')
 })
 
-let official = [
-  '/test/official/address.wast',
-  '/test/official/align.wast',
-  '/test/official/binary-leb128.wast',
-  '/test/official/binary.wast',
-  '/test/official/block.wast',
-  '/test/official/br_if.wast',
-  '/test/official/br_table.wast',
-  '/test/official/br.wast',
-  '/test/official/bulk.wast',
-  '/test/official/call_indirect.wast',
-  '/test/official/call.wast',
-  '/test/official/comments.wast',
-  // '/test/official/const.wast',
-  '/test/official/conversions.wast',
-  // '/test/official/custom.wast',
-  '/test/official/data.wast',
-  '/test/official/elem.wast',
-  // '/test/official/endianness.wast',
-  '/test/official/exports.wast',
-  '/test/official/f32_bitwise.wast',
-  '/test/official/f32_cmp.wast',
-  '/test/official/f32.wast',
-  '/test/official/f64_bitwise.wast',
-  '/test/official/f64_cmp.wast',
-  '/test/official/f64.wast',
-  '/test/official/fac.wast',
-  '/test/official/float_exprs.wast',
-  '/test/official/float_literals.wast',
-  '/test/official/float_memory.wast',
-  '/test/official/float_misc.wast',
-  '/test/official/forward.wast',
-  '/test/official/func_ptrs.wast',
-  '/test/official/func.wast',
-  '/test/official/global.wast',
-  '/test/official/i32.wast',
-  '/test/official/i64.wast',
-  '/test/official/if.wast',
-  '/test/official/imports.wast',
-  '/test/official/inline-module.wast',
-  '/test/official/int_exprs.wast',
-  '/test/official/int_literals.wast',
-  '/test/official/labels.wast',
-  '/test/official/left-to-right.wast',
-  // '/test/official/linking.wast',
-  '/test/official/load.wast',
-  '/test/official/local_get.wast',
-  '/test/official/local_set.wast',
-  '/test/official/loop.wast',
-  '/test/official/memory_copy.wast',
-  '/test/official/memory_fill.wast',
-  '/test/official/memory_grow.wast',
-  '/test/official/memory_init.wast',
-  '/test/official/memory_redundancy.wast',
-  '/test/official/memory_size.wast',
-  '/test/official/memory_trap.wast',
-  '/test/official/memory.wast',
-  // '/test/official/names.wast',
-  '/test/official/nop.wast',
-  '/test/official/obsolete-keywords.wast',
-  '/test/official/ref_func.wast',
-  '/test/official/ref_is_null.wast',
-  '/test/official/ref_null.wast',
-  '/test/official/return.wast',
-  '/test/official/select.wast',
-  '/test/official/simd_address.wast',
-  '/test/official/simd_align.wast',
-  '/test/official/simd_bit_shift.wast',
-  '/test/official/simd_bitwise.wast',
-  '/test/official/simd_boolean.wast',
-  // '/test/official/simd_const.wast',
-  '/test/official/simd_conversions.wast',
-  '/test/official/simd_f32x4_arith.wast',
-  '/test/official/simd_f32x4_cmp.wast',
-  '/test/official/simd_f32x4_pmin_pmax.wast',
-  '/test/official/simd_f32x4_rounding.wast',
-  '/test/official/simd_f32x4.wast',
-  // '/test/official/simd_f64x2_arith.wast',
-  '/test/official/simd_f64x2_cmp.wast',
-  '/test/official/simd_f64x2_pmin_pmax.wast',
-  '/test/official/simd_f64x2_rounding.wast',
-  '/test/official/simd_f64x2.wast',
-  '/test/official/simd_i16x8_arith.wast',
-  '/test/official/simd_i16x8_arith2.wast',
-  '/test/official/simd_i16x8_cmp.wast',
-  '/test/official/simd_i16x8_extadd_pairwise_i8x16.wast',
-  '/test/official/simd_i16x8_extmul_i8x16.wast',
-  '/test/official/simd_i16x8_q15mulr_sat_s.wast',
-  '/test/official/simd_i16x8_sat_arith.wast',
-  '/test/official/simd_i32x4_arith.wast',
-  '/test/official/simd_i32x4_arith2.wast',
-  '/test/official/simd_i32x4_cmp.wast',
-  '/test/official/simd_i32x4_dot_i16x8.wast',
-  '/test/official/simd_i32x4_extadd_pairwise_i16x8.wast',
-  '/test/official/simd_i32x4_extmul_i16x8.wast',
-  '/test/official/simd_i32x4_trunc_sat_f32x4.wast',
-  '/test/official/simd_i32x4_trunc_sat_f64x2.wast',
-  '/test/official/simd_i64x2_arith.wast',
-  '/test/official/simd_i64x2_arith2.wast',
-  '/test/official/simd_i64x2_cmp.wast',
-  '/test/official/simd_i64x2_extmul_i32x4.wast',
-  '/test/official/simd_int_to_int_extend.wast',
-  '/test/official/simd_lane.wast',
-  '/test/official/simd_linking.wast',
-  '/test/official/simd_load_extend.wast',
-  '/test/official/simd_load_splat.wast',
-  '/test/official/simd_load_zero.wast',
-  '/test/official/simd_load.wast',
-  '/test/official/simd_load8_lane.wast',
-  '/test/official/simd_load16_lane.wast',
-  '/test/official/simd_load32_lane.wast',
-  '/test/official/simd_load64_lane.wast',
-  '/test/official/simd_splat.wast',
-  '/test/official/simd_store.wast',
-  '/test/official/simd_store8_lane.wast',
-  '/test/official/simd_store16_lane.wast',
-  '/test/official/simd_store32_lane.wast',
-  '/test/official/simd_store64_lane.wast',
-  '/test/official/skip-stack-guard-page.wast',
-  '/test/official/stack.wast',
-  '/test/official/start.wast',
-  '/test/official/store.wast',
-  '/test/official/switch.wast',
-  '/test/official/table_copy.wast',
-  '/test/official/table_fill.wast',
-  '/test/official/table_get.wast',
-  '/test/official/table_grow.wast',
-  '/test/official/table_init.wast',
-  '/test/official/table_set.wast',
-  '/test/official/table_size.wast',
-  '/test/official/table-sub.wast',
-  '/test/official/table.wast',
-  '/test/official/token.wast',
-  '/test/official/traps.wast',
-  '/test/official/type.wast',
-  '/test/official/unreachable.wast',
-  '/test/official/unreached-invalid.wast',
-  '/test/official/unreached-valid.wast',
-  '/test/official/unwind.wast',
-  '/test/official/utf8-custom-section-id.wast',
-  '/test/official/utf8-import-field.wast',
-  '/test/official/utf8-import-module.wast',
-  '/test/official/utf8-invalid-encoding.wast',
-].forEach((it) => t(`official: ${it}`, () => ex(it)));
-
+// officials
+t('/test/official/address.wast', async function() { await ex(this.name) })
+t('/test/official/align.wast', async function() { await ex(this.name) })
+t('/test/official/binary-leb128.wast', async function() { await ex(this.name) })
+t('/test/official/binary.wast', async function() { await ex(this.name) })
+t('/test/official/block.wast', async function() { await ex(this.name) })
+t('/test/official/br_if.wast', async function() { await ex(this.name) })
+t('/test/official/br_table.wast', async function() { await ex(this.name) })
+t('/test/official/br.wast', async function() { await ex(this.name) })
+t('/test/official/bulk.wast', async function() { await ex(this.name) })
+t('/test/official/call_indirect.wast', async function() { await ex(this.name) })
+t('/test/official/call.wast', async function() { await ex(this.name) })
+t('/test/official/comments.wast', async function() { await ex(this.name) })
+t.todo('/test/official/const.wast', async function() { await ex(this.name) })
+t('/test/official/conversions.wast', async function() { await ex(this.name) })
+t('/test/official/custom.wast', async function() { await ex(this.name) })
+t('/test/official/data.wast', async function() { await ex(this.name) })
+t('/test/official/elem.wast', async function() { await ex(this.name) })
+t('/test/official/endianness.wast', async function() { await ex(this.name) })
+t('/test/official/exports.wast', async function() { await ex(this.name) })
+t('/test/official/f32_bitwise.wast', async function() { await ex(this.name) })
+t('/test/official/f32_cmp.wast', async function() { await ex(this.name) })
+t('/test/official/f32.wast', async function() { await ex(this.name) })
+t('/test/official/f64_bitwise.wast', async function() { await ex(this.name) })
+t('/test/official/f64_cmp.wast', async function() { await ex(this.name) })
+t('/test/official/f64.wast', async function() { await ex(this.name) })
+t('/test/official/fac.wast', async function() { await ex(this.name) })
+t('/test/official/float_exprs.wast', async function() { await ex(this.name) })
+t('/test/official/float_literals.wast', async function() { await ex(this.name) })
+t('/test/official/float_memory.wast', async function() { await ex(this.name) })
+t('/test/official/float_misc.wast', async function() { await ex(this.name) })
+t('/test/official/forward.wast', async function() { await ex(this.name) })
+t('/test/official/func_ptrs.wast', async function() { await ex(this.name) })
+t('/test/official/func.wast', async function() { await ex(this.name) })
+t('/test/official/global.wast', async function() { await ex(this.name) })
+t('/test/official/i32.wast', async function() { await ex(this.name) })
+t('/test/official/i64.wast', async function() { await ex(this.name) })
+t('/test/official/if.wast', async function() { await ex(this.name) })
+t('/test/official/imports.wast', async function() { await ex(this.name) })
+t('/test/official/inline-module.wast', async function() { await ex(this.name) })
+t('/test/official/int_exprs.wast', async function() { await ex(this.name) })
+t('/test/official/int_literals.wast', async function() { await ex(this.name) })
+t('/test/official/labels.wast', async function() { await ex(this.name) })
+t('/test/official/left-to-right.wast', async function() { await ex(this.name) })
+t.only('/test/official/linking.wast', async function() { await ex(this.name) })
+t('/test/official/load.wast', async function() { await ex(this.name) })
+t('/test/official/local_get.wast', async function() { await ex(this.name) })
+t('/test/official/local_set.wast', async function() { await ex(this.name) })
+t('/test/official/loop.wast', async function() { await ex(this.name) })
+t('/test/official/memory_copy.wast', async function() { await ex(this.name) })
+t('/test/official/memory_fill.wast', async function() { await ex(this.name) })
+t('/test/official/memory_grow.wast', async function() { await ex(this.name) })
+t('/test/official/memory_init.wast', async function() { await ex(this.name) })
+t('/test/official/memory_redundancy.wast', async function() { await ex(this.name) })
+t('/test/official/memory_size.wast', async function() { await ex(this.name) })
+t('/test/official/memory_trap.wast', async function() { await ex(this.name) })
+t('/test/official/memory.wast', async function() { await ex(this.name) })
+t.todo('/test/official/names.wast', async function() { await ex(this.name) })
+t('/test/official/nop.wast', async function() { await ex(this.name) })
+t('/test/official/obsolete-keywords.wast', async function() { await ex(this.name) })
+t('/test/official/ref_func.wast', async function() { await ex(this.name) })
+t('/test/official/ref_is_null.wast', async function() { await ex(this.name) })
+t('/test/official/ref_null.wast', async function() { await ex(this.name) })
+t('/test/official/return.wast', async function() { await ex(this.name) })
+t('/test/official/select.wast', async function() { await ex(this.name) })
+t('/test/official/simd_address.wast', async function() { await ex(this.name) })
+t('/test/official/simd_align.wast', async function() { await ex(this.name) })
+t('/test/official/simd_bit_shift.wast', async function() { await ex(this.name) })
+t('/test/official/simd_bitwise.wast', async function() { await ex(this.name) })
+t('/test/official/simd_boolean.wast', async function() { await ex(this.name) })
+t.todo('/test/official/simd_const.wast', async function() { await ex(this.name) })
+t('/test/official/simd_conversions.wast', async function() { await ex(this.name) })
+t('/test/official/simd_f32x4_arith.wast', async function() { await ex(this.name) })
+t('/test/official/simd_f32x4_cmp.wast', async function() { await ex(this.name) })
+t('/test/official/simd_f32x4_pmin_pmax.wast', async function() { await ex(this.name) })
+t('/test/official/simd_f32x4_rounding.wast', async function() { await ex(this.name) })
+t('/test/official/simd_f32x4.wast', async function() { await ex(this.name) })
+t.todo('/test/official/simd_f64x2_arith.wast', async function() { await ex(this.name) })
+t('/test/official/simd_f64x2_cmp.wast', async function() { await ex(this.name) })
+t('/test/official/simd_f64x2_pmin_pmax.wast', async function() { await ex(this.name) })
+t('/test/official/simd_f64x2_rounding.wast', async function() { await ex(this.name) })
+t('/test/official/simd_f64x2.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i16x8_arith.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i16x8_arith2.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i16x8_cmp.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i16x8_extadd_pairwise_i8x16.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i16x8_extmul_i8x16.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i16x8_q15mulr_sat_s.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i16x8_sat_arith.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i32x4_arith.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i32x4_arith2.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i32x4_cmp.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i32x4_dot_i16x8.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i32x4_extadd_pairwise_i16x8.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i32x4_extmul_i16x8.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i32x4_trunc_sat_f32x4.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i32x4_trunc_sat_f64x2.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i64x2_arith.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i64x2_arith2.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i64x2_cmp.wast', async function() { await ex(this.name) })
+t('/test/official/simd_i64x2_extmul_i32x4.wast', async function() { await ex(this.name) })
+t('/test/official/simd_int_to_int_extend.wast', async function() { await ex(this.name) })
+t('/test/official/simd_lane.wast', async function() { await ex(this.name) })
+t('/test/official/simd_linking.wast', async function() { await ex(this.name) })
+t('/test/official/simd_load_extend.wast', async function() { await ex(this.name) })
+t('/test/official/simd_load_splat.wast', async function() { await ex(this.name) })
+t('/test/official/simd_load_zero.wast', async function() { await ex(this.name) })
+t('/test/official/simd_load.wast', async function() { await ex(this.name) })
+t('/test/official/simd_load8_lane.wast', async function() { await ex(this.name) })
+t('/test/official/simd_load16_lane.wast', async function() { await ex(this.name) })
+t('/test/official/simd_load32_lane.wast', async function() { await ex(this.name) })
+t('/test/official/simd_load64_lane.wast', async function() { await ex(this.name) })
+t('/test/official/simd_splat.wast', async function() { await ex(this.name) })
+t('/test/official/simd_store.wast', async function() { await ex(this.name) })
+t('/test/official/simd_store8_lane.wast', async function() { await ex(this.name) })
+t('/test/official/simd_store16_lane.wast', async function() { await ex(this.name) })
+t('/test/official/simd_store32_lane.wast', async function() { await ex(this.name) })
+t('/test/official/simd_store64_lane.wast', async function() { await ex(this.name) })
+t('/test/official/skip-stack-guard-page.wast', async function() { await ex(this.name) })
+t('/test/official/stack.wast', async function() { await ex(this.name) })
+t('/test/official/start.wast', async function() { await ex(this.name) })
+t('/test/official/store.wast', async function() { await ex(this.name) })
+t('/test/official/switch.wast', async function() { await ex(this.name) })
+t('/test/official/table_copy.wast', async function() { await ex(this.name) })
+t('/test/official/table_fill.wast', async function() { await ex(this.name) })
+t('/test/official/table_get.wast', async function() { await ex(this.name) })
+t('/test/official/table_grow.wast', async function() { await ex(this.name) })
+t('/test/official/table_init.wast', async function() { await ex(this.name) })
+t('/test/official/table_set.wast', async function() { await ex(this.name) })
+t('/test/official/table_size.wast', async function() { await ex(this.name) })
+t('/test/official/table-sub.wast', async function() { await ex(this.name) })
+t('/test/official/table.wast', async function() { await ex(this.name) })
+t('/test/official/token.wast', async function() { await ex(this.name) })
+t('/test/official/traps.wast', async function() { await ex(this.name) })
+t('/test/official/type.wast', async function() { await ex(this.name) })
+t('/test/official/unreachable.wast', async function() { await ex(this.name) })
+t('/test/official/unreached-invalid.wast', async function() { await ex(this.name) })
+t('/test/official/unreached-valid.wast', async function() { await ex(this.name) })
+t('/test/official/unwind.wast', async function() { await ex(this.name) })
+t('/test/official/utf8-custom-section-id.wast', async function() { await ex(this.name) })
+t('/test/official/utf8-import-field.wast', async function() { await ex(this.name) })
+t('/test/official/utf8-import-module.wast', async function() { await ex(this.name) })
+t('/test/official/utf8-invalid-encoding.wast', async function() { await ex(this.name) })
 
 // execute test case
 async function ex(path) {
