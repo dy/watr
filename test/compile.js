@@ -2411,7 +2411,7 @@ async function file(path, imports = {}) {
         if (node[1] === 'binary') console.warn('module: skip binary')
         else if (wabtBuffer) is(buf, wabtBuffer, 'module: wat2wasm ' + lastComment?.trim())
       } catch (e) {
-        console.error(e.message, { ...e })
+        console.warn(e.message, { ...e })
       }
       // buf = wabtBuffer
 
@@ -2460,17 +2460,6 @@ async function file(path, imports = {}) {
       m[nm](...args)
 
     }
-    if (node[0] === 'assert_trap') {
-      // console.group('trap', ...node)
-      let [, nodes, msg] = node
-      try {
-        ex(nodes)
-      } catch (e) {
-        // console.log('trap error', e, msg)
-        ok(e.message, `assert_trap: ${msg}`)
-      }
-      // console.groupEnd()
-    }
     if (node[0] === 'assert_invalid') {
       let [, nodes, msg] = node
 
@@ -2486,7 +2475,26 @@ async function file(path, imports = {}) {
 
       // console.log('assert_invalid', ...node)
       //   lastComment = ``
-      throws(() => ex(nodes), msg, msg)\
+      throws(() => ex(nodes), msg, msg)
+    }
+    if (node[0] === 'assert_trap') {
+      // console.group('trap', ...node)
+      let [, nodes, msg] = node
+      try {
+        ex(nodes)
+      } catch (e) {
+        // console.log('trap error', e, msg)
+        ok(e.message, `assert_trap: ${msg}`)
+      }
+      // console.groupEnd()
+    }
+    if (node[0] === 'assert_malformed') {
+      let [, nodes, msg] = node
+      let err
+      // don't check if wat2wasm doesn't fail - certain tests are unnecessary
+      if (nodes[1] === 'binary') try {wat2wasm(print(nodes))} catch (e) {err=e}
+      if (err) throws(() => ex(nodes), msg, msg)
+      else console.warn(`assert_malformed: skip ${msg} as wat2wasm compiles fine`)
     }
   }
 }
