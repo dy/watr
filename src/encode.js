@@ -109,29 +109,28 @@ export function f64(input, value, idx) {
 
 f64.parse = (input, max=Number.MAX_VALUE) => {
   input = input.replaceAll('_', '')
-
   let sign = 1;
-  if (input[0] === '-' || input[0] === '+') sign = Number(input[0]+1), input = input.slice(1);
+  if (input[0] === '-') sign = -1, input = input.slice(1);
+  else if (input[0] === '+') input = input.slice(1);
 
   // ref: https://github.com/WebAssembly/wabt/blob/ea193b40d6d4a1a697d68ae855b2b3b3e263b377/src/literal.cc#L253
   // 0x1.5p3
   if (input[1] === 'x') {
     let [sig, exp='0'] = input.split(/p/i); // significand and exponent
-    let [int, fract] = sig.split('.'); // integer and fractional parts
-    let flen = fract?.length ?? 0;
+    let [int, fract=''] = sig.split('.'); // integer and fractional parts
+    let flen = fract.length ?? 0;
 
     // FIXME: this is not accurate, it must be byte-perfect
     sig = parseInt(int + fract); // 0x is included in int
     exp = parseInt(exp, 10);
 
     // 0x10a.fbc = 0x10afbc * 16⁻³ = 266.9833984375
-    // let value = (sig * (16 ** -flen)) * (2 ** exp);
-    let value = sig * (2 ** (exp - 4 * flen));
+    let value = sign * sig * (2 ** (exp - 4 * flen));
 
     // make sure it is not Infinity
     value = Math.max(-max, Math.min(max, value))
 
-    return sign * value
+    return value
   }
 
   if (input.includes('nan')) return sign < 0 ? -NaN : NaN;

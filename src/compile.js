@@ -261,7 +261,7 @@ const build = [,
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
       let [[,typeidx]] = dfn
-      details = uleb(typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx)
+      details = uleb(id(typeidx, ctx.type))
     }
     else if (kind === 'memory') {
       details = limits(dfn)
@@ -278,7 +278,7 @@ const build = [,
   },
 
   // (func $name? ...params result ...body)
-  ([[,typeidx]], ctx) => (uleb(typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx)),
+  ([[,typeidx]], ctx) => (uleb(id(typeidx, ctx.type))),
 
   // (table id? 1 2? funcref)
   (node, ctx) => ([TYPE[node.pop()], ...limits(node)]),
@@ -295,10 +295,10 @@ const build = [,
   },
 
   //  (export "name" (func|table|mem $name|idx))
-  ([nm, [kind, id]], ctx) => ([...vec(str(nm.slice(1,-1))), KIND[kind], ...uleb(id[0] === '$' ? ctx[kind][id] : +id)]),
+  ([nm, [kind, l]], ctx) => ([...vec(str(nm.slice(1,-1))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
 
   // (start $main)
-  ([id], ctx) => (uleb(id[0] === '$' ? ctx.func[id] : +id)),
+  ([l], ctx) => (uleb(id(l, ctx.func))),
 
   // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
   // passive: (elem elem*)
@@ -315,7 +315,7 @@ const build = [,
     // table?
     if (parts[0][0] === 'table') {
       [, tabidx] = parts.shift()
-      tabidx = tabidx[0] === '$' ? ctx.table[tabidx] : +tabidx
+      tabidx = id(tabidx, ctx.table)
       // ignore table=0
       if (tabidx) mode |= 0b010
     }
@@ -337,7 +337,7 @@ const build = [,
 
     // simplify els sequence
     parts = parts.map(el => {
-      if (el[0] === 'item') [, el] = el
+      if (el[0] === 'item') [, ...el] = el
       if (el[0] === 'ref.func') [, el] = el
       // (ref.null func) and other expressions turn expr init mode
       if (typeof el !== 'string') mode |= 0b100
@@ -369,7 +369,7 @@ const build = [,
         // ((ref.func y)end)*
         el => [...expr(typeof el === 'string' ? ['ref.func', el] : el, ctx), 0x0b] :
         // el*
-        el => uleb(el[0] === '$' ? ctx.func[el] : +el)
+        el => uleb(id(el, ctx.func))
       )
     ])
   },
@@ -377,7 +377,7 @@ const build = [,
   // (code)
   (body, ctx) => {
     let [typeidx, param] = body.shift()
-    if (!param) [param] = ctx.type[typeidx[0] === '$' ? ctx.type[typeidx] : +typeidx]
+    if (!param) [param] = ctx.type[id(typeidx, ctx.type)]
 
     // provide param/local in ctx
     ctx.local = Object.create(param) // list of local variables - some of them are params
@@ -414,7 +414,7 @@ const build = [,
     // (memory ref)?
     if (inits[0]?.[0] === 'memory') {
       [, memidx] = inits.shift()
-      memidx = memidx[0] === '$' ? ctx.memory[memidx] : +memidx
+      memidx = id(memidx, ctx.memory)
     }
 
     // (offset (i32.const 0)) or (i32.const 0)
@@ -513,7 +513,7 @@ const instr = (nodes, ctx) => {
 
     // memory.init idx, data.drop idx,
     if (code === 0x08 || code === 0x09) {
-      immed.push(...uleb(nodes[0][0] === '$' ? ctx.data[nodes.shift()] : +nodes.shift()))
+      immed.push(...uleb(id(nodes.shift(), ctx.data)))
     }
 
     // memory placeholders
@@ -522,19 +522,20 @@ const instr = (nodes, ctx) => {
 
     // elem.drop elemidx
     if (code === 0x0d) {
-      immed.push(...uleb(nodes[0][0] === '$' ? ctx.elem[nodes.shift()] : +nodes.shift()))
+      immed.push(...uleb(id(nodes.shift(), ctx.elem)))
     }
     // table.init tableidx? elemidx -> 0xfc 0x0c elemidx tableidx
     // https://webassembly.github.io/spec/core/binary/instructions.html#table-instructions
     else if (code === 0x0c) {
-      let tabidx = (nodes[1][0] === '$' || !isNaN(nodes[1])) ? (nodes[0][0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()) : 0
-      immed.push(...uleb(nodes[0][0] === '$' ? ctx.elem[nodes.shift()] : +nodes.shift()), ...uleb(tabidx))
+      let tabidx = (nodes[1][0] === '$' || !isNaN(nodes[1])) ? (id(nodes.shift(), ctx.table)) : 0
+      immed.push(...uleb(id(nodes.shift(), ctx.elem)), ...uleb(tabidx))
     }
     // table.* tableidx?
     // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
     else if (code >= 0x0c) {
-      immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()))
+      immed.push(...uleb(id(nodes.shift(), ctx.table)))
       // table.copy tableidx? tableidx?
+      // FIXME: this must be deabbred in instr and id() used here
       if (code === 0x0e) immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
     }
   }
@@ -548,7 +549,7 @@ const instr = (nodes, ctx) => {
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
     let type = nodes[0]?.[0] === 'type' && nodes.shift()
-    let typeidx = type?.[1]?.[0] === '$' ? ctx.type[type[1]] : type?.[1]
+    let typeidx = type && id(type[1], ctx.type)
     let [param, result] = type ? ctx.type[typeidx] : nodes[0]?.[0] === 'result' ? [,[nodes.shift()[1]]] : []
 
     // void
@@ -565,23 +566,23 @@ const instr = (nodes, ctx) => {
 
   // local.get $id, local.tee $id x
   else if (code == 0x20 || code == 0x21 || code == 0x22) {
-    immed.push(...uleb(nodes[0][0] === '$' ? ctx.local[nodes.shift()] : +nodes.shift()))
+    immed.push(...uleb(id(nodes.shift(), ctx.local)))
   }
 
   // global.get $id, global.set $id
   else if (code == 0x23 || code == 0x24) {
-    immed.push(...uleb(nodes[0][0] === '$' ? ctx.global[nodes.shift()] : +nodes.shift()))
+    immed.push(...uleb(id(nodes.shift(), ctx.global)))
   }
 
   // call id ...nodes
   else if (code == 0x10) {
-    immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift()))
+    immed.push(...uleb(id(nodes.shift(), ctx.func)))
   }
 
   // call_indirect tableIdx? (type $typeName)? ...nodes
   else if (code == 0x11) {
-    let tableidx = nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()
-    let typeidx = nodes[0][1][0] === '$' ? ctx.type[nodes.shift()[1]] : +nodes.shift()[1]
+    let tableidx = id(nodes.shift(), ctx.table)
+    let typeidx =  id(nodes.shift()[1], ctx.type)
     immed.push(...uleb(typeidx), ...uleb(tableidx))
   }
 
@@ -617,7 +618,7 @@ const instr = (nodes, ctx) => {
 
   // ref.func $id
   else if (code == 0xd2) {
-    immed.push(...uleb(nodes[0][0] === '$' ? ctx.func[nodes.shift()] : +nodes.shift()))
+    immed.push(...uleb(id(nodes.shift(), ctx.func)))
   }
 
   // ref.null func
@@ -647,7 +648,7 @@ const instr = (nodes, ctx) => {
 
   // table.get $id
   else if (code == 0x25 || code == 0x26) {
-    immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.table[nodes.shift()] : +nodes.shift()))
+    immed.push(...uleb( id(nodes.shift(), ctx.table) ))
   }
 
   // table.grow id, table.size id, table.fill id
@@ -668,6 +669,9 @@ const memarg = (args) => {
   while (args[0]?.includes('=')) kv = args.shift().split('='), ao[kv[0]] = Number(kv[1])
   return ao
 }
+
+// deref id node to idx
+const id = (n, list) => (n[0] === '$' ? list[n] ?? err(`Unknown label ${n}`) : !isNaN(n) ? +n : err(`Expected id, got ${n}`))
 
 // ref:
 // const ALIGN = {
