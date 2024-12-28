@@ -30,7 +30,7 @@ export default function watr (nodes) {
 
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
   const sections = []
-  for (let kind in SECTION) sections[SECTION[kind]] = sections[kind] = []
+  for (let kind in SECTION) (sections[SECTION[kind]] = sections[kind] = []).name = kind
   sections._ = {} // implicit types
 
   for (let [kind, ...node] of nodes) {
@@ -383,6 +383,10 @@ const build = [,
     ctx.local = Object.create(param) // list of local variables - some of them are params
     ctx.block = [] // control instructions / blocks stack
 
+    // display names for error messages
+    ctx.local.name = 'local'
+    ctx.block.name = 'block'
+
     // collect locals
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
@@ -420,7 +424,8 @@ const build = [,
     // (offset (i32.const 0)) or (i32.const 0)
     if (typeof inits[0] !== 'string') {
       offset = inits.shift()
-      if (offset[0] === 'offset') [, offset] = offset
+      if (offset[0] === 'offset') [, offset ] = offset
+      offset ?? err('Bad offset', offset)
     }
 
     return ([
@@ -454,8 +459,7 @@ const instr = (nodes, ctx) => {
     return out
   }
 
-
-  [...immed] = INSTR[op] ?? err('Unknown instruction: ' + op)
+  [...immed] = isNaN(op) && INSTR[op] || err(`Unknown instruction ${op}`)
   code = immed[0]
 
   // v128s: (v128.load x) etc
@@ -593,16 +597,18 @@ const instr = (nodes, ctx) => {
   // br_if $label cond result?
   else if (code == 0x0c || code == 0x0d) {
     // br index indicates how many block items to pop
-    let l = nodes.shift()
-    immed.push(...uleb(l?.[0] === '$' ? ctx.block.length - ctx.block[l] ?? err(`Unknown label ${l}`) : +l))
+    let l = nodes.shift(), i = l?.[0] === '$' ? ctx.block.length - ctx.block[l] : +l
+    i <= ctx.block.length || err(`Bad label ${l}`)
+    immed.push(...uleb(i))
   }
 
   // br_table 1 2 3 4  0  selector result?
   else if (code == 0x0e) {
     let args = []
     while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
-      let l = nodes.shift()
-      args.push(...uleb(l[0][0] === '$' ? ctx.block.length - ctx.block[l] ?? err(`Unknown label ${l}`) : +l))
+      let l = nodes.shift(), i = l[0][0] === '$' ? ctx.block.length - ctx.block[l] : +l
+      i <= ctx.block.length || err(`Bad label ${l}`)
+      args.push(...uleb(i))
     }
     args.unshift(...uleb(args.length - 1))
     immed.push(...args)
@@ -672,7 +678,7 @@ const memarg = (args) => {
 }
 
 // deref id node to idx
-const id = (n, list) => (n = n[0] === '$' ? list[n] : +n, console.trace(n, list), n in list ? n : err(`Unknown label ${n}`))
+const id = (n, list) => (n = n[0] === '$' ? list[n] : !isNaN(n) && +n, n in list ? n : err(`Unknown ${list.name} ${n}`))
 
 // ref:
 // const ALIGN = {

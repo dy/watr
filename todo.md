@@ -67,6 +67,7 @@
       ~+ unless we normalize marker to `(result i32)`|`(type $id)`|`empty`
   * [x] remove typeuses
   * [x] Return binary directly from build
+  * [x] catch mistakes like having a string in place of node, eg `(memory.copy 0 ...)`
 * [x] Separate slicing concert, remove unnecessary slices
 * [x] elem all use-cases
 * [ ] Official tests
