@@ -593,15 +593,16 @@ const instr = (nodes, ctx) => {
   // br_if $label cond result?
   else if (code == 0x0c || code == 0x0d) {
     // br index indicates how many block items to pop
-    immed.push(...uleb(nodes[0]?.[0] === '$' ? ctx.block.length - ctx.block[nodes.shift()] : nodes.shift()))
+    let l = nodes.shift()
+    immed.push(...uleb(l?.[0] === '$' ? ctx.block.length - ctx.block[l] ?? err(`Unknown label ${l}`) : +l))
   }
 
   // br_table 1 2 3 4  0  selector result?
   else if (code == 0x0e) {
     let args = []
     while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
-      let id = nodes.shift()
-      args.push(...uleb(id[0][0] === '$' ? ctx.block.length - ctx.block[id] : +id))
+      let l = nodes.shift()
+      args.push(...uleb(l[0][0] === '$' ? ctx.block.length - ctx.block[l] ?? err(`Unknown label ${l}`) : +l))
     }
     args.unshift(...uleb(args.length - 1))
     immed.push(...args)
@@ -671,7 +672,7 @@ const memarg = (args) => {
 }
 
 // deref id node to idx
-const id = (n, list) => (n[0] === '$' ? list[n] ?? err(`Unknown label ${n}`) : !isNaN(n) ? +n : err(`Expected id, got ${n}`))
+const id = (n, list) => (n = n[0] === '$' ? list[n] : +n, console.trace(n, list), n in list ? n : err(`Unknown label ${n}`))
 
 // ref:
 // const ALIGN = {
