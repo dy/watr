@@ -70,20 +70,20 @@
   * [x] catch mistakes like having a string in place of node, eg `(memory.copy 0 ...)`
 * [x] Separate slicing concert, remove unnecessary slices
 * [x] elem all use-cases
-* [ ] Official tests
+* [x] Official tests
   * [x] Include testsuite repo
-  * [ ] All test instructions: assert_invalid
-  * [ ] All tests
+  * [x] All test instructions: assert_invalid
+  * [x] All tests
 * [x] Compiler: Named/multiple memory;
 * [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
-* [ ] validation / errors: should be safe to type in anything
-* [ ] Print: make it as nice as AI
+* [x] validation / errors: should be safe to type in anything
 * [ ] Features
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [ ] All main ones (readme)
   * [ ] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
   * [ ] Wasm3
+* [ ] Print: make it as nice as AI
 
 ## REPL
 

@@ -27,6 +27,11 @@ export default function watr (nodes) {
     nodes.shift()
     return new Uint8Array(str(nodes.map(i => i.slice(1, -1)).join('')))
   }
+  // quote "a" "b"
+  else if (nodes[0] === 'quote') {
+    nodes.shift()
+    return watr(nodes.map(i => i.slice(1, -1)).join(''))
+  }
 
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
   const sections = []
@@ -42,7 +47,7 @@ export default function watr (nodes) {
 
     // index, alias
     let name = node[0]?.[0] === '$' && node.shift(), idx = sections[kind].length;
-    if (name) sections[kind][name] = idx; // save alias
+    if (name) name in sections[kind] ? err(`Duplicate ${kind} ${name}`) : sections[kind][name] = idx; // save alias
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
@@ -161,6 +166,7 @@ const plain = (nodes, ctx) => {
         if (typeof nodes[0] === 'string' && (nodes[0][0] === '$' || !isNaN(nodes[0]))) out.push(nodes.shift())
           else out.push('0')
           let [idx, param, result] = typeuse(nodes, ctx)
+        for (let n in param) if (n[0] === '$') err(`Unexpected param name ${n}`) // not really necessary but for test complacency
         out.push(['type', idx ?? (ctx._[idx = '$'+param+'>'+result] = [param, result], idx)])
       }
 
@@ -213,19 +219,24 @@ const plain = (nodes, ctx) => {
 // consume typeuse nodes, return type index/params, or null idx if no type
 // https://webassembly.github.io/spec/core/text/modules.html#type-uses
 const typeuse = (nodes, ctx) => {
-  let idx, parres
+  let idx, param, result
 
   // explicit type (type 0|$name)
   if (nodes[0]?.[0] === 'type') {
     [, idx] = nodes.shift();
-    paramres(nodes)
+    [param, result] = paramres(nodes);
+
+    // check type consistency (excludes forward refs)
+    if ((param.length || result.length) && idx in ctx.type)
+      if (ctx.type[id(idx, ctx.type)].join('>') !== param + '>' + result) err(`Type ${idx} mismatch`)
+
     return [idx]
   }
 
   // implicit type (param i32 i32)(result i32)
-  parres = paramres(nodes)
+  [param, result] = paramres(nodes)
 
-  return [, ...parres]
+  return [, param, result]
 }
 
 // consume (param t+)* (result t+)* sequence
@@ -245,6 +256,8 @@ const paramres = (nodes) => {
     let [, ...args] = nodes.shift()
     result.push(...args)
   }
+
+  if (nodes[0]?.[0] === 'param') err(`Unexpected param`)
 
   return [param, result]
 }
@@ -673,7 +686,11 @@ const expr = (node, ctx) => instr([node], ctx)
 // consume align/offset/etc params
 const memarg = (args) => {
   let ao = {}, kv
-  while (args[0]?.includes('=')) kv = args.shift().split('='), ao[kv[0]] = Number(kv[1])
+  while (args[0]?.includes('=')) kv = args.shift().split('='), ao[kv[0]] = +kv[1]
+  // check boundaries
+  let {align, offset} = ao
+  if (offset < 0 || offset > 0xffffffff) err(`Bad offset ${offset}`)
+  if (align < 0 || align == 0 || align > 0xffffffff || (align > 1 && (align & (align - 1)))) err(`Bad align ${align}`)
   return ao
 }
 

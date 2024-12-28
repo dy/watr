@@ -2359,7 +2359,6 @@ export function wat2wasm(code, config) {
 }
 
 // run test case inline
-// FIXME: rename to something more meaningful? testCase?
 function inline(src, importObj) {
   let tree = parse(src)
   // in order to make sure tree is not messed up we freeze it
@@ -2473,12 +2472,13 @@ async function file(path, imports = {}) {
       let m = 0
       if (nodes.some(n => (n[0] === 'memory' && (++m) > 1))) return console.warn('assert_invalid: skip multi memory');
 
-      // console.log('assert_invalid', ...node)
-      //   lastComment = ``
+      // console.group('assert_invalid', ...node)
+      lastComment = ``
       throws(() => ex(nodes), msg, msg)
+      // console.groupEnd()
     }
     if (node[0] === 'assert_trap') {
-      // console.group('trap', ...node)
+      // console.group('assert_trap', ...node)
       let [, nodes, msg] = node
       try {
         ex(nodes)
@@ -2489,12 +2489,22 @@ async function file(path, imports = {}) {
       // console.groupEnd()
     }
     if (node[0] === 'assert_malformed') {
+      // console.group('assert_malformed', ...node)
+      lastComment = ``
       let [, nodes, msg] = node
       let err
       // don't check if wat2wasm doesn't fail - certain tests are unnecessary
-      if (nodes[1] === 'binary') try {wat2wasm(print(nodes))} catch (e) {err=e}
-      if (err) throws(() => ex(nodes), msg, msg)
-      else console.warn(`assert_malformed: skip ${msg} as wat2wasm compiles fine`)
+      if (nodes[1] === 'binary') {
+        try {wat2wasm(print(nodes))} catch (e) {err=e}
+        if (err) throws(() => ex(nodes), msg, msg)
+        else console.warn(`assert_malformed: skip ${msg} as wat2wasm compiles fine`)
+      }
+      else if (nodes[1] === 'quote') {
+        // (module quote ...nodes) make wat2wasm hang - unwrap them
+        nodes = ['module',...parse(nodes.slice(2).map(str => str.slice(1, -1)).join('\n'))]
+        throws(() => ex(nodes), msg, msg)
+      }
+      // console.groupEnd()
     }
   }
 }
