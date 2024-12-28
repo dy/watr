@@ -300,17 +300,17 @@ const build = [,
   // (start $main)
   ([l], ctx) => (uleb(id(l, ctx.func))),
 
+  // (elem elem*) - passive
+  // (elem declare elem*) - declarative
+  // (elem (table idx)? (offset expr)|(expr) elem*) - active
+  // elems := funcref|externref (item expr)|expr (item expr)|expr
+  // idxs := func? $id0 $id1
   // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
-  // passive: (elem elem*)
-  // declarative: (elem declare elem*)
-  // active: (elem (table idx)? (offset expr)|(expr) elem*)
-  // elems: funcref|externref (item expr)|expr (item expr)|expr
-  // idxs: func? $id0 $id1
   (parts, ctx) => {
     let tabidx, offset, mode = 0b000, reftype
 
     // declare?
-    if (parts[0] === 'declare') parts.shift(), mode |= 0b010
+    if (parts[0] === 'declare')  parts.shift(), mode |= 0b010
 
     // table?
     if (parts[0][0] === 'table') {
@@ -329,11 +329,11 @@ const build = [,
 
     // funcref|externref|func, func ... === funcref ...
     if (parts[0] === 'func' || parts[0] === 'funcref' || parts[0] === 'externref') reftype = parts.shift()
+
     // externref makes explicit table index
     if (reftype === 'externref') offset ||= ['i32.const', 0], mode = 0b110
-
     // reset to simplest mode if no actual elements
-    if (!parts.length) mode &= 0b011
+    else if (!parts.length) mode &= 0b011
 
     // simplify els sequence
     parts = parts.map(el => {

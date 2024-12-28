@@ -1081,6 +1081,7 @@ t('case: data full cases', () => {
   (data $d11 (memory $m) (offset (i32.const 0)))
   (data $d12 (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
   `
+  // inline(src)
   let mod = new WebAssembly.Module(compile(src))
   new WebAssembly.Instance(mod)
   // NOTE: https://github.com/WebAssembly/wabt/issues/2518 - libwabt is corrupted
@@ -1170,7 +1171,11 @@ t('feature: multiple results', () => {
 })
 
 t('feature: bulk memory', () => {
-  let src = `(func $x (result f64)
+  let src = `
+  (memory 1 1)
+  (data "abc")
+  (func $x (result f64)
+    (local i32)
     (memory.copy (local.get 0)(i32.const 0)(i32.const 16))
     (memory.fill (local.get 0)(i32.const 0)(i32.const 16))
     (memory.init 0 (local.get 0)(i32.const 0)(i32.const 16))
@@ -2239,7 +2244,7 @@ t('/test/official/simd_align.wast', async function () { await file(this.name, { 
 t('/test/official/simd_bit_shift.wast', async function () { await file(this.name, { spectest }) })
 t('/test/official/simd_bitwise.wast', async function () { await file(this.name, { spectest }) })
 t('/test/official/simd_boolean.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/simd_const.wast', async function () { await file(this.name, { spectest }) })
+t('/test/official/simd_const.wast', async function () { await file(this.name, { spectest }) })
 t('/test/official/simd_conversions.wast', async function () { await file(this.name, { spectest }) })
 t('/test/official/simd_f32x4_arith.wast', async function () { await file(this.name, { spectest }) })
 t('/test/official/simd_f32x4_cmp.wast', async function () { await file(this.name, { spectest }) })
@@ -2403,7 +2408,8 @@ async function file(path, imports = {}) {
       try {
         wabtBuffer = wat2wasm(print(node)).buffer
         // compare with libwabt only if not binary flag
-        if (wabtBuffer && node[1] !== 'binary') is(buf, wabtBuffer, lastComment?.trim())
+        if (node[1] === 'binary') console.warn('module: skip binary')
+        else if (wabtBuffer) is(buf, wabtBuffer, 'module: wat2wasm ' + lastComment?.trim())
       } catch (e) {
         console.error(e.message, { ...e })
       }
@@ -2430,18 +2436,18 @@ async function file(path, imports = {}) {
 
       // console.log('assert_return', kind, nm, 'args:', ...args, 'expects:', ...expects)
 
-      if (expects.some(v => v[0] === 'v128.const') || args.some(v => v[0] === 'v128.const')) return console.warn('skipping v128');
+      if (expects.some(v => v[0] === 'v128.const') || args.some(v => v[0] === 'v128.const')) return console.warn('assert_return: skip v128');
 
       args = args.map(val)
       expects = expects?.map(val)
 
-      if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('skipping NaN');
+      if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('assert_return: skip NaN');
 
       if (kind === 'invoke') {
-        is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert ${nm}(${args}) === ${expects}`)
+        is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
       }
       else if (kind === 'get') {
-        is(m[nm].value, expects[0])
+        is(m[nm].value, expects[0], `assert_return: get ${nm} === ${expects}`)
       }
 
     }
@@ -2450,7 +2456,7 @@ async function file(path, imports = {}) {
       let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
         nm = args.shift().slice(1, -1);
       args = args.map(val)
-      console.log('invoke', nm, ...args)
+      // console.log('(invoke)', nm, ...args)
       m[nm](...args)
 
     }
@@ -2461,21 +2467,26 @@ async function file(path, imports = {}) {
         ex(nodes)
       } catch (e) {
         // console.log('trap error', e, msg)
-        ok(e.message, msg)
+        ok(e.message, `assert_trap: ${msg}`)
       }
       // console.groupEnd()
     }
     if (node[0] === 'assert_invalid') {
+      let [, nodes, msg] = node
+
+      // skip (data const_expr) - we don't have constant expr limitations
+      if (nodes.some(n => n[0] === 'data' && typeof n !== 'string')) return console.warn('assert_invalid: skip data const expr');
+      // skip (global const_expr) - we don't have constant expr limitations
+      if (nodes.some(n => n[0] === 'global' && typeof n[2] !== 'string' )) return console.warn('assert_invalid: skip global const expr');
+      // skip (elem const_expr) - we don't have constant expr limitations
+      if (nodes.some(n => n[0] === 'elem' && typeof n[1] !== 'string' )) return console.warn('assert_invalid: skip elem const expr');
+      // skip multimemory - there's no issue with proposal enabled
+      let m = 0
+      if (nodes.some(n => (n[0] === 'memory' && (++m) > 1))) return console.warn('assert_invalid: skip multi memory');
+
       // console.log('assert_invalid', ...node)
-      // let [, nodes, msg] = node
-      // let err
-      // try {
-      //   ex(nodes)
-      // } catch (e) {
-      //   console.warn('invalid error', e)
-      //   err = e.message
-      // }
-      // ok(err, msg)
+      //   lastComment = ``
+      throws(() => ex(nodes), msg, msg)\
     }
   }
 }
