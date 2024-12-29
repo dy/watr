@@ -161,6 +161,11 @@ const plain = (nodes, ctx) => {
         ctx.datacount[0] = true // mark datacount element
       }
 
+      // table.init tableidx? elemidx -> table.init tableidx elemidx
+      else if (node === 'table.init') {
+        out.push(node, (nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift())
+      }
+
       else if (node === 'call_indirect') {
         out.push(node)
         if (typeof nodes[0] === 'string' && (nodes[0][0] === '$' || !isNaN(nodes[0]))) out.push(nodes.shift())
@@ -541,11 +546,10 @@ const instr = (nodes, ctx) => {
     if (code === 0x0d) {
       immed.push(...uleb(id(nodes.shift(), ctx.elem)))
     }
-    // table.init tableidx? elemidx -> 0xfc 0x0c elemidx tableidx
-    // https://webassembly.github.io/spec/core/binary/instructions.html#table-instructions
+    // table.init tableidx elemidx -> 0xfc 0x0c elemidx tableidx
     else if (code === 0x0c) {
-      let tabidx = (nodes[1][0] === '$' || !isNaN(nodes[1])) ? (id(nodes.shift(), ctx.table)) : 0
-      immed.push(...uleb(id(nodes.shift(), ctx.elem)), ...uleb(tabidx))
+      immed.push(...uleb(id(nodes[1], ctx.elem)), ...uleb(id(nodes.shift(), ctx.table)))
+      nodes.shift()
     }
     // table.* tableidx?
     // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
