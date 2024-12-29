@@ -77,7 +77,7 @@ print(src, {
 * [x] [mutable_globals](https://github.com/WebAssembly/mutable-global)
 * [x] [extended const](https://github.com/WebAssembly/extended-const/blob/main/proposals/extended-const/Overview.md)
 * [x] [sat_float_to_int](https://github.com/WebAssembly/nontrapping-float-to-int-conversions)
-* [ ] [sign_extension](https://github.com/WebAssembly/sign-extension-ops)
+* [x] [sign_extension](https://github.com/WebAssembly/sign-extension-ops)
 * [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md)
 * [x] [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md)
 * [ ] [memory64](https://github.com/WebAssembly/memory64)

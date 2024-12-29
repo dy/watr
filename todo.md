@@ -100,6 +100,6 @@
 ## Offering Qualifications
 
 * minimal & clever validator - basic checks via generic funcs
-* streamline, clear, lightweight algorithm - easy to remember & understand
+* streamline, clear, light, sensible algorithm - easy to remember & understand
 * meaningful base of tests covered - not verbosities
 * clear, lightweight repl

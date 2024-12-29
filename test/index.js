@@ -2,6 +2,7 @@ import './parse.js'
 import './compile.js'
 import './print.js'
 import './bench.js'
+import './testsuite.js'
 
 // stub fetch for local purpose
 const isNode = typeof global !== 'undefined' && globalThis === global
