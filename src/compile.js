@@ -482,13 +482,13 @@ const instr = (nodes, ctx) => {
     immed = [0xfd, ...uleb(code)]
     // (v128.load)
     if (code <= 0x0b) {
-      const o = memarg(nodes)
-      immed.push(Math.log2(o.align ?? align(op)), ...uleb(o.offset ?? 0))
+      const [a,o] = memarg(nodes)
+      immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
     }
     // (v128.load_lane offset? align? idx)
     else if (code >= 0x54 && code <= 0x5d) {
-      const o = memarg(nodes)
-      immed.push(Math.log2(o.align ?? align(op)), ...uleb(o.offset ?? 0))
+      const [a,o] = memarg(nodes)
+      immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
       // (v128.load_lane_zero)
       if (code <= 0x5b) immed.push(...uleb(nodes.shift()))
     }
@@ -651,8 +651,8 @@ const instr = (nodes, ctx) => {
 
   // i32.store align=n offset=m
   else if (code >= 0x28 && code <= 0x3e) {
-    let o = memarg(nodes)
-    immed.push(Math.log2(o.align ?? align(op)), ...uleb(o.offset ?? 0))
+    let [a,o] = memarg(nodes)
+    immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
   }
 
   // i32.const 123, f32.const 123.45
@@ -683,15 +683,15 @@ const instr = (nodes, ctx) => {
 // instantiation time value initializer (consuming) - we redirect to instr
 const expr = (node, ctx) => instr([node], ctx)
 
-// consume align/offset/etc params
+// consume align/offset params
 const memarg = (args) => {
-  let ao = {}, kv
-  while (args[0]?.includes('=')) kv = args.shift().split('='), ao[kv[0]] = +kv[1]
-  // check boundaries
-  let {align, offset} = ao
+  let align, offset, k, v
+  while (args[0]?.includes('=')) [k,v] = args.shift().split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
+
   if (offset < 0 || offset > 0xffffffff) err(`Bad offset ${offset}`)
-  if (align < 0 || align == 0 || align > 0xffffffff || (align > 1 && (align & (align - 1)))) err(`Bad align ${align}`)
-  return ao
+  if (align <= 0 || align > 0xffffffff) err(`Bad align ${align}`)
+  if (align) ((align=Math.log2(align)) % 1) && err(`Bad align ${align}`)
+  return [align, offset]
 }
 
 // deref id node to idx
@@ -707,10 +707,10 @@ const id = (n, list) => (n = n[0] === '$' ? list[n] : !isNaN(n) && +n, n in list
 //   'v128.load': 16, 'v128.load8_lane': 1, 'v128.load16_lane': 2, 'v128.load32_lane': 4, 'v128.load64_lane': 8, 'v128.store8_lane': 1, 'v128.store16_lane': 2, 'v128.store32_lane': 4, 'v128.store64_lane': 8, 'v128.load32_zero': 4, 'v128.load64_zero': 8
 // }
 const align = (op) => {
-  let [group, opname] = op.split('.'); // v128.load8x8_u -> gsize = 32, opname = load8_u
+  let [group, opname] = op.split('.'); // v128.load8x8_u -> group = v128, opname = load8x8_u
   let [lsize] = (opname[0] === 'l' ? opname.slice(4) : opname.slice(5)).split('_') // load8x8_u -> lsize = 8x8
   let [size, x] = lsize ? lsize.split('x') : [group.slice(1)] // 8x8 -> size = 8
-  return x ? 8 : +size / 8
+  return Math.log2(x ? 8 : +size / 8)
 }
 
 // build limits sequence (non-consuming)
