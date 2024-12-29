@@ -132,11 +132,11 @@ const plain = (nodes, ctx) => {
   while (nodes.length) {
     let node = nodes.shift()
 
-    if (typeof node === 'string') {
+   if (typeof node === 'string') {
+      out.push(node)
+
       // block typeuse?
       if (node === 'block' || node === 'loop' || node === 'if') {
-        out.push(node)
-
         // (loop $l?)
         if (nodes[0]?.[0] === '$') out.push(nodes.shift())
 
@@ -153,41 +153,37 @@ const plain = (nodes, ctx) => {
       }
 
       // else $label, end $label
-      else if (node === 'else' || node === 'end') out.push(node), nodes[0]?.[0] === '$' && nodes.shift()
+      else if (node === 'else' || node === 'end') nodes[0]?.[0] === '$' && nodes.shift()
 
       // select (result i32 i32 i32)?
-      else if (node === 'select') out.push(node, paramres(nodes, 0)[1])
+      else if (node === 'select') out.push(paramres(nodes, 0)[1])
 
       // mark datacount section as required
       else if (node === 'memory.init' || node === 'data.drop') {
-        out.push(node)
         ctx.datacount[0] = true // mark datacount element
       }
 
       // call_indirect $typeidx
       else if (node === 'call_indirect') {
-        out.push(node, nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
+        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
         let [idx, param, result] = typeuse(nodes, ctx, 0)
         out.push(['type', idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result], idx)])
       }
 
       // table.init tableidx? elemidx -> table.init tableidx elemidx
       else if (node === 'table.init') {
-        out.push(node, (nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift())
+        out.push((nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift())
       }
 
       // abbr table.* idx?
       else if (node.startsWith('table.')) {
-        out.push(node, nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
+        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
 
         // table.copy tableidx? tableidx?
         if (node === 'table.copy') {
           out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
         }
       }
-
-      // plain instr
-      else out.push(node)
     }
 
     // (block ...) -> block ... end
@@ -209,7 +205,7 @@ const plain = (nodes, ctx) => {
       // label?
       if (node[0]?.[0] === '$') blocktype.push(node.shift())
 
-      // blocktype? - (param) are removed already
+      // blocktype? - (param) are removed already via plain
       if (node[0]?.[0] === 'type' || node[0]?.[0] === 'result') blocktype.push(node.shift());
 
       // ignore empty else
@@ -418,7 +414,7 @@ const build = [,
       ctx.local.push(...types.map(t => TYPE[t]))
     }
 
-    const bytes = []//instr(body, ctx)
+    const bytes = []
     while (body.length) bytes.push(...instr(body, ctx))
     bytes.push(0x0b)
 
