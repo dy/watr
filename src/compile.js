@@ -155,6 +155,9 @@ const plain = (nodes, ctx) => {
       // else $label, end $label
       else if (node === 'else' || node === 'end') out.push(node), nodes[0]?.[0] === '$' && nodes.shift()
 
+      // select (result i32 i32 i32)?
+      else if (node === 'select') out.push(node, paramres(nodes, 0)[1])
+
       // mark datacount section as required
       else if (node === 'memory.init' || node === 'data.drop') {
         out.push(node)
@@ -180,7 +183,6 @@ const plain = (nodes, ctx) => {
         if (node === 'table.copy') {
           out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
         }
-
       }
 
       // plain instr
@@ -571,9 +573,8 @@ const instr = (nodes, ctx) => {
     // (block $x) (loop $y)
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
-    let type = nodes[0]?.[0] === 'type' && nodes.shift()
-    let typeidx = type && id(type[1], ctx.type)
-    let [param, result] = type ? ctx.type[typeidx] : nodes[0]?.[0] === 'result' ? [, [nodes.shift()[1]]] : []
+    let typeidx =  nodes[0]?.[0] === 'type' && id(nodes.shift()[1], ctx.type)
+    let [param, result] = typeidx !== false ? ctx.type[typeidx] : nodes[0]?.[0] === 'result' ? [, [nodes.shift()[1]]] : []
 
     // void
     if (!param?.length && !result?.length) immed.push(TYPE.void)
@@ -602,11 +603,12 @@ const instr = (nodes, ctx) => {
     immed.push(...uleb(id(nodes.shift(), ctx.func)))
   }
 
-  // call_indirect tableIdx? (type $typeName)? ...nodes
+  // call_indirect tableIdx (type $typeName) ...nodes
   else if (code == 0x11) {
-    let tableidx = id(nodes.shift(), ctx.table)
-    let typeidx = id(nodes.shift()[1], ctx.type)
-    immed.push(...uleb(typeidx), ...uleb(tableidx))
+    immed.push(
+      ...uleb(id(nodes[1][1], ctx.type)),
+      ...uleb(id(nodes.shift(), ctx.table))
+    ), nodes.shift()
   }
 
   // end
@@ -633,13 +635,11 @@ const instr = (nodes, ctx) => {
     immed.push(...args)
   }
 
-  // select (result t+)?
+  // select (result t+)
   else if (code == 0x1b) {
-    let [param, result] = paramres(nodes, 0)
-    if (result.length) {
-      // 0x1b -> 0x1c
-      immed.push(immed.pop() + 1, ...uleb(result.length), ...result.map(t => TYPE[t]))
-    }
+    let result = nodes.shift()
+    // 0x1b -> 0x1c
+    if (result.length) immed.push(immed.pop() + 1, ...uleb(result.length), ...result.map(t => TYPE[t]))
   }
 
   // ref.func $id
@@ -675,10 +675,6 @@ const instr = (nodes, ctx) => {
   // table.get $id
   else if (code == 0x25 || code == 0x26) {
     immed.push(...uleb(id(nodes.shift(), ctx.table)))
-  }
-
-  // table.grow id, table.size id, table.fill id
-  else if (code >= 0x0f && code <= 0x11) {
   }
 
   out.push(...immed)
