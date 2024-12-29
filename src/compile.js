@@ -4,7 +4,7 @@ import { SECTION, TYPE, KIND, INSTR } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
-INSTR.forEach((op, i) => INSTR[op] = i >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc ? [0xfc, i - 0xfc] : [i])
+INSTR.forEach((op, i) => INSTR[op] = i >= 0x11a ? [0xfd, i - 0x11a] : i >= 0xfc ? [0xfc, i - 0xfc] : [i])
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
@@ -555,7 +555,7 @@ const instr = (nodes, ctx) => {
     }
     // table.* tableidx?
     // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
-    else if (code >= 0x0c) {
+    else if (code >= 0x0c && code < 0x13) {
       immed.push(...uleb(id(nodes.shift(), ctx.table)))
       // table.copy tableidx? tableidx?
       if (code === 0x0e) immed.push(...uleb(id(nodes.shift(), ctx.table)))

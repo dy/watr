@@ -31,6 +31,7 @@ export const INSTR = [
   // 0xFC 0xNN (0xfc shift)
   'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u', 'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
   'memory.init', 'data.drop', 'memory.copy', 'memory.fill', 'table.init', 'elem.drop', 'table.copy', 'table.grow', 'table.size', 'table.fill', ,
+  'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u', , , , , , , ,
 
   // 0xFD 0xNN (0x10f shift)
   'v128.load', 'v128.load8x8_s', 'v128.load8x8_u', 'v128.load16x4_s', 'v128.load16x4_u', 'v128.load32x2_s', 'v128.load32x2_u', 'v128.load8_splat', 'v128.load16_splat', 'v128.load32_splat', 'v128.load64_splat', 'v128.store', 'v128.const', 'i8x16.shuffle',

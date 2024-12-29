@@ -83,15 +83,17 @@ print(src, {
 * [ ] [memory64](https://github.com/WebAssembly/memory64)
 * [x] [multiple memories](https://github.com/WebAssembly/multi-memory/blob/master/proposals/multi-memory/Overview.md)
 * [x] [simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
-* [ ] [relaxed_simd](https://github.com/WebAssembly/relaxed-simd)
+* [x] [relaxed simd](https://github.com/WebAssembly/relaxed-simd)
+* [x] [fixed-width simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
 * [x] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md)
 * [x] [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md)
 * [ ] [gc](https://github.com/WebAssembly/gc)
 * [ ] [exceptions](https://github.com/WebAssembly/exception-handling)
-* [ ] [threads](https://github.com/WebAssembly/threads)
 * [ ] [tail_call](https://github.com/WebAssembly/tail-call)
 * [ ] [annotations](https://github.com/WebAssembly/annotations)
 * [ ] [code_metadata](https://github.com/WebAssembly/tool-conventions/blob/main/CodeMetadata.md)
+* [ ] [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md)
+* [x] [wide arithmetic](https://github.com/WebAssembly/wide-arithmetic/blob/main/proposals/wide-arithmetic/Overview.md)
 
 ## Alternatives
 
