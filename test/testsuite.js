@@ -187,7 +187,7 @@ t.todo('/test/official/proposals/gc/try_table.wast', async function () { await f
 t.todo('/test/official/proposals/multi-memory/try_table.wast', async function () { await file(this.name, { spectest }) })
 
 t.only('/test/official/proposals/relaxed-simd/i8x16_relaxed_swizzle.wast', async function () { await file(this.name, { spectest }) })
-t.only('/test/official/proposals/relaxed-simd/i16x8_relaxed_q15mulr.wast', async function () { await file(this.name, { spectest }) })
+t.only('/test/official/proposals/relaxed-simd/i16x8_relaxed_q15mulr_s.wast', async function () { await file(this.name, { spectest }) })
 t.only('/test/official/proposals/relaxed-simd/i32x4_relaxed_trunc.wast', async function () { await file(this.name, { spectest }) })
 t.only('/test/official/proposals/relaxed-simd/relaxed_dot_product.wast', async function () { await file(this.name, { spectest }) })
 t.only('/test/official/proposals/relaxed-simd/relaxed_laneselect.wast', async function () { await file(this.name, { spectest }) })
