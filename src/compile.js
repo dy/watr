@@ -140,7 +140,7 @@ const plain = (nodes, ctx) => {
         // (loop $l?)
         if (nodes[0]?.[0] === '$') out.push(nodes.shift())
 
-        let [idx, param, result] = typeuse(nodes, ctx)
+        let [idx, param, result] = typeuse(nodes, ctx, 0)
 
         // direct idx (no params/result needed)
         if (idx != null) out.push(['type', idx])
@@ -165,8 +165,7 @@ const plain = (nodes, ctx) => {
         out.push(node)
         if (typeof nodes[0] === 'string' && (nodes[0][0] === '$' || !isNaN(nodes[0]))) out.push(nodes.shift())
           else out.push('0')
-          let [idx, param, result] = typeuse(nodes, ctx)
-        for (let n in param) if (n[0] === '$') err(`Unexpected param name ${n}`) // not really necessary but for test complacency
+          let [idx, param, result] = typeuse(nodes, ctx, 0)
         out.push(['type', idx ?? (ctx._[idx = '$'+param+'>'+result] = [param, result], idx)])
       }
 
@@ -218,13 +217,13 @@ const plain = (nodes, ctx) => {
 
 // consume typeuse nodes, return type index/params, or null idx if no type
 // https://webassembly.github.io/spec/core/text/modules.html#type-uses
-const typeuse = (nodes, ctx) => {
+const typeuse = (nodes, ctx, names) => {
   let idx, param, result
 
   // explicit type (type 0|$name)
   if (nodes[0]?.[0] === 'type') {
     [, idx] = nodes.shift();
-    [param, result] = paramres(nodes);
+    [param, result] = paramres(nodes, names);
 
     // check type consistency (excludes forward refs)
     if ((param.length || result.length) && idx in ctx.type)
@@ -234,20 +233,21 @@ const typeuse = (nodes, ctx) => {
   }
 
   // implicit type (param i32 i32)(result i32)
-  [param, result] = paramres(nodes)
+  [param, result] = paramres(nodes, names)
 
   return [, param, result]
 }
 
 // consume (param t+)* (result t+)* sequence
-const paramres = (nodes) => {
+const paramres = (nodes, names=true) => {
   let param = [], result = []
 
   // collect param (param i32 i64) (param $x? i32)
   while (nodes[0]?.[0] === 'param') {
     let [, ...args] = nodes.shift()
     let name = args[0]?.[0] === '$' && args.shift()
-    if (name) param[name] = param.length // expose name refs
+    // expose name refs, if allowed
+    if (name) names ? param[name] = param.length : err(`Unexpected param name ${name}`)
     param.push(...args)
   }
 
@@ -629,7 +629,7 @@ const instr = (nodes, ctx) => {
 
   // select (result t+)?
   else if (code == 0x1b) {
-    let [param, result] = paramres(nodes)
+    let [param, result] = paramres(nodes, 0)
     if (result.length) {
       // 0x1b -> 0x1c
       immed.push(immed.pop()+1, ...uleb(result.length), ...result.map(t => TYPE[t]))
