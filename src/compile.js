@@ -164,6 +164,7 @@ const plain = (nodes, ctx) => {
         ctx.datacount[0] = true // mark datacount element
       }
 
+      // call_indirect $typeidx
       else if (node === 'call_indirect') {
         out.push(node, nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
         let [idx, param, result] = typeuse(nodes, ctx, 0)
@@ -482,7 +483,7 @@ const instr = (nodes, ctx) => {
     return out
   }
 
-  [...immed] = isNaN(op) && INSTR[op] || err(`Unknown instruction ${op}`)
+  [...immed] = isNaN(op[0]) && INSTR[op] || err(`Unknown instruction ${op}`)
   code = immed[0]
 
   // v128s: (v128.load x) etc
@@ -666,7 +667,7 @@ const instr = (nodes, ctx) => {
     immed.push(...encode[op.split('.')[0]](nodes.shift()))
   }
 
-  // memory.grow|size $idx? - mandatory 0x00
+  // memory.grow|size $idx - mandatory 0x00
   // https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions
   else if (code == 0x3f || code == 0x40) {
     immed.push(0)
