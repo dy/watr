@@ -12,7 +12,7 @@ INSTR.forEach((op, i) => INSTR[op] = i >= 0x10f ? [0xfd, i - 0x10f] : i >= 0xfc 
  * @param {string|Array} nodes - The WAT tree or string to be compiled to WASM binary.
  * @returns {Uint8Array} The compiled WASM binary data.
  */
-export default function watr (nodes) {
+export default function watr(nodes) {
   // normalize to (module ...) form
   if (typeof nodes === 'string') nodes = parse(nodes);
   else nodes = clone(nodes)
@@ -54,21 +54,21 @@ export default function watr (nodes) {
     while (node[0]?.[0] === 'export') sections.export.push([node.shift()[1], [kind, idx]])
 
     // for import nodes - redirect output to import
-    if (node[0]?.[0] === 'import') [,...imported] = node.shift()
+    if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
 
     // table abbr
     // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
     if (node[1]?.[0] === 'elem') {
       let [reftype, [, ...els]] = node
       node = [els.length, els.length, reftype]
-      sections.elem.push([['table', name || sections.table.length], ['i32.const', '0'],  typeof els[0] === 'string' ? 'func' : reftype, ...els])
+      sections.elem.push([['table', name || sections.table.length], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els])
     }
 
     // data abbr
     // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
     else if (node[0]?.[0] === 'data') {
-      let [,...data] = node.shift(), m = ''+Math.ceil(data.map(s => s.slice(1,-1)).join('').length / 65536) // FIXME: figure out actual data size
-      sections.data.push([['memory', idx], ['i32.const',0], ...data])
+      let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
+      sections.data.push([['memory', idx], ['i32.const', 0], ...data])
       node = [m, m]
     }
 
@@ -76,12 +76,12 @@ export default function watr (nodes) {
     else if (kind === 'start') name && node.push(name);
 
     // [func, [param, result]] -> [param, result], alias
-    else if (kind === 'type') node[0].shift(), node = paramres(node[0]),  sections.type['$'+node.join('>')] ??= idx
+    else if (kind === 'type') node[0].shift(), node = paramres(node[0]), sections.type['$' + node.join('>')] ??= idx
 
     // dupe to code section, save implicit type
     else if (kind === 'func') {
       let [idx, param, result] = typeuse(node, sections);
-      idx ?? (sections._[idx = '$'+param+'>'+result] = [param, result]);
+      idx ?? (sections._[idx = '$' + param + '>' + result] = [param, result]);
       !imported && nodes.push(['code', [idx, param, result], ...plain(node, sections)]) // pass param since they may have names
       node.unshift(['type', idx])
     }
@@ -99,7 +99,7 @@ export default function watr (nodes) {
   if (!sections.data.length) sections.datacount.length = 0
 
   // convert nodes to bytes
-  const bin = (kind, count=true) => {
+  const bin = (kind, count = true) => {
     let items = sections[kind].filter(Boolean).map(item => build[kind](item, sections))
     return !items.length ? [] : [kind, ...vec([...(count ? uleb(items.length) : []), ...items.flat()])]
   }
@@ -149,7 +149,7 @@ const plain = (nodes, ctx) => {
         // (result i32) - doesn't require registering type
         else if (!param.length && result.length === 1) out.push(['result', result])
         // (param i32 i32)? (result i32 i32) - implicit type
-        else ctx._[idx = '$'+param+'>'+result] = [param, result], out.push(['type', idx])
+        else ctx._[idx = '$' + param + '>' + result] = [param, result], out.push(['type', idx])
       }
 
       // else $label, end $label
@@ -161,23 +161,26 @@ const plain = (nodes, ctx) => {
         ctx.datacount[0] = true // mark datacount element
       }
 
+      else if (node === 'call_indirect') {
+        out.push(node, nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
+        let [idx, param, result] = typeuse(nodes, ctx, 0)
+        out.push(['type', idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result], idx)])
+      }
+
       // table.init tableidx? elemidx -> table.init tableidx elemidx
       else if (node === 'table.init') {
         out.push(node, (nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift())
       }
 
-      else if (node === 'call_indirect') {
-        out.push(node)
-        if (typeof nodes[0] === 'string' && (nodes[0][0] === '$' || !isNaN(nodes[0]))) out.push(nodes.shift())
-          else out.push('0')
-          let [idx, param, result] = typeuse(nodes, ctx, 0)
-        out.push(['type', idx ?? (ctx._[idx = '$'+param+'>'+result] = [param, result], idx)])
-      }
-
       // abbr table.* idx?
       else if (node.startsWith('table.')) {
-        out.push(node)
-        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : '0')
+        out.push(node, nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
+
+        // table.copy tableidx? tableidx?
+        if (node === 'table.copy') {
+          out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
+        }
+
       }
 
       // plain instr
@@ -244,7 +247,7 @@ const typeuse = (nodes, ctx, names) => {
 }
 
 // consume (param t+)* (result t+)* sequence
-const paramres = (nodes, names=true) => {
+const paramres = (nodes, names = true) => {
   let param = [], result = []
 
   // collect param (param i32 i64) (param $x? i32)
@@ -278,7 +281,7 @@ const build = [,
 
     if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
-      let [[,typeidx]] = dfn
+      let [[, typeidx]] = dfn
       details = uleb(id(typeidx, ctx.type))
     }
     else if (kind === 'memory') {
@@ -292,11 +295,11 @@ const build = [,
       details = [TYPE[dfn.pop()], ...limits(dfn)]
     }
 
-    return ([...vec(str(mod.slice(1,-1))), ...vec(str(field.slice(1,-1))), KIND[kind], ...details])
+    return ([...vec(str(mod.slice(1, -1))), ...vec(str(field.slice(1, -1))), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
-  ([[,typeidx]], ctx) => (uleb(id(typeidx, ctx.type))),
+  ([[, typeidx]], ctx) => (uleb(id(typeidx, ctx.type))),
 
   // (table id? 1 2? funcref)
   (node, ctx) => ([TYPE[node.pop()], ...limits(node)]),
@@ -313,7 +316,7 @@ const build = [,
   },
 
   //  (export "name" (func|table|mem $name|idx))
-  ([nm, [kind, l]], ctx) => ([...vec(str(nm.slice(1,-1))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
+  ([nm, [kind, l]], ctx) => ([...vec(str(nm.slice(1, -1))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
 
   // (start $main)
   ([l], ctx) => (uleb(id(l, ctx.func))),
@@ -328,7 +331,7 @@ const build = [,
     let tabidx, offset, mode = 0b000, reftype
 
     // declare?
-    if (parts[0] === 'declare')  parts.shift(), mode |= 0b010
+    if (parts[0] === 'declare') parts.shift(), mode |= 0b010
 
     // table?
     if (parts[0][0] === 'table') {
@@ -413,7 +416,7 @@ const build = [,
     }
 
     const bytes = []//instr(body, ctx)
-    while  (body.length) bytes.push(...instr(body, ctx))
+    while (body.length) bytes.push(...instr(body, ctx))
     bytes.push(0x0b)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
@@ -442,7 +445,7 @@ const build = [,
     // (offset (i32.const 0)) or (i32.const 0)
     if (typeof inits[0] !== 'string') {
       offset = inits.shift()
-      if (offset[0] === 'offset') [, offset ] = offset
+      if (offset[0] === 'offset') [, offset] = offset
       offset ?? err('Bad offset', offset)
     }
 
@@ -450,10 +453,10 @@ const build = [,
       ...(
         // active: 2, x=memidx, e=expr
         memidx ? [2, ...uleb(memidx), ...expr(offset, ctx), 0x0b] :
-        // active: 0, e=expr
-        offset ? [0, ...expr(offset, ctx), 0x0b] :
-        // passive: 1
-        [1]
+          // active: 0, e=expr
+          offset ? [0, ...expr(offset, ctx), 0x0b] :
+            // passive: 1
+            [1]
       ),
       ...vec(str(inits.map(i => i.slice(1, -1)).join('')))
     ])
@@ -483,16 +486,16 @@ const instr = (nodes, ctx) => {
   // v128s: (v128.load x) etc
   // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
   if (code === 0xfd) {
-    [,code] = immed
+    [, code] = immed
     immed = [0xfd, ...uleb(code)]
     // (v128.load)
     if (code <= 0x0b) {
-      const [a,o] = memarg(nodes)
+      const [a, o] = memarg(nodes)
       immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
     }
     // (v128.load_lane offset? align? idx)
     else if (code >= 0x54 && code <= 0x5d) {
-      const [a,o] = memarg(nodes)
+      const [a, o] = memarg(nodes)
       immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
       // (v128.load_lane_zero)
       if (code <= 0x5b) immed.push(...uleb(nodes.shift()))
@@ -531,7 +534,7 @@ const instr = (nodes, ctx) => {
   // table ops: (table.init|copy|grow|size|fill) (elem.drop)
   // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
   else if (code == 0xfc) {
-    [,code] = immed
+    [, code] = immed
 
     // memory.init idx, data.drop idx,
     if (code === 0x08 || code === 0x09) {
@@ -540,7 +543,7 @@ const instr = (nodes, ctx) => {
 
     // memory placeholders
     if (code == 0x08 || code == 0x0b) immed.push(0)
-    else if (code === 0x0a) immed.push(0,0)
+    else if (code === 0x0a) immed.push(0, 0)
 
     // elem.drop elemidx
     if (code === 0x0d) {
@@ -556,8 +559,7 @@ const instr = (nodes, ctx) => {
     else if (code >= 0x0c) {
       immed.push(...uleb(id(nodes.shift(), ctx.table)))
       // table.copy tableidx? tableidx?
-      // FIXME: this must be deabbred in instr and id() used here
-      if (code === 0x0e) immed.push(...uleb(nodes[0][0] === '$' ? ctx.table[nodes.shift()] : !isNaN(nodes[0]) ? +nodes.shift() : 0))
+      if (code === 0x0e) immed.push(...uleb(id(nodes.shift(), ctx.table)))
     }
   }
 
@@ -571,17 +573,17 @@ const instr = (nodes, ctx) => {
 
     let type = nodes[0]?.[0] === 'type' && nodes.shift()
     let typeidx = type && id(type[1], ctx.type)
-    let [param, result] = type ? ctx.type[typeidx] : nodes[0]?.[0] === 'result' ? [,[nodes.shift()[1]]] : []
+    let [param, result] = type ? ctx.type[typeidx] : nodes[0]?.[0] === 'result' ? [, [nodes.shift()[1]]] : []
 
     // void
     if (!param?.length && !result?.length) immed.push(TYPE.void)
     // (result i32) - doesn't require registering type
     else if (!param?.length && result.length === 1) immed.push(TYPE[result[0]])
     // (type idx)
-    else immed.push(...uleb( typeidx ))
+    else immed.push(...uleb(typeidx))
   }
   // else
-  else if (code === 5) {}
+  else if (code === 5) { }
   // then
   else if (code === 6) immed = [] // ignore
 
@@ -603,7 +605,7 @@ const instr = (nodes, ctx) => {
   // call_indirect tableIdx? (type $typeName)? ...nodes
   else if (code == 0x11) {
     let tableidx = id(nodes.shift(), ctx.table)
-    let typeidx =  id(nodes.shift()[1], ctx.type)
+    let typeidx = id(nodes.shift()[1], ctx.type)
     immed.push(...uleb(typeidx), ...uleb(tableidx))
   }
 
@@ -636,7 +638,7 @@ const instr = (nodes, ctx) => {
     let [param, result] = paramres(nodes, 0)
     if (result.length) {
       // 0x1b -> 0x1c
-      immed.push(immed.pop()+1, ...uleb(result.length), ...result.map(t => TYPE[t]))
+      immed.push(immed.pop() + 1, ...uleb(result.length), ...result.map(t => TYPE[t]))
     }
   }
 
@@ -655,7 +657,7 @@ const instr = (nodes, ctx) => {
 
   // i32.store align=n offset=m
   else if (code >= 0x28 && code <= 0x3e) {
-    let [a,o] = memarg(nodes)
+    let [a, o] = memarg(nodes)
     immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
   }
 
@@ -672,7 +674,7 @@ const instr = (nodes, ctx) => {
 
   // table.get $id
   else if (code == 0x25 || code == 0x26) {
-    immed.push(...uleb( id(nodes.shift(), ctx.table) ))
+    immed.push(...uleb(id(nodes.shift(), ctx.table)))
   }
 
   // table.grow id, table.size id, table.fill id
@@ -690,11 +692,11 @@ const expr = (node, ctx) => instr([node], ctx)
 // consume align/offset params
 const memarg = (args) => {
   let align, offset, k, v
-  while (args[0]?.includes('=')) [k,v] = args.shift().split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
+  while (args[0]?.includes('=')) [k, v] = args.shift().split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
 
   if (offset < 0 || offset > 0xffffffff) err(`Bad offset ${offset}`)
   if (align <= 0 || align > 0xffffffff) err(`Bad align ${align}`)
-  if (align) ((align=Math.log2(align)) % 1) && err(`Bad align ${align}`)
+  if (align) ((align = Math.log2(align)) % 1) && err(`Bad align ${align}`)
   return [align, offset]
 }
 
@@ -721,7 +723,7 @@ const align = (op) => {
 const limits = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]
 
 // escape codes
-const escape = { n: 10, r: 13, t: 9, v: 1, '"':34, "'": 39, '\\': 92 }
+const escape = { n: 10, r: 13, t: 9, v: 1, '"': 34, "'": 39, '\\': 92 }
 
 // build string binary
 const str = str => {
