@@ -1,7 +1,7 @@
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
 export const INSTR = [
   'unreachable', 'nop', 'block', 'loop', 'if', 'else', 'then', , , , ,
-  'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', , , , , , , , ,
+  'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', 'return_call', 'return_call_indirect','call_ref' ,'return_call_ref' , , , , ,
   'drop', 'select', 'select2', , , ,
   'local.get', 'local.set', 'local.tee', 'global.get', 'global.set', 'table.get', 'table.set', ,
   'i32.load', 'i64.load', 'f32.load', 'f64.load',
@@ -26,7 +26,7 @@ export const INSTR = [
   'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
   'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64',
   'i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s', , , , , , , , , , , ,
-  'ref.null', 'ref.is_null', 'ref.func', , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
+  'ref.null', 'ref.is_null', 'ref.func', ,'ref.as_non_null' ,'br_on_null' ,'br_on_non_null' , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
 
   // 0xFC 0xNN (0xfc shift)
   'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u', 'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',

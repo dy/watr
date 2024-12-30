@@ -6,6 +6,7 @@ import parse from './parse.js'
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x11a ? [0xfd, i - 0x11a] : i >= 0xfc ? [0xfc, i - 0xfc] : [i])
 
+// console.log(INSTR)
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
  *
@@ -164,7 +165,8 @@ const plain = (nodes, ctx) => {
       }
 
       // call_indirect $typeidx
-      else if (node === 'call_indirect') {
+      // return_call_indirect $typeidx
+      else if (node.endsWith('call_indirect')) {
         out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
         let [idx, param, result] = typeuse(nodes, ctx, 0)
         out.push(['type', idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result], idx)])
@@ -595,17 +597,24 @@ const instr = (nodes, ctx) => {
     immed.push(...uleb(id(nodes.shift(), ctx.global)))
   }
 
-  // call id ...nodes
-  else if (code == 0x10) {
+  // call $func ...nodes
+  // return_call $func
+  else if (code == 0x10 || code == 0x12) {
     immed.push(...uleb(id(nodes.shift(), ctx.func)))
   }
 
   // call_indirect tableIdx (type $typeName) ...nodes
-  else if (code == 0x11) {
+  // return_call_indirect $table (type $typeName) ... nodes
+  else if (code == 0x11 || code == 0x13) {
     immed.push(
       ...uleb(id(nodes[1][1], ctx.type)),
       ...uleb(id(nodes.shift(), ctx.table))
     ), nodes.shift()
+  }
+
+  // call_ref $type
+  else if (code == 0x14) {
+    immed.push(...uleb(id(nodes.shift(), ctx.type)))
   }
 
   // end
@@ -613,7 +622,8 @@ const instr = (nodes, ctx) => {
 
   // br $label result?
   // br_if $label cond result?
-  else if (code == 0x0c || code == 0x0d) {
+  // br_on_null $l, br_on_non_null $l
+  else if (code == 0x0c || code == 0x0d || code == 0xd5 || code == 0xd6) {
     // br index indicates how many block items to pop
     let l = nodes.shift(), i = l?.[0] === '$' ? ctx.block.length - ctx.block[l] : +l
     i <= ctx.block.length || err(`Bad label ${l}`)
