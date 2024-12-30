@@ -74,10 +74,10 @@ print(src, {
 ## Status
 
 * [x] core
-* [x] [mutable_globals](https://github.com/WebAssembly/mutable-global)
+* [x] [mutable globals](https://github.com/WebAssembly/mutable-global)
 * [x] [extended const](https://github.com/WebAssembly/extended-const/blob/main/proposals/extended-const/Overview.md)
-* [x] [sat_float_to_int](https://github.com/WebAssembly/nontrapping-float-to-int-conversions)
-* [x] [sign_extension](https://github.com/WebAssembly/sign-extension-ops)
+* [x] [nontrapping float to int](https://github.com/WebAssembly/nontrapping-float-to-int-conversions)
+* [x] [sign extension](https://github.com/WebAssembly/sign-extension-ops)
 * [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md)
 * [x] [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md)
 * [x] [multiple memories](https://github.com/WebAssembly/multi-memory/blob/master/proposals/multi-memory/Overview.md)
@@ -85,7 +85,7 @@ print(src, {
 * [x] [relaxed simd](https://github.com/WebAssembly/relaxed-simd)
 * [x] [fixed-width simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
 * [x] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md)
-* [x] [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md)
+* [ ] [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md)
 * [x] [tail_call](https://github.com/WebAssembly/tail-call)
 * [ ] [gc](https://github.com/WebAssembly/gc)
 * [ ] [exceptions](https://github.com/WebAssembly/exception-handling)

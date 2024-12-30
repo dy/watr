@@ -175,7 +175,7 @@ t('/test/official/proposals/extended-const/elem.wast', async function () { await
 t('/test/official/proposals/extended-const/global.wast', async function () { await file(this.name, { spectest }) })
 
 t('/test/official/proposals/function-references/binary.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/function-references/br_on_non_null.wast', async function () { await file(this.name, { spectest }) })
+t('/test/official/proposals/function-references/br_on_non_null.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/function-references/br_table.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/function-references/call_ref.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/function-references/data.wast', async function () { await file(this.name, { spectest }) })

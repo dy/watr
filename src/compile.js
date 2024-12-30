@@ -26,7 +26,7 @@ export default function watr(nodes) {
   // binary abbr "\00" "\0x61" ...
   if (nodes[0] === 'binary') {
     nodes.shift()
-    return new Uint8Array(str(nodes.map(i => i.slice(1, -1)).join('')))
+    return Uint8Array.from(str(nodes.map(i => i.slice(1, -1)).join('')))
   }
   // quote "a" "b"
   else if (nodes[0] === 'quote') {
@@ -106,7 +106,7 @@ export default function watr(nodes) {
   }
 
   // build final binary
-  return new Uint8Array([
+  return Uint8Array.from([
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
     ...bin(SECTION.custom),
@@ -133,7 +133,7 @@ const plain = (nodes, ctx) => {
   while (nodes.length) {
     let node = nodes.shift()
 
-   if (typeof node === 'string') {
+    if (typeof node === 'string') {
       out.push(node)
 
       // block typeuse?
@@ -148,7 +148,7 @@ const plain = (nodes, ctx) => {
         // get type - can be either idx or valtype (numtype | reftype)
         else if (!param.length && !result.length);
         // (result i32) - doesn't require registering type
-        else if (!param.length && result.length === 1) out.push(['result', result])
+        else if (!param.length && result.length === 1) out.push(['result', ...result])
         // (param i32 i32)? (result i32 i32) - implicit type
         else ctx._[idx = '$' + param + '>' + result] = [param, result], out.push(['type', idx])
       }
@@ -164,8 +164,8 @@ const plain = (nodes, ctx) => {
         ctx.datacount[0] = true // mark datacount element
       }
 
-      // call_indirect $typeidx
-      // return_call_indirect $typeidx
+      // call_indirect $table? $typeidx
+      // return_call_indirect $table? $typeidx
       else if (node.endsWith('call_indirect')) {
         out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
         let [idx, param, result] = typeuse(nodes, ctx, 0)
@@ -274,7 +274,7 @@ const paramres = (nodes, names = true) => {
 // build section binary [by section codes] (non consuming)
 const build = [,
   // (type $id? (func params result))
-  ([param, result], ctx) => ([TYPE.func, ...vec(param.map(t => TYPE[t])), ...vec(result.map(t => TYPE[t]))]),
+  ([param, result], ctx) => ([0x60, ...vec(param.map(t => type(t, ctx))), ...vec(result.map(t => type(t, ctx)))]),
 
   // (import "math" "add" (func|table|global|memory typedef?))
   ([mod, field, [kind, ...dfn]], ctx) => {
@@ -413,7 +413,7 @@ const build = [,
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
       if (types[0]?.[0] === '$') ctx.local[types.shift()] = ctx.local.length
-      ctx.local.push(...types.map(t => TYPE[t]))
+      ctx.local.push(...types.flatMap(t => type(t, ctx)))
     }
 
     const bytes = []
@@ -466,6 +466,11 @@ const build = [,
   // datacount
   (nodes, ctx) => uleb(ctx.data.length)
 ]
+
+// insert type, either direct or ref type
+const type = (t, ctx) =>
+    t[0] === 'ref' ? ([t[1] == 'null' ? TYPE.refnull : TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))])
+    : [TYPE[t] ?? err(`Unknown type ${t}`)]
 
 // consume one instruction from nodes sequence
 const instr = (nodes, ctx) => {
@@ -572,13 +577,14 @@ const instr = (nodes, ctx) => {
     // (block $x) (loop $y)
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
-    let typeidx =  nodes[0]?.[0] === 'type' && id(nodes.shift()[1], ctx.type)
+    let typeidx = nodes[0]?.[0] === 'type' && id(nodes.shift()[1], ctx.type)
+
     let [param, result] = typeidx !== false ? ctx.type[typeidx] : nodes[0]?.[0] === 'result' ? [, [nodes.shift()[1]]] : []
 
     // void
     if (!param?.length && !result?.length) immed.push(TYPE.void)
     // (result i32) - doesn't require registering type
-    else if (!param?.length && result.length === 1) immed.push(TYPE[result[0]])
+    else if (!param?.length && result.length === 1) immed.push(...type(result[0], ctx))
     // (type idx)
     else immed.push(...uleb(typeidx))
   }
@@ -603,7 +609,7 @@ const instr = (nodes, ctx) => {
     immed.push(...uleb(id(nodes.shift(), ctx.func)))
   }
 
-  // call_indirect tableIdx (type $typeName) ...nodes
+  // call_indirect $table (type $typeName) ...nodes
   // return_call_indirect $table (type $typeName) ... nodes
   else if (code == 0x11 || code == 0x13) {
     immed.push(
@@ -613,7 +619,8 @@ const instr = (nodes, ctx) => {
   }
 
   // call_ref $type
-  else if (code == 0x14) {
+  // return_call_ref $type
+  else if (code == 0x14 || code == 0x15) {
     immed.push(...uleb(id(nodes.shift(), ctx.type)))
   }
 
@@ -646,7 +653,7 @@ const instr = (nodes, ctx) => {
   else if (code == 0x1b) {
     let result = nodes.shift()
     // 0x1b -> 0x1c
-    if (result.length) immed.push(immed.pop() + 1, ...uleb(result.length), ...result.map(t => TYPE[t]))
+    if (result.length) immed.push(immed.pop() + 1, ...uleb(result.length), ...result.flatMap(t => type(t, ctx)))
   }
 
   // ref.func $id
@@ -740,7 +747,7 @@ const str = str => {
 }
 
 // serialize binary array
-const vec = a => [...uleb(a.length), ...a]
+const vec = a => [...uleb(a.length), ...a.flat()]
 
 const err = text => { throw Error(text) }
 
