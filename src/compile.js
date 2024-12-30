@@ -102,7 +102,7 @@ export default function watr(nodes) {
   // convert nodes to bytes
   const bin = (kind, count = true) => {
     let items = sections[kind].filter(Boolean).map(item => build[kind](item, sections))
-    return !items.length ? [] : [kind, ...vec([...(count ? uleb(items.length) : []), ...items.flat()])]
+    return !items.length ? [] : [kind, ...vec(count ? vec(items) : items)]
   }
 
   // build final binary
@@ -289,11 +289,11 @@ const build = [,
       details = limits(dfn)
     }
     else if (kind === 'global') {
-      let [type] = dfn, mut = type[0] === 'mut' ? 1 : 0
-      details = [TYPE[mut ? type[1] : type], mut]
+      let [t] = dfn, mut = t[0] === 'mut' ? 1 : 0
+      details = [...type(mut ? t[1] : t, ctx), mut]
     }
     else if (kind === 'table') {
-      details = [TYPE[dfn.pop()], ...limits(dfn)]
+      details = [...type(dfn.pop(), ctx), ...limits(dfn)]
     }
 
     return ([...vec(str(mod.slice(1, -1))), ...vec(str(field.slice(1, -1))), KIND[kind], ...details])
@@ -303,24 +303,24 @@ const build = [,
   ([[, typeidx]], ctx) => (uleb(id(typeidx, ctx.type))),
 
   // (table id? 1 2? funcref)
-  (node, ctx) => ([TYPE[node.pop()], ...limits(node)]),
+  (node, ctx) => ([...type(node.pop(), ctx), ...limits(node)]),
 
   // (memory id? export* min max shared)
   (node, ctx) => limits(node),
 
   // (global $id? (mut i32) (i32.const 42))
   (node, ctx) => {
-    let [type] = node, mut = type[0] === 'mut' ? 1 : 0
+    let [t] = node, mut = t[0] === 'mut' ? 1 : 0
 
     let [, init] = node
-    return ([TYPE[mut ? type[1] : type], mut, ...expr(init, ctx), 0x0b])
+    return ([...type(mut ? t[1] : t, ctx), mut, ...expr(init, ctx), 0x0b])
   },
 
   //  (export "name" (func|table|mem $name|idx))
   ([nm, [kind, l]], ctx) => ([...vec(str(nm.slice(1, -1))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
 
   // (start $main)
-  ([l], ctx) => (uleb(id(l, ctx.func))),
+  ([l], ctx) => uleb(id(l, ctx.func)),
 
   // (elem elem*) - passive
   // (elem declare elem*) - declarative
@@ -386,13 +386,13 @@ const build = [,
                       // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
                       [TYPE[reftype]]
       ),
-      ...uleb(parts.length),
-      ...parts.flatMap(mode & 0b100 ?
-        // ((ref.func y)end)*
-        el => [...expr(typeof el === 'string' ? ['ref.func', el] : el, ctx), 0x0b] :
-        // el*
-        el => uleb(id(el, ctx.func))
-      )
+      ...vec(
+        parts.map(mode & 0b100 ?
+          // ((ref.func y)end)*
+          el => [...expr(typeof el === 'string' ? ['ref.func', el] : el, ctx), 0x0b] :
+          // el*
+          el => uleb(id(el, ctx.func))
+      ))
     ])
   },
 
@@ -413,7 +413,7 @@ const build = [,
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
       if (types[0]?.[0] === '$') ctx.local[types.shift()] = ctx.local.length
-      ctx.local.push(...types.flatMap(t => type(t, ctx)))
+      ctx.local.push(...types)
     }
 
     const bytes = []
@@ -428,7 +428,7 @@ const build = [,
     ctx.local = ctx.block = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    return (vec([...uleb(loctypes.length), ...loctypes.flatMap(([n, t]) => [...uleb(n), t]), ...bytes]))
+    return vec([...vec(loctypes.map(([n, t]) => [...uleb(n), ...type(t, ctx)])), ...bytes])
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
@@ -469,7 +469,7 @@ const build = [,
 
 // insert type, either direct or ref type
 const type = (t, ctx) =>
-    t[0] === 'ref' ? ([t[1] == 'null' ? TYPE.refnull : TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))])
+  t[0] === 'ref' ? ([t[1] == 'null' ? TYPE.refnull : TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))])
     : [TYPE[t] ?? err(`Unknown type ${t}`)]
 
 // consume one instruction from nodes sequence
@@ -653,7 +653,7 @@ const instr = (nodes, ctx) => {
   else if (code == 0x1b) {
     let result = nodes.shift()
     // 0x1b -> 0x1c
-    if (result.length) immed.push(immed.pop() + 1, ...uleb(result.length), ...result.flatMap(t => type(t, ctx)))
+    if (result.length) immed.push(immed.pop() + 1, ...vec(result.map(t => type(t, ctx))))
   }
 
   // ref.func $id
