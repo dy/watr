@@ -78,6 +78,9 @@
 * [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
 * [x] validation / errors: should be safe to type in anything
+* [ ] Abbr dict instead of thick plain
+* [ ] Indicate immediates via list
+* [ ] Replace missing index with `(;idx;)`
 * [ ] Features
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [ ] All main ones (readme)

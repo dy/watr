@@ -136,56 +136,7 @@ const plain = (nodes, ctx) => {
     if (typeof node === 'string') {
       out.push(node)
 
-      // block typeuse?
-      if (node === 'block' || node === 'loop' || node === 'if') {
-        // (loop $l?)
-        if (nodes[0]?.[0] === '$') out.push(nodes.shift())
-
-        let [idx, param, result] = typeuse(nodes, ctx, 0)
-
-        // direct idx (no params/result needed)
-        if (idx != null) out.push(['type', idx])
-        // get type - can be either idx or valtype (numtype | reftype)
-        else if (!param.length && !result.length);
-        // (result i32) - doesn't require registering type
-        else if (!param.length && result.length === 1) out.push(['result', ...result])
-        // (param i32 i32)? (result i32 i32) - implicit type
-        else ctx._[idx = '$' + param + '>' + result] = [param, result], out.push(['type', idx])
-      }
-
-      // else $label, end $label
-      else if (node === 'else' || node === 'end') nodes[0]?.[0] === '$' && nodes.shift()
-
-      // select (result i32 i32 i32)?
-      else if (node === 'select') out.push(paramres(nodes, 0)[1])
-
-      // mark datacount section as required
-      else if (node === 'memory.init' || node === 'data.drop') {
-        ctx.datacount[0] = true // mark datacount element
-      }
-
-      // call_indirect $table? $typeidx
-      // return_call_indirect $table? $typeidx
-      else if (node.endsWith('call_indirect')) {
-        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
-        let [idx, param, result] = typeuse(nodes, ctx, 0)
-        out.push(['type', idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result], idx)])
-      }
-
-      // table.init tableidx? elemidx -> table.init tableidx elemidx
-      else if (node === 'table.init') {
-        out.push((nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift())
-      }
-
-      // abbr table.* idx?
-      else if (node.startsWith('table.')) {
-        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
-
-        // table.copy tableidx? tableidx?
-        if (node === 'table.copy') {
-          out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
-        }
-      }
+      if (abbr[node]) out.push(...abbr[node](nodes, ctx))
     }
 
     // (block ...) -> block ... end
@@ -222,6 +173,62 @@ const plain = (nodes, ctx) => {
   }
 
   return out
+}
+
+const abbr = {
+  // block typeuse?
+  block: (nodes, ctx, out = []) => {
+    // (loop $l?)
+    if (nodes[0]?.[0] === '$') out.push(nodes.shift())
+
+    let [idx, param, result] = typeuse(nodes, ctx, 0)
+
+    // direct idx (no params/result needed)
+    if (idx != null) out.push(['type', idx])
+    // get type - can be either idx or valtype (numtype | reftype)
+    else if (!param.length && !result.length);
+    // (result i32) - doesn't require registering type
+    else if (!param.length && result.length === 1) out.push(['result', ...result])
+    // (param i32 i32)? (result i32 i32) - implicit type
+    else ctx._[idx = '$' + param + '>' + result] = [param, result], out.push(['type', idx])
+
+    return out
+  },
+  loop: (nodes, ctx) => abbr.block(nodes, ctx),
+  if: (nodes, ctx) => abbr.block(nodes, ctx),
+
+  // select (result i32 i32 i32)?
+  select: (nodes, ctx) => [paramres(nodes, 0)[1]],
+
+  // call_indirect $table? $typeidx
+  // return_call_indirect $table? $typeidx
+  call_indirect: (nodes, ctx) => {
+    let tableidx = nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0
+    let [idx, param, result] = typeuse(nodes, ctx, 0)
+    return [tableidx, ['type', idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result], idx)]]
+  },
+  return_call_indirect: (nodes, ctx) => abbr.call_indirect(nodes, ctx),
+
+  // else $label
+  else: (nodes, ctx) => (nodes[0]?.[0] === '$' && nodes.shift(), []),
+  // end $label
+  end: (nodes, ctx) => (nodes[0]?.[0] === '$' && nodes.shift(), []),
+
+  // mark datacount section as required
+  'memory.init': (nodes, ctx) => (ctx.datacount[0] = true, []),
+  'data.drop': (nodes, ctx) => (ctx.datacount[0] = true, []),
+
+  // table.init tableidx? elemidx -> table.init tableidx elemidx
+  'table.init': (nodes, ctx) => [(nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift()],
+
+  // table.* tableidx?
+  'table.get': (nodes, ctx) => [nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0],
+  'table.set': (nodes,ctx) => abbr['table.get'](nodes, ctx),
+  'table.fill': (nodes,ctx) => abbr['table.get'](nodes, ctx),
+  'table.size': (nodes,ctx) => abbr['table.get'](nodes, ctx),
+  'table.grow': (nodes,ctx) => abbr['table.get'](nodes, ctx),
+  // table.copy tableidx? tableidx?
+  'table.copy': (nodes,ctx) => [...abbr['table.get'](nodes, ctx), nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0],
 }
 
 // consume typeuse nodes, return type index/params, or null idx if no type
