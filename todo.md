@@ -78,9 +78,10 @@
 * [x] Compiler: Named/multiple tables;
 * [x] Relax no-inline limitation?
 * [x] validation / errors: should be safe to type in anything
-* [ ] Abbr dict instead of thick plain
-* [ ] Indicate immediates via list
-* [ ] Replace missing index with `(;idx;)`
+* [x] Abbr dict instead of thick plain
+  * [ ] Make abbr main source of transforms, don't check for `if node==section|block`
+* [x] ~~Indicate immediates via list~~ -> too many expeptions, doesn't make much sense
+* [x] ~~Replace missing index with `(;idx;)`~~ -> not so much benefit
 * [ ] Features
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [ ] All main ones (readme)

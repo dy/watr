@@ -59,7 +59,7 @@ export default function watr(nodes) {
 
     // table abbr
     // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-    if (node[1]?.[0] === 'elem') {
+    if (kind === 'table' && node[1]?.[0] === 'elem') {
       let [reftype, [, ...els]] = node
       node = [els.length, els.length, reftype]
       sections.elem.push([['table', name || sections.table.length], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els])
@@ -67,7 +67,7 @@ export default function watr(nodes) {
 
     // data abbr
     // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
-    else if (node[0]?.[0] === 'data') {
+    else if (kind === 'memory' && node[0]?.[0] === 'data') {
       let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
       sections.data.push([['memory', idx], ['i32.const', 0], ...data])
       node = [m, m]
@@ -139,37 +139,37 @@ const plain = (nodes, ctx) => {
       if (abbr[node]) out.push(...abbr[node](nodes, ctx))
     }
 
-    // (block ...) -> block ... end
-    else if (node[0] === 'block' || node[0] === 'loop') {
-      node = plain(node, ctx)
-      out.push(...node, 'end')
-    }
-
-    // (if ...) -> if ... end
-    else if (node[0] === 'if') {
+    // FIXME: try to move this to abbr
+    else {
       node = plain(node, ctx)
 
-      let thenelse = [], blocktype = [node.shift()]
-      // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
-      // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
-      if (node[node.length - 1]?.[0] === 'else') thenelse.unshift(...node.pop())
-      if (node[node.length - 1]?.[0] === 'then') thenelse.unshift(...node.pop())
+      // (block ...) -> block ... end
+      if (node[0] === 'block' || node[0] === 'loop') {
+        out.push(...node, 'end')
+      }
 
-      // label?
-      if (node[0]?.[0] === '$') blocktype.push(node.shift())
+      // (if ...) -> if ... end
+      else if (node[0] === 'if') {
+        let thenelse = [], blocktype = [node.shift()]
+        // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
+        // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
+        if (node[node.length - 1]?.[0] === 'else') thenelse.unshift(...node.pop())
+        if (node[node.length - 1]?.[0] === 'then') thenelse.unshift(...node.pop())
 
-      // blocktype? - (param) are removed already via plain
-      if (node[0]?.[0] === 'type' || node[0]?.[0] === 'result') blocktype.push(node.shift());
+        // label?
+        if (node[0]?.[0] === '$') blocktype.push(node.shift())
 
-      // ignore empty else
-      // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
-      if (thenelse[thenelse.length - 1] === 'else') thenelse.pop()
+        // blocktype? - (param) are removed already via plain
+        if (node[0]?.[0] === 'type' || node[0]?.[0] === 'result') blocktype.push(node.shift());
 
-      out.push(...node, ...blocktype, ...thenelse, 'end')
+        // ignore empty else
+        // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
+        if (thenelse[thenelse.length - 1] === 'else') thenelse.pop()
+
+        out.push(...node, ...blocktype, ...thenelse, 'end')
+      }
+      else out.push(node)
     }
-
-    // (instr *) -> unfold internals
-    else out.push(plain(node, ctx))
   }
 
   return out
@@ -177,7 +177,9 @@ const plain = (nodes, ctx) => {
 
 const abbr = {
   // block typeuse?
-  block: (nodes, ctx, out = []) => {
+  block: (nodes, ctx) => {
+    let out = []
+
     // (loop $l?)
     if (nodes[0]?.[0] === '$') out.push(nodes.shift())
 
@@ -223,12 +225,12 @@ const abbr = {
 
   // table.* tableidx?
   'table.get': (nodes, ctx) => [nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0],
-  'table.set': (nodes,ctx) => abbr['table.get'](nodes, ctx),
-  'table.fill': (nodes,ctx) => abbr['table.get'](nodes, ctx),
-  'table.size': (nodes,ctx) => abbr['table.get'](nodes, ctx),
-  'table.grow': (nodes,ctx) => abbr['table.get'](nodes, ctx),
+  'table.set': (nodes, ctx) => abbr['table.get'](nodes, ctx),
+  'table.fill': (nodes, ctx) => abbr['table.get'](nodes, ctx),
+  'table.size': (nodes, ctx) => abbr['table.get'](nodes, ctx),
+  'table.grow': (nodes, ctx) => abbr['table.get'](nodes, ctx),
   // table.copy tableidx? tableidx?
-  'table.copy': (nodes,ctx) => [...abbr['table.get'](nodes, ctx), nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0],
+  'table.copy': (nodes, ctx) => [...abbr['table.get'](nodes, ctx), nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0],
 }
 
 // consume typeuse nodes, return type index/params, or null idx if no type
@@ -399,7 +401,7 @@ const build = [,
           el => [...expr(typeof el === 'string' ? ['ref.func', el] : el, ctx), 0x0b] :
           // el*
           el => uleb(id(el, ctx.func))
-      ))
+        ))
     ])
   },
 
