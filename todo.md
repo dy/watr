@@ -95,11 +95,11 @@
 * [ ] examples
 * [ ] perf stats
 * [ ] prettifier flag
+* [ ] binary copy/paster
 
 ## Backlog
 
 * [ ] wat-based wat-compiler
-
 
 ## Offering Qualifications
 
