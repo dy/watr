@@ -1,6 +1,6 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=red)](https://npmjs.org/watr)
 
-Light & fast WASM compiler. An alternative to [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).<br/>
+Light & fast WASM compiler. An alternative to [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js) or [spec/wast]().<br/>
 Useful for high-level languages or dynamic (in-browser) compilation.<br>
 Supports complete [standard text syntax](https://webassembly.github.io/spec/core/text/index.html) and [official testsuite](https://github.com/WebAssembly/testsuite).
 
@@ -96,14 +96,12 @@ print(src, {
 
 ## Alternatives
 
-&nbsp; | Size (gzipped) | Performance (op/s)
+&nbsp; | Size (gzipped) | Performance
 ---|---|---
-watr | 5 kb | 6000
-[wabt](https://github.com/AssemblyScript/wabt.js) | 300 kb | 574
-[wat-compiler](https://github.com/stagas/wat-compiler) | 6 kb | 348
-<!-- [wassemble](https://github.com/wingo/wassemble) | ? kb | ? -->
-
-<!-- Watr has better syntax support than wabt & produces more compact output due to types squash. -->
+watr | 6.2 kb | 11.6 op/s
+[spec/wast.js](https://github.com/WebAssembly/spec/tree/main/interpreter#javascript-library) | 216 kb | 7.1 op/s
+[wabt](https://github.com/WebAssembly/wabt) | 282 kb | 2.3 op/s
+[wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 kb | 1.34 op/s
 
 <!--
 ## Projects using watr
@@ -118,22 +116,6 @@ watr | 5 kb | 6000
 * [MDN: control flow](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/Control_flow)
 * [WASM reference manual](https://github.com/sunfishcode/wasm-reference-manual/blob/master/WebAssembly.md#loop)
 * [WASM binary encoding](https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md)
--->
-
-<!--
-## Refs
-
-* [mdn wasm text format](https://developer.mozilla.org/en-US/docs/WebAssembly/Understanding_the_text_format)
-* [wasm reference manual](https://github.com/sunfishcode/wasm-reference-manual/blob/master/WebAssembly.md)
-* [wabt source search](https://github.com/WebAssembly/wabt/search?p=5&q=then)
-* [wat control flow](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/Control_flow)
-* [ontouchstart wasm book](https://ontouchstart.pages.dev/chapter_wasm_binary)
-* [hackernoon](https://web.archive.org/web/20210215171830/https://hackernoon.com/webassembly-binary-format-explained-part-2-hj1t33yp?source=rss)
-* [webassemblyjs](https://github.com/xtuc/webassemblyjs)
-* [chasm](https://github.com/ColinEberhardt/chasm/blob/master/src/encoding.ts)
-* [WebBS](https://github.com/j-s-n/WebBS)
-* [leb128a](https://github.com/minhducsun2002/leb128/blob/master/src/index.ts)
-* [leb128b](https://github.com/shmishtopher/wasm-LEB128/tree/master/esm)
 -->
 
 <p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>

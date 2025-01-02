@@ -84,8 +84,8 @@
 * [x] ~~Replace missing index with `(;idx;)`~~ -> not so much benefit
 * [ ] Features
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
-  * [ ] All main ones (readme)
-  * [ ] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
+  * [x] All main ones (readme)
+  * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
   * [ ] Wasm3
 * [ ] Print: make it as nice as AI
 

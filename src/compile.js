@@ -294,19 +294,19 @@ const build = [,
   ([mod, field, [kind, ...dfn]], ctx) => {
     let details
 
-    if (kind === 'func') {
+    if (kind[0] === 'f') {
       // we track imported funcs in func section to share namespace, and skip them on final build
       let [[, typeidx]] = dfn
       details = uleb(id(typeidx, ctx.type))
     }
-    else if (kind === 'memory') {
+    else if (kind[0] === 'm') {
       details = limits(dfn)
     }
-    else if (kind === 'global') {
+    else if (kind[0] === 'g') {
       let [t] = dfn, mut = t[0] === 'mut' ? 1 : 0
       details = [...type(mut ? t[1] : t, ctx), mut]
     }
-    else if (kind === 'table') {
+    else if (kind[0] === 't') {
       details = [...type(dfn.pop(), ctx), ...limits(dfn)]
     }
 

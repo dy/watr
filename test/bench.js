@@ -4,7 +4,7 @@ import watr from '../src/compile.js'
 import watCompiler from './lib/wat-compiler.js'
 import wassemble from 'wassemble/wassemble.mjs'
 import { wat2wasm } from './compile.js'
-
+import './lib/wast.js'
 
 // bench
 t.skip('bench: brownian', async () => {
@@ -25,13 +25,17 @@ t.skip('bench: brownian', async () => {
 
   let N = 500
 
+  console.time('wast (spec)')
+  for (let i = 0; i < N; i++) WebAssemblyText.encode(src, { metrics: false })
+  console.timeEnd('wast (spec)')
+
   console.time('watr')
   for (let i = 0; i < N; i++) watr(src)
   console.timeEnd('watr')
 
-  // console.time('watr0')
-  // for (let i = 0; i < N; i++) watr0(src)
-  // console.timeEnd('watr0')
+  console.time('wast (spec)')
+  for (let i = 0; i < N; i++) WebAssemblyText.encode(src, { metrics: false })
+  console.timeEnd('wast (spec)')
 
   console.time('wat-compiler')
   for (let i = 0; i < N; i++) watCompiler(src, { metrics: false })
