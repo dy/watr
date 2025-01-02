@@ -1,6 +1,6 @@
 import * as encode from './encode.js'
 import { uleb } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, REFTYPE } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
@@ -59,11 +59,13 @@ export default function watr(nodes) {
     if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
 
     // table abbr
-    // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-    if (kind === 'table' && node[1]?.[0] === 'elem') {
-      let [reftype, [, ...els]] = node
-      node = [els.length, els.length, reftype]
-      sections.elem.push([['table', name || sections.table.length], ['i32.const', '0'], reftype, ...els])
+    if (kind === 'table') {
+      // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
+      if (node[1]?.[0] === 'elem') {
+        let [reftype, [, ...els]] = node
+        node = [els.length, els.length, reftype]
+        sections.elem.push([['table', name || sections.table.length], ['i32.const', '0'], reftype, ...els])
+      }
     }
 
     // data abbr
@@ -96,7 +98,6 @@ export default function watr(nodes) {
 
   // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
   for (let n in sections._) sections.type[n] ??= sections.type.push(sections._[n]) - 1
-
 
   // patch datacount if data === 0
   if (!sections.data.length) sections.datacount.length = 0
@@ -315,8 +316,11 @@ const build = [,
   // (func $name? ...params result ...body)
   ([[, typeidx]], ctx) => (uleb(id(typeidx, ctx.type))),
 
-  // (table id? 1 2? funcref)
-  (node, ctx) => ([...type(node.pop(), ctx), ...limits(node)]),
+  // (table 1 2 funcref)
+  (node, ctx) => {
+    let lims = limits(node), [reftype, init] = node
+    return [...type(reftype, ctx), ...lims, ...(init ? expr(init, ctx) : [])]
+  },
 
   // (memory id? export* min max shared)
   (node, ctx) => limits(node),
@@ -326,7 +330,7 @@ const build = [,
     let [t] = node, mut = t[0] === 'mut' ? 1 : 0
 
     let [, init] = node
-    return ([...type(mut ? t[1] : t, ctx), mut, ...expr(init, ctx), 0x0b])
+    return ([...type(mut ? t[1] : t, ctx), mut, ...expr(init, ctx)])
   },
 
   //  (export "name" (func|table|mem $name|idx))
@@ -388,26 +392,26 @@ const build = [,
       mode,
       ...(
         // 0b000 e:expr y*:vec(funcidx)                     | type=funcref, init ((ref.func y)end)*, active (table=0,offset=e)
-        mode === 0b000 ? [...expr(offset, ctx), 0x0b] :
+        mode === 0b000 ? expr(offset, ctx) :
           // 0b001 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive
           mode === 0b001 ? [0x00] :
             // 0b010 x:tabidx e:expr et:elkind y*:vec(funcidx)  | type=0x00, init ((ref.func y)end)*, active (table=x,offset=e)
-            mode === 0b010 ? [...uleb(tabidx || 0), ...expr(offset, ctx), 0x0b, 0x00] :
+            mode === 0b010 ? [...uleb(tabidx || 0), ...expr(offset, ctx), 0x00] :
               // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
               mode === 0b011 ? [0x00] :
                 // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
-                mode === 0b100 ? [...expr(offset, ctx), 0x0b] :
+                mode === 0b100 ? expr(offset, ctx) :
                   // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
                   mode === 0b101 ? type(reftype, ctx) :
                     // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
-                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset, ctx), 0x0b, ...type(reftype, ctx)] :
+                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset, ctx), ...type(reftype, ctx)] :
                       // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
                       type(reftype, ctx)
       ),
       ...vec(
         parts.map(mode & 0b100 ?
           // ((ref.func y)end)*
-          el => [...expr(typeof el === 'string' ? ['ref.func', el] : el, ctx), 0x0b] :
+          el => expr(typeof el === 'string' ? ['ref.func', el] : el, ctx) :
           // el*
           el => uleb(id(el, ctx.func))
         )
@@ -472,9 +476,9 @@ const build = [,
     return ([
       ...(
         // active: 2, x=memidx, e=expr
-        memidx ? [2, ...uleb(memidx), ...expr(offset, ctx), 0x0b] :
+        memidx ? [2, ...uleb(memidx), ...expr(offset, ctx)] :
           // active: 0, e=expr
-          offset ? [0, ...expr(offset, ctx), 0x0b] :
+          offset ? [0, ...expr(offset, ctx)] :
             // passive: 1
             [1]
       ),
@@ -717,7 +721,7 @@ const instr = (nodes, ctx) => {
 }
 
 // instantiation time value initializer (consuming) - we redirect to instr
-const expr = (node, ctx) => instr([node], ctx)
+const expr = (node, ctx) => [...instr([node], ctx), 0x0b]
 
 // consume align/offset params
 const memarg = (args) => {
@@ -749,8 +753,8 @@ const align = (op) => {
   return Math.log2(x ? 8 : +size / 8)
 }
 
-// build limits sequence (non-consuming)
-const limits = ([min, max, shared]) => isNaN(parseInt(max)) ? [0, ...uleb(min)] : [shared === 'shared' ? 3 : 1, ...uleb(min), ...uleb(max)]
+// build limits sequence (consuming)
+const limits = (node) => isNaN(node[1]) ? [0, ...uleb(node.shift())] : [node[2] === 'shared' ? 3 : 1, ...uleb(node.shift()), ...uleb(node.shift())]
 
 // escape codes
 const escape = { n: 10, r: 13, t: 9, v: 1, '"': 34, "'": 39, '\\': 92 }
