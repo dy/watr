@@ -3,7 +3,7 @@ import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import Wabt from './lib/libwabt.js'
 import print from '../src/print.js'
-import { f32, f64, i64, i32 } from '../src/encode.js'
+import { f32, f64, i64, i32, uleb } from '../src/encode.js'
 
 
 t('compile: reexport func', () => {
@@ -2163,7 +2163,7 @@ t('feature: function refs', () => {
   `
   inline(src)
 
-  src=`
+  src = `
     (type $t (func))
     (func (param $r (ref null $t)) (drop (block (result (ref $t)) (br_on_non_null 0 (local.get $r)) (unreachable))))
     (func (param $r (ref null func)) (drop (block (result (ref func)) (br_on_non_null 0 (local.get $r)) (unreachable))))
@@ -2171,6 +2171,28 @@ t('feature: function refs', () => {
   `
   inline(src)
 
+  src = `(type $t (func))
+  (func $tf)
+  (table $t (ref null $t) (elem $tf))
+  (func (param i32) (result (ref null $t))
+    (block $l1 (result (ref null $t))
+      (br_table $l1 (table.get $t (i32.const 0)) (local.get 0))
+    )
+  )`
+  inline(src)
+
+  src = `
+  (type $sig (func (param i32 i32 i32) (result i32)))
+  (type $t (func))
+  (func (param i32) (result (ref null func))
+    (block $l1 (result (ref null func))
+      (block $l2 (result (ref null $t))
+        (br_table $l1 $l2 $l1 (ref.null $t) (local.get 0))
+      )
+    )
+  )
+  `
+  inline(src)
 })
 
 // examples
@@ -2338,7 +2360,8 @@ export async function file(path, imports = {}) {
       if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('assert_return: skip NaN');
 
       if (kind === 'invoke') {
-        is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
+        if (typeof expects[0] === 'function' || expects[0]==='func') ok(m[nm](...args)?.toString().includes('function', `assert_return: invoke ${nm}(${args}) === ${expects}`))
+        else is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
       }
       else if (kind === 'get') {
         is(m[nm].value, expects[0], `assert_return: get ${nm} === ${expects}`)
@@ -2360,9 +2383,9 @@ export async function file(path, imports = {}) {
       // skip (data const_expr) - we don't have constant expr limitations
       if (nodes.some(n => n[0] === 'data' && typeof n !== 'string')) return console.warn('assert_invalid: skip data const expr');
       // skip (global const_expr) - we don't have constant expr limitations
-      if (nodes.some(n => n[0] === 'global' && typeof n[2] !== 'string' )) return console.warn('assert_invalid: skip global const expr');
+      if (nodes.some(n => n[0] === 'global' && typeof n[2] !== 'string')) return console.warn('assert_invalid: skip global const expr');
       // skip (elem const_expr) - we don't have constant expr limitations
-      if (nodes.some(n => n[0] === 'elem' && typeof n[1] !== 'string' )) return console.warn('assert_invalid: skip elem const expr');
+      if (nodes.some(n => n[0] === 'elem' && typeof n[1] !== 'string')) return console.warn('assert_invalid: skip elem const expr');
       // skip multimemory - there's no issue with proposal enabled
       let m = 0
       if (nodes.some(n => (n[0] === 'memory' && (++m) > 1))) return console.warn('assert_invalid: skip multi memory');
@@ -2390,13 +2413,13 @@ export async function file(path, imports = {}) {
       let err
       // don't check if wat2wasm doesn't fail - certain tests are unnecessary
       if (nodes[1] === 'binary') {
-        try {wat2wasm(print(nodes))} catch (e) {err=e}
+        try { wat2wasm(print(nodes)) } catch (e) { err = e }
         if (err) throws(() => ex(nodes), msg, msg)
         else console.warn(`assert_malformed: skip ${msg} as wat2wasm compiles fine`)
       }
       else if (nodes[1] === 'quote') {
         // (module quote ...nodes) make wat2wasm hang - unwrap them
-        nodes = ['module',...parse(nodes.slice(2).map(str => str.slice(1, -1)).join('\n'))]
+        nodes = ['module', ...parse(nodes.slice(2).map(str => str.slice(1, -1)).join('\n'))]
         throws(() => ex(nodes), msg, msg)
       }
       // console.groupEnd()
@@ -2405,7 +2428,7 @@ export async function file(path, imports = {}) {
 }
 
 // save binary (asm buffer) to file
-export function save (buf) {
+export function save(buf) {
   // Create a Blob
   const blob = new Blob([buf], { type: "application/wasm" });
 
@@ -2429,11 +2452,13 @@ const isNaNValue = a => (typeof a === 'number' && isNaN(a)) || a === 2143289344 
 
 // get value from [type, value] args
 var f32arr = new Float32Array(1), i32arr = new Int32Array(1), i64arr = new BigInt64Array(1)
-const val = ([t, v]) =>
-  t === 'v128.const' ? v :
-    t === 'ref.null' ? null :
-      t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :
-        t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :
-          t === 'i32.const' ? (i32arr[0] = i32.parse(v), i32arr[0]) :
-            t === 'f64.const' ? f64.parse(v) :
-              v;
+const val = ([t, v]) => {
+  return t === 'ref.func' ? v || 'func' :
+    t === 'v128.const' ? v :
+      t === 'ref.null' ? null :
+        t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :
+          t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :
+            t === 'i32.const' ? (i32arr[0] = i32.parse(v), i32arr[0]) :
+              t === 'f64.const' ? f64.parse(v) :
+                v;
+}

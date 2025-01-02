@@ -17,6 +17,21 @@ export const uleb = (n, buffer = []) => {
   }
 }
 
+// fixed-width uleb
+// export function full_uleb(value) {
+//   const result = [];
+//   for (let i = 0; i < 5; i++) {
+//     let byte = value & 0x7f;
+//     value >>>= 7;
+//     if (i < 4) {
+//       byte |= 0x80; // Set continuation bit for first 4 bytes
+//     }
+//     result.push(byte);
+//   }
+//   return result;
+// }
+
+
 // leb
 export function i32(n, buffer = []) {
   if (typeof n === 'string') n = i32.parse(n)
@@ -32,6 +47,8 @@ export function i32(n, buffer = []) {
   }
   return buffer
 }
+
+
 // alias
 export const i8 = i32, i16 = i32
 

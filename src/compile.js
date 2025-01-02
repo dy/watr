@@ -1,16 +1,17 @@
 import * as encode from './encode.js'
 import { uleb } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
-INSTR.forEach((op, i) => INSTR[op] = i >= 0x11a ? [0xfd, i - 0x11a] : i >= 0xfc ? [0xfc, i - 0xfc] : [i])
+INSTR.forEach((op, i) => INSTR[op] = i >= 0x11a ? [0xfd, i - 0x11a] : i >= 0xfc ? [0xfc, i - 0xfc] : [i]);
 
 // console.log(INSTR)
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
  *
  * @param {string|Array} nodes - The WAT tree or string to be compiled to WASM binary.
+ * @param {Object} opt - opt.fullSize for fixed-width uleb encoding
  * @returns {Uint8Array} The compiled WASM binary data.
  */
 export default function watr(nodes) {
@@ -62,7 +63,7 @@ export default function watr(nodes) {
     if (kind === 'table' && node[1]?.[0] === 'elem') {
       let [reftype, [, ...els]] = node
       node = [els.length, els.length, reftype]
-      sections.elem.push([['table', name || sections.table.length], ['i32.const', '0'], typeof els[0] === 'string' ? 'func' : reftype, ...els])
+      sections.elem.push([['table', name || sections.table.length], ['i32.const', '0'], reftype, ...els])
     }
 
     // data abbr
@@ -95,6 +96,7 @@ export default function watr(nodes) {
 
   // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
   for (let n in sections._) sections.type[n] ??= sections.type.push(sections._[n]) - 1
+
 
   // patch datacount if data === 0
   if (!sections.data.length) sections.datacount.length = 0
@@ -263,6 +265,7 @@ const paramres = (nodes, names = true) => {
   // collect param (param i32 i64) (param $x? i32)
   while (nodes[0]?.[0] === 'param') {
     let [, ...args] = nodes.shift()
+    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2]+t[0]) : t) : t); // deabbr
     let name = args[0]?.[0] === '$' && args.shift()
     // expose name refs, if allowed
     if (name) names ? param[name] = param.length : err(`Unexpected param name ${name}`)
@@ -272,6 +275,7 @@ const paramres = (nodes, names = true) => {
   // collect result eg. (result f64 f32)(result i32)
   while (nodes[0]?.[0] === 'result') {
     let [, ...args] = nodes.shift()
+    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2]+t[0]) : t) : t); // deabbr
     result.push(...args)
   }
 
@@ -358,11 +362,16 @@ const build = [,
     }
     else mode |= 0b001 // passive
 
-    // funcref|externref|func, func ... === funcref ...
-    if (parts[0] === 'func' || parts[0] === 'funcref' || parts[0] === 'externref') reftype = parts.shift()
+    // func ... === funcref ..., https://webassembly.github.io/function-references/core/text/modules.html#id7
+    if (HEAPTYPE[parts[0]]) parts[0] += 'ref'
+    // reftype: funcref|externref|(ref ...)
+    if (parts[0] === 'funcref' || parts[0] === 'externref' || parts[0]?.[0] === 'ref') reftype = parts.shift()
+
+    // legacy abbr if func is skipped
+    if (!reftype) !tabidx ? reftype = 'funcref' : err(`Undefined reftype`)
 
     // externref makes explicit table index
-    if (reftype === 'externref') offset ||= ['i32.const', 0], mode = 0b110
+    if (reftype === 'externref' || reftype[0] === 'ref') offset ||= ['i32.const', 0], mode = 0b110
     // reset to simplest mode if no actual elements
     else if (!parts.length) mode &= 0b011
 
@@ -389,11 +398,11 @@ const build = [,
                 // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
                 mode === 0b100 ? [...expr(offset, ctx), 0x0b] :
                   // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
-                  mode === 0b101 ? [TYPE[reftype]] :
+                  mode === 0b101 ? type(reftype, ctx) :
                     // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
-                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset, ctx), 0x0b, TYPE[reftype]] :
+                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset, ctx), 0x0b, ...type(reftype, ctx)] :
                       // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
-                      [TYPE[reftype]]
+                      type(reftype, ctx)
       ),
       ...vec(
         parts.map(mode & 0b100 ?
@@ -401,7 +410,8 @@ const build = [,
           el => [...expr(typeof el === 'string' ? ['ref.func', el] : el, ctx), 0x0b] :
           // el*
           el => uleb(id(el, ctx.func))
-        ))
+        )
+      )
     ])
   },
 
@@ -672,7 +682,8 @@ const instr = (nodes, ctx) => {
 
   // ref.null func
   else if (code == 0xd0) {
-    immed.push(TYPE[nodes.shift() + 'ref']) // func->funcref, extern->externref
+    let t = nodes.shift()
+    immed.push(HEAPTYPE[t] || id(t, ctx.type)) // func->funcref, extern->externref
   }
 
   // binary/unary (i32.add a b) - no immed

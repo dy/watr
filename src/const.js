@@ -47,11 +47,7 @@ export const INSTR = [
   'i8x16.relaxed_swizzle', 'i32x4.relaxed_trunc_f32x4_s', 'i32x4.relaxed_trunc_f32x4_u', 'i32x4.relaxed_trunc_f64x2_s_zero', 'i32x4.relaxed_trunc_f64x2_u_zero', 'f32x4.relaxed_madd', 'f32x4.relaxed_nmadd', 'f64x2.relaxed_madd', 'f64x2.relaxed_nmadd', 'i8x16.relaxed_laneselect', 'i16x8.relaxed_laneselect', 'i32x4.relaxed_laneselect', 'i64x2.relaxed_laneselect', 'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max', 'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s'
 ],
   SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 },
-  TYPE = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B,
-    // heaptypes
-    func: 0x70, extern: 0x6F,
-    // reftypes
-    funcref: 0x70 /* -0x10 */, externref: 0x6F /* -0x11 */,
-    ref: 0x64 /* -0x1c */, refnull: 0x63 /* -0x1d */
-  },
+  HEAPTYPE = {func: 0x70, extern: 0x6F},
+  REFTYPE = {funcref: 0x70 /* -0x10 */, externref: 0x6F /* -0x11 */, ref: 0x64 /* -0x1c */, refnull: 0x63 /* -0x1d */},
+  TYPE = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B, ...HEAPTYPE, ...REFTYPE },
   KIND = { func: 0, table: 1, memory: 2, global: 3 }
