@@ -2,7 +2,7 @@
 
 Light & fast WASM compiler. An alternative to [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js).<br/>
 Useful for high-level languages or dynamic (in-browser) compilation.<br>
-Supports complete [standard text syntax](https://webassembly.github.io/spec/core/text/index.html) and [official testsuite](https://github.com/WebAssembly/testsuite).
+Supports full [spec text syntax](https://webassembly.github.io/spec/core/text/index.html) and [official testsuite](https://github.com/WebAssembly/testsuite).
 
 ## Usage
 
