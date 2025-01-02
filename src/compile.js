@@ -318,8 +318,8 @@ const build = [,
 
   // (table 1 2 funcref)
   (node, ctx) => {
-    let lims = limits(node), [reftype, init] = node
-    return [...type(reftype, ctx), ...lims, ...(init ? expr(init, ctx) : [])]
+    let lims = limits(node), t = type(node.shift(), ctx), [init] = node
+    return init ? [0x40, 0x00, ...t, ...lims, ...expr(init, ctx)]  : [...t, ...lims]
   },
 
   // (memory id? export* min max shared)
@@ -754,7 +754,7 @@ const align = (op) => {
 }
 
 // build limits sequence (consuming)
-const limits = (node) => isNaN(node[1]) ? [0, ...uleb(node.shift())] : [node[2] === 'shared' ? 3 : 1, ...uleb(node.shift()), ...uleb(node.shift())]
+const limits = (node) => isNaN(parseInt(node[1])) ? [0, ...uleb(node.shift())] : [node[2] === 'shared' ? 3 : 1, ...uleb(node.shift()), ...uleb(node.shift())]
 
 // escape codes
 const escape = { n: 10, r: 13, t: 9, v: 1, '"': 34, "'": 39, '\\': 92 }
