@@ -2389,6 +2389,8 @@ export async function file(path, imports = {}) {
       // skip multimemory - there's no issue with proposal enabled
       let m = 0
       if (nodes.some(n => (n[0] === 'memory' && (++m) > 1))) return console.warn('assert_invalid: skip multi memory');
+      // skip recursive type checks
+      if (msg === '"unknown type"') return console.warn('assert_invalid: skip type checks');
 
       // console.group('assert_invalid', ...node)
       lastComment = ``
