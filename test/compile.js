@@ -1,7 +1,7 @@
 import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
-import Wabt from './lib/libwabt.cjs'
+import Wabt from './lib/libwabt.js'
 import print from '../src/print.js'
 import { f32, f64, i64, i32, uleb } from '../src/encode.js'
 

@@ -88,6 +88,8 @@
   * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
   * [ ] Wasm3
 * [ ] Print: make it as nice as AI
+* [ ] Bench binaryen
+* [ ] replace wabt with spec/wasm for tests
 
 ## REPL
 

@@ -4,7 +4,7 @@ import watr from '../src/compile.js'
 import watCompiler from './lib/wat-compiler.js'
 import wassemble from 'wassemble/wassemble.mjs'
 import { wat2wasm } from './compile.js'
-import './lib/wast.cjs'
+// import './lib/wast.js'
 
 // bench
 t.skip('bench: brownian', async () => {
