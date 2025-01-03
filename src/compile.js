@@ -1,6 +1,6 @@
 import * as encode from './encode.js'
 import { uleb } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, REFTYPE } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
@@ -136,13 +136,61 @@ const plain = (nodes, ctx) => {
   while (nodes.length) {
     let node = nodes.shift()
 
+    // lookup is slower than sequence of known ifs
     if (typeof node === 'string') {
       out.push(node)
 
-      if (abbr[node]) out.push(...abbr[node](nodes, ctx))
+      // block typeuse?
+      if (node === 'block' || node === 'if' || node === 'loop') {
+        // (loop $l?)
+        if (nodes[0]?.[0] === '$') out.push(nodes.shift())
+
+        let [idx, param, result] = typeuse(nodes, ctx, 0)
+
+        // direct idx (no params/result needed)
+        if (idx != null) out.push(['type', idx])
+        // get type - can be either idx or valtype (numtype | reftype)
+        else if (!param.length && !result.length);
+        // (result i32) - doesn't require registering type
+        else if (!param.length && result.length === 1) out.push(['result', ...result])
+        // (param i32 i32)? (result i32 i32) - implicit type
+        else ctx._[idx = '$' + param + '>' + result] = [param, result], out.push(['type', idx])
+      }
+
+      // else $label
+      // end $label
+      else if (node === 'else' || node === 'end') nodes[0]?.[0] === '$' && nodes.shift()
+
+      // select (result i32 i32 i32)?
+      else if (node === 'select') {
+        out.push(paramres(nodes, 0)[1])
+      }
+
+      // call_indirect $table? $typeidx
+      // return_call_indirect $table? $typeidx
+      else if (node.endsWith('call_indirect')) {
+        let tableidx = nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0
+        let [idx, param, result] = typeuse(nodes, ctx, 0)
+        out.push(tableidx, ['type', idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result], idx)])
+      }
+
+      // mark datacount section as required
+      else if (node === 'memory.init' || node === 'data.drop') {
+        ctx.datacount[0] = true
+      }
+
+      // table.init tableidx? elemidx -> table.init tableidx elemidx
+      else if (node === 'table.init') out.push((nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift())
+
+      // table.* tableidx?
+      else if (node.startsWith('table.')) {
+        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
+
+        // table.copy tableidx? tableidx?
+        if (node === 'table.copy' ) out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
+      }
     }
 
-    // FIXME: try to move this to abbr
     else {
       node = plain(node, ctx)
 
@@ -178,63 +226,6 @@ const plain = (nodes, ctx) => {
   return out
 }
 
-const abbr = {
-  // block typeuse?
-  block: (nodes, ctx) => {
-    let out = []
-
-    // (loop $l?)
-    if (nodes[0]?.[0] === '$') out.push(nodes.shift())
-
-    let [idx, param, result] = typeuse(nodes, ctx, 0)
-
-    // direct idx (no params/result needed)
-    if (idx != null) out.push(['type', idx])
-    // get type - can be either idx or valtype (numtype | reftype)
-    else if (!param.length && !result.length);
-    // (result i32) - doesn't require registering type
-    else if (!param.length && result.length === 1) out.push(['result', ...result])
-    // (param i32 i32)? (result i32 i32) - implicit type
-    else ctx._[idx = '$' + param + '>' + result] = [param, result], out.push(['type', idx])
-
-    return out
-  },
-  loop: (nodes, ctx) => abbr.block(nodes, ctx),
-  if: (nodes, ctx) => abbr.block(nodes, ctx),
-
-  // select (result i32 i32 i32)?
-  select: (nodes, ctx) => [paramres(nodes, 0)[1]],
-
-  // call_indirect $table? $typeidx
-  // return_call_indirect $table? $typeidx
-  call_indirect: (nodes, ctx) => {
-    let tableidx = nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0
-    let [idx, param, result] = typeuse(nodes, ctx, 0)
-    return [tableidx, ['type', idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result], idx)]]
-  },
-  return_call_indirect: (nodes, ctx) => abbr.call_indirect(nodes, ctx),
-
-  // else $label
-  else: (nodes, ctx) => (nodes[0]?.[0] === '$' && nodes.shift(), []),
-  // end $label
-  end: (nodes, ctx) => (nodes[0]?.[0] === '$' && nodes.shift(), []),
-
-  // mark datacount section as required
-  'memory.init': (nodes, ctx) => (ctx.datacount[0] = true, []),
-  'data.drop': (nodes, ctx) => (ctx.datacount[0] = true, []),
-
-  // table.init tableidx? elemidx -> table.init tableidx elemidx
-  'table.init': (nodes, ctx) => [(nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift()],
-
-  // table.* tableidx?
-  'table.get': (nodes, ctx) => [nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0],
-  'table.set': (nodes, ctx) => abbr['table.get'](nodes, ctx),
-  'table.fill': (nodes, ctx) => abbr['table.get'](nodes, ctx),
-  'table.size': (nodes, ctx) => abbr['table.get'](nodes, ctx),
-  'table.grow': (nodes, ctx) => abbr['table.get'](nodes, ctx),
-  // table.copy tableidx? tableidx?
-  'table.copy': (nodes, ctx) => [...abbr['table.get'](nodes, ctx), nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0],
-}
 
 // consume typeuse nodes, return type index/params, or null idx if no type
 // https://webassembly.github.io/spec/core/text/modules.html#type-uses
@@ -266,7 +257,7 @@ const paramres = (nodes, names = true) => {
   // collect param (param i32 i64) (param $x? i32)
   while (nodes[0]?.[0] === 'param') {
     let [, ...args] = nodes.shift()
-    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2]+t[0]) : t) : t); // deabbr
+    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2] + t[0]) : t) : t); // deabbr
     let name = args[0]?.[0] === '$' && args.shift()
     // expose name refs, if allowed
     if (name) names ? param[name] = param.length : err(`Unexpected param name ${name}`)
@@ -276,7 +267,7 @@ const paramres = (nodes, names = true) => {
   // collect result eg. (result f64 f32)(result i32)
   while (nodes[0]?.[0] === 'result') {
     let [, ...args] = nodes.shift()
-    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2]+t[0]) : t) : t); // deabbr
+    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2] + t[0]) : t) : t); // deabbr
     result.push(...args)
   }
 
@@ -294,19 +285,19 @@ const build = [,
   ([mod, field, [kind, ...dfn]], ctx) => {
     let details
 
-    if (kind[0] === 'f') {
+    if (kind === 'func') {
       // we track imported funcs in func section to share namespace, and skip them on final build
       let [[, typeidx]] = dfn
       details = uleb(id(typeidx, ctx.type))
     }
-    else if (kind[0] === 'm') {
+    else if (kind === 'memory') {
       details = limits(dfn)
     }
-    else if (kind[0] === 'g') {
+    else if (kind === 'global') {
       let [t] = dfn, mut = t[0] === 'mut' ? 1 : 0
       details = [...type(mut ? t[1] : t, ctx), mut]
     }
-    else if (kind[0] === 't') {
+    else if (kind === 'table') {
       details = [...type(dfn.pop(), ctx), ...limits(dfn)]
     }
 
@@ -319,7 +310,7 @@ const build = [,
   // (table 1 2 funcref)
   (node, ctx) => {
     let lims = limits(node), t = type(node.shift(), ctx), [init] = node
-    return init ? [0x40, 0x00, ...t, ...lims, ...expr(init, ctx)]  : [...t, ...lims]
+    return init ? [0x40, 0x00, ...t, ...lims, ...expr(init, ctx)] : [...t, ...lims]
   },
 
   // (memory id? export* min max shared)

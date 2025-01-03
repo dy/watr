@@ -25,25 +25,21 @@ t.skip('bench: brownian', async () => {
 
   let N = 500
 
-  console.time('wast (spec)')
-  for (let i = 0; i < N; i++) WebAssemblyText.encode(src, { metrics: false })
-  console.timeEnd('wast (spec)')
+  // console.time('wast (spec)')
+  // for (let i = 0; i < N; i++) WebAssemblyText.encode(src, { metrics: false })
+  // console.timeEnd('wast (spec)')
 
   console.time('watr')
   for (let i = 0; i < N; i++) watr(src)
   console.timeEnd('watr')
 
-  console.time('wast (spec)')
-  for (let i = 0; i < N; i++) WebAssemblyText.encode(src, { metrics: false })
-  console.timeEnd('wast (spec)')
+  // console.time('wat-compiler')
+  // for (let i = 0; i < N; i++) watCompiler(src, { metrics: false })
+  // console.timeEnd('wat-compiler')
 
-  console.time('wat-compiler')
-  for (let i = 0; i < N; i++) watCompiler(src, { metrics: false })
-  console.timeEnd('wat-compiler')
-
-  console.time('wabt')
-  for (let i = 0; i < N; i++) wat2wasm(src, { metrics: false })
-  console.timeEnd('wabt')
+  // console.time('wabt')
+  // for (let i = 0; i < N; i++) wat2wasm(src, { metrics: false })
+  // console.timeEnd('wabt')
 
   // console.time('wassemble')
   // for (let i = 0; i < N; i++) wassemble(src)
