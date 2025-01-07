@@ -1,12 +1,11 @@
 import * as encode from './encode.js'
 import { uleb } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
 
-// console.log(INSTR)
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
  *
@@ -279,7 +278,7 @@ const paramres = (nodes, names = true) => {
 // build section binary [by section codes] (non consuming)
 const build = [,
   // (type $id? (func params result))
-  ([param, result], ctx) => ([0x60, ...vec(param.map(t => type(t, ctx))), ...vec(result.map(t => type(t, ctx)))]),
+  ([param, result], ctx) => ([DEFTYPE.func, ...vec(param.map(t => type(t, ctx))), ...vec(result.map(t => type(t, ctx)))]),
 
   // (import "math" "add" (func|table|global|memory typedef?))
   ([mod, field, [kind, ...dfn]], ctx) => {
@@ -503,12 +502,59 @@ const instr = (nodes, ctx) => {
   [...immed] = isNaN(op[0]) && INSTR[op] || err(`Unknown instruction ${op}`)
   code = immed[0]
 
+  // struct/array
+  if (code === 0x0fb) {
+    [, code] = immed
+
+    // struct.new $t
+    if ((code >= 0x00 && code <= 0x0e) || (code >= 0x10 && code <= 0x13)) {
+
+    }
+    // ref.test
+    else if (code >= 0x14 && code <= 0x17) {
+
+    }
+  }
+
+  // bulk memory: (memory.init) (memory.copy) (data.drop) (memory.fill)
+  // table ops: (table.init|copy|grow|size|fill) (elem.drop)
+  // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
+  else if (code == 0xfc) {
+    [, code] = immed
+
+    // memory.init idx, data.drop idx,
+    if (code === 0x08 || code === 0x09) {
+      immed.push(...uleb(id(nodes.shift(), ctx.data)))
+    }
+
+    // memory placeholders
+    if (code == 0x08 || code == 0x0b) immed.push(0)
+    else if (code === 0x0a) immed.push(0, 0)
+
+    // elem.drop elemidx
+    if (code === 0x0d) {
+      immed.push(...uleb(id(nodes.shift(), ctx.elem)))
+    }
+    // table.init tableidx elemidx -> 0xfc 0x0c elemidx tableidx
+    else if (code === 0x0c) {
+      immed.push(...uleb(id(nodes[1], ctx.elem)), ...uleb(id(nodes.shift(), ctx.table)))
+      nodes.shift()
+    }
+    // table.* tableidx?
+    // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
+    else if (code >= 0x0c && code < 0x13) {
+      immed.push(...uleb(id(nodes.shift(), ctx.table)))
+      // table.copy tableidx? tableidx?
+      if (code === 0x0e) immed.push(...uleb(id(nodes.shift(), ctx.table)))
+    }
+  }
+
   // v128s: (v128.load x) etc
   // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
-  if (code === 0xfd) {
+  else if (code === 0xfd) {
     [, code] = immed
     immed = [0xfd, ...uleb(code)]
-    // (v128.load)
+    // (v128.load offset? align?)
     if (code <= 0x0b) {
       const [a, o] = memarg(nodes)
       immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
@@ -547,39 +593,6 @@ const instr = (nodes, ctx) => {
     // (i8x16.extract_lane_s 0 ...)
     else if (code >= 0x15 && code <= 0x22) {
       immed.push(...uleb(nodes.shift()))
-    }
-  }
-
-  // bulk memory: (memory.init) (memory.copy) (data.drop) (memory.fill)
-  // table ops: (table.init|copy|grow|size|fill) (elem.drop)
-  // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
-  else if (code == 0xfc) {
-    [, code] = immed
-
-    // memory.init idx, data.drop idx,
-    if (code === 0x08 || code === 0x09) {
-      immed.push(...uleb(id(nodes.shift(), ctx.data)))
-    }
-
-    // memory placeholders
-    if (code == 0x08 || code == 0x0b) immed.push(0)
-    else if (code === 0x0a) immed.push(0, 0)
-
-    // elem.drop elemidx
-    if (code === 0x0d) {
-      immed.push(...uleb(id(nodes.shift(), ctx.elem)))
-    }
-    // table.init tableidx elemidx -> 0xfc 0x0c elemidx tableidx
-    else if (code === 0x0c) {
-      immed.push(...uleb(id(nodes[1], ctx.elem)), ...uleb(id(nodes.shift(), ctx.table)))
-      nodes.shift()
-    }
-    // table.* tableidx?
-    // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
-    else if (code >= 0x0c && code < 0x13) {
-      immed.push(...uleb(id(nodes.shift(), ctx.table)))
-      // table.copy tableidx? tableidx?
-      if (code === 0x0e) immed.push(...uleb(id(nodes.shift(), ctx.table)))
     }
   }
 
