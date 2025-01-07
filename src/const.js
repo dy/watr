@@ -26,7 +26,7 @@ export const INSTR = [
   'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
   'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64',
   'i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s', , , , , , , , , , , ,
-  'ref.null', 'ref.is_null', 'ref.func', ,'ref.as_non_null' ,'br_on_null' ,'br_on_non_null' , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
+  'ref.null', 'ref.is_null', 'ref.func', 'ref.eq' ,'ref.as_non_null' ,'br_on_null' ,'br_on_non_null' , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
 
   // 0xFC 0xNN (0xfc shift)
   'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u', 'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
@@ -47,7 +47,8 @@ export const INSTR = [
   'i8x16.relaxed_swizzle', 'i32x4.relaxed_trunc_f32x4_s', 'i32x4.relaxed_trunc_f32x4_u', 'i32x4.relaxed_trunc_f64x2_s_zero', 'i32x4.relaxed_trunc_f64x2_u_zero', 'f32x4.relaxed_madd', 'f32x4.relaxed_nmadd', 'f64x2.relaxed_madd', 'f64x2.relaxed_nmadd', 'i8x16.relaxed_laneselect', 'i16x8.relaxed_laneselect', 'i32x4.relaxed_laneselect', 'i64x2.relaxed_laneselect', 'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max', 'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s'
 ],
   SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 },
-  HEAPTYPE = {func: 0x70, extern: 0x6F},
-  REFTYPE = {funcref: 0x70 /* -0x10 */, externref: 0x6F /* -0x11 */, ref: 0x64 /* -0x1c */, refnull: 0x63 /* -0x1d */},
-  TYPE = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B, ...HEAPTYPE, ...REFTYPE },
+  DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, sub: 0x50, subfinal: 0x4F, rec: 0x4E},
+  HEAPTYPE = {nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A},
+  REFTYPE = {nullfuncref: 0x73, nullexternref: 0x72, nullref: 0x71, funcref: 0x70, externref: 0x6F, anyref: 0x6E, eqref: 0x6D, i31ref: 0x6C, structref: 0x6B, arrayref: 0x6A, ref: 0x64 /* -0x1c */, refnull: 0x63 /* -0x1d */},
+  TYPE = { i8: 0x78, i16: 0x77, i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B, ...HEAPTYPE, ...REFTYPE },
   KIND = { func: 0, table: 1, memory: 2, global: 3 }
