@@ -4,7 +4,7 @@ import { SECTION, TYPE, KIND, INSTR, HEAPTYPE } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
-INSTR.forEach((op, i) => INSTR[op] = i >= 0x11a ? [0xfd, i - 0x11a] : i >= 0xfc ? [0xfc, i - 0xfc] : [i]);
+INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
 
 // console.log(INSTR)
 /**

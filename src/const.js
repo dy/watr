@@ -26,14 +26,17 @@ export const INSTR = [
   'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
   'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64',
   'i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s', , , , , , , , , , , ,
-  'ref.null', 'ref.is_null', 'ref.func', 'ref.eq' ,'ref.as_non_null' ,'br_on_null' ,'br_on_non_null' , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
+  'ref.null', 'ref.is_null', 'ref.func', 'ref.eq' ,'ref.as_non_null' ,'br_on_null' ,'br_on_non_null' , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
 
-  // 0xFC 0xNN (0xfc shift)
+  // 0xFB 0xNN (0xFB shift)
+  'struct.new', 'struct.new_default', 'struct.get', 'struct.get_s', 'struct.get_u', 'struct.set', 'array.new', 'array.new_default', 'array.new_fixed', 'array.new_data', 'array.new_elem', 'array.get', 'array.get_s', 'array.get_u', 'array.set', 'array.len', 'array.fill', 'array.copy', 'array.init_data', 'array.init_elem', 'ref.test', 'ref.test', 'ref.cast', 'ref.cast', 'br_on_cast', 'br_on_cast_fail', 'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u', ,
+
+  // 0xFC 0xNN (0x11b shift)
   'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u', 'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
   'memory.init', 'data.drop', 'memory.copy', 'memory.fill', 'table.init', 'elem.drop', 'table.copy', 'table.grow', 'table.size', 'table.fill', ,
-  'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u', , , , , , , ,
+  'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u', ,
 
-  // 0xFD 0xNN (0x10f shift)
+  // 0xFD 0xNN (0x133 shift)
   'v128.load', 'v128.load8x8_s', 'v128.load8x8_u', 'v128.load16x4_s', 'v128.load16x4_u', 'v128.load32x2_s', 'v128.load32x2_u', 'v128.load8_splat', 'v128.load16_splat', 'v128.load32_splat', 'v128.load64_splat', 'v128.store', 'v128.const', 'i8x16.shuffle',
   'i8x16.swizzle', 'i8x16.splat', 'i16x8.splat', 'i32x4.splat', 'i64x2.splat', 'f32x4.splat', 'f64x2.splat',
   'i8x16.extract_lane_s', 'i8x16.extract_lane_u', 'i8x16.replace_lane', 'i16x8.extract_lane_s', 'i16x8.extract_lane_u', 'i16x8.replace_lane', 'i32x4.extract_lane', 'i32x4.replace_lane', 'i64x2.extract_lane', 'i64x2.replace_lane', 'f32x4.extract_lane', 'f32x4.replace_lane', 'f64x2.extract_lane', 'f64x2.replace_lane',
