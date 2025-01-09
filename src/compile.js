@@ -79,7 +79,11 @@ export default function watr(nodes) {
     else if (kind === 'start') name && node.push(name);
 
     // [func, [param, result]] -> [param, result], alias
-    else if (kind === 'type') node[0].shift(), node = paramres(node[0]), sections.type['$' + node.join('>')] ??= idx
+    else if (kind === 'type') {
+      let dfn = node[0].shift()
+      if (dfn === 'func') node = [dfn, paramres(node[0])], sections.type['$' + node[1].join('>')] ??= idx
+      else node = [dfn];
+    }
 
     // dupe to code section, save implicit type
     else if (kind === 'func') {
@@ -96,7 +100,7 @@ export default function watr(nodes) {
   }
 
   // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
-  for (let n in sections._) sections.type[n] ??= sections.type.push(sections._[n]) - 1
+  for (let n in sections._) sections.type[n] ??= (sections.type.push(['func', sections._[n]]) - 1)
 
   // patch datacount if data === 0
   if (!sections.data.length) sections.datacount.length = 0
@@ -238,7 +242,7 @@ const typeuse = (nodes, ctx, names) => {
 
     // check type consistency (excludes forward refs)
     if ((param.length || result.length) && idx in ctx.type)
-      if (ctx.type[id(idx, ctx.type)].join('>') !== param + '>' + result) err(`Type ${idx} mismatch`)
+      if (ctx.type[id(idx, ctx.type)][1].join('>') !== param + '>' + result) err(`Type ${idx} mismatch`)
 
     return [idx]
   }
@@ -278,7 +282,7 @@ const paramres = (nodes, names = true) => {
 // build section binary [by section codes] (non consuming)
 const build = [,
   // (type $id? (func params result))
-  ([param, result], ctx) => ([DEFTYPE.func, ...vec(param.map(t => type(t, ctx))), ...vec(result.map(t => type(t, ctx)))]),
+  ([dfn, [param, result]], ctx) => ([DEFTYPE[dfn], ...vec(param.map(t => type(t, ctx))), ...vec(result.map(t => type(t, ctx)))]),
 
   // (import "math" "add" (func|table|global|memory typedef?))
   ([mod, field, [kind, ...dfn]], ctx) => {
@@ -412,7 +416,7 @@ const build = [,
   // (code)
   (body, ctx) => {
     let [typeidx, param] = body.shift()
-    if (!param) [param] = ctx.type[id(typeidx, ctx.type)]
+    if (!param) [param] = ctx.type[id(typeidx, ctx.type)][1]
 
     // provide param/local in ctx
     ctx.local = Object.create(param) // list of local variables - some of them are params
@@ -606,7 +610,7 @@ const instr = (nodes, ctx) => {
 
     let typeidx = nodes[0]?.[0] === 'type' && id(nodes.shift()[1], ctx.type)
 
-    let [param, result] = typeidx !== false ? ctx.type[typeidx] : nodes[0]?.[0] === 'result' ? [, [nodes.shift()[1]]] : []
+    let [param, result] = typeidx !== false ? ctx.type[typeidx][1] : nodes[0]?.[0] === 'result' ? [, [nodes.shift()[1]]] : []
 
     // void
     if (!param?.length && !result?.length) immed.push(TYPE.void)
