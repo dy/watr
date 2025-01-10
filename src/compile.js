@@ -80,9 +80,11 @@ export default function watr(nodes) {
 
     // [func, [param, result]] -> [param, result], alias
     else if (kind === 'type') {
-      let dfn = node[0].shift()
-      if (dfn === 'func') node = [dfn, paramres(node[0])], sections.type['$' + node[1].join('>')] ??= idx
-      else node = [dfn];
+      // FIXME: normalize type to canonical form (rec (type x (sub final ...)))
+      let typekind = node[0].shift()
+      if (typekind === 'func') node = [typekind, paramres(node[0])], sections.type['$' + node[1].join('>')] ??= idx
+      // else if (typekind === 'struct') node = [typekind,]
+      else node = [typekind, typeseq(node[0], 'field', true)]
     }
 
     // dupe to code section, save implicit type
@@ -255,34 +257,54 @@ const typeuse = (nodes, ctx, names) => {
 
 // consume (param t+)* (result t+)* sequence
 const paramres = (nodes, names = true) => {
-  let param = [], result = []
+  // let param = [], result = []
 
   // collect param (param i32 i64) (param $x? i32)
-  while (nodes[0]?.[0] === 'param') {
-    let [, ...args] = nodes.shift()
-    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2] + t[0]) : t) : t); // deabbr
-    let name = args[0]?.[0] === '$' && args.shift()
-    // expose name refs, if allowed
-    if (name) names ? param[name] = param.length : err(`Unexpected param name ${name}`)
-    param.push(...args)
-  }
+  let param = typeseq(nodes, 'param', names)
 
   // collect result eg. (result f64 f32)(result i32)
-  while (nodes[0]?.[0] === 'result') {
-    let [, ...args] = nodes.shift()
-    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2] + t[0]) : t) : t); // deabbr
-    result.push(...args)
-  }
+  let result = typeseq(nodes, 'result')
 
   if (nodes[0]?.[0] === 'param') err(`Unexpected param`)
 
   return [param, result]
 }
+// collect sequence of field, eg. (param a) (param b c) or (field a) (field b c)
+const typeseq = (nodes, field, names = false) => {
+  let seq = []
+  // collect field eg. (field f64 f32)(field i32)
+  while (nodes[0]?.[0] === field) {
+    let [, ...args] = nodes.shift()
+    let name = args[0]?.[0] === '$' && args.shift()
+    // expose name refs, if allowed
+    if (name) names ? seq[name] = seq.length : err(`Unexpected param name ${name}`)
+    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2] + t[0]) : t) : t); // deabbr
+    seq.push(...args)
+  }
+  return seq
+}
 
 // build section binary [by section codes] (non consuming)
 const build = [,
   // (type $id? (func params result))
-  ([dfn, [param, result]], ctx) => ([DEFTYPE[dfn], ...vec(param.map(t => type(t, ctx))), ...vec(result.map(t => type(t, ctx)))]),
+  // (type $id? (array i8))
+  ([kind, dfn], ctx) => {
+    let details
+
+    if (kind === 'func') {
+      details = [...vec(dfn[0].map(t => type(t, ctx))), ...vec(dfn[1].map(t => type(t, ctx)))]
+    }
+    else if (kind === 'array') {
+      let [t] = dfn, mut = t[0] === 'mut' ? 1 : 0
+      details = [...type(mut ? t[1] : t, ctx), mut]
+    }
+    else if (kind === 'struct') {
+      // FIXME: handle per-field mutability
+      details = [...vec(dfn.map(t => [...type(t, ctx), 0]))]
+    }
+
+    return [DEFTYPE[kind], ...details]
+  },
 
   // (import "math" "add" (func|table|global|memory typedef?))
   ([mod, field, [kind, ...dfn]], ctx) => {
