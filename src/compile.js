@@ -339,12 +339,7 @@ const build = [,
   (node, ctx) => limits(node),
 
   // (global $id? (mut i32) (i32.const 42))
-  (node, ctx) => {
-    let [t] = node, mut = t[0] === 'mut' ? 1 : 0
-
-    let [, init] = node
-    return ([...type(mut ? t[1] : t, ctx), mut, ...expr(init, ctx)])
-  },
+  ([t, init], ctx) => [...fieldtype(t, ctx), ...expr(init, ctx)],
 
   //  (export "name" (func|table|mem $name|idx))
   ([nm, [kind, l]], ctx) => ([...vec(str(nm.slice(1, -1))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
