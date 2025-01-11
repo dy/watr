@@ -295,7 +295,7 @@ const build = [,
       details = [...vec(dfn[0].map(t => type(t, ctx))), ...vec(dfn[1].map(t => type(t, ctx)))]
     }
     else if (kind === 'array') {
-      details = fieldtype(dfn[0])
+      details = fieldtype(dfn[0], ctx)
     }
     else if (kind === 'struct') {
       details = vec(dfn.map(t => fieldtype(t, ctx)))
@@ -322,6 +322,7 @@ const build = [,
     else if (kind === 'table') {
       details = [...type(dfn.pop(), ctx), ...limits(dfn)]
     }
+    else err(`Unknown kind ${kind}`)
 
     return ([...vec(str(mod.slice(1, -1))), ...vec(str(field.slice(1, -1))), KIND[kind], ...details])
   },
@@ -499,12 +500,12 @@ const build = [,
 ]
 
 // insert type with mutable flag (mut t) or t
-const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...type(mut ? t[1] : t, ctx), mut]
+const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...type(mut ? t[1] : t, ctx), mut];
 
 // insert type, either direct or ref type
 const type = (t, ctx) =>
   t[0] === 'ref' ? ([t[1] == 'null' ? TYPE.refnull : TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))])
-    : [TYPE[t] ?? err(`Unknown type ${t}`)]
+    : [TYPE[t] ?? err(`Unknown type ${t}`)];
 
 // consume one instruction from nodes sequence
 const instr = (nodes, ctx) => {
@@ -527,9 +528,15 @@ const instr = (nodes, ctx) => {
   if (code === 0x0fb) {
     [, code] = immed
 
-    // struct.new $t
-    if ((code >= 0x00 && code <= 0x0e) || (code >= 0x10 && code <= 0x13)) {
-
+    // struct.new $t ... array.set $t
+    if ((code >= 0 && code <= 14) || (code >= 16 && code <= 19)) {
+      immed.push(...uleb(id(nodes.shift(), ctx.type)))
+      // array.new_data|init_data $t $d
+      if (code === 9 || code === 18) immed.push(...uleb(id(nodes.shift(), ctx.data)))
+      // array.new_elem|init_elem $t $e
+      else if (code === 10 || code === 19) immed.push(...uleb(id(nodes.shift(), ctx.elem)))
+      // array.copy $t $t
+      else if (code === 17) immed.push(...uleb(id(nodes.shift(), ctx.type)))
     }
     // ref.test
     else if (code >= 0x14 && code <= 0x17) {
@@ -712,7 +719,7 @@ const instr = (nodes, ctx) => {
   // ref.null func
   else if (code == 0xd0) {
     let t = nodes.shift()
-    immed.push(HEAPTYPE[t] || id(t, ctx.type)) // func->funcref, extern->externref
+    immed.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, ctx.type)))) // func->funcref, extern->externref
   }
 
   // binary/unary (i32.add a b) - no immed
