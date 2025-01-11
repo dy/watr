@@ -83,8 +83,8 @@ export default function watr(nodes) {
       // FIXME: normalize type to canonical form (rec (type x (sub final ...)))
       let typekind = node[0].shift()
       if (typekind === 'func') node = [typekind, paramres(node[0])], sections.type['$' + node[1].join('>')] ??= idx
-      // else if (typekind === 'struct') node = [typekind,]
-      else node = [typekind, typeseq(node[0], 'field', true)]
+      else if (typekind === 'struct') node = [typekind, typeseq(node[0], 'field', true)]
+      else if (typekind === 'array') node = [typekind, node[0]]
     }
 
     // dupe to code section, save implicit type
@@ -295,12 +295,10 @@ const build = [,
       details = [...vec(dfn[0].map(t => type(t, ctx))), ...vec(dfn[1].map(t => type(t, ctx)))]
     }
     else if (kind === 'array') {
-      let [t] = dfn, mut = t[0] === 'mut' ? 1 : 0
-      details = [...type(mut ? t[1] : t, ctx), mut]
+      details = fieldtype(dfn[0])
     }
     else if (kind === 'struct') {
-      // FIXME: handle per-field mutability
-      details = [...vec(dfn.map(t => [...type(t, ctx), 0]))]
+      details = vec(dfn.map(t => fieldtype(t, ctx)))
     }
 
     return [DEFTYPE[kind], ...details]
@@ -319,8 +317,7 @@ const build = [,
       details = limits(dfn)
     }
     else if (kind === 'global') {
-      let [t] = dfn, mut = t[0] === 'mut' ? 1 : 0
-      details = [...type(mut ? t[1] : t, ctx), mut]
+      details = fieldtype(dfn[0], ctx)
     }
     else if (kind === 'table') {
       details = [...type(dfn.pop(), ctx), ...limits(dfn)]
@@ -505,6 +502,9 @@ const build = [,
   // datacount
   (nodes, ctx) => uleb(ctx.data.length)
 ]
+
+// insert type with mutable flag (mut t) or t
+const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...type(mut ? t[1] : t, ctx), mut]
 
 // insert type, either direct or ref type
 const type = (t, ctx) =>
