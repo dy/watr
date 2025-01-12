@@ -35,24 +35,28 @@ export default function watr(nodes) {
   }
 
   // Scopes are stored directly on section array by key, eg. section.func.$name = idx
-  const sections = []
-  for (let kind in SECTION) (sections[SECTION[kind]] = sections[kind] = []).name = kind
-  sections._ = {} // implicit types
+  const ctx = []
+  for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
+  ctx._ = {} // implicit types
 
-  for (let [kind, ...node] of nodes) {
+  // normalize nodes
+  while (nodes.length) {
+    let [kind, ...node] = nodes.shift()
     let imported // if node needs to be imported
 
     // import abbr
     // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
     if (kind === 'import') [kind, ...node] = (imported = node).pop()
+    // (rec (type...)) -> (type...)
+    else if (kind === 'rec') {nodes.unshift(...node); continue}
 
     // index, alias
-    let name = node[0]?.[0] === '$' && node.shift(), idx = sections[kind].length;
-    if (name) name in sections[kind] ? err(`Duplicate ${kind} ${name}`) : sections[kind][name] = idx; // save alias
+    let name = node[0]?.[0] === '$' && node.shift(), idx = ctx[kind].length;
+    if (name) name in ctx[kind] ? err(`Duplicate ${kind} ${name}`) : ctx[kind][name] = idx; // save alias
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    while (node[0]?.[0] === 'export') sections.export.push([node.shift()[1], [kind, idx]])
+    while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, idx]])
 
     // for import nodes - redirect output to import
     if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
@@ -63,7 +67,7 @@ export default function watr(nodes) {
       if (node[1]?.[0] === 'elem') {
         let [reftype, [, ...els]] = node
         node = [els.length, els.length, reftype]
-        sections.elem.push([['table', name || sections.table.length], ['i32.const', '0'], reftype, ...els])
+        ctx.elem.push([['table', name || ctx.table.length], ['i32.const', '0'], reftype, ...els])
       }
     }
 
@@ -71,7 +75,7 @@ export default function watr(nodes) {
     // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
     else if (kind === 'memory' && node[0]?.[0] === 'data') {
       let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
-      sections.data.push([['memory', idx], ['i32.const', 0], ...data])
+      ctx.data.push([['memory', idx], ['i32.const', 0], ...data])
       node = [m, m]
     }
 
@@ -82,34 +86,34 @@ export default function watr(nodes) {
     else if (kind === 'type') {
       // FIXME: normalize type to canonical form (rec (type x (sub final ...)))
       let typekind = node[0].shift()
-      if (typekind === 'func') node = [typekind, paramres(node[0])], sections.type['$' + node[1].join('>')] ??= idx
+      if (typekind === 'func') node = [typekind, paramres(node[0])], ctx.type['$' + node[1].join('>')] ??= idx
       else if (typekind === 'struct') node = [typekind, typeseq(node[0], 'field', true)]
       else if (typekind === 'array') node = [typekind, node[0]]
     }
 
     // dupe to code section, save implicit type
     else if (kind === 'func') {
-      let [idx, param, result] = typeuse(node, sections);
-      idx ?? (sections._[idx = '$' + param + '>' + result] = [param, result]);
-      !imported && nodes.push(['code', [idx, param, result], ...plain(node, sections)]) // pass param since they may have names
+      let [idx, param, result] = typeuse(node, ctx);
+      idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result]);
+      !imported && nodes.push(['code', [idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
       node.unshift(['type', idx])
     }
 
     // import writes to import section amd adds placeholder for (kind) section
-    if (imported) sections.import.push([...imported, [kind, ...node]]), node = null
+    if (imported) ctx.import.push([...imported, [kind, ...node]]), node = null
 
-    sections[kind].push(node)
+    ctx[kind].push(node)
   }
 
   // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
-  for (let n in sections._) sections.type[n] ??= (sections.type.push(['func', sections._[n]]) - 1)
+  for (let n in ctx._) ctx.type[n] ??= (ctx.type.push(['func', ctx._[n]]) - 1)
 
   // patch datacount if data === 0
-  if (!sections.data.length) sections.datacount.length = 0
+  if (!ctx.data.length) ctx.datacount.length = 0
 
   // convert nodes to bytes
   const bin = (kind, count = true) => {
-    let items = sections[kind].filter(Boolean).map(item => build[kind](item, sections))
+    let items = ctx[kind].filter(Boolean).map(item => build[kind](item, ctx))
     return !items.length ? [] : [kind, ...vec(count ? vec(items) : items)]
   }
 
@@ -132,6 +136,7 @@ export default function watr(nodes) {
     ...bin(SECTION.data)
   ])
 }
+
 
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
@@ -192,7 +197,7 @@ const plain = (nodes, ctx) => {
         out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
 
         // table.copy tableidx? tableidx?
-        if (node === 'table.copy' ) out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
+        if (node === 'table.copy') out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
       }
     }
 
