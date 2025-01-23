@@ -1,6 +1,6 @@
 import * as encode from './encode.js'
 import { uleb } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE } from './const.js'
 import parse from './parse.js'
 
 // build instructions index
@@ -47,12 +47,16 @@ export default function watr(nodes) {
     // import abbr
     // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
     if (kind === 'import') [kind, ...node] = (imported = node).pop()
-    // (rec (type...)) -> (type...)
-    else if (kind === 'rec') {nodes.unshift(...node); continue}
+    else if (kind === 'rec') {
+      // (rec (type...)) -> (type...) - single self-recursion
+      if (node.length === 1) {
+        [kind, ...node] = node.shift()
+      }
+    }
 
     // index, alias
     let name = node[0]?.[0] === '$' && node.shift(), idx = ctx[kind].length;
-    if (name) name in ctx[kind] ? err(`Duplicate ${kind} ${name}`) : ctx[kind][name] = idx; // save alias
+    if (name && idx != null) name in ctx[kind] ? err(`Duplicate ${kind} ${name}`) : ctx[kind][name] = idx; // save alias
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
@@ -82,7 +86,7 @@ export default function watr(nodes) {
     // keep start name
     else if (kind === 'start') name && node.push(name);
 
-    // [func, [param, result]] -> [param, result], alias
+    // (rec (type (sub final (func ...)) | (func ...) )) -> normalize
     else if (kind === 'type') {
       // FIXME: normalize type to canonical form (rec (type x (sub final ...)))
       let typekind = node[0].shift()
@@ -274,6 +278,7 @@ const paramres = (nodes, names = true) => {
 
   return [param, result]
 }
+
 // collect sequence of field, eg. (param a) (param b c) or (field a) (field b c)
 const typeseq = (nodes, field, names = false) => {
   let seq = []
@@ -293,6 +298,7 @@ const typeseq = (nodes, field, names = false) => {
 const build = [,
   // (type $id? (func params result))
   // (type $id? (array i8))
+  // (type (rec (type $id? (sub ...)) (type $id? (sub final ...))))
   ([kind, dfn], ctx) => {
     let details
 
@@ -304,6 +310,9 @@ const build = [,
     }
     else if (kind === 'struct') {
       details = vec(dfn.map(t => fieldtype(t, ctx)))
+    }
+    else if (kind === 'rec') {
+      details = vec(dfn.map(t => subtype(t, ctx)))
     }
 
     return [DEFTYPE[kind], ...details]
@@ -504,13 +513,19 @@ const build = [,
   (nodes, ctx) => uleb(ctx.data.length)
 ]
 
-// insert type with mutable flag (mut t) or t
+// build type, either direct or ref type
+const type = (t, ctx) => (
+  t[0] === 'ref' ?
+    ([t[1] == 'null' ? TYPE.refnull : TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))]) :
+    [TYPE[t] ?? err(`Unknown type ${t}`)]
+);
+
+// build type with mutable flag (mut t) or t
 const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...type(mut ? t[1] : t, ctx), mut];
 
-// insert type, either direct or ref type
-const type = (t, ctx) =>
-  t[0] === 'ref' ? ([t[1] == 'null' ? TYPE.refnull : TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))])
-    : [TYPE[t] ?? err(`Unknown type ${t}`)];
+// build subtype for rec type (wrapper over type)
+// (sub final? typeidx* (type ...))
+const subtype = (t, ctx) => [RECTYPE[t], ...vec()]
 
 // consume one instruction from nodes sequence
 const instr = (nodes, ctx) => {
@@ -772,7 +787,7 @@ const memarg = (args) => {
 }
 
 // deref id node to idx
-const id = (n, list) => (n = n[0] === '$' ? list[n] : !isNaN(n) && +n, n in list ? n : err(`Unknown ${list.name} ${n}`))
+const id = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
 
 // ref:
 // const ALIGN = {

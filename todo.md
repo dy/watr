@@ -82,6 +82,9 @@
   * [x] ~~Make abbr main source of transforms, don't check for `if node==section|block`~~ -> too different call signature: 1 node 1 result vs nodes list nodes result. It's section vs node
 * [x] ~~Indicate immediates via list~~ -> too many expeptions, doesn't make much sense
 * [x] ~~Replace missing index with `(;idx;)`~~ -> not so much benefit
+* [ ] GC
+  * [ ] Recursive types
+    * [ ] normalize subtypes to list, skip single recusion abbr
 * [ ] Features
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [x] All main ones (readme)
