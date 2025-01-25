@@ -47,20 +47,16 @@ export default function watr(nodes) {
     // import abbr
     // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
     if (kind === 'import') [kind, ...node] = (imported = node).pop()
-    else if (kind === 'rec') {
-      // (rec (type...)) -> (type...) - single self-recursion
-      if (node.length === 1) {
-        [kind, ...node] = node.shift()
-      }
-    }
 
     // index, alias
-    let name = node[0]?.[0] === '$' && node.shift(), idx = ctx[kind].length;
-    if (name && idx != null) name in ctx[kind] ? err(`Duplicate ${kind} ${name}`) : ctx[kind][name] = idx; // save alias
+    let items = ctx[kind];
+    //FIXME in some reason we have to touch items.length, no idea why
+    items.length
+    let name = alias(node, items)
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, idx]])
+    while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
 
     // for import nodes - redirect output to import
     if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
@@ -71,7 +67,7 @@ export default function watr(nodes) {
       if (node[1]?.[0] === 'elem') {
         let [reftype, [, ...els]] = node
         node = [els.length, els.length, reftype]
-        ctx.elem.push([['table', name || ctx.table.length], ['i32.const', '0'], reftype, ...els])
+        ctx.elem.push([['table', name || items.length], ['i32.const', '0'], reftype, ...els])
       }
     }
 
@@ -79,20 +75,28 @@ export default function watr(nodes) {
     // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
     else if (kind === 'memory' && node[0]?.[0] === 'data') {
       let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
-      ctx.data.push([['memory', idx], ['i32.const', 0], ...data])
+      ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
       node = [m, m]
     }
 
     // keep start name
-    else if (kind === 'start') name && node.push(name);
+    else if (kind === 'start') name && node.push(name)
 
-    // (rec (type (sub final (func ...)) | (func ...) )) -> normalize
+    // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> normalize to [final?, supertypes, dfn]ush(name);
+    else if (kind === 'rec') {
+      node = [kind, node.map(([,...dfn]) => {
+        alias(dfn, ctx.type), ctx.type.push(null);
+        [dfn] = dfn
+        if (dfn[0] !== 'sub') dfn = ['final', dfn]; else dfn.shift()
+        let final = dfn[0] === 'final' && !!dfn.shift();
+        let supertypes = [];
+        while (dfn[0][0] === '$') supertypes.push(dfn.shift())
+        return [final, supertypes, typeabbr(dfn[0], ctx)]
+      })]
+    }
+    // normalize type definition to (func|array|struct dfn) form
     else if (kind === 'type') {
-      // FIXME: normalize type to canonical form (rec (type x (sub final ...)))
-      let typekind = node[0].shift()
-      if (typekind === 'func') node = [typekind, paramres(node[0])], ctx.type['$' + node[1].join('>')] ??= idx
-      else if (typekind === 'struct') node = [typekind, typeseq(node[0], 'field', true)]
-      else if (typekind === 'array') node = [typekind, node[0]]
+      node = typeabbr(node[0], ctx)
     }
 
     // dupe to code section, save implicit type
@@ -106,7 +110,7 @@ export default function watr(nodes) {
     // import writes to import section amd adds placeholder for (kind) section
     if (imported) ctx.import.push([...imported, [kind, ...node]]), node = null
 
-    ctx[kind].push(node)
+    items?.push(node)
   }
 
   // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
@@ -141,6 +145,12 @@ export default function watr(nodes) {
   ])
 }
 
+// consume name eg. $t ...
+const alias = (node, list) => {
+  let name = node[0]?.[0] === '$' && node.shift();
+  if (name && list) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
+  return name
+}
 
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
@@ -240,6 +250,13 @@ const plain = (nodes, ctx) => {
   return out
 }
 
+// consume / convert composite type node (func dfn), (array dfn), (struct dfn) or (rec dfn)
+const typeabbr = ([kind, ...node], ctx) => {
+  // (type (func param* result*))
+  if (kind === 'func') return node = [kind, paramres(node)], ctx.type['$' + node[1].join('>')] ??= ctx.type.length, node
+  if (kind === 'struct') return [kind, typeseq(node, 'field', true)]
+  if (kind === 'array') return [kind, ...node]
+}
 
 // consume typeuse nodes, return type index/params, or null idx if no type
 // https://webassembly.github.io/spec/core/text/modules.html#type-uses
@@ -296,17 +313,18 @@ const typeseq = (nodes, field, names = false) => {
 
 // build section binary [by section codes] (non consuming)
 const build = [,
-  // (type $id? (func params result))
-  // (type $id? (array i8))
-  // (type (rec (type $id? (sub ...)) (type $id? (sub final ...))))
+  // (func params result)
+  // (array i8)
+  // (rec (sub ...) (sub final ...))
   ([kind, dfn], ctx) => {
     let details
+    // console.group(kind, dfn)
 
     if (kind === 'func') {
       details = [...vec(dfn[0].map(t => type(t, ctx))), ...vec(dfn[1].map(t => type(t, ctx)))]
     }
     else if (kind === 'array') {
-      details = fieldtype(dfn[0], ctx)
+      details = fieldtype(dfn, ctx)
     }
     else if (kind === 'struct') {
       details = vec(dfn.map(t => fieldtype(t, ctx)))
@@ -315,6 +333,7 @@ const build = [,
       details = vec(dfn.map(t => subtype(t, ctx)))
     }
 
+    // console.groupEnd()
     return [DEFTYPE[kind], ...details]
   },
 
@@ -525,7 +544,9 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...type(mut ? t[1] 
 
 // build subtype for rec type (wrapper over type)
 // (sub final? typeidx* (type ...))
-const subtype = (t, ctx) => [RECTYPE[t], ...vec()]
+const subtype = ([final, sups, dfn], ctx) =>
+  !sups.length ? build[SECTION.type](dfn, ctx) :
+  [final ? RECTYPE.subfinal : RECTYPE.sub, ...vec(sups.map(n => id(n, ctx.type))), ...build[SECTION.type](dfn, ctx)]
 
 // consume one instruction from nodes sequence
 const instr = (nodes, ctx) => {
