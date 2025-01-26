@@ -50,8 +50,6 @@ export default function watr(nodes) {
 
     // index, alias
     let items = ctx[kind];
-    //FIXME in some reason we have to touch items.length, no idea why
-    items.length
     let name = alias(node, items)
 
     // export abbr
@@ -103,6 +101,7 @@ export default function watr(nodes) {
     else if (kind === 'func') {
       let [idx, param, result] = typeuse(node, ctx);
       idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result]);
+      // we save idx because type can be defined after
       !imported && nodes.push(['code', [idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
       node.unshift(['type', idx])
     }
@@ -304,7 +303,10 @@ const typeseq = (nodes, field, names = false) => {
     let [, ...args] = nodes.shift()
     let name = args[0]?.[0] === '$' && args.shift()
     // expose name refs, if allowed
-    if (name) names ? seq[name] = seq.length : err(`Unexpected param name ${name}`)
+    if (name) {
+      if (names) name in seq ? err(`Duplicate ${field} ${name}`) : seq[name] = seq.length
+      else err(`Unexpected ${field} name ${name}`)
+    }
     args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2] + t[0]) : t) : t); // deabbr
     seq.push(...args)
   }
@@ -414,7 +416,7 @@ const build = [,
     if (parts[0] === 'funcref' || parts[0] === 'externref' || parts[0]?.[0] === 'ref') reftype = parts.shift()
 
     // legacy abbr if func is skipped
-    if (!reftype) !tabidx ? reftype = 'funcref' : err(`Undefined reftype`)
+    if (!reftype) !tabidx ? reftype = 'funcref' : err(`Undefined elem reftype`)
 
     // externref makes explicit table index
     if (reftype === 'externref' || reftype[0] === 'ref') offset ||= ['i32.const', 0], mode = 0b110
@@ -477,7 +479,11 @@ const build = [,
     // collect locals
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
-      if (types[0]?.[0] === '$') ctx.local[types.shift()] = ctx.local.length
+      if (types[0]?.[0] === '$') {
+        let name = types.shift()
+        if (name in ctx.local) err(`Duplicate local ${name}`)
+        else ctx.local[name] = ctx.local.length
+      }
       ctx.local.push(...types)
     }
 

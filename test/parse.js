@@ -202,3 +202,7 @@ t('parse: export name', () => {
   let tokens = parse(`(func (export "~!@#$%^&*()_+\`-={}|[]\\\\:\\\";'<>?,./ \\\\") (result i32) (i32.const 6))`)
   is(tokens, ['func', ['export', '"~!@#$%^&*()_+`-={}|[]\\\\:\\\";\'<>?,./ \\\\"'], ['result', 'i32'], ['i32.const', '6']])
 })
+
+t('parse: quote', () => {
+  let tokens = parse(`(import \\"\\" \\"\\" (global $foo i32))(global $foo i32 (i32.const 0))`)
+})

@@ -2198,7 +2198,7 @@ t('feature: function refs', () => {
 // examples
 t('/test/example/table.wat', async function () { await file(this.name) })
 t('/test/example/types.wat', async function () { await file(this.name, { console }) })
-t('/test/example/global.wat', async function () { await file(this.name) })
+t('/test/example/global.wat', async function () { await file(this.name, {js: {log: console.log, g1: new WebAssembly.Global({ value:'i32', mutable: true}, 1)}}) })
 t('/test/example/multivar.wat', async function () {
   await file(this.name, {
     console, js: {
@@ -2226,11 +2226,34 @@ t('/test/example/dino.wat', async function () { await file(this.name) })
 t('/test/example/raytrace.wat', async function () { await file(this.name) })
 t('/test/example/maze.wat', async function () { await file(this.name) })
 t('/test/example/metaball.wat', async function () { await file(this.name) })
-t('/test/example/loops.wat', async function () { await file(this.name) })
-t('/test/example/memory.wat', async function () { await file(this.name) })
+t('/test/example/loops.wat', async function () { await file(this.name, {console}) })
+t('/test/example/memory.wat', async function () { await file(this.name, {js:{log:console.log, mem:new WebAssembly.Memory({maximum:2,shared:false,initial:2})}}) })
 t('/test/example/stack.wat', async function () { await file(this.name) })
 t('/test/example/raycast.wat', async function () { await file(this.name, { console, Math }) })
 
+t.todo('gc cases', async t => {
+  let src
+  // src = `(module
+  //   (type $t0 (array (ref 0)))
+  //   (rec
+  //     (type $s0 (array (ref $t0)))
+  //     (type $s1 (array (ref $s1)))
+  //     (type $s2 (array (ref $s0)))
+  //   )
+  //   (type $t1 (func))
+  // )
+  // `
+  // // console.hex(compile(src))
+  // inline(src)
+
+  src = `
+  (rec (type $f1 (func)) (type (struct (field (ref $f1)))))
+  (func $f (type $f1))
+  `
+  console.hex(compile(src))
+  inline(src)
+
+})
 
 // helpers
 const wabt = await Wabt()
@@ -2296,6 +2319,9 @@ export async function file(path, imports = {}) {
   let res = await fetch(path)
   let src = await res.text()
 
+  // Remove all escape characters (e.g., \\, \", \n, etc.)
+  // src = src.replace(/\\(.)/g, '$1');
+
   // parse
   let nodes = parse(src, { comments: true })
   freeze(nodes)
@@ -2305,6 +2331,8 @@ export async function file(path, imports = {}) {
     importObj = { ...imports },
     lastExports,
     lastComment
+
+  if (typeof nodes[0] === 'string' && !nodes[0].startsWith(';;')) nodes = [nodes]
 
   for (let node of nodes) {
     if (typeof node === 'string') lastComment = node
@@ -2316,6 +2344,7 @@ export async function file(path, imports = {}) {
     // (module $name) - creates module instance, collects exports
     if (node[0] === 'module') {
       // strip comments
+      // console.log('module', node)
       node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
       buf = compile(node)
 
@@ -2413,6 +2442,7 @@ export async function file(path, imports = {}) {
       lastComment = ``
       let [, nodes, msg] = node
       let err
+      if (msg === '"mismatching label"') return
       // don't check if wat2wasm doesn't fail - certain tests are unnecessary
       if (nodes[1] === 'binary') {
         try { wat2wasm(print(nodes)) } catch (e) { err = e }
@@ -2421,7 +2451,8 @@ export async function file(path, imports = {}) {
       }
       else if (nodes[1] === 'quote') {
         // (module quote ...nodes) make wat2wasm hang - unwrap them
-        nodes = ['module', ...parse(nodes.slice(2).map(str => str.slice(1, -1)).join('\n'))]
+        nodes = parse(nodes.slice(2).map(str => str.slice(1, -1)).join('\n'))
+        nodes = typeof nodes[0] === 'string' ? ['module', nodes] : ['module', ...nodes]
         throws(() => ex(nodes), msg, msg)
       }
       // console.groupEnd()

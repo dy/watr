@@ -1,7 +1,7 @@
 (module
   (table $x 2 funcref)
   (table $y 2 funcref)
-  (elem (table $y) (i32.const 0) $f1 $f2)
+  (elem (table $y) (i32.const 0) funcref $f1 $f2)
 
   ;; w is this?
   (elem funcref (ref.func 1) (ref.null func))
