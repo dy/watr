@@ -219,12 +219,12 @@ const plain = (nodes, ctx) => {
         // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
         // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
         if (node[node.length - 1]?.[0] === 'else') {
-          els = plain(node.pop())
+          els = plain(node.pop(), ctx)
           // ignore empty else
           // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
           if (els.length === 1) els.length = 0
         }
-        if (node[node.length - 1]?.[0] === 'then') then = plain(node.pop())
+        if (node[node.length - 1]?.[0] === 'then') then = plain(node.pop(), ctx)
 
         // label?
         if (node[0]?.[0] === '$') immed.push(node.shift())
@@ -234,7 +234,7 @@ const plain = (nodes, ctx) => {
 
         if (typeof node[0] === 'string') err('Unfolded condition')
 
-        out.push(...plain(node), ...immed, ...then, ...els, 'end')
+        out.push(...plain(node, ctx), ...immed, ...then, ...els, 'end')
       }
       else out.push(plain(node, ctx))
     }
