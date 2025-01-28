@@ -850,7 +850,11 @@ const align = (op) => {
 }
 
 // build limits sequence (consuming)
-const limits = (node) => isNaN(parseInt(node[1])) ? [0, ...uleb(node.shift())] : [node[2] === 'shared' ? 3 : 1, ...uleb(node.shift()), ...uleb(node.shift())]
+const limits = (node) => (
+  isNaN(parseInt(node[1])) ? [0, ...uleb(leq(node.shift()))] : [node[2] === 'shared' ? 3 : 1, ...uleb(leq(node.shift())), ...uleb(leq(node.shift()))]
+)
+
+const leq = (v, max=0xFFFFFFFF) => (typeof v === 'string' ? i32.parse(v) : v) > max ? err(`Value is out of range ${v}`) : v
 
 // escape codes
 const escape = { n: 10, r: 13, t: 9, v: 1, '"': 34, "'": 39, '\\': 92 }
