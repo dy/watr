@@ -1,7 +1,8 @@
 import * as encode from './encode.js'
-import { uleb } from './encode.js'
+import { uleb, i32 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE } from './const.js'
 import parse from './parse.js'
+import { clone, err } from './util.js'
 
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
@@ -565,7 +566,8 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...type(mut ? t[1] 
 // (sub final? typeidx* (type ...))
 const subtype = ([final, sups, dfn], ctx) =>
   !sups.length ? build[SECTION.type](dfn, ctx) :
-  [final ? RECTYPE.subfinal : RECTYPE.sub, ...vec(sups.map(n => id(n, ctx.type))), ...build[SECTION.type](dfn, ctx)]
+  [final ? RECTYPE.subfinal : RECTYPE.sub, ...vec(sups.map(n => id(n, ctx.type))), ...build[SECTION.type](dfn, ctx)];
+
 
 // consume one instruction from nodes sequence
 const instr = (nodes, ctx) => {
@@ -657,7 +659,7 @@ const instr = (nodes, ctx) => {
     // (i8x16.shuffle 0 1 ... 15 a b)
     else if (code === 0x0d) {
       // i8, i16, i32 - bypass the encoding
-      for (let i = 0; i < 16; i++) immed.push(encode.i32.parse(nodes.shift()))
+      for (let i = 0; i < 16; i++) immed.push(i32.parse(uint(nodes.shift(), 32)))
     }
     // (v128.const i32x4 1 2 3 4)
     else if (code === 0x0c) {
@@ -680,7 +682,7 @@ const instr = (nodes, ctx) => {
     }
     // (i8x16.extract_lane_s 0 ...)
     else if (code >= 0x15 && code <= 0x22) {
-      immed.push(...uleb(nodes.shift()))
+      immed.push(...uleb(uint(nodes.shift())))
     }
   }
 
@@ -851,10 +853,12 @@ const align = (op) => {
 
 // build limits sequence (consuming)
 const limits = (node) => (
-  isNaN(parseInt(node[1])) ? [0, ...uleb(leq(node.shift()))] : [node[2] === 'shared' ? 3 : 1, ...uleb(leq(node.shift())), ...uleb(leq(node.shift()))]
+  isNaN(parseInt(node[1])) ? [0, ...uleb(uint(node.shift()))] : [node[2] === 'shared' ? 3 : 1, ...uleb(uint(node.shift())), ...uleb(uint(node.shift()))]
 )
 
-const leq = (v, max=0xFFFFFFFF) => (typeof v === 'string' ? i32.parse(v) : v) > max ? err(`Value is out of range ${v}`) : v
+// check if node is valid int in a range
+// we put extra condition for index ints for tests complacency
+const uint = (v, max=0xFFFFFFFF) => (typeof v === 'string' && v[0]!=='+' ? i32.parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
 
 // escape codes
 const escape = { n: 10, r: 13, t: 9, v: 1, '"': 34, "'": 39, '\\': 92 }
@@ -872,7 +876,3 @@ const str = str => {
 
 // serialize binary array
 const vec = a => [...uleb(a.length), ...a.flat()]
-
-const err = text => { throw Error(text) }
-
-const clone = items => items.map(item => Array.isArray(item) ? clone(item) : item)
