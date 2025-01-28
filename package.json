@@ -42,6 +42,6 @@
   },
   "homepage": "https://github.com/dy/watr#readme",
   "devDependencies": {
-    "tst": "^7.3.0"
+    "tst": "^8.0.0"
   }
 }

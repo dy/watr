@@ -2,7 +2,6 @@ import t, { is } from 'tst'
 import watr from '../src/compile.js'
 // import watr0 from 'https://cdn.skypack.dev/watr'
 import watCompiler from './lib/wat-compiler.js'
-import wassemble from 'wassemble/wassemble.mjs'
 import { wat2wasm } from './compile.js'
 // import './lib/wast.js'
 
