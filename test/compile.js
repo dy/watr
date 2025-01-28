@@ -2442,7 +2442,6 @@ export async function file(path, imports = {}) {
       lastComment = ``
       let [, nodes, msg] = node
       let err
-      if (msg === '"mismatching label"') return
       // don't check if wat2wasm doesn't fail - certain tests are unnecessary
       if (nodes[1] === 'binary') {
         try { wat2wasm(print(nodes)) } catch (e) { err = e }

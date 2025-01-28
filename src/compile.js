@@ -154,7 +154,7 @@ const alias = (node, list) => {
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const plain = (nodes, ctx) => {
-  let out = []
+  let out = [], label
 
   while (nodes.length) {
     let node = nodes.shift()
@@ -166,23 +166,18 @@ const plain = (nodes, ctx) => {
       // block typeuse?
       if (node === 'block' || node === 'if' || node === 'loop') {
         // (loop $l?)
-        if (nodes[0]?.[0] === '$') out.push(nodes.shift())
+        if (nodes[0]?.[0] === '$') out.push(label = nodes.shift())
 
-        let [idx, param, result] = typeuse(nodes, ctx, 0)
-
-        // direct idx (no params/result needed)
-        if (idx != null) out.push(['type', idx])
-        // get type - can be either idx or valtype (numtype | reftype)
-        else if (!param.length && !result.length);
-        // (result i32) - doesn't require registering type
-        else if (!param.length && result.length === 1) out.push(['result', ...result])
-        // (param i32 i32)? (result i32 i32) - implicit type
-        else ctx._[idx = '$' + param + '>' + result] = [param, result], out.push(['type', idx])
+        // FIXME: make mandatory type return (void type as null)
+        let t = blocktype(nodes, ctx)
+        t && out.push(t)
       }
 
       // else $label
-      // end $label
-      else if (node === 'else' || node === 'end') nodes[0]?.[0] === '$' && nodes.shift()
+      // end $label - make sure it matches block label
+      else if (node === 'else' || node === 'end') {
+        if (nodes[0]?.[0] === '$') label === (label = nodes.shift()) ? label = null : err(`Mismatched label ${label}`)
+      }
 
       // select (result i32 i32 i32)?
       else if (node === 'select') {
@@ -215,34 +210,36 @@ const plain = (nodes, ctx) => {
     }
 
     else {
-      node = plain(node, ctx)
-
       // (block ...) -> block ... end
       if (node[0] === 'block' || node[0] === 'loop') {
-        out.push(...node, 'end')
+        out.push(...plain(node, ctx), 'end')
       }
 
       // (if ...) -> if ... end
       else if (node[0] === 'if') {
-        let thenelse = [], blocktype = [node.shift()]
+        let thenelse = [], immed = [node.shift()]
         // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
         // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
-        if (node[node.length - 1]?.[0] === 'else') thenelse.unshift(...node.pop())
-        if (node[node.length - 1]?.[0] === 'then') thenelse.unshift(...node.pop())
+        if (node[node.length - 1]?.[0] === 'else') {
+          let els = node.pop()
+          // ignore empty else
+          // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
+          if (els.length > 1) thenelse.push(...plain(els))
+        }
+        if (node[node.length - 1]?.[0] === 'then') thenelse.unshift(...plain(node.pop()))
 
         // label?
-        if (node[0]?.[0] === '$') blocktype.push(node.shift())
+        if (node[0]?.[0] === '$') immed.push(node.shift())
 
-        // blocktype? - (param) are removed already via plain
-        if (node[0]?.[0] === 'type' || node[0]?.[0] === 'result') blocktype.push(node.shift());
+        // blocktype?
+        let t = blocktype(node, ctx)
+        t && immed.push(t)
 
-        // ignore empty else
-        // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
-        if (thenelse[thenelse.length - 1] === 'else') thenelse.pop()
+        if (typeof node[0] === 'string') err('Unfolded condition')
 
-        out.push(...node, ...blocktype, ...thenelse, 'end')
+        out.push(...plain(node), ...immed, ...thenelse, 'end')
       }
-      else out.push(node)
+      else out.push(plain(node, ctx))
     }
   }
 
@@ -253,7 +250,7 @@ const plain = (nodes, ctx) => {
 const typeabbr = ([kind, ...node], ctx) => {
   // (type (func param* result*))
   if (kind === 'func') return node = [kind, paramres(node)], ctx.type['$' + node[1].join('>')] ??= ctx.type.length, node
-  if (kind === 'struct') return [kind, typeseq(node, 'field', true)]
+  if (kind === 'struct') return [kind, fieldseq(node, 'field', true)]
   if (kind === 'array') return [kind, ...node]
 }
 
@@ -285,18 +282,19 @@ const paramres = (nodes, names = true) => {
   // let param = [], result = []
 
   // collect param (param i32 i64) (param $x? i32)
-  let param = typeseq(nodes, 'param', names)
+  let param = fieldseq(nodes, 'param', names)
 
   // collect result eg. (result f64 f32)(result i32)
-  let result = typeseq(nodes, 'result')
+  let result = fieldseq(nodes, 'result')
 
   if (nodes[0]?.[0] === 'param') err(`Unexpected param`)
 
   return [param, result]
 }
 
-// collect sequence of field, eg. (param a) (param b c) or (field a) (field b c)
-const typeseq = (nodes, field, names = false) => {
+// collect sequence of field, eg. (param a) (param b c), (field a) (field b c) or (result a b) (result c)
+// optionally allow or not names
+const fieldseq = (nodes, field, names = false) => {
   let seq = []
   // collect field eg. (field f64 f32)(field i32)
   while (nodes[0]?.[0] === field) {
@@ -311,6 +309,24 @@ const typeseq = (nodes, field, names = false) => {
     seq.push(...args)
   }
   return seq
+}
+
+// consume blocktype - makes sure either type or single result is returned
+const blocktype = (nodes, ctx) => {
+  let [idx, param, result] = typeuse(nodes, ctx, 0)
+
+  // direct idx (no params/result needed)
+  if (idx != null) return ['type', idx]
+
+  // get type - can be either idx or valtype (numtype | reftype)
+  if (!param.length && !result.length) return
+
+  // (result i32) - doesn't require registering type
+  if (!param.length && result.length === 1) return ['result', ...result]
+
+  // (param i32 i32)? (result i32 i32) - implicit type
+  ctx._[idx = '$' + param + '>' + result] = [param, result]
+  return ['type', idx]
 }
 
 // build section binary [by section codes] (non consuming)
