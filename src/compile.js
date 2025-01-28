@@ -168,9 +168,7 @@ const plain = (nodes, ctx) => {
         // (loop $l?)
         if (nodes[0]?.[0] === '$') out.push(label = nodes.shift())
 
-        // FIXME: make mandatory type return (void type as null)
-        let t = blocktype(nodes, ctx)
-        t && out.push(t)
+        out.push(blocktype(nodes, ctx))
       }
 
       // else $label
@@ -217,27 +215,26 @@ const plain = (nodes, ctx) => {
 
       // (if ...) -> if ... end
       else if (node[0] === 'if') {
-        let thenelse = [], immed = [node.shift()]
+        let then = [], els = [], immed = [node.shift()]
         // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
         // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
         if (node[node.length - 1]?.[0] === 'else') {
-          let els = node.pop()
+          els = plain(node.pop())
           // ignore empty else
           // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
-          if (els.length > 1) thenelse.push(...plain(els))
+          if (els.length === 1) els.length = 0
         }
-        if (node[node.length - 1]?.[0] === 'then') thenelse.unshift(...plain(node.pop()))
+        if (node[node.length - 1]?.[0] === 'then') then = plain(node.pop())
 
         // label?
         if (node[0]?.[0] === '$') immed.push(node.shift())
 
         // blocktype?
-        let t = blocktype(node, ctx)
-        t && immed.push(t)
+        immed.push(blocktype(node, ctx))
 
         if (typeof node[0] === 'string') err('Unfolded condition')
 
-        out.push(...plain(node), ...immed, ...thenelse, 'end')
+        out.push(...plain(node), ...immed, ...then, ...els, 'end')
       }
       else out.push(plain(node, ctx))
     }
@@ -695,16 +692,20 @@ const instr = (nodes, ctx) => {
     // (block $x) (loop $y)
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
-    let typeidx = nodes[0]?.[0] === 'type' && id(nodes.shift()[1], ctx.type)
-
-    let [param, result] = typeidx !== false ? ctx.type[typeidx][1] : nodes[0]?.[0] === 'result' ? [, [nodes.shift()[1]]] : []
+    let t = nodes.shift();
 
     // void
-    if (!param?.length && !result?.length) immed.push(TYPE.void)
+    if (!t) immed.push(TYPE.void)
     // (result i32) - doesn't require registering type
-    else if (!param?.length && result.length === 1) immed.push(...type(result[0], ctx))
-    // (type idx)
-    else immed.push(...uleb(typeidx))
+    else if (t[0] === 'result') immed.push(...type(t[1], ctx))
+    else {
+      let typeidx = id(t[1], ctx.type), [param, result] = ctx.type[typeidx][1]
+
+      // (type $idx (func (result i32)))
+      if (!param?.length && result.length === 1) immed.push(...type(result[0], ctx))
+      // (type idx)
+      else immed.push(...uleb(typeidx))
+    }
   }
   // else
   else if (code === 5) { }
