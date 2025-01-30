@@ -1,5 +1,5 @@
 import * as encode from './encode.js'
-import { uleb, i32 } from './encode.js'
+import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE } from './const.js'
 import parse from './parse.js'
 import { clone, err } from './util.js'
@@ -155,7 +155,7 @@ const alias = (node, list) => {
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const plain = (nodes, ctx) => {
-  let out = [], label
+  let out = [], stack = [], label
 
   while (nodes.length) {
     let node = nodes.shift()
@@ -167,7 +167,7 @@ const plain = (nodes, ctx) => {
       // block typeuse?
       if (node === 'block' || node === 'if' || node === 'loop') {
         // (loop $l?)
-        if (nodes[0]?.[0] === '$') out.push(label = nodes.shift())
+        if (nodes[0]?.[0] === '$') label = nodes.shift(), out.push(label), stack.push(label)
 
         out.push(blocktype(nodes, ctx))
       }
@@ -175,7 +175,7 @@ const plain = (nodes, ctx) => {
       // else $label
       // end $label - make sure it matches block label
       else if (node === 'else' || node === 'end') {
-        if (nodes[0]?.[0] === '$') label === (label = nodes.shift()) ? label = null : err(`Mismatched label ${label}`)
+        if (nodes[0]?.[0] === '$') (node === 'end' ? stack.pop() : label) !== (label = nodes.shift()) && err(`Mismatched label ${label}`)
       }
 
       // select (result i32 i32 i32)?
@@ -659,30 +659,36 @@ const instr = (nodes, ctx) => {
     // (i8x16.shuffle 0 1 ... 15 a b)
     else if (code === 0x0d) {
       // i8, i16, i32 - bypass the encoding
-      for (let i = 0; i < 16; i++) immed.push(i32.parse(uint(nodes.shift(), 32)))
+      for (let i = 0; i < 16; i++) immed.push(parseUint(nodes.shift(), 32))
     }
     // (v128.const i32x4 1 2 3 4)
     else if (code === 0x0c) {
-      let [t, n] = nodes.shift().split('x'), stride = t.slice(1) >>> 3 // i16 -> 2, f32 -> 4
+      let [t, n] = nodes.shift().split('x'),
+        bits = +t.slice(1),
+        stride = bits >>> 3 // i16 -> 2, f32 -> 4
       n = +n
       // i8, i16, i32 - bypass the encoding
       if (t[0] === 'i') {
-        let arr = n === 16 ? new Uint8Array(16) : n === 8 ? new Uint16Array(8) : n === 4 ? new Uint32Array(4) : new BigInt64Array(2)
+        let arr = n === 16 ? new Uint8Array(16) : n === 8 ? new Uint16Array(8) : n === 4 ? new Uint32Array(4) : new BigUint64Array(2)
         for (let i = 0; i < n; i++) {
-          arr[i] = encode[t].parse(nodes.shift())
+          let s = nodes.shift(), v = encode[t].parse(s)
+          arr[i] = v
         }
         immed.push(...(new Uint8Array(arr.buffer)))
       }
       // f32, f64 - encode
       else {
         let arr = new Uint8Array(16)
-        for (let i = 0; i < n; i++) arr.set(encode[t](nodes.shift()), i * stride)
+        for (let i = 0; i < n; i++) {
+          let s = nodes.shift(), v = encode[t](s)
+          arr.set(v, i * stride)
+        }
         immed.push(...arr)
       }
     }
     // (i8x16.extract_lane_s 0 ...)
     else if (code >= 0x15 && code <= 0x22) {
-      immed.push(...uleb(uint(nodes.shift())))
+      immed.push(...uleb(parseUint(nodes.shift())))
     }
   }
 
@@ -853,12 +859,13 @@ const align = (op) => {
 
 // build limits sequence (consuming)
 const limits = (node) => (
-  isNaN(parseInt(node[1])) ? [0, ...uleb(uint(node.shift()))] : [node[2] === 'shared' ? 3 : 1, ...uleb(uint(node.shift())), ...uleb(uint(node.shift()))]
+  isNaN(parseInt(node[1])) ? [0, ...uleb(parseUint(node.shift()))] : [node[2] === 'shared' ? 3 : 1, ...uleb(parseUint(node.shift())), ...uleb(parseUint(node.shift()))]
 )
 
 // check if node is valid int in a range
 // we put extra condition for index ints for tests complacency
-const uint = (v, max=0xFFFFFFFF) => (typeof v === 'string' && v[0]!=='+' ? i32.parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
+const parseUint = (v, max=0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
+
 
 // escape codes
 const escape = { n: 10, r: 13, t: 9, v: 1, '"': 34, "'": 39, '\\': 92 }

@@ -1,6 +1,6 @@
 import t, { is, ok, same } from 'tst'
 import print from '../src/print.js'
-import { wat2wasm } from './compile.js'
+import { wat2wasm } from './index.js'
 
 t('print: basics', () => {
   const tree = [

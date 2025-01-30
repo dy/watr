@@ -1,4 +1,4 @@
-import { err } from './util.js'
+import { err, intRE, sepRE } from './util.js'
 
 // encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
 
@@ -51,7 +51,7 @@ export function i32(n, buffer = []) {
 }
 
 // for tests complacency we check format
-const cleanInt = v => (!/^_|_$|[^\da-f]_|_[^\da-f]/i.test(v)) && /^[+-]?(?:0x[\da-f]+|\d+)$/i.test(v=v.replaceAll('_','')) ? v : err(`Bad int ${v}`)
+const cleanInt = (v) => (!sepRE.test(v) && intRE.test(v=v.replaceAll('_',''))) ? v : err(`Bad int ${v}`)
 
 // alias
 export const i8 = i32, i16 = i32
@@ -75,9 +75,9 @@ export function i64(n, buffer = []) {
 }
 i64.parse = n => {
   n = cleanInt(n)
-  n = n[0] === '-' ? -BigInt(n.slice(1)) : BigInt(n) // FIXME: why do we need it?
+  n = n[0] === '-' ? -BigInt(n.slice(1)) : BigInt(n) // can be -0x123
   byteView.setBigInt64(0, n)
-  return n = byteView.getBigInt64(0)
+  return byteView.getBigInt64(0)
 }
 
 const byteView = new DataView(new Float64Array(1).buffer)
