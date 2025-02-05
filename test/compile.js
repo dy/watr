@@ -1,7 +1,7 @@
 import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
-import {inline, file, wat2wasm} from './index.js'
+import {inline, file, wat2wasm, save} from './index.js'
 
 
 t('compile: reexport func', () => {
@@ -2191,6 +2191,21 @@ t('feature: function refs', () => {
   )
   `
   inline(src)
+})
+
+t('feature: rec types', () => {
+  let src
+  src = `
+    (module
+      (rec (type $f1 (func)) (type (struct)))
+      (rec (type (struct)) (type $f2 (func)))
+      (table funcref (elem $f1))
+      (func $f1 (type $f1))
+      (func (export "run") (call_indirect (type $f2) (i32.const 0)))
+    )
+  `
+  inline(src)
+
 })
 
 // examples

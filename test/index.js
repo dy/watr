@@ -1,14 +1,15 @@
-import './parse.js'
-import './compile.js'
-import './print.js'
-import './bench.js'
-import './testsuite.js'
 import Wabt from './lib/libwabt.js'
 import print from '../src/print.js'
 import { f32, f64, i64, i32, uleb } from '../src/encode.js'
 import parse from '../src/parse.js'
 import compile from '../src/compile.js'
 import { throws, ok, is } from 'tst'
+
+import './parse.js'
+import './compile.js'
+import './print.js'
+import './bench.js'
+import './testsuite.js'
 
 // stub fetch for local purpose
 const isNode = typeof global !== 'undefined' && globalThis === global
@@ -166,7 +167,7 @@ export async function file(path, imports = {}) {
       if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('assert_return: skip NaN');
 
       if (kind === 'invoke') {
-        if (typeof expects[0] === 'function' || expects[0]==='func') ok(m[nm](...args)?.toString().includes('function', `assert_return: invoke ${nm}(${args}) === ${expects}`))
+        if (typeof expects[0] === 'function' || expects[0] === 'func') ok(m[nm](...args)?.toString().includes('function', `assert_return: invoke ${nm}(${args}) === ${expects}`))
         else is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
       }
       else if (kind === 'get') {
@@ -227,7 +228,7 @@ export async function file(path, imports = {}) {
       }
       else if (nodes[1] === 'quote') {
         // (module quote ...nodes) make wat2wasm hang - unwrap them
-        let code = nodes.slice(2).map(str => str.slice(1, -1).replaceAll(/\\(.)/g,'$1')).join('\n')
+        let code = nodes.slice(2).map(str => str.slice(1, -1).replaceAll(/\\(.)/g, '$1')).join('\n')
         if (code.includes('nan:')) return // ignore nan-related tests
         if (/[a-z$]"|"[a-z$]|""/i.test(code)) return // ignore space required (data"abc") tests
         if (/v128\.const/i.test(code) && /range/.test(msg)) return // ignore out-of-range v128.const tests

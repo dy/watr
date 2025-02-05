@@ -7,6 +7,7 @@ import { clone, err } from './util.js'
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
 
+
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
  *
@@ -35,7 +36,7 @@ export default function watr(nodes) {
     return watr(nodes.map(i => i.slice(1, -1)).join(''))
   }
 
-  // Scopes are stored directly on section array by key, eg. section.func.$name = idx
+  // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
   ctx._ = {} // implicit types
@@ -44,6 +45,25 @@ export default function watr(nodes) {
   while (nodes.length) {
     let [kind, ...node] = nodes.shift()
     let imported // if node needs to be imported
+
+    // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> normalize subtypes to [final?, supertypes, dfn]
+    if (kind === 'rec') {
+      // get list of subtypes
+      const subtypes = node.map(([, ...dfn], i) => {
+        // keep name since it's handled by generic node alias for created subtype
+        let name = dfn[0][0] === '$' ? dfn.shift() : null;
+        dfn = dfn[0]
+        if (dfn[0] !== 'sub') dfn = ['final', dfn]; else dfn.shift() // abbr
+        let final = dfn[0] === 'final' && !!dfn.shift();
+        let supertypes = [];
+        while (dfn[0][0] === '$') supertypes.push(dfn.shift())
+        return [final, supertypes, dfn[0], name]
+      })
+      // convert rec type into regular type node (first subtype) with all subtypes info
+      kind = 'type', node = [subtypes[0][3], subtypes[0][2], subtypes]
+      // add rest of subtypes as regular type nodes with subtype flag
+      nodes.unshift(...subtypes.slice(1).map(([, , dfn, name]) => ['type', name, dfn, true]))
+    }
 
     // import abbr
     // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
@@ -81,21 +101,20 @@ export default function watr(nodes) {
     // keep start name
     else if (kind === 'start') name && node.push(name)
 
-    // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> normalize to [final?, supertypes, dfn]ush(name);
-    else if (kind === 'rec') {
-      node = [kind, node.map(([,...dfn]) => {
-        alias(dfn, ctx.type), ctx.type.push(null);
-        [dfn] = dfn
-        if (dfn[0] !== 'sub') dfn = ['final', dfn]; else dfn.shift()
-        let final = dfn[0] === 'final' && !!dfn.shift();
-        let supertypes = [];
-        while (dfn[0][0] === '$') supertypes.push(dfn.shift())
-        return [final, supertypes, typeabbr(dfn[0], ctx)]
-      })]
-    }
     // normalize type definition to (func|array|struct dfn) form
+    // (type (func param* result*))
+    // (type (array (mut i8)))
+    // (type (struct (field a)*)
+    // (type (...) subtypes*)
     else if (kind === 'type') {
-      node = typeabbr(node[0], ctx)
+      // careful here: we mutate dfn since we need it updated in subtypes
+      let [dfn, subtypes] = node, tkind = dfn.shift()
+      if (tkind === 'func') dfn.unshift(tkind, paramres(dfn)), ctx.type['$' + dfn[1].join('>')] ??= ctx.type.length
+      else if (tkind === 'struct') dfn.unshift(tkind, fieldseq(dfn, 'field', true))
+      else if (tkind === 'array') dfn.unshift(tkind, dfn.shift())
+        // subtypes flags that it's either rec + first subtype or n-th subtype
+        // if (subtypes?.length) subtypes.forEach((st, i) => st[2] = ctx.type.length + i) // put type idx in subtypes instead of dfn
+        ; (node = dfn).push(subtypes)
     }
 
     // dupe to code section, save implicit type
@@ -110,18 +129,23 @@ export default function watr(nodes) {
     // import writes to import section amd adds placeholder for (kind) section
     if (imported) ctx.import.push([...imported, [kind, ...node]]), node = null
 
-    items?.push(node)
+    items.push(node)
   }
 
   // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
   for (let n in ctx._) ctx.type[n] ??= (ctx.type.push(['func', ctx._[n]]) - 1)
 
   // patch datacount if data === 0
-  if (!ctx.data.length) ctx.datacount.length = 0
+  // FIXME: let's try to return empty in datacount builder, since we filter after builder as well
+  // if (!ctx.data.length) ctx.datacount.length = 0
 
   // convert nodes to bytes
   const bin = (kind, count = true) => {
-    let items = ctx[kind].filter(Boolean).map(item => build[kind](item, ctx))
+    const items = ctx[kind]
+      .filter(Boolean)  // filter out (type, imported) placeholders
+      .map(item => build[kind](item, ctx))
+      .filter(Boolean)  // filter out unrenderable things (subtype or data.length)
+
     return !items.length ? [] : [kind, ...vec(count ? vec(items) : items)]
   }
 
@@ -147,8 +171,8 @@ export default function watr(nodes) {
 
 // consume name eg. $t ...
 const alias = (node, list) => {
-  let name = node[0]?.[0] === '$' && node.shift();
-  if (name && list) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
+  let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
+  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
   return name
 }
 
@@ -244,14 +268,6 @@ const plain = (nodes, ctx) => {
   return out
 }
 
-// consume / convert composite type node (func dfn), (array dfn), (struct dfn) or (rec dfn)
-const typeabbr = ([kind, ...node], ctx) => {
-  // (type (func param* result*))
-  if (kind === 'func') return node = [kind, paramres(node)], ctx.type['$' + node[1].join('>')] ??= ctx.type.length, node
-  if (kind === 'struct') return [kind, fieldseq(node, 'field', true)]
-  if (kind === 'array') return [kind, ...node]
-}
-
 // consume typeuse nodes, return type index/params, or null idx if no type
 // https://webassembly.github.io/spec/core/text/modules.html#type-uses
 const typeuse = (nodes, ctx, names) => {
@@ -327,29 +343,38 @@ const blocktype = (nodes, ctx) => {
   return ['type', idx]
 }
 
+
 // build section binary [by section codes] (non consuming)
 const build = [,
+  // type kinds
   // (func params result)
   // (array i8)
-  // (rec (sub ...) (sub final ...))
-  ([kind, dfn], ctx) => {
+  // (struct ...fields)
+  // subtypes array means it was (rec ...subtypes) that turned into first subtype
+  // subtypes flag means it was second subtype from rec
+  ([kind, fields, subtypes], ctx) => {
     let details
-    // console.group(kind, dfn)
+    if (subtypes) {
+      // ignore subtypes (covered by rec)
+      if (subtypes === true) return
+
+      subtypes = subtypes.map(([final, sups, [tkind, dfn]]) =>
+        !sups.length && final ? build[SECTION.type]([tkind, dfn], ctx) : // (sub final (type...)) abbr
+          [final ? RECTYPE.subfinal : RECTYPE.sub, ...vec(sups.map(n => id(n, ctx.type))), ...build[SECTION.type]([tkind, dfn], ctx)])
+
+      return subtypes.length > 1 ? [RECTYPE.rec, ...vec(subtypes)] : subtypes[0] // (rec (type ...)) abbr
+    }
 
     if (kind === 'func') {
-      details = [...vec(dfn[0].map(t => type(t, ctx))), ...vec(dfn[1].map(t => type(t, ctx)))]
+      details = [...vec(fields[0].map(t => type(t, ctx))), ...vec(fields[1].map(t => type(t, ctx)))]
     }
     else if (kind === 'array') {
-      details = fieldtype(dfn, ctx)
+      details = fieldtype(fields, ctx)
     }
     else if (kind === 'struct') {
-      details = vec(dfn.map(t => fieldtype(t, ctx)))
-    }
-    else if (kind === 'rec') {
-      details = vec(dfn.map(t => subtype(t, ctx)))
+      details = vec(fields.map(t => fieldtype(t, ctx)))
     }
 
-    // console.groupEnd()
     return [DEFTYPE[kind], ...details]
   },
 
@@ -480,7 +505,7 @@ const build = [,
   // (code)
   (body, ctx) => {
     let [typeidx, param] = body.shift()
-    if (!param) [param] = ctx.type[id(typeidx, ctx.type)][1]
+    if (!param) [, [param]] = ctx.type[id(typeidx, ctx.type)]
 
     // provide param/local in ctx
     ctx.local = Object.create(param) // list of local variables - some of them are params
@@ -562,11 +587,6 @@ const type = (t, ctx) => (
 // build type with mutable flag (mut t) or t
 const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...type(mut ? t[1] : t, ctx), mut];
 
-// build subtype for rec type (wrapper over type)
-// (sub final? typeidx* (type ...))
-const subtype = ([final, sups, dfn], ctx) =>
-  !sups.length ? build[SECTION.type](dfn, ctx) :
-  [final ? RECTYPE.subfinal : RECTYPE.sub, ...vec(sups.map(n => id(n, ctx.type))), ...build[SECTION.type](dfn, ctx)];
 
 
 // consume one instruction from nodes sequence
@@ -864,7 +884,7 @@ const limits = (node) => (
 
 // check if node is valid int in a range
 // we put extra condition for index ints for tests complacency
-const parseUint = (v, max=0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
+const parseUint = (v, max = 0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
 
 
 // escape codes
