@@ -2,7 +2,7 @@
 export const INSTR = [
   'unreachable', 'nop', 'block', 'loop', 'if', 'else', 'then', , , , ,
   'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', 'return_call', 'return_call_indirect','call_ref' ,'return_call_ref' , , , , ,
-  'drop', 'select', 'select2', , , ,
+  'drop', 'select', '', , , ,
   'local.get', 'local.set', 'local.tee', 'global.get', 'global.set', 'table.get', 'table.set', ,
   'i32.load', 'i64.load', 'f32.load', 'f64.load',
   'i32.load8_s', 'i32.load8_u', 'i32.load16_s', 'i32.load16_u',
@@ -29,7 +29,7 @@ export const INSTR = [
   'ref.null', 'ref.is_null', 'ref.func', 'ref.eq' ,'ref.as_non_null' ,'br_on_null' ,'br_on_non_null' , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
 
   // 0xFB 0xNN (0xFB shift)
-  'struct.new', 'struct.new_default', 'struct.get', 'struct.get_s', 'struct.get_u', 'struct.set', 'array.new', 'array.new_default', 'array.new_fixed', 'array.new_data', 'array.new_elem', 'array.get', 'array.get_s', 'array.get_u', 'array.set', 'array.len', 'array.fill', 'array.copy', 'array.init_data', 'array.init_elem', 'ref.test', 'ref.test', 'ref.cast', 'ref.cast', 'br_on_cast', 'br_on_cast_fail', 'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u', ,
+  'struct.new', 'struct.new_default', 'struct.get', 'struct.get_s', 'struct.get_u', 'struct.set', 'array.new', 'array.new_default', 'array.new_fixed', 'array.new_data', 'array.new_elem', 'array.get', 'array.get_s', 'array.get_u', 'array.set', 'array.len', 'array.fill', 'array.copy', 'array.init_data', 'array.init_elem', 'ref.test', '', 'ref.cast', '', 'br_on_cast', 'br_on_cast_fail', 'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u', ,
 
   // 0xFC 0xNN (0x11b shift)
   'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u', 'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',

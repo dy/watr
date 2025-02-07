@@ -896,6 +896,20 @@ t('compile: call function indirect (table) non zero indexed ref types', () => {
   is(call_function_indirect(1), 13)
 })
 
+t('compile: call indirect case', () => {
+  let src = `
+    (type (func (param i32 i64) (result i64 i32)))
+
+    (func $const-i32 (result i32) (i32.const 0x132))
+    (table funcref (elem $const-i32))
+
+    (func
+      (drop (call_indirect (param i64) (result i32) (i64.const 0) (i32.const 0)))
+    )
+  `
+  inline(src)
+})
+
 
 // found cases
 t('case: global (import)', async () => {

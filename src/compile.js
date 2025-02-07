@@ -41,33 +41,26 @@ export default function watr(nodes) {
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
   ctx._ = {} // implicit types
 
+  let subc // current subtype count
+
   // normalize nodes
   while (nodes.length) {
     let [kind, ...node] = nodes.shift()
     let imported // if node needs to be imported
+    let rec // number of subtypes under rec type
 
-    // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> normalize subtypes to [final?, supertypes, dfn]
+    // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
     if (kind === 'rec') {
-      // get list of subtypes
-      const subtypes = node.map(([, ...dfn], i) => {
-        // keep name since it's handled by generic node alias for created subtype
-        let name = dfn[0][0] === '$' ? dfn.shift() : null;
-        dfn = dfn[0]
-        if (dfn[0] !== 'sub') dfn = ['final', dfn]; else dfn.shift() // abbr
-        let final = dfn[0] === 'final' && !!dfn.shift();
-        let supertypes = [];
-        while (dfn[0][0] === '$') supertypes.push(dfn.shift())
-        return [final, supertypes, dfn[0], name]
-      })
-      // convert rec type into regular type node (first subtype) with all subtypes info
-      kind = 'type', node = [subtypes[0][3], subtypes[0][2], subtypes]
+      // node contains a list of subtypes, (type ...) or (type (sub final? ...))
+      // convert rec type into regular type (first subtype) with stashed subtypes length
       // add rest of subtypes as regular type nodes with subtype flag
-      nodes.unshift(...subtypes.slice(1).map(([, , dfn, name]) => ['type', name, dfn, true]))
+      if (node.length > 1) rec = subc = node.length, nodes.unshift(...node), node = nodes.shift(), kind = node.shift()
+      else kind = (node = node[0]).shift()
     }
 
     // import abbr
     // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
-    if (kind === 'import') [kind, ...node] = (imported = node).pop()
+    else if (kind === 'import') [kind, ...node] = (imported = node).pop()
 
     // index, alias
     let items = ctx[kind];
@@ -105,16 +98,22 @@ export default function watr(nodes) {
     // (type (func param* result*))
     // (type (array (mut i8)))
     // (type (struct (field a)*)
-    // (type (...) subtypes*)
+    // (type (sub final? $nm* (struct|array|func ...)))
     else if (kind === 'type') {
-      // careful here: we mutate dfn since we need it updated in subtypes
-      let [dfn, subtypes] = node, tkind = dfn.shift()
-      if (tkind === 'func') dfn.unshift(tkind, paramres(dfn)), ctx.type['$' + dfn[1].join('>')] ??= ctx.type.length
-      else if (tkind === 'struct') dfn.unshift(tkind, fieldseq(dfn, 'field', true))
-      else if (tkind === 'array') dfn.unshift(tkind, dfn.shift())
-        // subtypes flags that it's either rec + first subtype or n-th subtype
-        // if (subtypes?.length) subtypes.forEach((st, i) => st[2] = ctx.type.length + i) // put type idx in subtypes instead of dfn
-        ; (node = dfn).push(subtypes)
+      let [dfn] = node
+      let issub = subc-- > 0
+      let subkind = issub && 'subfinal', supertypes = []
+      if (dfn[0] === 'sub') {
+        subkind = dfn.shift(), dfn[0] === 'final' && (subkind += dfn.shift())
+        dfn = (supertypes = dfn).pop() // last item is definition
+      }
+
+      let ckind = dfn.shift() // composite type kind
+      if (ckind === 'func') dfn = paramres(dfn), ctx.type['$' + dfn.join('>')] ??= ctx.type.length
+      else if (ckind === 'struct') dfn = fieldseq(dfn, 'field', true)
+      else if (ckind === 'array') dfn = dfn.shift()
+
+      node = [ckind, dfn, subkind, supertypes, rec ? [ctx.type.length, rec] : issub]
     }
 
     // dupe to code section, save implicit type
@@ -319,7 +318,7 @@ const fieldseq = (nodes, field, names = false) => {
       if (names) name in seq ? err(`Duplicate ${field} ${name}`) : seq[name] = seq.length
       else err(`Unexpected ${field} name ${name}`)
     }
-    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2] + t[0]) : t) : t); // deabbr
+    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2] + t[0]) : t) : t); // deabbr (ref null func|extern) -> funcref|externref
     seq.push(...args)
   }
   return seq
@@ -350,22 +349,24 @@ const build = [,
   // (func params result)
   // (array i8)
   // (struct ...fields)
-  // subtypes array means it was (rec ...subtypes) that turned into first subtype
-  // subtypes flag means it was second subtype from rec
-  ([kind, fields, subtypes], ctx) => {
+  ([kind, fields, subkind, supertypes, rec], ctx) => {
+    if (rec === true) return // ignore rec subtypes cept for 1st one
+
     let details
-    if (subtypes) {
-      // ignore subtypes (covered by rec)
-      if (subtypes === true) return
-
-      subtypes = subtypes.map(([final, sups, [tkind, dfn]]) =>
-        !sups.length && final ? build[SECTION.type]([tkind, dfn], ctx) : // (sub final (type...)) abbr
-          [final ? RECTYPE.subfinal : RECTYPE.sub, ...vec(sups.map(n => id(n, ctx.type))), ...build[SECTION.type]([tkind, dfn], ctx)])
-
-      return subtypes.length > 1 ? [RECTYPE.rec, ...vec(subtypes)] : subtypes[0] // (rec (type ...)) abbr
+    // (rec (sub ...)*)
+    if (rec) {
+      // FIXME: rec of one type
+      kind = 'rec'
+      let [from, length] = rec, subtypes = Array.from({length}, (_,i) => build[SECTION.type](ctx.type[from + i].slice(0, 4), ctx))
+      details = vec(subtypes)
+    }
+    // (sub final? sups* (type...))
+    else if (subkind === 'sub' || supertypes?.length) {
+      details = [...vec(supertypes.map(n => id(n, ctx.type))), ...build[SECTION.type]([kind, fields], ctx)]
+      kind = subkind
     }
 
-    if (kind === 'func') {
+    else if (kind === 'func') {
       details = [...vec(fields[0].map(t => type(t, ctx))), ...vec(fields[1].map(t => type(t, ctx)))]
     }
     else if (kind === 'array') {
@@ -620,9 +621,10 @@ const instr = (nodes, ctx) => {
       // array.copy $t $t
       else if (code === 17) immed.push(...uleb(id(nodes.shift(), ctx.type)))
     }
-    // ref.test
-    else if (code >= 0x14 && code <= 0x17) {
-
+    // ref.test|cast (ref null? $t)
+    else if (code >= 20 && code <= 23) {
+      if (nodes[0][1] === 'null') code++ // ref.test (ref null $t), ref.cast (ref null $t) is different op
+      immed.push(...type(nodes.shift(), ctx))
     }
   }
 
@@ -762,7 +764,8 @@ const instr = (nodes, ctx) => {
     immed.push(
       ...uleb(id(nodes[1][1], ctx.type)),
       ...uleb(id(nodes.shift(), ctx.table))
-    ), nodes.shift()
+    )
+    nodes.shift()
   }
 
   // call_ref $type
@@ -858,10 +861,9 @@ const memarg = (args) => {
   return [align, offset]
 }
 
-// deref id node to idx
+// deref id node to numeric idx
 const id = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
 
-// ref:
 // const ALIGN = {
 //   'i32.load': 4, 'i64.load': 8, 'f32.load': 4, 'f64.load': 8,
 //   'i32.load8_s': 1, 'i32.load8_u': 1, 'i32.load16_s': 2, 'i32.load16_u': 2,
