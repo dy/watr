@@ -1,6 +1,6 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
 import parse from './parse.js'
 import { clone, err } from './util.js'
 
@@ -318,7 +318,6 @@ const fieldseq = (nodes, field, names = false) => {
       if (names) name in seq ? err(`Duplicate ${field} ${name}`) : seq[name] = seq.length
       else err(`Unexpected ${field} name ${name}`)
     }
-    args = args.map(t => t[0] === 'ref' && t[2] ? (HEAPTYPE[t[2]] ? (t[2] + t[0]) : t) : t); // deabbr (ref null func|extern) -> funcref|externref
     seq.push(...args)
   }
   return seq
@@ -582,7 +581,8 @@ const build = [,
 const type = (t, ctx) => (
   t[0] === 'ref' ?
     ([t[1] == 'null' ? TYPE.refnull : TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))]) :
-    [TYPE[t] ?? err(`Unknown type ${t}`)]
+    // abbrs
+   [TYPE[t] ?? err(`Unknown type ${t}`)]
 );
 
 // build type with mutable flag (mut t) or t

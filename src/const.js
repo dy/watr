@@ -53,6 +53,21 @@ export const INSTR = [
   RECTYPE = { sub: 0x50, subfinal: 0x4F, rec: 0x4E },
   DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, ...RECTYPE},
   HEAPTYPE = {nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A},
-  REFTYPE = {nullfuncref: 0x73, nullexternref: 0x72, nullref: 0x71, funcref: 0x70, externref: 0x6F, anyref: 0x6E, eqref: 0x6D, i31ref: 0x6C, structref: 0x6B, arrayref: 0x6A, ref: 0x64 /* -0x1c */, refnull: 0x63 /* -0x1d */},
+  REFTYPE = {
+    // absheaptype abbrs
+    nullfuncref: HEAPTYPE.nofunc,
+    nullexternref: HEAPTYPE.noextern,
+    nullref: HEAPTYPE.none,
+    funcref: HEAPTYPE.func,
+    externref: HEAPTYPE.extern,
+    anyref: HEAPTYPE.any,
+    eqref: HEAPTYPE.eq,
+    i31ref: HEAPTYPE.i31,
+    structref: HEAPTYPE.struct,
+    arrayref: HEAPTYPE.array,
+
+    // ref, refnull
+    ref: 0x64 /* -0x1c */, refnull: 0x63 /* -0x1d */
+  },
   TYPE = { i8: 0x78, i16: 0x77, i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B, ...HEAPTYPE, ...REFTYPE },
   KIND = { func: 0, table: 1, memory: 2, global: 3 }
