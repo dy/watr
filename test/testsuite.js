@@ -241,7 +241,7 @@ t.todo('/test/official/proposals/gc/table.wast', async function () { await file(
 t.mute('/test/official/proposals/gc/type-canon.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/proposals/gc/type-equivalence.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/proposals/gc/type-rec.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/gc/type-subtyping.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/gc/type-subtyping.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/gc/unreached-invalid.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/gc/unreached-valid.wast', async function () { await file(this.name, { spectest }) })
 

@@ -621,10 +621,11 @@ const instr = (nodes, ctx) => {
       // array.copy $t $t
       else if (code === 17) immed.push(...uleb(id(nodes.shift(), ctx.type)))
     }
-    // ref.test|cast (ref null? $t)
+    // ref.test|cast (ref null? $t|heaptype)
     else if (code >= 20 && code <= 23) {
-      if (nodes[0][1] === 'null') code++ // ref.test (ref null $t), ref.cast (ref null $t) is different op
-      immed.push(...type(nodes.shift(), ctx))
+      if (nodes[0][1] === 'null') code++ // ref.test|cast (ref null $t) is next op
+      let heaptype = nodes.shift().pop()
+      immed.push(HEAPTYPE[heaptype] || id(heaptype, ctx.type))
     }
   }
 
