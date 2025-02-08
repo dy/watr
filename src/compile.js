@@ -448,17 +448,17 @@ const build = [,
       if (offset[0] === 'offset') [, offset] = offset
     }
     else mode |= 0b001 // passive
+    offset = expr(offset || ['i32.const', 0], ctx)
 
-    // func ... === funcref ..., https://webassembly.github.io/function-references/core/text/modules.html#id7
-    if (HEAPTYPE[parts[0]]) parts[0] += 'ref'
+    // func ... https://webassembly.github.io/function-references/core/text/modules.html#id7
+    if (HEAPTYPE[parts[0]]) reftype = [HEAPTYPE[parts.shift()]]
     // reftype: funcref|externref|(ref ...)
-    if (parts[0] === 'funcref' || parts[0] === 'externref' || parts[0]?.[0] === 'ref') reftype = parts.shift()
-
+    else if (REFTYPE[parts[0]] || parts[0]?.[0] === 'ref') reftype = type(parts.shift(), ctx)
     // legacy abbr if func is skipped
-    if (!reftype) !tabidx ? reftype = 'funcref' : err(`Undefined elem reftype`)
+    else !tabidx ? reftype = [HEAPTYPE.func] : err(`Undefined elem reftype`)
 
     // externref makes explicit table index
-    if (reftype === 'externref' || reftype[0] === 'ref') offset ||= ['i32.const', 0], mode = 0b110
+    if (reftype[0] !== REFTYPE.funcref) mode = 0b110
     // reset to simplest mode if no actual elements
     else if (!parts.length) mode &= 0b011
 
@@ -475,21 +475,21 @@ const build = [,
       mode,
       ...(
         // 0b000 e:expr y*:vec(funcidx)                     | type=funcref, init ((ref.func y)end)*, active (table=0,offset=e)
-        mode === 0b000 ? expr(offset, ctx) :
+        mode === 0b000 ? offset :
           // 0b001 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive
           mode === 0b001 ? [0x00] :
             // 0b010 x:tabidx e:expr et:elkind y*:vec(funcidx)  | type=0x00, init ((ref.func y)end)*, active (table=x,offset=e)
-            mode === 0b010 ? [...uleb(tabidx || 0), ...expr(offset, ctx), 0x00] :
+            mode === 0b010 ? [...uleb(tabidx || 0), ...offset, 0x00] :
               // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
               mode === 0b011 ? [0x00] :
                 // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
-                mode === 0b100 ? expr(offset, ctx) :
+                mode === 0b100 ? offset :
                   // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
-                  mode === 0b101 ? type(reftype, ctx) :
+                  mode === 0b101 ? reftype :
                     // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
-                    mode === 0b110 ? [...uleb(tabidx || 0), ...expr(offset, ctx), ...type(reftype, ctx)] :
+                    mode === 0b110 ? [...uleb(tabidx || 0), ...offset, ...reftype] :
                       // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
-                      type(reftype, ctx)
+                      reftype
       ),
       ...vec(
         parts.map(mode & 0b100 ?
