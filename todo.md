@@ -100,11 +100,10 @@
 * [ ] examples
 * [x] perf stats: time took to compile
 * [ ] prettify / minify
-* [ ] save prev result file
 * [ ] drop wasm binary
-* [ ] binary copy/paste
-* [ ] download wasm binary
-* [ ] binary analysis with highlight
+* [x] ~~binary copy~~ -> just copy text as is
+* [x] download wasm binary
+* [x] binary analysis with highlight
 
 ## Backlog
 

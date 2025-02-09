@@ -34,15 +34,23 @@
       font-style: normal;
     }
 
+    /* theme */
     :root {
-      --success-color: inherit;
-      --error-color: #dc3545;
+      --success: inherit;
+      --error: #dc3545;
+
+      --data: #d6336c;
+      --keyword: #2b69cc;
+      --number: #37a2a5;
+      --comment: #848d95;
+      --annot: #6f42c1;
+      --id: #953800;
     }
   </style>
 </head>
 
 <body style="display: flex; flex-direction: column; height: 100%;">
-  <header style="padding: 1rem;">
+  <header style="padding: 1rem 1rem 0.5rem;">
     <h1>Watr REPL</h1>
   </header>
 
@@ -60,46 +68,30 @@
     </button>
   </nav>
 
-  <div id="container">
-    <style>
-      #container {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        max-width: 100%;
-        margin: 1rem;
-        gap: 2rem;
-      }
-
-      @media (max-width: 1080px) {
-        #container {
-          grid-template-columns: 1fr;
-        }
-      }
-    </style>
-
+  <div id="container" style="display: flex; flex-wrap: wrap; margin: 1rem; gap: 2rem">
     <output id="source"></output>
     <style>
       /* theme */
       #source {
         .kw {
-          color: #2b69cc;
+          color: var(--keyword);
           font-weight: 500;
         }
         .var {
-          color: #953800;
+          color: var(--id);
         }
         .num {
-          color: #37a2a5;
+          color: var(--number);
         }
         .data {
-          color: #d6336c;
+          color: var(--data);
         }
         .comment {
-          color: #848d95;
+          color: var(--comment);
           font-style: italic;
         }
         .annot {
-          color: #6f42c1;
+          color: var(--annot);
         }
       }
     </style>
@@ -136,6 +128,46 @@
     <style>
       #binary {
         position: relative;
+        max-width: 48ch;
+      }
+      .preamble {
+        color: var(--comment);
+      }
+      .type {
+        color: var(--keyword);
+      }
+      .import {
+        color: var(--annot);
+      }
+      .func {
+        color: var(--id);
+      }
+      .table {
+        color: var(--keyword);
+      }
+      .memory {
+        color: var(--keyword);
+      }
+      .global {
+        color: var(--id);
+      }
+      .export {
+        color: var(--annot);
+      }
+      .start {
+        color: var(--annot);
+      }
+      .elem {
+        color: var(--keyword);
+      }
+      .datacount {
+        color: var(--comment);
+      }
+      .code {
+        /* color:; */
+      }
+      .data {
+        color: var(--data);
       }
     </style>
   </div>
@@ -231,6 +263,7 @@
 
     function recompile () {
       clearTimeout(timeout);
+      log.textContent = ''
       timeout = setTimeout(() => compile(source.textContent), 300);
     }
 
@@ -242,22 +275,65 @@
         start = performance.now();
         buf = await lib[compiler.value](code)
         end = performance.now();
-        binary.textContent = hex(buf)
+        binary.innerHTML = hihex(buf)
         const mod = new WebAssembly.Module(buf)
         const instance = new WebAssembly.Instance(mod)
         console.log(instance)
-        log.innerHTML = `<span style="color: var(--success-color);">Compiled in ${(end - start).toFixed(2)} ms</span>`
+        log.innerHTML = `<span style="color: var(--success);">Compiled in ${(end - start).toFixed(2)} ms</span>`
       }
       catch (e) {
         console.error(e)
         binary.textContent = ''
-        log.innerHTML = `<span style="color: var(--error-color);">${e}</span>`
+        log.innerHTML = `<span style="color: var(--error);">${e}</span>`
       }
     }
 
-    // format string into hex
-    function hex (d) {
-      return Array.from(new Uint8Array(d)).map((c, i) => c.toString(16).padStart(2, 0) + (i % 16 === 15 ? '\n' : ' ')).join('')
+    const SECTION = 'custom type import func table memory global export start elem code data datacount'.split(' ')
+
+    // format buffer into higglighted hex string
+    function hihex (buf) {
+      let bytes = new Uint8Array(buf);
+
+      let result = '';
+
+      // parse wasm sections
+      const sections = Array(12);
+      let offset = 8; // Skip preamble
+      result += `<span class="preamble" title="preamble">${hex(bytes.slice(0, 8))}</span>`
+
+      while(offset < bytes.length) {
+        const id = bytes[offset++];
+        if (!SECTION[id]) err(`Bad section ${id}`)
+
+        result += `<span title="${SECTION[id]}" class="${SECTION[id]}">`
+        result += ` <b title="${SECTION[id]} id: ${id}">${hex([id])}</b>`
+
+        const [size, newOffset] = uleb(bytes, offset);
+        result += ` <i title="${SECTION[id]} size: ${size}">${hex(bytes.slice(offset, newOffset))}</i> `
+
+        result += hex(bytes.slice(newOffset, offset = newOffset + size))
+        result += `</span>`
+      }
+
+      return result;
+    }
+    // consume unsigned LEB128
+    function uleb(bytes, offset = 0) {
+      let result = 0;
+      let shift = 0;
+      let byte;
+
+      do {
+        byte = bytes[offset++];
+        result |= (byte & 0x7F) << shift;
+        shift += 7;
+      } while (byte & 0x80);
+
+      return [result, offset];
+    }
+
+    function hex (arr) {
+      return Array.from(arr).map((c, i) => c.toString(16).padStart(2, 0)).join(' ')
     }
 
     // download compiled buffer
