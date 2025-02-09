@@ -91,6 +91,7 @@
   * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
   * [ ] Wasm3
 * [ ] Print: make it as nice as AI
+* [ ] Normalize: make it a separate step: (;1;) for missing names, fill optional props, fold or unfold ops
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
 
@@ -100,10 +101,12 @@
 * [ ] examples
 * [x] perf stats: time took to compile
 * [x] prettify / minify
-* [ ] drop wasm binary
+* [ ] drop wasm binary?
+* [ ] plain / fold code
 * [x] ~~binary copy~~ -> just copy text as is
 * [x] download wasm binary
 * [x] binary analysis with highlight
+* [ ] github link
 
 ## Backlog
 

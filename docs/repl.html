@@ -26,13 +26,21 @@
     }
     button, select {
       height: 2rem;
+      border: none;
+      box-shadow: 0 1px 1px 1px gainsboro;
+      border-radius: 3px;
+      cursor: pointer;
     }
     button {
       white-space: nowrap;
-    }
-    button::before {
-      content: attr(icon);
-      font-size: 1rem;
+      background: whitesmoke;
+      &:hover {
+        background: white;
+      }
+      &::before {
+        content: attr(icon);
+        font-size: 1rem;
+      }
     }
 
     @media (max-width: 600px) {
@@ -78,12 +86,22 @@
 
     <button id="minify" title="Minify source" icon="🗜️"> minify</button>
 
-    <button id="prettify" title="Prettify source" icon="📜"> prettify</button>
+    <button id="prettify" title="Prettify source" icon="🪷"> prettify</button>
 
     <button id="download" title="Download WASM" icon="📥"> save</button>
   </nav>
 
-  <div id="container" style="display: flex; flex-wrap: wrap; margin: 1rem; gap: 2rem">
+  <div id="container">
+    <style>
+      #container {
+        display: flex; margin: 1rem; gap: 2rem
+      }
+      @media (max-width: 960px) {
+        #container {
+          flex-direction: column;
+        }
+      }
+    </style>
     <output id="source"></output>
     <style>
       /* theme */

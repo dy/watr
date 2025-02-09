@@ -43,7 +43,7 @@ export default function watr(nodes) {
 
   let subc // current subtype count
 
-  // normalize nodes
+  // prepare/normalize nodes
   while (nodes.length) {
     let [kind, ...node] = nodes.shift()
     let imported // if node needs to be imported
