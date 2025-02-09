@@ -164,6 +164,7 @@
       #binary {
         position: relative;
         max-width: 48ch;
+        margin: 0 auto;
       }
       .preamble {
         color: var(--comment);
@@ -313,8 +314,12 @@
         end = performance.now();
         binary.innerHTML = hihex(buf)
         const mod = new WebAssembly.Module(buf)
-        const instance = new WebAssembly.Instance(mod)
-        console.log(instance)
+        try {
+          const instance = new WebAssembly.Instance(mod, {})
+          console.log(instance)
+        } catch (e) {
+          console.warn(e)
+        }
         log.innerHTML = `<span style="color: var(--success);">Compiled in ${(end - start).toFixed(2)} ms</span>`
       }
       catch (e) {
