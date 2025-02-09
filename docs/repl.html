@@ -6,7 +6,7 @@
   <title>Watr REPL</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=Space+Mono:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./lib/reset.css" />
   <style>
     html,
@@ -19,7 +19,13 @@
       font-optical-sizing: auto;
       font-weight: 400;
       font-style: normal;
-      margin-bottom: 3rem;
+      padding-bottom: 3rem;
+    }
+    a {
+      color:silver;
+      &:hover {
+        color: black;
+      }
     }
 
     pre, code, output {
@@ -31,7 +37,6 @@
     :root {
       --success-color: inherit;
       --error-color: #dc3545;
-      --theme-color: #007bff;
     }
   </style>
 </head>
@@ -78,7 +83,10 @@
           color: #953800;
         }
         .num {
-          color: #1c6b48;
+          color: #37a2a5;
+        }
+        .data {
+          color: #d6336c;
         }
         .comment {
           color: #848d95;
@@ -89,13 +97,6 @@
         }
       }
     </style>
-
-    <output id="binary"></output>
-    <style>
-      #binary {
-        white-space: pre;
-      }
-    </style>
     <script type="module">
       import Codejar from './lib/codejar.js'
 
@@ -103,20 +104,14 @@
 
       // Minimal WAT syntax rules (56 lines)
       const watHighlighter = (editor) => {
-        const keywords = [
-          'module', 'func', 'param', 'result', 'local', 'global',
-          'memory', 'table', 'export', 'import', 'type', 'data',
-          'elem', 'start', 'call', 'i32', 'i64', 'f32', 'f64', 'rec'
-        ];
-
         const text = editor.textContent;
         editor.innerHTML = text
           .replace(/\(([\w$.]+)/g, '(<span class="kw">$1</span>')
           .replace(/(\$\w+)/g, '<span class="var">$1</span>')
           .replace(/(;.*)$/gm, '<span class="comment">$1</span>')
           .replace(/(@\w+)/g, '<span class="annot">$1</span>')
-          .replace(/(\b\d[\d_]*\b)/g, '<span class="num">$1</span>')
-          .replace(new RegExp(`\\b(${keywords.join('|')})\\b`, 'g'), '<span class="kw">$1</span>');
+          .replace(/(\\[\da-z][\da-z])/ig, '<span class="data">$1</span>')
+          .replace(/(?<!\\)(\b(?:0x)?\d[\d_a-z]*\b)/ig, '<span class="num">$1</span>')
       };
 
       let codejar = Codejar(code, watHighlighter, {
@@ -128,10 +123,15 @@
       })
       const response = await fetch('../test/example/quine.wat');
       const watCode = await response.text();
-      console.log(watCode)
       codejar.updateCode(watCode);
-
     </script>
+
+    <output id="binary"></output>
+    <style>
+      #binary {
+        white-space: pre;
+      }
+    </style>
   </div>
 
 
@@ -204,24 +204,24 @@
       select = document.getElementById('compiler'),
       binary = document.getElementById('binary')
 
-    // debounce recompile each time input changes
-    source.addEventListener('input', recompile);
-    select.addEventListener('change', recompile);
+    let timeout
 
-    let timeout;
+    // debounce recompile each time input changes
+    // source.addEventListener('input', recompile);
+    const observer = new MutationObserver(recompile);
+    observer.observe(source, { childList: true, subtree: true, characterData: true });
+    select.addEventListener('change', recompile);
+    recompile();
+
     function recompile () {
       clearTimeout(timeout);
-      timeout = setTimeout(() => {
-      compile(source.textContent);
-      }, 300);
+      timeout = setTimeout(() => compile(source.textContent), 300);
     }
-
-    // init
-    compile(source.value)
 
     // compile code in editor
     async function compile(code) {
       log.textContent = ''
+      if (!code.trim()) return
       try {
         const start = performance.now();
         let buf = await lib[compiler.value](code)
@@ -244,4 +244,8 @@
       return Array.from(new Uint8Array(d)).map((c, i) => c.toString(16).padStart(2, 0) + (i % 16 === 15 ? '\n' : ' ')).join('')
     }
   </script>
+
+  <footer>
+    <a href="https://github.com/krishnized/license" style="position: fixed; bottom: 1rem; right: 1rem;">ॐ</a>
+  </footer>
 </body>
