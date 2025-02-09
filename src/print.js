@@ -1,21 +1,5 @@
 import parse from './parse.js';
 
-const INLINE = [
-  'param',
-  'local',
-  'drop',
-  'f32.const',
-  'f64.const',
-  'i32.const',
-  'i64.const',
-  'local.get',
-  'global.get',
-  'memory.size',
-  'result',
-  'export',
-  'unreachable',
-  'nop'
-]
 
 /**
  * Formats a tree or a WAT (WebAssembly Text) string into a readable format.
@@ -37,27 +21,17 @@ export default function print(tree, options = {}) {
   function printNode(node, level = 0) {
     if (!Array.isArray(node)) return node
 
+    // flat node (no deep subnodes) shortcut, eg. (i32.const 1), (module (export "") 1)
+    if (node.length < 4 && node.every(subnode => !Array.isArray(subnode) || subnode.every(subsubnode => !Array.isArray(subsubnode))))
+      return `(${node.map(sn => printNode(sn)).join(' ')})`
+
     let content = node[0]
 
     for (let i = 1; i < node.length; i++) {
       // (<keyword> ...)
       if (Array.isArray(node[i])) {
-        // inline nodes like (param x)(param y)
-        // (func (export "xxx")..., but not (func (export "a")(param "b")...
-        // if (
-        //   INLINE.includes(node[i][0]) &&
-        //   (!Array.isArray(node[i - 1]) || INLINE.includes(node[i - 1][0]))
-        // ) {
-        //   if (!Array.isArray(node[i - 1])) content += ` `
-        // }
-        // // new line
-        // else {
-
-        // flat node (<keyword> <str>*)
-        if (node[i].length < 8 && !node[i].some(subnode => Array.isArray(subnode))) console.log(node), content += ` ` + printNode(node[i])
-
-        // newline
-        else content += newline + indent.repeat(level + 1) + printNode(node[i], level + 1)
+        // new line
+        content += newline + indent.repeat(level + 1) + printNode(node[i], level + 1)
       }
       // data chunks "\00...")
       else if (node[i].includes('\\'))   {
@@ -68,6 +42,7 @@ export default function print(tree, options = {}) {
         content += ` ` + node[i]
       }
     }
+
     return `(${content})`
   }
 }
