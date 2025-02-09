@@ -83,8 +83,8 @@
 * [x] ~~Indicate immediates via list~~ -> too many expeptions, doesn't make much sense
 * [x] ~~Replace missing index with `(;idx;)`~~ -> not so much benefit
 * [ ] GC
-  * [ ] Recursive types
-    * [ ] normalize subtypes to list, skip single recusion abbr
+  * [x] Recursive types
+    * [x] normalize subtypes to list, skip single recusion abbr
 * [ ] Features
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [x] All main ones (readme)
@@ -98,9 +98,12 @@
 
 * [ ] compiler selector
 * [ ] examples
-* [ ] perf stats
-* [ ] prettifier flag
-* [ ] binary copy/paster
+* [ ] perf stats: time took to compile
+* [ ] prettify / minify
+* [ ] save prev result file
+* [ ] drop wasm binary
+* [ ] binary copy/paste
+* [ ] binary analysis with highlight
 
 ## Backlog
 

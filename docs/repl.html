@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+
+<head>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./lib/reset.css" />
+  <style>
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+      font-family: "Space Grotesk", sans-serif;
+      font-optical-sizing: auto;
+      font-weight: 400;
+      font-style: normal;
+    }
+
+    pre, code, output {
+      font-family: "Space Mono";
+      font-weight: 400;
+      font-style: normal;
+    }
+
+    :root {
+      --success-color: #28a745;
+      --error-color: #dc3545;
+      --theme-color: #007bff;
+    }
+  </style>
+</head>
+
+<body style="display: flex; flex-direction: column; height: 100%;">
+  <header style="padding: 1rem;">
+    <h1>Watr REPL</h1>
+
+    <label for="compiler">Compiler:</label>
+    <select name="compiler" id="compiler">
+      <option value="watr" selected>watr</option>
+      <option value="wasm">spec/wasm</option>
+      <option value="wabt">wabt</option>
+      <option value="watc">wat-compiler</option>
+    </select>
+  </header>
+
+  <div id="container">
+    <style>
+      #container {
+        display: grid;
+        grid-template-columns: 50% 50%;
+        max-width: 100%;
+        margin: 1rem;
+        gap: 2rem;
+      }
+
+      @media (max-width: 1080px) {
+        #container {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+
+    <output id="source"></output>
+    <style>
+      /* theme */
+      #source {
+        .kw {
+          color: #2b69cc;
+          font-weight: 500;
+        }
+        .var {
+          color: #953800;
+        }
+        .num {
+          color: #1c6b48;
+        }
+        .comment {
+          color: #848d95;
+          font-style: italic;
+        }
+        .annot {
+          color: #6f42c1;
+        }
+      }
+    </style>
+
+    <output id="binary"></output>
+    <style>
+      #binary {
+        white-space: pre;
+      }
+    </style>
+
+    <script type="module">
+      import Codejar from './lib/codejar.js'
+
+      let code = document.getElementById('source')
+
+      // Minimal WAT syntax rules (56 lines)
+      const watHighlighter = (editor) => {
+        const keywords = [
+          'module', 'func', 'param', 'result', 'local', 'global',
+          'memory', 'table', 'export', 'import', 'type', 'data',
+          'elem', 'start', 'call', 'i32', 'i64', 'f32', 'f64', 'rec'
+        ];
+
+        const text = editor.textContent;
+        editor.innerHTML = text
+          .replace(/\(([\w$.]+)/g, '(<span class="kw">$1</span>')
+          .replace(/(\$\w+)/g, '<span class="var">$1</span>')
+          .replace(/(;.*)$/gm, '<span class="comment">$1</span>')
+          .replace(/(@\w+)/g, '<span class="annot">$1</span>')
+          .replace(/(\b\d[\d_]*\b)/g, '<span class="num">$1</span>')
+          .replace(new RegExp(`\\b(${keywords.join('|')})\\b`, 'g'), '<span class="kw">$1</span>');
+      };
+
+      let codejar = Codejar(code, watHighlighter, {
+        tab: '  ',
+        indentOn: /{/,
+        spellcheck: false,
+        catchTabs: true,
+        history: true,
+      })
+      codejar.updateCode(`(module
+  (rec (type $f1 (func)) (type (struct)))
+  (rec (type (struct)) (type $f2 (func)))
+  (table funcref (elem $f1))
+  (func $f1 (type $f1))
+  (func (export "run") (call_indirect (type $f2) (i32.const 0)))
+)
+      `)
+
+    </script>
+  </div>
+
+
+  <output id="log"></output>
+  <style>#log { margin: 1rem}</style>
+
+  <script type="module">
+    import watr from '../watr.js'
+    // import wabt from '../test/lib/libwabt.js'
+    // import wast from '../test/lib/wast.js'
+    // import watc from '../test/lib/wat-compiler.js'
+
+    // available compilers
+    const lib = {
+      watr(code) { return watr(code) },
+      wabt() {},
+      wast() {},
+      watc() {},
+    }
+
+    let source = document.getElementById('source'),
+      log = document.getElementById('log'),
+      select = document.getElementById('compiler'),
+      binary = document.getElementById('binary')
+
+    let timeout;
+    source.addEventListener('input', () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+      compile(source.textContent);
+      }, 300);
+    });
+    compile(source.value)
+
+    // compile code in editor
+    function compile(code) {
+      log.textContent = ''
+      try {
+        const start = performance.now();
+        let buf = lib[compiler.value](code)
+        binary.textContent = hex(buf)
+        const mod = new WebAssembly.Module(buf)
+        const instance = new WebAssembly.Instance(mod)
+        console.log(instance)
+        const end = performance.now();
+        log.innerHTML = `<span style="color: var(--success-color);">Compiled in ${(end - start).toFixed(2)} ms</span>`
+      }
+      catch (e) {
+        console.error(e)
+        log.innerHTML = `<span style="color: var(--error-color);">${e}</span>`
+      }
+    }
+
+    // format string into hex
+    function hex (d) {
+      return Array.from(d).map((c, i) => c.toString(16).padStart(2, 0) + (i % 16 === 15 ? '\n' : ' ')).join('')
+    }
+  </script>
+</body>
