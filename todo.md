@@ -99,7 +99,7 @@
 * [x] compiler selector
 * [ ] examples
 * [x] perf stats: time took to compile
-* [ ] prettify / minify
+* [x] prettify / minify
 * [ ] drop wasm binary
 * [x] ~~binary copy~~ -> just copy text as is
 * [x] download wasm binary

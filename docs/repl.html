@@ -27,6 +27,19 @@
     button, select {
       height: 2rem;
     }
+    button {
+      white-space: nowrap;
+    }
+    button::before {
+      content: attr(icon);
+      font-size: 1rem;
+    }
+
+    @media (max-width: 600px) {
+      button {
+       font-size: 0;
+      }
+    }
 
     pre, code, output {
       font-family: monospace;
@@ -54,8 +67,8 @@
     <h1>Watr REPL</h1>
   </header>
 
-  <nav style="display: flex; align-items: center; margin: 0 1rem;">
-    <label for="compiler" style="margin-right: .5rem;">Compiler:</label>
+  <nav style="display: flex; align-items: center; margin: 0 1rem; gap: 1rem;">
+    <label for="compiler" style="margin-right: -.5rem;">Compiler:</label>
     <select name="compiler" id="compiler">
       <option value="watr" selected>watr</option>
       <option value="wast">wast (spec)</option>
@@ -63,9 +76,11 @@
       <option value="watc">wat-compiler</option>
     </select>
 
-    <button id="download" title="Download WASM" style="margin-left: 1rem;">
-      &#x1F4E5;
-    </button>
+    <button id="minify" title="Minify source" icon="🗜️"> minify</button>
+
+    <button id="prettify" title="Prettify source" icon="📜"> prettify</button>
+
+    <button id="download" title="Download WASM" icon="📥"> save</button>
   </nav>
 
   <div id="container" style="display: flex; flex-wrap: wrap; margin: 1rem; gap: 2rem">
@@ -98,10 +113,10 @@
     <script type="module">
       import Codejar from './lib/codejar.js'
 
-      let code = document.getElementById('source')
+      let source = document.getElementById('source')
 
       // Minimal WAT syntax rules (56 lines)
-      const watHighlighter = (editor) => {
+      const highlight = (editor) => {
         const text = editor.textContent;
         editor.innerHTML = text
           .replace(/\(([\w$.]+)/g, '(<span class="kw">$1</span>')
@@ -112,7 +127,7 @@
           .replace(/(?<!\\)(\b(?:0x)?\d[\d_a-z]*\b)/ig, '<span class="num">$1</span>')
       };
 
-      let codejar = Codejar(code, watHighlighter, {
+      let codejar = Codejar(source, highlight, {
         tab: '  ',
         indentOn: /{/,
         spellcheck: false,
@@ -122,6 +137,8 @@
       const response = await fetch('../test/example/quine.wat');
       const watCode = await response.text();
       codejar.updateCode(watCode);
+
+      source.codejar = codejar
     </script>
 
     <output id="binary"></output>
@@ -164,7 +181,6 @@
         color: var(--comment);
       }
       .code {
-        /* color:; */
       }
       .data {
         color: var(--data);
@@ -187,7 +203,7 @@
   </style>
 
   <script type="module">
-    import watr from '../watr.js'
+    import watr, {print} from '../watr.js'
 
     let start, end, // performance timer
         timeout, // debounce timer
@@ -197,7 +213,9 @@
       log = document.getElementById('log'),
       select = document.getElementById('compiler'),
       binary = document.getElementById('binary'),
-      download = document.getElementById('download')
+      download = document.getElementById('download'),
+      prettify = document.getElementById('prettify'),
+      minify = document.getElementById('minify')
 
     // available compilers
     const lib = {
@@ -299,13 +317,13 @@
       // parse wasm sections
       const sections = Array(12);
       let offset = 8; // Skip preamble
-      result += `<span class="preamble" title="preamble">${hex(bytes.slice(0, 8))}</span>`
+      result += `<span class="section preamble" title="preamble">${hex(bytes.slice(0, 8))}</span>`
 
       while(offset < bytes.length) {
         const id = bytes[offset++];
         if (!SECTION[id]) err(`Bad section ${id}`)
 
-        result += `<span title="${SECTION[id]}" class="${SECTION[id]}">`
+        result += `<span title="${SECTION[id]}" class="section ${SECTION[id]}">`
         result += ` <b title="${SECTION[id]} id: ${id}">${hex([id])}</b>`
 
         const [size, newOffset] = uleb(bytes, offset);
@@ -317,7 +335,7 @@
 
       return result;
     }
-    // consume unsigned LEB128
+    // parse unsigned LEB128
     function uleb(bytes, offset = 0) {
       let result = 0;
       let shift = 0;
@@ -331,7 +349,6 @@
 
       return [result, offset];
     }
-
     function hex (arr) {
       return Array.from(arr).map((c, i) => c.toString(16).padStart(2, 0)).join(' ')
     }
@@ -347,6 +364,17 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    }
+
+    // prettify/minify source
+    prettify.onclick = () => {
+      source.codejar.updateCode(source.textContent = print(source.textContent))
+    }
+    minify.onclick = () => {
+      source.codejar.updateCode(source.textContent = print(source.textContent, {
+        indent: false,
+        newline: false
+      }))
     }
   </script>
 
