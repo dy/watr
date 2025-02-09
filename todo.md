@@ -96,13 +96,14 @@
 
 ## REPL
 
-* [ ] compiler selector
+* [x] compiler selector
 * [ ] examples
-* [ ] perf stats: time took to compile
+* [x] perf stats: time took to compile
 * [ ] prettify / minify
 * [ ] save prev result file
 * [ ] drop wasm binary
 * [ ] binary copy/paste
+* [ ] download wasm binary
 * [ ] binary analysis with highlight
 
 ## Backlog

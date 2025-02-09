@@ -81,11 +81,11 @@ t('compile: function with 2 params 2 results', () => {
   let { answer } = inline(`
     (func (export "answer") (param i32 i32) (result i32 i32)
       (i32.add (local.get 0) (local.get 1))
-      (i32.const 666)
+      (i32.const 108)
     )
   `).exports
 
-  is(answer(20, 22), [42, 666])
+  is(answer(20, 22), [42, 108])
 })
 
 t('compile: named function named param', () => {
