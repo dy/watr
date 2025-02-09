@@ -167,7 +167,8 @@ export async function file(path, imports = {}) {
       if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('assert_return: skip NaN');
 
       if (kind === 'invoke') {
-        if (typeof expects[0] === 'function' || expects[0] === 'func') ok(m[nm](...args)?.toString().includes('function', `assert_return: invoke ${nm}(${args}) === ${expects}`))
+        // func, ref compares
+        if (typeof expects[0] === 'string') is(typeof m[nm](...args), expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
         else is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
       }
       else if (kind === 'get') {
@@ -272,7 +273,8 @@ const isNaNValue = a => (typeof a === 'number' && isNaN(a)) || a === 2143289344 
 // get value from [type, value] args
 var f32arr = new Float32Array(1), i32arr = new Int32Array(1), i64arr = new BigInt64Array(1)
 const val = ([t, v]) => {
-  return t === 'ref.func' ? v || 'func' :
+  return t === 'ref.func' ? 'function' :
+  t === 'ref.array' || t === 'ref.eq' || t === 'ref.struct' ? 'object' :
     t === 'v128.const' ? v :
       t === 'ref.null' ? null :
         t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :

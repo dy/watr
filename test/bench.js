@@ -1,9 +1,8 @@
 import t, { is } from 'tst'
 import watr from '../src/compile.js'
-// import watr0 from 'https://cdn.skypack.dev/watr'
 import watCompiler from './lib/wat-compiler.js'
 import { wat2wasm } from './index.js'
-// import './lib/wast.js'
+import './lib/wast.js'
 
 // bench
 t.skip('bench: brownian', async () => {
@@ -24,21 +23,21 @@ t.skip('bench: brownian', async () => {
 
   let N = 500
 
-  // console.time('wast (spec)')
-  // for (let i = 0; i < N; i++) WebAssemblyText.encode(src, { metrics: false })
-  // console.timeEnd('wast (spec)')
+  console.time('wast (spec)')
+  for (let i = 0; i < N; i++) WebAssemblyText.encode(src, { metrics: false })
+  console.timeEnd('wast (spec)')
 
   console.time('watr')
   for (let i = 0; i < N; i++) watr(src)
   console.timeEnd('watr')
 
-  // console.time('wat-compiler')
-  // for (let i = 0; i < N; i++) watCompiler(src, { metrics: false })
-  // console.timeEnd('wat-compiler')
+  console.time('wat-compiler')
+  for (let i = 0; i < N; i++) watCompiler(src, { metrics: false })
+  console.timeEnd('wat-compiler')
 
-  // console.time('wabt')
-  // for (let i = 0; i < N; i++) wat2wasm(src, { metrics: false })
-  // console.timeEnd('wabt')
+  console.time('wabt')
+  for (let i = 0; i < N; i++) wat2wasm(src, { metrics: false })
+  console.timeEnd('wabt')
 
   // console.time('wassemble')
   // for (let i = 0; i < N; i++) wassemble(src)

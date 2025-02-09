@@ -2084,53 +2084,6 @@ t('feature: extended const', () => {
     )
   )`
   is(compile(parse(src)), wat2wasm(src).buffer)
-
-  // FIXME: funcref etc
-  // src = `(module
-  //   (table 10 funcref)
-  //   (func (result i32) (i32.const 42))
-  //   (func (export "call_in_table") (param i32) (result i32)
-  //     (call_indirect (type 0) (local.get 0)))
-  //   (elem (table 0) (offset (i32.add (i32.const 1) (i32.const 2))) funcref (ref.func 0))
-  // )`
-  // is(compile(parse(src)), wat2wasm(src).buffer)
-
-
-  // (module
-  //   (table 10 funcref)
-  //   (func (result i32) (i32.const 42))
-  //   (func (export "call_in_table") (param i32) (result i32)
-  //     (call_indirect (type 0) (local.get 0)))
-  //   (elem (table 0) (offset (i32.sub (i32.const 2) (i32.const 1))) funcref (ref.func 0))
-  // )
-
-
-  // (module
-  //   (table 10 funcref)
-  //   (func (result i32) (i32.const 42))
-  //   (func (export "call_in_table") (param i32) (result i32)
-  //     (call_indirect (type 0) (local.get 0)))
-  //   (elem (table 0) (offset (i32.mul (i32.const 2) (i32.const 2))) funcref (ref.func 0))
-  // )
-
-
-  // (module
-  //   (global (import "spectest" "global_i32") i32)
-  //   (table 10 funcref)
-  //   (func (result i32) (i32.const 42))
-  //   (func (export "call_in_table") (param i32) (result i32)
-  //     (call_indirect (type 0) (local.get 0)))
-  //   (elem (table 0)
-  //         (offset
-  //           (i32.mul
-  //             (i32.const 2)
-  //             (i32.add
-  //               (i32.sub (global.get 0) (i32.const 665))
-  //               (i32.const 2))))
-  //         funcref
-  //         (ref.func 0))
-  // )
-
 })
 
 t('feature: function refs', () => {
@@ -2219,7 +2172,40 @@ t('feature: rec types', () => {
     )
   `
   inline(src)
+})
 
+t.only('feature: array', () => {
+  // NOTE: that's not issue of watr, that's issue of wasm compiler
+  let src = `
+    (type $vec (array i8))
+    (type $mvec (array (mut i8)))
+
+    (data $d "\\00\\01\\02\\ff\\04")
+
+    (func $new (export "new") (result (ref $vec))
+      (array.new_data $vec $d (i32.const 1) (i32.const 3))
+    )
+  `
+  console.hex(compile(src))
+  // output from official spec/interpreter/wasm
+  let data = [
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x8c, 0x80, 0x80, 0x80, 0x00, 0x03, 0x5e,
+    0x78, 0x00, 0x5e, 0x78, 0x01, 0x60, 0x00, 0x01,
+    0x64, 0x00, 0x03, 0x82, 0x80, 0x80, 0x80, 0x00,
+    0x01, 0x02, 0x07, 0x87, 0x80, 0x80, 0x80, 0x00,
+    0x01, 0x03, 0x6e, 0x65, 0x77, 0x00, 0x00, 0x0c,
+    0x81, 0x80, 0x80, 0x80, 0x00, 0x01, 0x0a, 0x90,
+    0x80, 0x80, 0x80, 0x00, 0x01, 0x8a, 0x80, 0x80,
+    0x80, 0x00, 0x00, 0x41, 0x01, 0x41, 0x03, 0xfb,
+    0x09, 0x00, 0x00, 0x0b, 0x0b, 0x88, 0x80, 0x80,
+    0x80, 0x00, 0x01, 0x01, 0x05, 0x00, 0x01, 0x02,
+    0xff, 0x04,
+  ]
+  console.hex(data)
+
+  let m = new WebAssembly.Module(Uint8Array.from(data))
+  let inst = new WebAssembly.Instance(m, {})
 })
 
 // examples
@@ -2257,27 +2243,3 @@ t('/test/example/loops.wat', async function () { await file(this.name, {console}
 t('/test/example/memory.wat', async function () { await file(this.name, {js:{log:console.log, mem:new WebAssembly.Memory({maximum:2,shared:false,initial:2})}}) })
 t('/test/example/stack.wat', async function () { await file(this.name) })
 t('/test/example/raycast.wat', async function () { await file(this.name, { console, Math }) })
-
-t.todo('gc cases', async t => {
-  let src
-  // src = `(module
-  //   (type $t0 (array (ref 0)))
-  //   (rec
-  //     (type $s0 (array (ref $t0)))
-  //     (type $s1 (array (ref $s1)))
-  //     (type $s2 (array (ref $s0)))
-  //   )
-  //   (type $t1 (func))
-  // )
-  // `
-  // // console.hex(compile(src))
-  // inline(src)
-
-  src = `
-  (rec (type $f1 (func)) (type (struct (field (ref $f1)))))
-  (func $f (type $f1))
-  `
-  console.hex(compile(src))
-  inline(src)
-
-})

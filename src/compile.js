@@ -608,14 +608,19 @@ const instr = (nodes, ctx) => {
   code = immed[0]
 
   // struct/array
+  // https://webassembly.github.io/gc/core/binary/instructions.html#reference-instructions
   if (code === 0x0fb) {
     [, code] = immed
 
     // struct.new $t ... array.set $t
     if ((code >= 0 && code <= 14) || (code >= 16 && code <= 19)) {
       immed.push(...uleb(id(nodes.shift(), ctx.type)))
+      // struct.get|set* x y
+      if (code >= 2 && code <= 5) Unimplemented //immed.push(...uleb(id(nodes.shift(), ctx.field)))
+      // array.new_fixed $t n
+      else if (code === 8) immed.push(...uleb(nodes.shift()))
       // array.new_data|init_data $t $d
-      if (code === 9 || code === 18) immed.push(...uleb(id(nodes.shift(), ctx.data)))
+      else if (code === 9 || code === 18) immed.push(...uleb(id(nodes.shift(), ctx.data)))
       // array.new_elem|init_elem $t $e
       else if (code === 10 || code === 19) immed.push(...uleb(id(nodes.shift(), ctx.elem)))
       // array.copy $t $t
