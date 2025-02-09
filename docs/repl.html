@@ -4,9 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Watr REPL</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=Space+Mono:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./lib/reset.css" />
   <style>
     html,
@@ -15,7 +12,7 @@
     }
 
     body {
-      font-family: "Space Grotesk", sans-serif;
+      font-family: sans-serif;
       font-optical-sizing: auto;
       font-weight: 400;
       font-style: normal;
@@ -27,9 +24,12 @@
         color: black;
       }
     }
+    button, select {
+      height: 2rem;
+    }
 
     pre, code, output {
-      font-family: "Space Mono", monospace;
+      font-family: monospace;
       font-weight: 400;
       font-style: normal;
     }
@@ -43,16 +43,22 @@
 
 <body style="display: flex; flex-direction: column; height: 100%;">
   <header style="padding: 1rem;">
-    <h1 style="margin: 0rem 0 1rem">Watr REPL</h1>
+    <h1>Watr REPL</h1>
+  </header>
 
-    <label for="compiler">Compiler:</label>
+  <nav style="display: flex; align-items: center; margin: 0 1rem;">
+    <label for="compiler" style="margin-right: .5rem;">Compiler:</label>
     <select name="compiler" id="compiler">
       <option value="watr" selected>watr</option>
       <option value="wast">wast (spec)</option>
       <option value="wabt">wabt</option>
       <option value="watc">wat-compiler</option>
     </select>
-  </header>
+
+    <button id="download" title="Download WASM" style="margin-left: 1rem;">
+      &#x1F4E5;
+    </button>
+  </nav>
 
   <div id="container">
     <style>
@@ -129,7 +135,7 @@
     <output id="binary"></output>
     <style>
       #binary {
-        white-space: pre;
+        position: relative;
       }
     </style>
   </div>
@@ -150,17 +156,24 @@
 
   <script type="module">
     import watr from '../watr.js'
-    import Wabt from '../test/lib/wabt.js'
-    import '../test/lib/wast.js'
-    import watc from '../test/lib/wat-compiler.js'
 
-    const wabt = await Wabt()
+    let start, end, timeout
+
+    let source = document.getElementById('source'),
+      log = document.getElementById('log'),
+      select = document.getElementById('compiler'),
+      binary = document.getElementById('binary')
 
     // available compilers
     const lib = {
-      watr(code) { return watr(code).buffer },
+      async watr(code) { return watr(code).buffer },
 
       async wabt(code) {
+        if (!lib.wabt.compile) {let {default:Wabt} = await import('../test/lib/wabt.js'); lib.wabt.compile = await new Wabt()}
+
+        start = performance.now(); // reset timer
+        const wabt = lib.wabt.compile
+
         const module = wabt.parseWat('inline', code, {
           "exceptions": true,
           "mutable_globals": true,
@@ -191,20 +204,20 @@
           write_debug_names: false
         }).buffer
       },
-      wast(code) {
+
+      async wast(code) {
+        if (!globalThis.WebAssemblyText) await import('../test/lib/wast.js')
+        start = performance.now(); // reset timer
         return WebAssemblyText.encode(code, { metrics: false })
       },
-      watc(code) {
-        return watc(code, {metrics: false}).buffer
-      },
+
+      async watc(code) {
+        if (!lib.watc.compile) lib.watc.compile = (await import('../test/lib/wat-compiler.js')).default
+        start = performance.now(); // reset timer
+        return lib.watc.compile(code, {metrics: false}).buffer
+      }
     }
 
-    let source = document.getElementById('source'),
-      log = document.getElementById('log'),
-      select = document.getElementById('compiler'),
-      binary = document.getElementById('binary')
-
-    let timeout
 
     // debounce recompile each time input changes
     // source.addEventListener('input', recompile);
@@ -223,13 +236,13 @@
       log.textContent = ''
       if (!code.trim()) return
       try {
-        const start = performance.now();
+        start = performance.now();
         let buf = await lib[compiler.value](code)
+        end = performance.now();
         binary.textContent = hex(buf)
         const mod = new WebAssembly.Module(buf)
         const instance = new WebAssembly.Instance(mod)
         console.log(instance)
-        const end = performance.now();
         log.innerHTML = `<span style="color: var(--success-color);">Compiled in ${(end - start).toFixed(2)} ms</span>`
       }
       catch (e) {
