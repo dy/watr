@@ -23,7 +23,7 @@ export default function print(tree, options = {}) {
 
     // flat node (no deep subnodes) shortcut, eg. (i32.const 1), (module (export "") 1)
     if (node.length < 4 && node.every(subnode => !Array.isArray(subnode) || subnode.every(subsubnode => !Array.isArray(subsubnode))))
-      return `(${node.map(sn => printNode(sn)).join(' ')})`
+      return `(${node.map(sn => printNode(sn)).join(' ') })`
 
     let content = node[0]
 
@@ -43,6 +43,6 @@ export default function print(tree, options = {}) {
       }
     }
 
-    return `(${content})`
+    return `(${content + newline + indent.repeat(level)})`
   }
 }
