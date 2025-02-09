@@ -157,12 +157,15 @@
   <script type="module">
     import watr from '../watr.js'
 
-    let start, end, timeout
+    let start, end, // performance timer
+        timeout, // debounce timer
+        buf // compiled buffer
 
     let source = document.getElementById('source'),
       log = document.getElementById('log'),
       select = document.getElementById('compiler'),
-      binary = document.getElementById('binary')
+      binary = document.getElementById('binary'),
+      download = document.getElementById('download')
 
     // available compilers
     const lib = {
@@ -237,7 +240,7 @@
       if (!code.trim()) return
       try {
         start = performance.now();
-        let buf = await lib[compiler.value](code)
+        buf = await lib[compiler.value](code)
         end = performance.now();
         binary.textContent = hex(buf)
         const mod = new WebAssembly.Module(buf)
@@ -255,6 +258,19 @@
     // format string into hex
     function hex (d) {
       return Array.from(new Uint8Array(d)).map((c, i) => c.toString(16).padStart(2, 0) + (i % 16 === 15 ? '\n' : ' ')).join('')
+    }
+
+    // download compiled buffer
+    download.onclick = () => {
+      const blob = new Blob([buf], { type: 'application/wasm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'module.wasm';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     }
   </script>
 
