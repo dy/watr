@@ -17,26 +17,39 @@
       font-weight: 400;
       font-style: normal;
       padding-bottom: 3rem;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      position: relative;
     }
+
     a {
-      color:silver;
+      color: silver;
+
       &:hover {
         color: black;
       }
     }
-    button, select {
+
+    button,
+    select {
       height: 2rem;
       border: none;
       box-shadow: 0 1px 1px 1px gainsboro;
       border-radius: 3px;
       cursor: pointer;
     }
+
     button {
       white-space: nowrap;
       background: whitesmoke;
+      min-width: 2rem;
+      padding: 0 .5rem;
+
       &:hover {
         background: white;
       }
+
       &::before {
         content: attr(icon);
         font-size: 1rem;
@@ -45,11 +58,13 @@
 
     @media (max-width: 600px) {
       button {
-       font-size: 0;
+        font-size: 0;
       }
     }
 
-    pre, code, output {
+    pre,
+    code,
+    output {
       font-family: monospace;
       font-weight: 400;
       font-style: normal;
@@ -70,15 +85,18 @@
   </style>
 </head>
 
-<body style="display: flex; flex-direction: column; height: 100%;">
-  <header style="padding: 1rem 1rem 0.5rem;">
-    <h1>Watr REPL</h1>
+<body>
+  <header style="padding: 1rem 1rem 0.5rem; display: flex; gap: 1rem;">
+    <h1>WASM REPL</h1>
+    <nav style="margin-left: auto; gap: 1rem; display: flex;">
+      <a href="https://github.com/dy/watr" title="Source (github)">⎇</a>
+    </nav>
   </header>
 
   <nav style="display: flex; align-items: center; margin: 0 1rem; gap: 1rem;">
-    <label for="compiler" style="margin-right: -.5rem;">Compiler:</label>
+    <label for="compiler" style="margin-right: -.25rem;">Compiler:</label>
     <select name="compiler" id="compiler">
-      <option value="watr" selected>watr</option>
+      <option value="watr" selected>watr (latest)</option>
       <option value="wast">wast (spec)</option>
       <option value="wabt">wabt</option>
       <option value="watc">wat-compiler</option>
@@ -94,8 +112,11 @@
   <div id="container">
     <style>
       #container {
-        display: flex; margin: 1rem; gap: 2rem
+        display: flex;
+        margin: 1rem;
+        gap: 2rem
       }
+
       @media (max-width: 960px) {
         #container {
           flex-direction: column;
@@ -106,23 +127,36 @@
     <style>
       /* theme */
       #source {
+        min-height: 2rem;
+        position: relative;
+
+        &:empty::before {
+          content: "Type your code here...";
+          color: var(--comment);
+        }
+
         .kw {
           color: var(--keyword);
           font-weight: 500;
         }
+
         .var {
           color: var(--id);
         }
+
         .num {
           color: var(--number);
         }
+
         .data {
           color: var(--data);
         }
+
         .comment {
           color: var(--comment);
           font-style: italic;
         }
+
         .annot {
           color: var(--annot);
         }
@@ -166,41 +200,59 @@
         max-width: 48ch;
         margin: 0 auto;
       }
+
+      @media (max-width: 960px) {
+        #binary {
+          margin: 0;
+        }
+      }
+
       .preamble {
         color: var(--comment);
       }
+
       .type {
         color: var(--keyword);
       }
+
       .import {
         color: var(--annot);
       }
+
       .func {
         color: var(--id);
       }
+
       .table {
         color: var(--keyword);
       }
+
       .memory {
         color: var(--keyword);
       }
+
       .global {
         color: var(--id);
       }
+
       .export {
         color: var(--annot);
       }
+
       .start {
         color: var(--annot);
       }
+
       .elem {
         color: var(--keyword);
       }
+
       .datacount {
         color: var(--comment);
       }
-      .code {
-      }
+
+      .code {}
+
       .data {
         color: var(--data);
       }
@@ -222,11 +274,11 @@
   </style>
 
   <script type="module">
-    import watr, {print} from '../watr.js'
+    import watr, { print } from '../watr.js'
 
     let start, end, // performance timer
-        timeout, // debounce timer
-        buf // compiled buffer
+      timeout, // debounce timer
+      buf // compiled buffer
 
     let source = document.getElementById('source'),
       log = document.getElementById('log'),
@@ -241,7 +293,7 @@
       async watr(code) { return watr(code).buffer },
 
       async wabt(code) {
-        if (!lib.wabt.compile) {let {default:Wabt} = await import('../test/lib/wabt.js'); lib.wabt.compile = await new Wabt()}
+        if (!lib.wabt.compile) { let { default: Wabt } = await import('../test/lib/wabt.js'); lib.wabt.compile = await new Wabt() }
 
         start = performance.now(); // reset timer
         const wabt = lib.wabt.compile
@@ -286,7 +338,7 @@
       async watc(code) {
         if (!lib.watc.compile) lib.watc.compile = (await import('../test/lib/wat-compiler.js')).default
         start = performance.now(); // reset timer
-        return lib.watc.compile(code, {metrics: false}).buffer
+        return lib.watc.compile(code, { metrics: false }).buffer
       }
     }
 
@@ -298,14 +350,16 @@
     select.addEventListener('change', recompile);
     recompile();
 
-    function recompile () {
+    function recompile() {
       clearTimeout(timeout);
       log.textContent = ''
+      if (!source.textContent) binary.textContent = ''
       timeout = setTimeout(() => compile(source.textContent), 300);
     }
 
     // compile code in editor
     async function compile(code) {
+      binary.textContent = ''
       log.textContent = ''
       if (!code.trim()) return
       try {
@@ -332,7 +386,7 @@
     const SECTION = 'custom type import func table memory global export start elem code data datacount'.split(' ')
 
     // format buffer into higglighted hex string
-    function hihex (buf) {
+    function hihex(buf) {
       let bytes = new Uint8Array(buf);
 
       let result = '';
@@ -342,7 +396,7 @@
       let offset = 8; // Skip preamble
       result += `<span class="section preamble" title="preamble">${hex(bytes.slice(0, 8))}</span>`
 
-      while(offset < bytes.length) {
+      while (offset < bytes.length) {
         const id = bytes[offset++];
         if (!SECTION[id]) err(`Bad section ${id}`)
 
@@ -372,7 +426,7 @@
 
       return [result, offset];
     }
-    function hex (arr) {
+    function hex(arr) {
       return Array.from(arr).map((c, i) => c.toString(16).padStart(2, 0)).join(' ')
     }
 
@@ -401,7 +455,8 @@
     }
   </script>
 
-  <footer>
-    <a href="https://github.com/krishnized/license" style="position: fixed; bottom: 1rem; right: 1rem;">ॐ</a>
+  <footer style="position: absolute; bottom: 1rem; right: 1rem; z-index: 2;">
+    <a href="https://github.com/krishnized/license"
+       title="License (MIT, Krishnized)">ॐ</a>
   </footer>
 </body>

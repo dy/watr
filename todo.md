@@ -106,7 +106,9 @@
 * [x] ~~binary copy~~ -> just copy text as is
 * [x] download wasm binary
 * [x] binary analysis with highlight
-* [ ] github link
+* [x] github link
+* [x] make Brahman at absolute level
+* [x] navigation to comparison?, github
 
 ## Backlog
 
