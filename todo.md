@@ -94,6 +94,7 @@
 * [ ] Normalize: make it a separate step: (;1;) for missing names, fill optional props, fold or unfold ops
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
+* [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
 
 ## REPL
 
