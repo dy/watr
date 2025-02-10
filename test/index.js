@@ -8,8 +8,8 @@ import { throws, ok, is } from 'tst'
 import './parse.js'
 import './compile.js'
 import './print.js'
-import './bench.js'
 import './testsuite.js'
+// import './bench.js'
 
 // stub fetch for local purpose
 const isNode = typeof global !== 'undefined' && globalThis === global
@@ -274,15 +274,16 @@ const isNaNValue = a => (typeof a === 'number' && isNaN(a)) || a === 2143289344 
 // get value from [type, value] args
 var f32arr = new Float32Array(1), i32arr = new Int32Array(1), i64arr = new BigInt64Array(1)
 const val = ([t, v]) => {
+  console.log(t, v)
   return t === 'ref.func' ? 'function' :
-  t === 'ref.array' || t === 'ref.eq' || t === 'ref.struct' ? 'object' :
-  t === 'ref.i31' ? 'number' :
-  t.startsWith('ref') ? (!isNaN(Number(v)) ? Number(v) : v || t.split('.')[1]) : // (ref.extern 1), (ref.null extern)
-    t === 'v128.const' ? v :
-      t === 'ref.null' ? null :
-        t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :
-          t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :
-            t === 'i32.const' ? (i32arr[0] = i32.parse(v), i32arr[0]) :
-              t === 'f64.const' ? f64.parse(v) :
-                v;
+    t === 'ref.array' || t === 'ref.eq' || t === 'ref.struct' ? 'object' :
+      t === 'ref.i31' ? 'number' :
+        t === 'ref.null' ? null :
+          t.startsWith('ref') ? (!isNaN(Number(v)) ? Number(v) : v || t.split('.')[1]) : // (ref.extern 1), (ref.null extern)
+            t === 'v128.const' ? v :
+              t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :
+                t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :
+                  t === 'i32.const' ? (i32arr[0] = i32.parse(v), i32arr[0]) :
+                    t === 'f64.const' ? f64.parse(v) :
+                      v;
 }
