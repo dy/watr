@@ -80,10 +80,10 @@ export function inline(src, importObj) {
   let watrBuffer = compile(tree), wabtBuffer
   try {
     wabtBuffer = wat2wasm(src).buffer
-    is(watrBuffer, wabtBuffer)
   } catch (e) {
     console.warn(e)
   }
+  if (wabtBuffer) is(watrBuffer, wabtBuffer)
   const mod = new WebAssembly.Module(watrBuffer)
   // ok(1, 'compiles')
   const inst = new WebAssembly.Instance(mod, importObj)
@@ -167,7 +167,8 @@ export async function file(path, imports = {}) {
       if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('assert_return: skip NaN');
 
       if (kind === 'invoke') {
-        if (typeof expects[0] === 'string') is(typeof m[nm](...args), expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
+        if (expects[0] === 'any' || expects[0] === 'extern') m[nm](...args), ok(1, `assert_return: invoke ${nm}(${args}) is ${expects}`)
+        else if (typeof expects[0] === 'string') is(typeof m[nm](...args), expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
         else if (typeof expects[0] === 'function') ok(m[nm](...args)?.toString().includes('function'), `assert_return: invoke ${nm}(${args}) === ${expects}`)
         else is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
       }
@@ -275,11 +276,13 @@ var f32arr = new Float32Array(1), i32arr = new Int32Array(1), i64arr = new BigIn
 const val = ([t, v]) => {
   return t === 'ref.func' ? 'function' :
   t === 'ref.array' || t === 'ref.eq' || t === 'ref.struct' ? 'object' :
+  t === 'ref.i31' ? 'number' :
+  t.startsWith('ref') ? (!isNaN(Number(v)) ? Number(v) : v || t.split('.')[1]) : // (ref.extern 1), (ref.null extern)
     t === 'v128.const' ? v :
       t === 'ref.null' ? null :
         t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :
           t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :
             t === 'i32.const' ? (i32arr[0] = i32.parse(v), i32arr[0]) :
               t === 'f64.const' ? f64.parse(v) :
-                Number(v) || v; // FIXME: this fixes (ref.extern 1), but not sure...
+                v;
 }

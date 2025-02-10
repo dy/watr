@@ -215,7 +215,7 @@ const plain = (nodes, ctx) => {
       }
 
       // mark datacount section as required
-      else if (node === 'memory.init' || node === 'data.drop' || 'array.new_data' || 'array.init_data') {
+      else if (node === 'memory.init' || node === 'data.drop' || node === 'array.new_data' || node === 'array.init_data') {
         ctx.datacount[0] = true
       }
 
@@ -843,7 +843,7 @@ const instr = (nodes, ctx) => {
     immed.push(0)
   }
 
-  // table.get $id
+  // table.get|set $id
   else if (code == 0x25 || code == 0x26) {
     immed.push(...uleb(id(nodes.shift(), ctx.table)))
   }
