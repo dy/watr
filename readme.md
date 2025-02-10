@@ -1,7 +1,7 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr)
 
-Light & fast WAT compiler. An alternative to [wabt/wat2wasm](https://github.com/AssemblyScript/wabt.js) or [spec/wast]().<br/>
-Useful for high-level languages or dynamic (in-browser) compilation.<br>
+Light & fast WAT compiler.<br/>
+Useful for high-level languages or dynamic (in-browser) compilation.<br/>
 Supports full [spec text syntax](https://webassembly.github.io/spec/core/text/index.html) and [official testsuite](https://github.com/WebAssembly/testsuite).
 
 ## Usage
