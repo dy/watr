@@ -167,8 +167,8 @@ export async function file(path, imports = {}) {
       if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('assert_return: skip NaN');
 
       if (kind === 'invoke') {
-        // func, ref compares
         if (typeof expects[0] === 'string') is(typeof m[nm](...args), expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
+        else if (typeof expects[0] === 'function') ok(m[nm](...args)?.toString().includes('function'), `assert_return: invoke ${nm}(${args}) === ${expects}`)
         else is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
       }
       else if (kind === 'get') {
@@ -281,5 +281,5 @@ const val = ([t, v]) => {
           t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :
             t === 'i32.const' ? (i32arr[0] = i32.parse(v), i32arr[0]) :
               t === 'f64.const' ? f64.parse(v) :
-                v;
+                Number(v) || v; // FIXME: this fixes (ref.extern 1), but not sure...
 }

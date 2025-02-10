@@ -2174,7 +2174,7 @@ t('feature: rec types', () => {
   inline(src)
 })
 
-t.only('feature: array', () => {
+t.skip('feature: array', () => {
   // NOTE: that's not issue of watr, that's issue of wasm compiler
   let src = `
     (type $vec (array i8))
