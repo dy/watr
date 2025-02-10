@@ -379,7 +379,6 @@
       }
       catch (e) {
         console.error(e)
-        binary.textContent = ''
         log.innerHTML = `<span style="color: var(--error);">${e}</span>`
       }
     }
@@ -395,20 +394,21 @@
       // parse wasm sections
       const sections = Array(12);
       let offset = 8; // Skip preamble
-      result += `<span class="section preamble" title="preamble">${hex(bytes.slice(0, 8))}</span>`
+      result += `<p class="section preamble" title="preamble">${hex(bytes.slice(0, 8))}</p>`
 
       while (offset < bytes.length) {
         const id = bytes[offset++];
         if (!SECTION[id]) err(`Bad section ${id}`)
 
-        result += `<span title="${SECTION[id]}" class="section ${SECTION[id]}">`
-        result += ` <b title="${SECTION[id]} id: ${id}">${hex([id])}</b>`
+        result += `<p title="${SECTION[id]}" class="section ${SECTION[id]}">`
 
+        result += ` <b title="${SECTION[id]} id: ${id}">${hex([id])}</b>`
         const [size, newOffset] = uleb(bytes, offset);
         result += ` <i title="${SECTION[id]} size: ${size}">${hex(bytes.slice(offset, newOffset))}</i> `
 
+        result += `<br/>`
         result += hex(bytes.slice(newOffset, offset = newOffset + size))
-        result += `</span>`
+        result += `</p>`
       }
 
       return result;
