@@ -2174,7 +2174,7 @@ t('feature: rec types', () => {
   inline(src)
 })
 
-t.skip('feature: array', () => {
+t('feature: array', () => {
   // NOTE: that's not issue of watr, that's issue of wasm compiler
   let src = `
     (type $vec (array i8))
@@ -2186,7 +2186,9 @@ t.skip('feature: array', () => {
       (array.new_data $vec $d (i32.const 1) (i32.const 3))
     )
   `
-  console.hex(compile(src))
+  // console.hex(compile(src))
+  inline(src)
+
   // output from official spec/interpreter/wasm
   let data = [
     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
@@ -2202,7 +2204,7 @@ t.skip('feature: array', () => {
     0x80, 0x00, 0x01, 0x01, 0x05, 0x00, 0x01, 0x02,
     0xff, 0x04,
   ]
-  console.hex(data)
+  // console.hex(data)
 
   let m = new WebAssembly.Module(Uint8Array.from(data))
   let inst = new WebAssembly.Instance(m, {})

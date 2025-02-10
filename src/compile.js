@@ -215,7 +215,7 @@ const plain = (nodes, ctx) => {
       }
 
       // mark datacount section as required
-      else if (node === 'memory.init' || node === 'data.drop') {
+      else if (node === 'memory.init' || node === 'data.drop' || 'array.new_data' || 'array.init_data') {
         ctx.datacount[0] = true
       }
 
