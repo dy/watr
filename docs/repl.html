@@ -173,8 +173,9 @@
         const text = editor.textContent;
         editor.innerHTML = text
           .replace(/\(([\w$.]+)/g, '(<span class="kw">$1</span>')
-          .replace(/(\$\w+)/g, '<span class="var">$1</span>')
-          .replace(/(;.*)$/gm, '<span class="comment">$1</span>')
+          .replace(/(\$[^\s(){}[\];,"]+)/g, '<span class="var">$1</span>')
+          .replace(/(;;.*)$/gm, '<span class="comment">$1</span>')
+          .replace(/(\(;.*;\))$/gm, '<span class="comment">$1</span>')
           .replace(/(@\w+)/g, '<span class="annot">$1</span>')
           .replace(/(\\[\da-z][\da-z])/ig, '<span class="data">$1</span>')
           .replace(/(?<!\\)(\b(?:0x)?\d[\d_a-z]*\b)/ig, '<span class="num">$1</span>')
@@ -217,15 +218,15 @@
       }
 
       .import {
-        color: var(--annot);
-      }
-
-      .func {
         color: var(--id);
       }
 
+      .func {
+        color: var(--keyword)
+      }
+
       .table {
-        color: var(--keyword);
+        color: var(--number);
       }
 
       .memory {
@@ -237,7 +238,7 @@
       }
 
       .export {
-        color: var(--annot);
+        color: var(--number);
       }
 
       .start {
