@@ -4,6 +4,8 @@ Light & fast WAT compiler.<br/>
 Useful for high-level languages or dynamic (in-browser) compilation.<br/>
 Supports full [spec text syntax](https://webassembly.github.io/spec/core/text/index.html) and [official testsuite](https://github.com/WebAssembly/testsuite).
 
+**[REPL](https://dy.github.io/watr/docs/repl)**
+
 ## Usage
 
 ### Compile

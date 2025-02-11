@@ -3,7 +3,45 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Watr REPL</title>
+
+  <title>WAT REPL - Run or compile WebAssembly text code online</title>
+  <meta name="description"
+        content="Online WebAssembly REPL for compiling and formattig WebAssembly text WAT code into binary directly in your browser. Fast, simple, and efficient. Multiple compiler choices.">
+  <meta name="keywords"
+        content="WebAssembly, WAT, WAST, WASM, online REPL, WebAssembly editor, WASM REPL, wabt, wat2wasm, wat compiler">
+
+  <meta property="og:title" content="WebAssembly Text REPL">
+  <meta property="og:description"
+        content="Run and test WebAssembly WAT code online.">
+  <meta property="og:url" content="https://dy.github.io/watr/docs/repl">
+  <meta property="og:type" content="website">
+  <!-- <meta property="og:image" content="https://dy.github.io/watr/docs/og-image.png"> -->
+
+  <!-- <meta name="twitter:card" content="summary_large_image"> -->
+  <meta name="twitter:title" content="WebAssembly Text REPL">
+  <meta name="twitter:description"
+        content="Fast, simple WebAssembly REPL for WAT code.">
+  <!-- <meta name="twitter:image" content="https://dy.github.io/watr/docs/twitter-image.png"> -->
+
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "WebAssembly Text REPL",
+      "applicationCategory": "Developer Tool",
+      "operatingSystem": "All",
+      "url": "https://dy.github.io/watr/docs/repl",
+      "description": "An online WebAssembly REPL for running and testing WAT code.",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
+    }
+  </script>
+
+  <link rel="canonical" href="https://dy.github.io/watr/docs/repl">
+
   <link rel="stylesheet" href="./lib/reset.css" />
   <style>
     html,
@@ -87,7 +125,7 @@
 
 <body>
   <header style="padding: 1rem 1rem 0.5rem; display: flex; gap: 1rem;">
-    <h1>WASM REPL</h1>
+    <h1 title="WebAssembly text REPL">WAT REPL</h1>
     <nav style="margin-left: auto; gap: 1rem; display: flex;">
       <a href="https://github.com/dy/watr" title="Source (github)">⎇</a>
     </nav>
@@ -102,11 +140,11 @@
       <option value="watc">wat-compiler</option>
     </select>
 
-    <button id="minify" title="Minify source" icon="🗜️"> minify</button>
+    <button id="minify" title="Minify WAT source" aria-label="Minify WAT code" icon="🗜️"> minify</button>
 
-    <button id="prettify" title="Prettify source" icon="🪷"> prettify</button>
+    <button id="prettify" title="Prettify WAT source" aria-label="Prettify WAT code" icon="🪷"> prettify</button>
 
-    <button id="download" title="Download WASM" icon="📥"> save</button>
+    <button id="download" title="Download WASM binary" aria-label="Download WASM binary" icon="📥"> save</button>
   </nav>
 
   <div id="container">
