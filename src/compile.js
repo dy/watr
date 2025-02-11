@@ -429,52 +429,63 @@ const build = [,
   // idxs := func? $id0 $id1
   // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
   (parts, ctx) => {
-    let tabidx, offset, mode = 0b000, reftype
+    let passive = 0, declare = 0, elexpr = 0, tabidx, offset, reftype
 
     // declare?
-    if (parts[0] === 'declare') parts.shift(), mode |= 0b010
+    if (parts[0] === 'declare') parts.shift(), declare = 1
 
     // table?
     if (parts[0][0] === 'table') {
       [, tabidx] = parts.shift()
       tabidx = id(tabidx, ctx.table)
       // ignore table=0
-      if (tabidx) mode |= 0b010
+      // if (tabidx) mode |= 0b010
     }
 
     // (offset expr)|expr
     if (parts[0]?.[0] === 'offset' || (Array.isArray(parts[0]) && parts[0][0] !== 'item' && !parts[0][0].startsWith('ref'))) {
       offset = parts.shift()
       if (offset[0] === 'offset') [, offset] = offset
+      offset = expr(offset, ctx)
     }
-    else mode |= 0b001 // passive
-    offset = expr(offset || ['i32.const', 0], ctx)
+    // no offset means passive element
+    else if (!declare) passive = 1
 
-    // func ... https://webassembly.github.io/function-references/core/text/modules.html#id7
-    if (HEAPTYPE[parts[0]]) reftype = [HEAPTYPE[parts.shift()]]
+    // offset = expr(offset || ['i32.const', 0], ctx)
+
     // reftype: funcref|externref|(ref ...)
-    else if (REFTYPE[parts[0]] || parts[0]?.[0] === 'ref') reftype = type(parts.shift(), ctx)
-    // legacy abbr if func is skipped
-    else !tabidx ? reftype = [HEAPTYPE.func] : err(`Undefined elem reftype`)
+    if (REFTYPE[parts[0]] || parts[0][0] === 'ref') reftype = type(parts.shift(), ctx)
+    // func ... abbr https://webassembly.github.io/function-references/core/text/modules.html#id7
+    else if (parts[0] === 'func') reftype = [HEAPTYPE[parts.shift()]]
+    // or anything else
+    else reftype = [HEAPTYPE.func]
 
-    // externref makes explicit table index
-    if (reftype[0] !== REFTYPE.funcref) mode = 0b110
-    // reset to simplest mode if no actual elements
-    else if (!parts.length) mode &= 0b011
+    // // externref makes explicit table index
+    // if (reftype[0] !== REFTYPE.funcref) tabidx ? mode = 0b110 : mode = 0b101
+    // // reset to simplest mode if no actual elements
+    // else if (!parts.length) mode &= 0b011
 
-    // simplify els sequence
+    // deabbr els sequence, detect expr usage
     parts = parts.map(el => {
       if (el[0] === 'item') [, ...el] = el
       if (el[0] === 'ref.func') [, el] = el
-      // (ref.null func) and other expressions turn expr init mode
-      if (typeof el !== 'string') mode |= 0b100
+      // (ref.null func) and other expressions turn expr els mode
+      if (typeof el !== 'string') elexpr = 1
       return el
     })
 
+    // mode:
+    // Bit 0 indicates a passive or declarative segment
+    // bit 1 indicates the presence of an explicit table index for an active segment
+    // and otherwise distinguishes passive from declarative segments
+    // bit 2 indicates the use of element type and element expressions instead of elemkind=0x00 and element indices.
+    let mode = (elexpr << 2) | ((passive || declare ? declare : !!tabidx) << 1) | (passive || declare);
+
+    console.log(mode)
     return ([
       mode,
       ...(
-        // 0b000 e:expr y*:vec(funcidx)                     | type=funcref, init ((ref.func y)end)*, active (table=0,offset=e)
+        // 0b000 e:expr y*:vec(funcidx)                     | type=(ref func), init ((ref.func y)end)*, active (table=0,offset=e)
         mode === 0b000 ? offset :
           // 0b001 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive
           mode === 0b001 ? [0x00] :
@@ -482,7 +493,7 @@ const build = [,
             mode === 0b010 ? [...uleb(tabidx || 0), ...offset, 0x00] :
               // 0b011 et:elkind y*:vec(funcidx)                  | type=0x00, init ((ref.func y)end)*, passive declare
               mode === 0b011 ? [0x00] :
-                // 0b100 e:expr el*:vec(expr)                       | type=funcref, init el*, active (table=0, offset=e)
+                // 0b100 e:expr el*:vec(expr)                       | type=(ref null func), init el*, active (table=0, offset=e)
                 mode === 0b100 ? offset :
                   // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
                   mode === 0b101 ? reftype :
@@ -492,7 +503,7 @@ const build = [,
                       reftype
       ),
       ...vec(
-        parts.map(mode & 0b100 ?
+        parts.map(elexpr ?
           // ((ref.func y)end)*
           el => expr(typeof el === 'string' ? ['ref.func', el] : el, ctx) :
           // el*
