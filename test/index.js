@@ -167,7 +167,7 @@ export async function file(path, imports = {}) {
       if (args.some(isNaNValue) || expects.some(isNaNValue)) return console.warn('assert_return: skip NaN');
 
       if (kind === 'invoke') {
-        if (expects[0] === 'any' || expects[0] === 'extern') m[nm](...args), ok(1, `assert_return: invoke ${nm}(${args}) is ${expects}`)
+        if (expects[0] === 'any' || expects[0] === 'extern' || expects[0] === 'host') m[nm](...args), ok(1, `assert_return: invoke ${nm}(${args}) is ${expects}`)
         else if (typeof expects[0] === 'string') is(typeof m[nm](...args), expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
         else if (typeof expects[0] === 'function') ok(m[nm](...args)?.toString().includes('function'), `assert_return: invoke ${nm}(${args}) === ${expects}`)
         else is(m[nm](...args), expects.length > 1 ? expects : expects[0], `assert_return: invoke ${nm}(${args}) === ${expects}`)
@@ -278,7 +278,7 @@ const val = ([t, v]) => {
     t === 'ref.array' || t === 'ref.eq' || t === 'ref.struct' ? 'object' :
       t === 'ref.i31' ? 'number' :
         t === 'ref.null' ? null :
-          t.startsWith('ref') ? (!isNaN(Number(v)) ? Number(v) : v || t.split('.')[1]) : // (ref.extern 1), (ref.null extern)
+          t.startsWith('ref') ? t.split('.')[1] : // (ref.extern 1), (ref.null extern) etc
             t === 'v128.const' ? v :
               t === 'i64.const' ? (i64arr[0] = i64.parse(v), i64arr[0]) :
                 t === 'f32.const' ? (f32arr[0] = f32.parse(v), f32arr[0]) :

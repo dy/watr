@@ -366,7 +366,7 @@ const build = [,
     }
 
     else if (kind === 'func') {
-      details = [...vec(fields[0].map(t => type(t, ctx))), ...vec(fields[1].map(t => type(t, ctx)))]
+      details = [...vec(fields[0].map(t => reftype(t, ctx))), ...vec(fields[1].map(t => reftype(t, ctx)))]
     }
     else if (kind === 'array') {
       details = fieldtype(fields, ctx)
@@ -394,7 +394,7 @@ const build = [,
       details = fieldtype(dfn[0], ctx)
     }
     else if (kind === 'table') {
-      details = [...type(dfn.pop(), ctx), ...limits(dfn)]
+      details = [...reftype(dfn.pop(), ctx), ...limits(dfn)]
     }
     else err(`Unknown kind ${kind}`)
 
@@ -406,7 +406,7 @@ const build = [,
 
   // (table 1 2 funcref)
   (node, ctx) => {
-    let lims = limits(node), t = type(node.shift(), ctx), [init] = node
+    let lims = limits(node), t = reftype(node.shift(), ctx), [init] = node
     return init ? [0x40, 0x00, ...t, ...lims, ...expr(init, ctx)] : [...t, ...lims]
   },
 
@@ -425,11 +425,9 @@ const build = [,
   // (elem elem*) - passive
   // (elem declare elem*) - declarative
   // (elem (table idx)? (offset expr)|(expr) elem*) - active
-  // elems := funcref|externref (item expr)|expr (item expr)|expr
-  // idxs := func? $id0 $id1
   // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
   (parts, ctx) => {
-    let passive = 0, declare = 0, elexpr = 0, nofunc = 0, tabidx, offset, reftype
+    let passive = 0, declare = 0, elexpr = 0, nofunc = 0, tabidx, offset, rt
 
     // declare?
     if (parts[0] === 'declare') parts.shift(), declare = 1
@@ -446,17 +444,15 @@ const build = [,
       if (offset[0] === 'offset') [, offset] = offset
       offset = expr(offset, ctx)
     }
-    // no offset means passive element
+    // no offset = passive
     else if (!declare) passive = 1
 
-    // offset = expr(offset || ['i32.const', 0], ctx)
-
-    // reftype: funcref|externref|(ref ...)
-    if (REFTYPE[parts[0]] || parts[0]?.[0] === 'ref') reftype = type(parts.shift(), ctx)
+    // funcref|externref|(ref ...)
+    if (REFTYPE[parts[0]] || parts[0]?.[0] === 'ref') rt = reftype(parts.shift(), ctx)
     // func ... abbr https://webassembly.github.io/function-references/core/text/modules.html#id7
-    else if (parts[0] === 'func') reftype = [HEAPTYPE[parts.shift()]]
+    else if (parts[0] === 'func') rt = [HEAPTYPE[parts.shift()]]
     // or anything else
-    else reftype = [HEAPTYPE.func]
+    else rt = [HEAPTYPE.func]
 
     // deabbr els sequence, detect expr usage
     parts = parts.map(el => {
@@ -469,10 +465,10 @@ const build = [,
 
     // reftype other than (ref null? func) forces table index via nofunc flag
     // also it forces elexpr
-    if (reftype[0] !== REFTYPE.funcref) nofunc = 1, elexpr = 1
+    if (rt[0] !== REFTYPE.funcref) nofunc = 1, elexpr = 1
 
     // mode:
-    // Bit 0 indicates a passive or declarative segment
+    // bit 0 indicates a passive or declarative segment
     // bit 1 indicates the presence of an explicit table index for an active segment
     // and otherwise distinguishes passive from declarative segments
     // bit 2 indicates the use of element type and element expressions instead of elemkind=0x00 and element indices.
@@ -492,11 +488,11 @@ const build = [,
                 // 0b100 e:expr el*:vec(expr)                       | type=(ref null func), init el*, active (table=0, offset=e)
                 mode === 0b100 ? offset :
                   // 0b101 et:reftype el*:vec(expr)                   | type=et, init el*, passive
-                  mode === 0b101 ? reftype :
+                  mode === 0b101 ? rt :
                     // 0b110 x:tabidx e:expr et:reftype el*:vec(expr)   | type=et, init el*, active (table=x, offset=e)
-                    mode === 0b110 ? [...uleb(tabidx || 0), ...offset, ...reftype] :
+                    mode === 0b110 ? [...uleb(tabidx || 0), ...offset, ...rt] :
                       // 0b111 et:reftype el*:vec(expr)                   | type=et, init el*, passive declare
-                      reftype
+                      rt
       ),
       ...vec(
         parts.map(elexpr ?
@@ -545,7 +541,7 @@ const build = [,
     ctx.local = ctx.block = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    return vec([...vec(loctypes.map(([n, t]) => [...uleb(n), ...type(t, ctx)])), ...bytes])
+    return vec([...vec(loctypes.map(([n, t]) => [...uleb(n), ...reftype(t, ctx)])), ...bytes])
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
@@ -584,16 +580,18 @@ const build = [,
   (nodes, ctx) => uleb(ctx.data.length)
 ]
 
-// build type, either direct or ref type
-const type = (t, ctx) => (
+// build reftype, either direct absheaptype or wrapped heaptype https://webassembly.github.io/gc/core/binary/types.html#reference-types
+const reftype = (t, ctx) => (
   t[0] === 'ref' ?
-    ([t[1] == 'null' ? TYPE.refnull : TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))]) :
+    t[1] == 'null' ?
+      HEAPTYPE[t[2]] ? [HEAPTYPE[t[2]]] : [REFTYPE.refnull, ...uleb(id(t[t.length - 1], ctx.type))] :
+      [TYPE.ref, ...uleb(HEAPTYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))] :
     // abbrs
     [TYPE[t] ?? err(`Unknown type ${t}`)]
 );
 
 // build type with mutable flag (mut t) or t
-const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...type(mut ? t[1] : t, ctx), mut];
+const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[1] : t, ctx), mut];
 
 
 
@@ -614,16 +612,18 @@ const instr = (nodes, ctx) => {
   [...immed] = isNaN(op[0]) && INSTR[op] || err(`Unknown instruction ${op}`)
   code = immed[0]
 
-  // struct/array
+  // gc-related
   // https://webassembly.github.io/gc/core/binary/instructions.html#reference-instructions
   if (code === 0x0fb) {
     [, code] = immed
 
     // struct.new $t ... array.set $t
     if ((code >= 0 && code <= 14) || (code >= 16 && code <= 19)) {
-      immed.push(...uleb(id(nodes.shift(), ctx.type)))
-      // struct.get|set* x y
-      if (code >= 2 && code <= 5) Unimplemented //immed.push(...uleb(id(nodes.shift(), ctx.field)))
+      let tidx = id(nodes.shift(), ctx.type)
+      immed.push(...uleb(tidx))
+
+      // struct.get|set* $t $f - read field by index from struct definition (ctx.type[structidx][dfnidx])
+      if (code >= 2 && code <= 5) immed.push(...uleb(id(nodes.shift(), ctx.type[tidx][1])))
       // array.new_fixed $t n
       else if (code === 8) immed.push(...uleb(nodes.shift()))
       // array.new_data|init_data $t $d
@@ -638,6 +638,15 @@ const instr = (nodes, ctx) => {
       if (nodes[0][1] === 'null') code++ // ref.test|cast (ref null $t) is next op
       let heaptype = nodes.shift().pop()
       immed.push(HEAPTYPE[heaptype] || id(heaptype, ctx.type))
+    }
+    // br_on_cast[_fail] $l? (ref null? ht1) (ref null? ht2)
+    // FIXME: normalizer should resolve anyref|etc to (ref null any|etc)
+    else if (code === 24 || code === 25) {
+      let i = blockid(nodes.shift(), ctx.block),
+        ht1 = reftype(nodes.shift(), ctx),
+        ht2 = reftype(nodes.shift(), ctx),
+        castflags = ((ht2[0] !== REFTYPE.ref) << 1) | (ht1[0] !== REFTYPE.ref)
+        immed.push(castflags, ...uleb(i), ht1.pop(), ht2.pop()) // we take only abstype or
     }
   }
 
@@ -732,7 +741,8 @@ const instr = (nodes, ctx) => {
   else if (code === 2 || code === 3 || code === 4) {
     ctx.block.push(code)
 
-    // (block $x) (loop $y)
+    // (block $x) (loop $y) - save label pointer
+    // FIXME: do in normalizer
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
     let t = nodes.shift();
@@ -740,12 +750,12 @@ const instr = (nodes, ctx) => {
     // void
     if (!t) immed.push(TYPE.void)
     // (result i32) - doesn't require registering type
-    else if (t[0] === 'result') immed.push(...type(t[1], ctx))
+    // FIXME: Make sure it is signed positive integer (leb, not uleb) https://webassembly.github.io/gc/core/binary/instructions.html#control-instructions
+    else if (t[0] === 'result') immed.push(...reftype(t[1], ctx))
     else {
       let typeidx = id(t[1], ctx.type), [param, result] = ctx.type[typeidx][1]
-
       // (type $idx (func (result i32)))
-      if (!param?.length && result.length === 1) immed.push(...type(result[0], ctx))
+      if (!param?.length && result.length === 1) immed.push(...reftype(result[0], ctx))
       // (type idx)
       else immed.push(...uleb(typeidx))
     }
@@ -794,19 +804,14 @@ const instr = (nodes, ctx) => {
   // br_if $label cond result?
   // br_on_null $l, br_on_non_null $l
   else if (code == 0x0c || code == 0x0d || code == 0xd5 || code == 0xd6) {
-    // br index indicates how many block items to pop
-    let l = nodes.shift(), i = l?.[0] === '$' ? ctx.block.length - ctx.block[l] : +l
-    i <= ctx.block.length || err(`Bad label ${l}`)
-    immed.push(...uleb(i))
+    immed.push(...uleb(blockid(nodes.shift(), ctx.block)))
   }
 
   // br_table 1 2 3 4  0  selector result?
   else if (code == 0x0e) {
     let args = []
     while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
-      let l = nodes.shift(), i = l[0][0] === '$' ? ctx.block.length - ctx.block[l] : +l
-      i <= ctx.block.length || err(`Bad label ${l}`)
-      args.push(...uleb(i))
+      args.push(...uleb(blockid(nodes.shift(), ctx.block)))
     }
     args.unshift(...uleb(args.length - 1))
     immed.push(...args)
@@ -816,7 +821,7 @@ const instr = (nodes, ctx) => {
   else if (code == 0x1b) {
     let result = nodes.shift()
     // 0x1b -> 0x1c
-    if (result.length) immed.push(immed.pop() + 1, ...vec(result.map(t => type(t, ctx))))
+    if (result.length) immed.push(immed.pop() + 1, ...vec(result.map(t => reftype(t, ctx))))
   }
 
   // ref.func $id
@@ -863,6 +868,16 @@ const instr = (nodes, ctx) => {
 // instantiation time value initializer (consuming) - we redirect to instr
 const expr = (node, ctx) => [...instr([node], ctx), 0x0b]
 
+// deref id node to numeric idx
+const id = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
+
+// block id - same as id but for block
+// index indicates how many block items to pop
+const blockid = (nm, block, i) => (
+  i = nm?.[0] === '$' ? block.length - block[nm] : +nm,
+  isNaN(i) || i > block.length ? err(`Bad label ${nm}`) : i
+)
+
 // consume align/offset params
 const memarg = (args) => {
   let align, offset, k, v
@@ -873,9 +888,6 @@ const memarg = (args) => {
   if (align) ((align = Math.log2(align)) % 1) && err(`Bad align ${align}`)
   return [align, offset]
 }
-
-// deref id node to numeric idx
-const id = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
 
 // const ALIGN = {
 //   'i32.load': 4, 'i64.load': 8, 'f32.load': 4, 'f64.load': 8,
