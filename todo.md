@@ -104,11 +104,15 @@
 ## REPL
 
 * [x] compiler selector
-* [ ] examples
+* [ ] examples (when no code - prompt for suggest?)
 * [x] perf stats: time took to compile
 * [x] prettify / minify
+* [ ] PWA
 * [ ] drop wasm binary?
 * [ ] normalize code button (when normalizer step is ready)
+* [ ] compile button? better for SEO and UI - can have a shortcut
+* [ ] button shortcuts: ctrl + enter, ctrl + /
+* [ ] history
 * [x] ~~binary copy~~ -> just copy text as is
 * [x] download wasm binary
 * [x] binary analysis with highlight
@@ -116,6 +120,16 @@
 * [x] make Brahman at absolute level
 * [x] navigation to comparison?, github
 * [x] highlight fails: (elem (i32.const 0) (;;)(ref func) (ref.func 0))
+* [ ] shareable permalinks #code=(module(func (result i32) i32.const 42))
+* [ ] tree view for binary
+* [ ] dark theme
+* [ ] inline docs about all commands / instructions
+  * [ ] at least tooltips for syntax
+* [ ] resizable divider between panels
+* [ ] offline use
+* [ ] random code generator?
+* [ ] copy as binary
+* [ ] make a component? going to need it for jz, piezo
 
 ## Backlog
 
