@@ -23,6 +23,8 @@
         content="Fast, simple WebAssembly REPL for WAT code.">
   <!-- <meta name="twitter:image" content="https://dy.github.io/watr/docs/twitter-image.png"> -->
 
+  <meta name="google" content="notranslate">
+
   <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -161,7 +163,8 @@
         }
       }
     </style>
-    <output id="source"></output>
+
+    <code id="source" title="WebAssembly Text Format (WAT) code" aria-label="WebAssembly Text Format (WAT) code" lang="plaintext"></code>
     <style>
       /* theme */
       #source {
@@ -233,7 +236,7 @@
       source.codejar = codejar
     </script>
 
-    <output id="binary"></output>
+    <output id="binary" title="WebAssembly WASM binary" aria-label="WebAssembly WASM binary" lang="plaintext"></output>
     <style>
       #binary {
         position: relative;
