@@ -274,7 +274,6 @@ const isNaNValue = a => (typeof a === 'number' && isNaN(a)) || a === 2143289344 
 // get value from [type, value] args
 var f32arr = new Float32Array(1), i32arr = new Int32Array(1), i64arr = new BigInt64Array(1)
 const val = ([t, v]) => {
-  console.log(t, v)
   return t === 'ref.func' ? 'function' :
     t === 'ref.array' || t === 'ref.eq' || t === 'ref.struct' ? 'object' :
       t === 'ref.i31' ? 'number' :

@@ -356,7 +356,7 @@ const build = [,
     if (rec) {
       // FIXME: rec of one type
       kind = 'rec'
-      let [from, length] = rec, subtypes = Array.from({length}, (_,i) => build[SECTION.type](ctx.type[from + i].slice(0, 4), ctx))
+      let [from, length] = rec, subtypes = Array.from({ length }, (_, i) => build[SECTION.type](ctx.type[from + i].slice(0, 4), ctx))
       details = vec(subtypes)
     }
     // (sub final? sups* (type...))
@@ -429,7 +429,7 @@ const build = [,
   // idxs := func? $id0 $id1
   // ref: https://webassembly.github.io/spec/core/binary/modules.html#element-section
   (parts, ctx) => {
-    let passive = 0, declare = 0, elexpr = 0, tabidx, offset, reftype
+    let passive = 0, declare = 0, elexpr = 0, nofunc = 0, tabidx, offset, reftype
 
     // declare?
     if (parts[0] === 'declare') parts.shift(), declare = 1
@@ -438,8 +438,6 @@ const build = [,
     if (parts[0][0] === 'table') {
       [, tabidx] = parts.shift()
       tabidx = id(tabidx, ctx.table)
-      // ignore table=0
-      // if (tabidx) mode |= 0b010
     }
 
     // (offset expr)|expr
@@ -454,16 +452,11 @@ const build = [,
     // offset = expr(offset || ['i32.const', 0], ctx)
 
     // reftype: funcref|externref|(ref ...)
-    if (REFTYPE[parts[0]] || parts[0][0] === 'ref') reftype = type(parts.shift(), ctx)
+    if (REFTYPE[parts[0]] || parts[0]?.[0] === 'ref') reftype = type(parts.shift(), ctx)
     // func ... abbr https://webassembly.github.io/function-references/core/text/modules.html#id7
     else if (parts[0] === 'func') reftype = [HEAPTYPE[parts.shift()]]
     // or anything else
     else reftype = [HEAPTYPE.func]
-
-    // // externref makes explicit table index
-    // if (reftype[0] !== REFTYPE.funcref) tabidx ? mode = 0b110 : mode = 0b101
-    // // reset to simplest mode if no actual elements
-    // else if (!parts.length) mode &= 0b011
 
     // deabbr els sequence, detect expr usage
     parts = parts.map(el => {
@@ -474,14 +467,17 @@ const build = [,
       return el
     })
 
+    // reftype other than (ref null? func) forces table index via nofunc flag
+    // also it forces elexpr
+    if (reftype[0] !== REFTYPE.funcref) nofunc = 1, elexpr = 1
+
     // mode:
     // Bit 0 indicates a passive or declarative segment
     // bit 1 indicates the presence of an explicit table index for an active segment
     // and otherwise distinguishes passive from declarative segments
     // bit 2 indicates the use of element type and element expressions instead of elemkind=0x00 and element indices.
-    let mode = (elexpr << 2) | ((passive || declare ? declare : !!tabidx) << 1) | (passive || declare);
+    let mode = (elexpr << 2) | ((passive || declare ? declare : (!!tabidx || nofunc)) << 1) | (passive || declare);
 
-    console.log(mode)
     return ([
       mode,
       ...(
@@ -593,7 +589,7 @@ const type = (t, ctx) => (
   t[0] === 'ref' ?
     ([t[1] == 'null' ? TYPE.refnull : TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))]) :
     // abbrs
-   [TYPE[t] ?? err(`Unknown type ${t}`)]
+    [TYPE[t] ?? err(`Unknown type ${t}`)]
 );
 
 // build type with mutable flag (mut t) or t

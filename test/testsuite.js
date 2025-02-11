@@ -204,7 +204,7 @@ t.mute('/test/official/proposals/gc/array_copy.wast', async function () { await 
 t.mute('/test/official/proposals/gc/array_fill.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/proposals/gc/array_init_data.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/proposals/gc/array_init_elem.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/gc/array.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/gc/array.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/proposals/gc/binary-gc.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/proposals/gc/binary.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/gc/br_on_cast_fail.wast', async function () { await file(this.name, { spectest }) })

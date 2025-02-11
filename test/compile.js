@@ -1161,6 +1161,14 @@ t('case: start index', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
+t('case: elem with special ref', () => {
+  let src
+
+  src = `(type $bvec (array i8))
+        (elem $e (ref $bvec))`
+
+  inline(src)
+})
 
 // extensions
 t('feature: multiple results', () => {

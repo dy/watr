@@ -1,7 +1,7 @@
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
 export const INSTR = [
   'unreachable', 'nop', 'block', 'loop', 'if', 'else', 'then', , , , ,
-  'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', 'return_call', 'return_call_indirect','call_ref' ,'return_call_ref' , , , , ,
+  'end', 'br', 'br_if', 'br_table', 'return', 'call', 'call_indirect', 'return_call', 'return_call_indirect', 'call_ref', 'return_call_ref', , , , ,
   'drop', 'select', '', , , ,
   'local.get', 'local.set', 'local.tee', 'global.get', 'global.set', 'table.get', 'table.set', ,
   'i32.load', 'i64.load', 'f32.load', 'f64.load',
@@ -26,7 +26,7 @@ export const INSTR = [
   'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
   'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64',
   'i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s', , , , , , , , , , , ,
-  'ref.null', 'ref.is_null', 'ref.func', 'ref.eq' ,'ref.as_non_null' ,'br_on_null' ,'br_on_non_null' , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
+  'ref.null', 'ref.is_null', 'ref.func', 'ref.eq', 'ref.as_non_null', 'br_on_null', 'br_on_non_null', , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
 
   // 0xFB 0xNN (0xFB shift)
   'struct.new', 'struct.new_default', 'struct.get', 'struct.get_s', 'struct.get_u', 'struct.set', 'array.new', 'array.new_default', 'array.new_fixed', 'array.new_data', 'array.new_elem', 'array.get', 'array.get_s', 'array.get_u', 'array.set', 'array.len', 'array.fill', 'array.copy', 'array.init_data', 'array.init_elem', 'ref.test', '', 'ref.cast', '', 'br_on_cast', 'br_on_cast_fail', 'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u', ,
@@ -51,8 +51,8 @@ export const INSTR = [
 ],
   SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 },
   RECTYPE = { sub: 0x50, subfinal: 0x4F, rec: 0x4E },
-  DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, ...RECTYPE},
-  HEAPTYPE = {nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A},
+  DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, ...RECTYPE },
+  HEAPTYPE = { nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A },
   REFTYPE = {
     // absheaptype abbrs
     nullfuncref: HEAPTYPE.nofunc,
