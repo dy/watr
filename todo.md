@@ -91,10 +91,15 @@
   * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
   * [ ] Wasm3
 * [x] Print: make it as nice as AI
-* [ ] Normalize: make it a separate step: (;1;) for missing names, fill optional props, fold or unfold ops
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
 * [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
+
+## Optimizations
+
+* [ ] Normalize: make it a separate step: (;1;) for missing names, fill optional props, fold or unfold ops
+* [ ] Avoid .shift() as it is supposed to be slower
+* [ ] Split instr into smaller instr by kind
 
 ## REPL
 
@@ -103,13 +108,14 @@
 * [x] perf stats: time took to compile
 * [x] prettify / minify
 * [ ] drop wasm binary?
-* [ ] plain / fold code
+* [ ] normalize code button (when normalizer step is ready)
 * [x] ~~binary copy~~ -> just copy text as is
 * [x] download wasm binary
 * [x] binary analysis with highlight
 * [x] github link
 * [x] make Brahman at absolute level
 * [x] navigation to comparison?, github
+* [x] highlight fails: (elem (i32.const 0) (;;)(ref func) (ref.func 0))
 
 ## Backlog
 
