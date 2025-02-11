@@ -635,9 +635,11 @@ const instr = (nodes, ctx) => {
     }
     // ref.test|cast (ref null? $t|heaptype)
     else if (code >= 20 && code <= 23) {
-      if (nodes[0][1] === 'null') code++ // ref.test|cast (ref null $t) is next op
-      let heaptype = nodes.shift().pop()
-      immed.push(HEAPTYPE[heaptype] || id(heaptype, ctx.type))
+      // FIXME: normalizer is supposed to resolve this
+      let ht = reftype(nodes.shift(), ctx)
+      if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop()+1) // ref.test|cast (ref null $t) is next op
+      if (ht.length > 1) ht.shift() // pop ref
+      immed.push(...ht)
     }
     // br_on_cast[_fail] $l? (ref null? ht1) (ref null? ht2)
     // FIXME: normalizer should resolve anyref|etc to (ref null any|etc)
