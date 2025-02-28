@@ -103,7 +103,7 @@
 * [ ] resolves type abbrs
 * [ ] injects implicit types
 * [ ] resolves name aliases to indices
-* [ ] Normalize: make it a separate step: (;1;) for missing names, fill optional props, fold or unfold ops
+* [ ] make it a separate step: (;1;) for missing names, fill optional props, fold or unfold ops
 
 ## Optimizations
 

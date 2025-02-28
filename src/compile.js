@@ -1,8 +1,8 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
-import parse from './parse.js'
-import { clone, err } from './util.js'
+import normalize from './normalize.js'
+import { err } from './util.js'
 
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
@@ -16,9 +16,7 @@ INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b
  * @returns {Uint8Array} The compiled WASM binary data.
  */
 export default function watr(nodes) {
-  // normalize to (module ...) form
-  if (typeof nodes === 'string') nodes = parse(nodes);
-  else nodes = clone(nodes)
+  nodes = normalize(nodes)
 
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
   if (nodes[0] === 'module') nodes.shift(), nodes[0]?.[0] === '$' && nodes.shift()
