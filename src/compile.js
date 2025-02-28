@@ -16,12 +16,9 @@ INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b
  * @returns {Uint8Array} The compiled WASM binary data.
  */
 export default function watr(nodes) {
+  // make sure it's (module ...)
   nodes = normalize(nodes)
-
-  // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
-  if (nodes[0] === 'module') nodes.shift(), nodes[0]?.[0] === '$' && nodes.shift()
-  // single node, not module
-  else if (typeof nodes[0] === 'string') nodes = [nodes]
+  nodes.shift()
 
   // binary abbr "\00" "\0x61" ...
   if (nodes[0] === 'binary') {
