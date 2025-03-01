@@ -18,6 +18,10 @@ INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b
 export default function watr(nodes) {
   // make sure it's (module ...)
   nodes = normalize(nodes)
+
+  // FIXME: get rid of when we redo internals to avoid mutations
+  nodes = (function clone(items) { return items.map(item => Array.isArray(item) ? clone(item) : item) } )(nodes);
+
   nodes.shift()
 
   // binary abbr "\00" "\0x61" ...

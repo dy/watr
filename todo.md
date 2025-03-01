@@ -96,8 +96,11 @@
 * [ ] replace wabt with spec/wasm for tests
 * [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
 
+* [ ] Imported members always go first (indexed) - we don't have to maintain `null`s in output arrays
+
 ## Normalize
 
+* [ ] it should not use shift/unshift and be immutable for input
 * [ ] prepares source for compiler, so that tokens layout is static (constant index)
 * [ ] resolves section abbrs
 * [ ] resolves type abbrs

@@ -1170,6 +1170,16 @@ t('case: elem with type ref', () => {
   inline(src)
 })
 
+t('case: import order', () => {
+  let src = `
+    (func (import "x" "i32")(param i32))
+    (import "x" "i64" (func (param i64)))
+    (func (param i32))
+    (func (call 0 (i32.const 1)))
+  `
+
+  inline(src, {x:{i32(){}, i64(){}}})
+})
 
 // extensions
 t('feature: multiple results', () => {
