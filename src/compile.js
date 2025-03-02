@@ -22,8 +22,6 @@ export default function watr(nodes) {
   // FIXME: get rid of when we redo internals to avoid mutations
   nodes = (function clone(items) { return items.map(item => Array.isArray(item) ? clone(item) : item) } )(nodes);
 
-  nodes.shift()
-
   // binary abbr "\00" "\0x61" ...
   if (nodes[0] === 'binary') {
     nodes.shift()
@@ -63,14 +61,9 @@ export default function watr(nodes) {
 
     // index, alias
     let items = ctx[kind];
-    let name = alias(node, items)
-
-    // export abbr
-    // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
-
-    // for import nodes - redirect output to import
-    if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
+    let name = (node[0]?.[0] === '$' || node[0]?.[0] === '(' || node[0]?.[0] == null) && node.shift();
+    if (name[0] === '(') name = false
+    else if (name) name in items ? err(`Duplicate ${items.name} ${name}`) : items[name] = items.length; // save alias
 
     // table abbr
     if (kind === 'table') {
@@ -165,13 +158,6 @@ export default function watr(nodes) {
     ...bin(SECTION.code),
     ...bin(SECTION.data)
   ])
-}
-
-// consume name eg. $t ...
-const alias = (node, list) => {
-  let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
-  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
-  return name
 }
 
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
