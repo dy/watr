@@ -103,11 +103,12 @@
 * [ ] it should not use shift/unshift and be immutable for input
   * [ ] immutable compile.js
 * [ ] normalize typeuse param/result
-* [ ] prepares source for compiler, so that tokens layout is static (constant index)
-* [ ] resolves section abbrs
-* [ ] resolves type abbrs
+* [ ] prepare source for compiler, so that tokens layout is static (constant index)
+* [ ] resolve section abbrs
+* [ ] resolve type abbrs
 * [ ] injects implicit types
-* [ ] resolves name aliases to indices
+* [ ] resolve name aliases to indices
+* [ ] flat or fold all ops
 
 ## Optimizations
 

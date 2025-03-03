@@ -23,7 +23,6 @@ export default function normalize (nodes) {
   for (let kind in SECTION) sections[SECTION[kind]] = []
 
   // TODO: dealias section names
-  // TODO: deabbr exports
 
   // reorder nodes by sections, deabbr
   for (let i = from; i < nodes.length; i++) {
