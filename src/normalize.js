@@ -45,33 +45,37 @@ export default function normalize (nodes) {
 
     let items = sections[SECTION[kind]];
 
-    if (kind === 'type' || kind === 'table' || kind === 'memory' || kind === 'global' || kind === 'func') {
+    if (kind === 'export' || kind === 'start' || kind === 'elem' || kind === 'data') {
+      items.push(node)
+    }
+
+    // (kind === 'type' || kind === 'table' || kind === 'memory' || kind === 'global' || kind === 'func')
+    else {
       // index, alias
       let idx = 1 // within-node idx
       let name = (node[idx]?.[0] === '$') && node[idx++]
 
       // export abbr
       // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-      while (node[idx]?.[0] === 'export') (sections[SECTION.export]).push([...node[idx++], [kind, items.length]])
+      while (node[idx]?.[0] === 'export') sections[SECTION.export].push([...node[idx++], [kind, items.length]])
 
       // import abbr
       // (table|memory|global|func id? (import m n) type) -> (import m n (table|memory|global|func id? type))
       if (node[idx]?.[0] === 'import') {
         let imp = node[idx++]
-        ;(sections[SECTION.import]).push([...imp, [kind, name || `(;${items.length};)`, ...node.slice(idx)]])
+        sections[SECTION.import].push([...imp, [kind, name || `(;${items.length};)`, ...node.slice(idx)]])
         items.length++ // stub
         continue
       }
 
-      // // table abbr
-      // if (kind === 'table') {
-      //   // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-      //   if (node[1]?.[0] === 'elem') {
-      //     let [reftype, [, ...els]] = node
-      //     node = [els.length, els.length, reftype]
-      //     ctx.elem.push([['table', name || items.length], ['i32.const', '0'], reftype, ...els])
-      //   }
-      // }
+      // table abbr
+      // (table id? reftype (elem ...n)) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
+      if (kind === 'table' && node[idx+1]?.[0] === 'elem') {
+        let reftype = node[idx], [, ...els] = node[idx+1]
+        idx = 1
+        node = [kind, els.length, els.length, reftype]
+        sections[SECTION.elem].push(['elem', ['table', name || items.length], ['i32.const', '0'], reftype, ...els])
+      }
 
       // // data abbr
       // // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
@@ -117,8 +121,6 @@ export default function normalize (nodes) {
 
       items.push([kind, name || `(;${items.length};)`, ...node.slice(idx)])
     }
-
-    else items.push(node)
   }
 
   // TODO: push implicit types
