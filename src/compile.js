@@ -65,16 +65,8 @@ export default function watr(nodes) {
     if (name[0] === '(') name = false
     else if (name) name in items ? err(`Duplicate ${items.name} ${name}`) : items[name] = items.length; // save alias
 
-    // data abbr
-    // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
-    if (kind === 'memory' && node[0]?.[0] === 'data') {
-      let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
-      ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
-      node = [m, m]
-    }
-
     // keep start name
-    else if (kind === 'start') name && node.push(name)
+    if (kind === 'start') name && node.push(name)
 
     // normalize type definition to (func|array|struct dfn) form
     // (type (func param* result*))

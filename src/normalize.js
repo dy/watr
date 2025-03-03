@@ -72,18 +72,18 @@ export default function normalize (nodes) {
       // (table id? reftype (elem ...n)) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
       if (kind === 'table' && node[idx+1]?.[0] === 'elem') {
         let reftype = node[idx], [, ...els] = node[idx+1]
-        idx = 1
-        node = [kind, els.length, els.length, reftype]
+        idx = 0, node = [els.length, els.length, reftype]
         sections[SECTION.elem].push(['elem', ['table', name || items.length], ['i32.const', '0'], reftype, ...els])
       }
 
-      // // data abbr
-      // // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
-      // else if (kind === 'memory' && node[0]?.[0] === 'data') {
-      //   let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
-      //   ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
-      //   node = [m, m]
-      // }
+      // data abbr
+      // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
+      else if (kind === 'memory' && node[idx]?.[0] === 'data') {
+        let [, ...data] = node[idx],
+            m = ('' + Math.ceil(data.reduce((s,str) => (s+str.length-2), 0) / 65536)) // FIXME: figure out precise data size
+        sections[SECTION.data].push(['data', ['memory', items.length], ['i32.const', 0], ...data])
+        idx=0, node = [m, m]
+      }
 
       // // keep start name
       // else if (kind === 'start') name && node.push(name)
