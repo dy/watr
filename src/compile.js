@@ -55,15 +55,14 @@ export default function watr(nodes) {
       else kind = (node = node[0]).shift()
     }
 
-    // import abbr
-    // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
-    else if (kind === 'import') [kind, ...node] = (imported = node).pop()
-
     // index, alias
     let items = ctx[kind];
     let name = (node[0]?.[0] === '$' || node[0]?.[0] === '(' || node[0]?.[0] == null) && node.shift();
     if (name[0] === '(') name = false
     else if (name) name in items ? err(`Duplicate ${items.name} ${name}`) : items[name] = items.length; // save alias
+
+    // for import nodes - redirect output to import
+    if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
 
     // keep start name
     if (kind === 'start') name && node.push(name)

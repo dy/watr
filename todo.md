@@ -101,12 +101,13 @@
 ## Normalize
 
 * [ ] it should not use shift/unshift and be immutable for input
+  * [ ] immutable compile.js
+* [ ] normalize typeuse param/result
 * [ ] prepares source for compiler, so that tokens layout is static (constant index)
 * [ ] resolves section abbrs
 * [ ] resolves type abbrs
 * [ ] injects implicit types
 * [ ] resolves name aliases to indices
-* [ ] make it a separate step: (;1;) for missing names, fill optional props, fold or unfold ops
 
 ## Optimizations
 
