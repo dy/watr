@@ -100,13 +100,13 @@
 
 ## Normalize
 
+* [ ] inject implicit types
 * [ ] it should not use shift/unshift and be immutable for input
   * [ ] immutable compile.js
 * [ ] normalize typeuse param/result
 * [ ] prepare source for compiler, so that tokens layout is static (constant index)
 * [ ] resolve section abbrs
 * [ ] resolve type abbrs
-* [ ] injects implicit types
 * [ ] resolve name aliases to indices
 * [ ] flat or fold all ops
 
