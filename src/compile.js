@@ -41,6 +41,7 @@ export default function watr(nodes) {
   let subc // current subtype count
 
   // prepare/normalize nodes
+  // TODO: make via immutable way
   while (nodes.length) {
     let [kind, ...node] = nodes.shift()
     let imported // if node needs to be imported
@@ -65,6 +66,7 @@ export default function watr(nodes) {
     if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
 
     // keep start name
+    // FIXME: move away
     if (kind === 'start') name && node.push(name)
 
     // normalize type definition to (func|array|struct dfn) form

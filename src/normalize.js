@@ -16,26 +16,31 @@ export default function normalize(nodes) {
   // (module binary "..."), (module quote "...")
   if (nodes[0] === 'binary' || nodes[0] === 'quote') return nodes
 
-  const sections = [[], [], [], [], [], [], [], [], [], [], [], []]
+  let types = [], sections = [[], types, [], [], [], [], [], [], [], [], [], []]
 
-  // consume typeuse nodes, return type index/params, or null idx if no type
-  // https://webassembly.github.io/spec/core/text/modules.html#type-uses
-  const typeuse = (node, names) => {
-    let id, param, result
+  // deref id node to numeric idx
+  // const deref = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
 
-    // explicit type (type 0|$name)
-    if (node[idx]?.[0] === 'type') {
-      [, id] = node[idx];
-    }
+  let idx = 0 // reusable within-node pointer
 
-    // implicit type (param i32 i32)(result i32)
-    [param, result] = paramres(node, names)
+  // normalize type definition
+  // (type $n? (func param* result*))
+  // (type $n? (array (mut i8)))
+  // (type $n? (struct (field a)*)
+  // -> (type (sub final (struct|array|func ...)))
+  const normtype = (node) => {
+    idx = 1
+    let nm = node[idx][0] === '$' && node[idx++],
+        subtype = node[idx],
+        comptype = subtype[0] === 'sub' ? subtype.at(-1) : subtype
 
-    // check type consistency
-    // if ((param.length || result.length) && id in sections[SECTION.type])
-    //   if (sections[SECTION.type][deref(id, sections[SECTION.type])][1].join('>') !== param + '>' + result) err(`Type ${id} mismatch`)
+    if (nm) nm in types ? err(`Duplicate type ${nm}`) : types[nm] = types.length
 
-    return [id, param, result]
+    idx = 1
+    if (comptype[0] === 'func') comptype = paramres(comptype), types['$' + comptype.join('>')] ??= types.length
+    else if (comptype[0] === 'struct') comptype = fieldseq(comptype, 'field', true)
+
+    return []
   }
 
   // consume (param t+)* (result t+)* sequence
@@ -46,7 +51,7 @@ export default function normalize(nodes) {
     // collect result eg. (result f64 f32)(result i32)
     let result = fieldseq(node, 'result')
 
-    if (node[0]?.[0] === 'param') err(`Unexpected param`)
+    if (node[idx]?.[0] === 'param') err(`Unexpected param`)
 
     return [param, result]
   }
@@ -71,25 +76,51 @@ export default function normalize(nodes) {
     return seq
   }
 
-  // deref id node to numeric idx
-  // const deref = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
+  // consume typeuse nodes, return type index/params, or null idx if no type
+  // https://webassembly.github.io/spec/core/text/modules.html#type-uses
+  const typeuse = (node, names) => {
+    let id, param, result
 
-  let idx = 0 // reusable within-node pointer
+    // explicit type (type 0|$name)
+    if (node[idx]?.[0] === 'type') {
+      [, id] = node[idx++];
+      if (id[0] === '$') id = types[id] ?? err(`Unknown type ${id}`)
+    }
+
+    // implicit type (param i32 i32)(result i32)
+    [param, result] = paramres(node, names)
+
+    // TODO: check type consistency
+    // if ((param.length || result.length) && id in types)
+    //   if (types[deref(id, types)][1].join('>') !== param + '>' + result) err(`Type ${id} mismatch`)
+
+    // we detect typeuse after explicit types, so undefined types are implicit
+    id ??= (types['$' + param + '>' + result] ??= types.push(['type', ['func', ['param', ...param], ['result', ...result]]])-1)
+
+    return id
+  }
 
   // collect & normalize types
   nodes.filter(node => {
     let [kind] = node
 
-    // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
-    if (kind === 'rec' || kind === 'type') sections[SECTION.type].push(node)
+    // TODO
+    // if (kind === 'type') node = normtype(node)
+    // // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> normalize subtypes
+    // else if (kind === 'rec') {
+    //   types.push(node.map((type, i) => !i ? type : normtype(type)))
+    //   // TODO: collect/normalize func/struct type elements
+    // }
+    if (kind === 'rec' || kind === 'type') types.push(node)
     else if (kind === 'export' || kind === 'start' || kind === 'elem' || kind === 'data') sections[SECTION[kind]].push(node)
     else return true
   })
 
   // reorder nodes by sections, deabbr
+  // (kind === 'table' || kind === 'memory' || kind === 'global' || kind === 'func')
   .forEach((node) => {
     // TODO: dealias section names
-    idx = 0 // within-node indx
+    idx = 0
     let kind = node[0], imported = 0
 
     // import abbr
@@ -102,8 +133,6 @@ export default function normalize(nodes) {
     }
 
     let items = sections[SECTION[kind]];
-
-    // (kind === 'type' || kind === 'table' || kind === 'memory' || kind === 'global' || kind === 'func')
 
     // index, alias
     idx = 1 // within-node idx
@@ -152,9 +181,13 @@ export default function normalize(nodes) {
     items.push([kind, name || `(;${items.length};)`, ...node.slice(idx - imported)])
   })
 
-  // TODO: push implicit types
+  // collect implicit types
+  // TODO: plainify code, resolve name refs
+  // sections[SECTION.func] = sections[SECTION.func].map(([kind, nm, ...code]) => {
+  //   idx = 0
+  //   return [['type', typeuse(code)], nm, ...code]
+  // })
 
-  // TODO: plainify func, resolve types
 
   return sections.flat()
 }

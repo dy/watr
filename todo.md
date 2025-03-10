@@ -109,6 +109,7 @@
 * [ ] resolve type abbrs
 * [ ] resolve name aliases to indices
 * [ ] flat or fold all ops
+* [ ] make compile immutable
 
 ## Optimizations
 
