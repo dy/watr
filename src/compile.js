@@ -41,13 +41,10 @@ export default function watr(nodes) {
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
   ctx._ = {} // implicit types
 
-  let subc // current subtype count
-
   // prepare/normalize nodes
   while (nodes.length) {
     let [kind, ...node] = nodes.shift()
     let imported // if node needs to be imported
-    let rec // number of subtypes under rec type
 
     // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
     if (kind === 'rec') {
@@ -55,10 +52,13 @@ export default function watr(nodes) {
       // convert rec type into regular type (first subtype) with stashed subtypes length
       // add rest of subtypes as regular type nodes with subtype flag
       if (node.length > 1) {
-        rec = subc = node.length, nodes.unshift(...node), node = nodes.shift(), kind = node.shift()
-        // FIXME
-        // ctx.type.push(...node.map(([,...subnode], i) => [...typedef(subnode), !i ? [ctx.type.length, node.length] : true]))
-        // continue
+        for (let i = 0; i < node.length; i++) {
+          let [,...subnode] = node[i]
+          alias(subnode, ctx.type);
+          (subnode = typedef(subnode, ctx)).push(!i ? [ctx.type.length, node.length] : true)
+          ctx.type.push(subnode)
+        }
+        continue
       }
       else kind = (node = node[0]).shift()
     }
@@ -69,8 +69,7 @@ export default function watr(nodes) {
 
     // index, alias
     let items = ctx[kind];
-    let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
-    if (name) name in items ? err(`Duplicate ${items.name} ${name}`) : items[name] = items.length; // save alias
+    let name = alias(node, items);
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
@@ -106,9 +105,7 @@ export default function watr(nodes) {
     // (type (struct (field a)*)
     // (type (sub final? $nm* (struct|array|func ...)))
     else if (kind === 'type') {
-      let issub = subc-- > 0
       node = typedef(node, ctx)
-      node.push(rec ? [ctx.type.length, rec] : issub)
     }
 
     // dupe to code section, save implicit type
@@ -162,6 +159,7 @@ export default function watr(nodes) {
     ...bin(SECTION.data)
   ])
 }
+
 // (type $id? (func param* result*))
 // (type $id? (array (mut i8)))
 // (type $id? (struct (field a)*)
@@ -192,6 +190,13 @@ const typedef = ([dfn], ctx) => {
   else if (ckind === 'array') dfn = dfn.shift()
 
   return [ckind, dfn, subkind, supertypes]
+}
+
+// consume name eg. $t ...
+const alias = (node, list) => {
+  let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
+  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
+  return name
 }
 
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
@@ -397,7 +402,7 @@ const build = [,
     return [DEFTYPE[kind], ...details]
   },
 
-  // (import "math" "add" (func|table|global|memory typedef?))
+  // (import "math" "add" (func|table|global|memory dfn?))
   ([mod, field, [kind, ...dfn]], ctx) => {
     let details
 
