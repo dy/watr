@@ -51,16 +51,13 @@ export default function watr(nodes) {
       // node contains a list of subtypes, (type ...) or (type (sub final? ...))
       // convert rec type into regular type (first subtype) with stashed subtypes length
       // add rest of subtypes as regular type nodes with subtype flag
-      if (node.length > 1) {
-        for (let i = 0; i < node.length; i++) {
-          let [,...subnode] = node[i]
-          alias(subnode, ctx.type);
-          (subnode = typedef(subnode, ctx)).push(!i ? [ctx.type.length, node.length] : true)
-          ctx.type.push(subnode)
-        }
-        continue
+      for (let i = 0; i < node.length; i++) {
+        let [,...subnode] = node[i]
+        alias(subnode, ctx.type);
+        (subnode = typedef(subnode, ctx)).push(!i ? [ctx.type.length, node.length] : true)
+        ctx.type.push(subnode)
       }
-      else kind = (node = node[0]).shift()
+      continue
     }
 
     // import abbr
