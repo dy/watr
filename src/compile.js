@@ -42,8 +42,7 @@ export default function watr(nodes) {
   ctx._ = {} // implicit types
 
   // prepare/normalize nodes
-  while (nodes.length) {
-    let [kind, ...node] = nodes.shift()
+  for (let [kind, ...node] of nodes) {
     let imported // if node needs to be imported
 
     // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
@@ -110,7 +109,7 @@ export default function watr(nodes) {
       let [idx, param, result] = typeuse(node, ctx);
       idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result]);
       // we save idx because type can be defined after
-      !imported && nodes.push(['code', [idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
+      !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
       node.unshift(['type', idx])
     }
 
