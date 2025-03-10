@@ -41,27 +41,40 @@ export default function watr(nodes) {
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
   ctx._ = {} // implicit types
 
-  // prepare/normalize nodes
-  for (let [kind, ...node] of nodes) {
-    let imported // if node needs to be imported
-
+  // initialize types
+  nodes = nodes.filter(([kind, ...node]) => {
     // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
     if (kind === 'rec') {
       // node contains a list of subtypes, (type ...) or (type (sub final? ...))
       // convert rec type into regular type (first subtype) with stashed subtypes length
       // add rest of subtypes as regular type nodes with subtype flag
+      // FIXME: make shorter
       for (let i = 0; i < node.length; i++) {
         let [,...subnode] = node[i]
         alias(subnode, ctx.type);
-        (subnode = typedef(subnode, ctx)).push(!i ? [ctx.type.length, node.length] : true)
+        (subnode = typedef(subnode, ctx)).push(i ? true : [ctx.type.length, node.length])
         ctx.type.push(subnode)
       }
-      continue
     }
+    // (type (func param* result*))
+    // (type (array (mut i8)))
+    // (type (struct (field a)*)
+    // (type (sub final? $nm* (struct|array|func ...)))
+    else if (kind === 'type') {
+      alias(node, ctx.type);
+      ctx.type.push(typedef(node, ctx));
+    }
+
+    else return true
+  })
+
+  // prepare/normalize nodes
+  for (let [kind, ...node] of nodes) {
+    let imported // if node needs to be imported
 
     // import abbr
     // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
-    else if (kind === 'import') [kind, ...node] = (imported = node).pop()
+    if (kind === 'import') [kind, ...node] = (imported = node).pop()
 
     // index, alias
     let items = ctx[kind];
@@ -94,15 +107,6 @@ export default function watr(nodes) {
 
     // keep start name
     else if (kind === 'start') name && node.push(name)
-
-    // normalize type definition to (func|array|struct dfn) form
-    // (type (func param* result*))
-    // (type (array (mut i8)))
-    // (type (struct (field a)*)
-    // (type (sub final? $nm* (struct|array|func ...)))
-    else if (kind === 'type') {
-      node = typedef(node, ctx)
-    }
 
     // dupe to code section, save implicit type
     else if (kind === 'func') {
