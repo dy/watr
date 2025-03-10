@@ -190,3 +190,16 @@
 + wabt fails some test cases
 + no time wasted
 + better codebase org
+
+## [ ] Normalize or not? -> too little value. Try instead immutable, streamlined types
+
++ Allows unraveling mutable code
+  ? can we make it immutable in-place?
++ Simplifies compiler
+  - very little
++ Gives (false?) hope of declarative parser
+- Takes unscoped time to make (bogging down with simple things)
+- The precompiler code is tightly coupled, eg. struct fields names - need to be stored somewhere
+- Current code seems to be more compact
++ Better order separation
+  ? can we separate separately?

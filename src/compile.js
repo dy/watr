@@ -64,7 +64,8 @@ export default function watr(nodes) {
 
     // index, alias
     let items = ctx[kind];
-    let name = alias(node, items)
+    let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
+    if (name) name in items ? err(`Duplicate ${items.name} ${name}`) : items[name] = items.length; // save alias
 
     // export abbr
     // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
@@ -168,11 +169,6 @@ export default function watr(nodes) {
   ])
 }
 
-// consume name eg. $t ...
-const alias = (node, list) => {
-  let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
-  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
-  return name
 }
 
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
