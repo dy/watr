@@ -96,14 +96,20 @@
 * [ ] replace wabt with spec/wasm for tests
 * [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
 
+* [ ] Imported members always go first (indexed) - we don't have to maintain `null`s in output arrays
+
 ## Normalize
 
-* [ ] prepares source for compiler, so that tokens layout is static (constant index)
-* [ ] resolves section abbrs
-* [ ] resolves type abbrs
-* [ ] injects implicit types
-* [ ] resolves name aliases to indices
-* [ ] Normalize: make it a separate step: (;1;) for missing names, fill optional props, fold or unfold ops
+* [ ] inject implicit types
+* [ ] it should not use shift/unshift and be immutable for input
+  * [ ] immutable compile.js
+* [ ] normalize typeuse param/result
+* [ ] prepare source for compiler, so that tokens layout is static (constant index)
+* [ ] resolve section abbrs
+* [ ] resolve type abbrs
+* [ ] resolve name aliases to indices
+* [ ] flat or fold all ops
+* [ ] make compile immutable
 
 ## Optimizations
 

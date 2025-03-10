@@ -1,8 +1,8 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
-import parse from './parse.js'
-import { clone, err } from './util.js'
+import normalize from './normalize.js'
+import { err } from './util.js'
 
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
@@ -16,14 +16,11 @@ INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b
  * @returns {Uint8Array} The compiled WASM binary data.
  */
 export default function watr(nodes) {
-  // normalize to (module ...) form
-  if (typeof nodes === 'string') nodes = parse(nodes);
-  else nodes = clone(nodes)
+  // make sure it's (module ...)
+  nodes = normalize(nodes)
 
-  // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
-  if (nodes[0] === 'module') nodes.shift(), nodes[0]?.[0] === '$' && nodes.shift()
-  // single node, not module
-  else if (typeof nodes[0] === 'string') nodes = [nodes]
+  // FIXME: get rid of when we redo internals to avoid mutations
+  nodes = (function clone(items) { return items.map(item => Array.isArray(item) ? clone(item) : item) } )(nodes);
 
   // binary abbr "\00" "\0x61" ...
   if (nodes[0] === 'binary') {
@@ -44,6 +41,7 @@ export default function watr(nodes) {
   let subc // current subtype count
 
   // prepare/normalize nodes
+  // TODO: make via immutable way
   while (nodes.length) {
     let [kind, ...node] = nodes.shift()
     let imported // if node needs to be imported
@@ -58,41 +56,18 @@ export default function watr(nodes) {
       else kind = (node = node[0]).shift()
     }
 
-    // import abbr
-    // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
-    else if (kind === 'import') [kind, ...node] = (imported = node).pop()
-
     // index, alias
     let items = ctx[kind];
-    let name = alias(node, items)
-
-    // export abbr
-    // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
+    let name = (node[0]?.[0] === '$' || node[0]?.[0] === '(' || node[0]?.[0] == null) && node.shift();
+    if (name[0] === '(') name = false
+    else if (name) name in items ? err(`Duplicate ${items.name} ${name}`) : items[name] = items.length; // save alias
 
     // for import nodes - redirect output to import
     if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
 
-    // table abbr
-    if (kind === 'table') {
-      // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-      if (node[1]?.[0] === 'elem') {
-        let [reftype, [, ...els]] = node
-        node = [els.length, els.length, reftype]
-        ctx.elem.push([['table', name || items.length], ['i32.const', '0'], reftype, ...els])
-      }
-    }
-
-    // data abbr
-    // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
-    else if (kind === 'memory' && node[0]?.[0] === 'data') {
-      let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
-      ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
-      node = [m, m]
-    }
-
     // keep start name
-    else if (kind === 'start') name && node.push(name)
+    // FIXME: move away
+    if (kind === 'start') name && node.push(name)
 
     // normalize type definition to (func|array|struct dfn) form
     // (type (func param* result*))
@@ -166,13 +141,6 @@ export default function watr(nodes) {
     ...bin(SECTION.code),
     ...bin(SECTION.data)
   ])
-}
-
-// consume name eg. $t ...
-const alias = (node, list) => {
-  let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
-  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
-  return name
 }
 
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates

@@ -1,7 +1,9 @@
 import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
+import print from '../src/print.js'
 import {inline, file, wat2wasm, save} from './index.js'
+import normalize from '../src/normalize.js'
 
 
 t('compile: reexport func', () => {
@@ -907,6 +909,14 @@ t('compile: call indirect case', () => {
       (drop (call_indirect (param i64) (result i32) (i64.const 0) (i32.const 0)))
     )
   `
+  // console.log(print(normalize(src)))
+  inline(src)
+})
+
+t('compile: bulk case', () => {
+  let src = `(module
+    (memory (data "\\aa\\bb\\cc\\dd"))
+  )`
   inline(src)
 })
 
@@ -1170,6 +1180,16 @@ t('case: elem with type ref', () => {
   inline(src)
 })
 
+t('case: import order', () => {
+  let src = `
+    (func (import "x" "i32")(param i32))
+    (import "x" "i64" (func (param i64)))
+    (func (param i32))
+    (func (call 0 (i32.const 1)))
+  `
+
+  inline(src, {x:{i32(){}, i64(){}}})
+})
 
 // extensions
 t('feature: multiple results', () => {
