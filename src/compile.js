@@ -64,6 +64,8 @@ export default function watr(nodes) {
       alias(node, ctx.type);
       ctx.type.push(typedef(node, ctx));
     }
+    // FIXME: something else can go here? what other sections have no names?
+    else if (kind === 'start' || kind === 'export') ctx[kind].push(node)
 
     else return true
   })
@@ -104,9 +106,6 @@ export default function watr(nodes) {
       ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
       node = [m, m]
     }
-
-    // keep start name
-    else if (kind === 'start') name && node.push(name)
 
     // dupe to code section, save implicit type
     else if (kind === 'func') {
