@@ -42,13 +42,12 @@ export default function watr(nodes) {
   ctx._ = {} // implicit types
 
   // initialize types
-  nodes = nodes.filter(([kind, ...node]) => {
+  nodes.filter(([kind, ...node]) => {
     // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
     if (kind === 'rec') {
       // node contains a list of subtypes, (type ...) or (type (sub final? ...))
       // convert rec type into regular type (first subtype) with stashed subtypes length
       // add rest of subtypes as regular type nodes with subtype flag
-      // FIXME: make shorter
       for (let i = 0; i < node.length; i++) {
         let [,...subnode] = node[i]
         alias(subnode, ctx.type);
@@ -64,14 +63,14 @@ export default function watr(nodes) {
       alias(node, ctx.type);
       ctx.type.push(typedef(node, ctx));
     }
-    // FIXME: something else can go here? what other sections have no names?
+    // other sections may have id
     else if (kind === 'start' || kind === 'export') ctx[kind].push(node)
 
     else return true
   })
 
   // prepare/normalize nodes
-  for (let [kind, ...node] of nodes) {
+  .forEach(([kind, ...node]) => {
     let imported // if node needs to be imported
 
     // import abbr
@@ -120,7 +119,7 @@ export default function watr(nodes) {
     if (imported) ctx.import.push([...imported, [kind, ...node]]), node = null
 
     items.push(node)
-  }
+  })
 
   // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
   for (let n in ctx._) ctx.type[n] ??= (ctx.type.push(['func', ctx._[n]]) - 1)
@@ -170,25 +169,19 @@ const typedef = ([dfn], ctx) => {
   //     subtype = node[idx],
   //     comptype = subtype[0] === 'sub' ? subtype.pop() : subtype
 
-  // if (nm) nm in ctx.type ? err(`Duplicate type ${nm}`) : ctx.type[nm] = ctx.type.length
-
-  // if (comptype[0] === 'func') comptype = paramres(comptype), ctx.type['$' + comptype.join('>')] ??= ctx.type.length
-  // else if (comptype[0] === 'struct') comptype = fieldseq(comptype, 'field', true)
-  // else if (comptype[0] === 'array') comptype = comptype.pop()
-
-  let subkind = 'subfinal', supertypes = []
+  let subkind = 'subfinal', supertypes = [], compkind
   if (dfn[0] === 'sub') {
     subkind = dfn.shift(), dfn[0] === 'final' && (subkind += dfn.shift())
     dfn = (supertypes = dfn).pop() // last item is definition
   }
 
-  let ckind = dfn.shift() // composite type kind
+  [compkind, ...dfn] = dfn // composite type kind
 
-  if (ckind === 'func') dfn = paramres(dfn), ctx.type['$' + dfn.join('>')] ??= ctx.type.length
-  else if (ckind === 'struct') dfn = fieldseq(dfn, 'field', true)
-  else if (ckind === 'array') dfn = dfn.shift()
+  if (compkind === 'func') dfn = paramres(dfn), ctx.type['$' + dfn.join('>')] ??= ctx.type.length
+  else if (compkind === 'struct') dfn = fieldseq(dfn, 'field', true)
+  else if (compkind === 'array') [dfn] = dfn
 
-  return [ckind, dfn, subkind, supertypes]
+  return [compkind, dfn, subkind, supertypes]
 }
 
 // consume name eg. $t ...
