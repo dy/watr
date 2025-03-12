@@ -78,12 +78,15 @@ print(src, {
 
 * [x] core
 * [x] [mutable globals](https://github.com/WebAssembly/mutable-global), [extended const](https://github.com/WebAssembly/extended-const/blob/main/proposals/extended-const/Overview.md), [nontrapping float to int](https://github.com/WebAssembly/nontrapping-float-to-int-conversions), [sign extension](https://github.com/WebAssembly/sign-extension-ops)
-* [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md), [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md), [multiple memories](https://github.com/WebAssembly/multi-memory/blob/master/proposals/multi-memory/Overview.md)
+* [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md), [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md)
 * [x] [simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md), [relaxed simd](https://github.com/WebAssembly/relaxed-simd), [fixed-width simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
 * [x] [tail_call](https://github.com/WebAssembly/tail-call)
 * [x] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md), [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md), [gc](https://github.com/WebAssembly/gc)
 * [ ] [exceptions](https://github.com/WebAssembly/exception-handling), [annotations](https://github.com/WebAssembly/annotations), [code_metadata](https://github.com/WebAssembly/tool-conventions/blob/main/CodeMetadata.md)
-* [ ] [memory64](https://github.com/WebAssembly/memory64), [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md)
+* [ ] [multiple memories](https://github.com/WebAssembly/multi-memory/blob/master/proposals/multi-memory/Overview.md), [memory64](https://github.com/WebAssembly/memory64)
+* [ ] [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md)
+* [ ] wide arithmetic, threads, custom page size,
+* [ ] wasm 3
 
 ## Alternatives
 

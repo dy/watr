@@ -94,8 +94,7 @@
 * [x] Print: make it as nice as AI
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
-* [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
-  * [ ] It can also compile module right away 'let {a,b} = watr`(export a)`'
+* [ ] All tests
 
 ## REPL
 
@@ -105,7 +104,7 @@
 * [x] prettify / minify
 * [ ] PWA
 * [ ] drop wasm binary?
-* [ ] normalize code button (when normalizer step is ready)
+* [x] ~~normalize code button (when normalizer step is ready)~~
 * [ ] compile button? better for SEO and UI - can have a shortcut
 * [ ] button shortcuts: ctrl + enter, ctrl + /
 * [ ] history
@@ -121,15 +120,17 @@
 * [ ] dark theme
 * [ ] inline docs about all commands / instructions
   * [ ] at least tooltips for syntax
-* [ ] resizable divider between panels
+* [x] ~~resizable divider between panels~~
 * [ ] offline use
-* [ ] random code generator?
+* [ ] random code generator? (AI)?
 * [ ] copy as binary
 * [ ] make a component? going to need it for jz, piezo
 
 ## Backlog
 
 * [ ] wat-based wat-compiler
+* [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
+  * [ ] It can also compile module right away 'let {a,b} = watr`(export a)`'
 
 ## Offering Qualifications
 
