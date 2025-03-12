@@ -81,12 +81,9 @@ print(src, {
 * [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md), [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md), [multiple memories](https://github.com/WebAssembly/multi-memory/blob/master/proposals/multi-memory/Overview.md)
 * [x] [simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md), [relaxed simd](https://github.com/WebAssembly/relaxed-simd), [fixed-width simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
 * [x] [tail_call](https://github.com/WebAssembly/tail-call)
-* [x] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md), [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md)
-* [x] [gc](https://github.com/WebAssembly/gc)
-* [ ] [exceptions](https://github.com/WebAssembly/exception-handling)
-* [ ] [memory64](https://github.com/WebAssembly/memory64)
-* [ ] [annotations](https://github.com/WebAssembly/annotations), [code_metadata](https://github.com/WebAssembly/tool-conventions/blob/main/CodeMetadata.md)
-* [ ] [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md)
+* [x] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md), [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md), [gc](https://github.com/WebAssembly/gc)
+* [ ] [exceptions](https://github.com/WebAssembly/exception-handling), [annotations](https://github.com/WebAssembly/annotations), [code_metadata](https://github.com/WebAssembly/tool-conventions/blob/main/CodeMetadata.md)
+* [ ] [memory64](https://github.com/WebAssembly/memory64), [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md)
 
 ## Alternatives
 
