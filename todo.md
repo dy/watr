@@ -95,20 +95,7 @@
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
 * [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
-
-## Normalize
-
-* [ ] prepares source for compiler, so that tokens layout is static (constant index)
-* [ ] resolves section abbrs
-* [ ] resolves type abbrs
-* [ ] injects implicit types
-* [ ] resolves name aliases to indices
-* [ ] Normalize: make it a separate step: (;1;) for missing names, fill optional props, fold or unfold ops
-
-## Optimizations
-
-* [ ] Avoid .shift() as it is supposed to be slower
-* [ ] Split instr into smaller instr by kind
+  * [ ] It can also compile module right away 'let {a,b} = watr`(export a)`'
 
 ## REPL
 

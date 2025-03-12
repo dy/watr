@@ -163,12 +163,6 @@ const alias = (node, list) => {
 // (type $id? (struct (field a)*)
 // (type $id? (sub final? $nm* (struct|array|func ...)))
 const typedef = ([dfn], ctx) => {
-  // TODO: immutable version
-  // let idx = 1
-  // let nm = node[idx][0] === '$' && node[idx++],
-  //     subtype = node[idx],
-  //     comptype = subtype[0] === 'sub' ? subtype.pop() : subtype
-
   let subkind = 'subfinal', supertypes = [], compkind
   if (dfn[0] === 'sub') {
     subkind = dfn.shift(), dfn[0] === 'final' && (subkind += dfn.shift())
@@ -266,7 +260,6 @@ const blocktype = (nodes, ctx) => {
 const plain = (nodes, ctx) => {
   let out = [], stack = [], label
 
-  // FIXME: make immutable, avoid shift
   while (nodes.length) {
     let node = nodes.shift()
 
@@ -367,7 +360,6 @@ const build = [,
     let details
     // (rec (sub ...)*)
     if (rec) {
-      // FIXME: rec of one type
       kind = 'rec'
       let [from, length] = rec, subtypes = Array.from({ length }, (_, i) => build[SECTION.type](ctx.type[from + i].slice(0, 4), ctx))
       details = vec(subtypes)
@@ -648,14 +640,12 @@ const instr = (nodes, ctx) => {
     }
     // ref.test|cast (ref null? $t|heaptype)
     else if (code >= 20 && code <= 23) {
-      // FIXME: normalizer is supposed to resolve this
       let ht = reftype(nodes.shift(), ctx)
       if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop()+1) // ref.test|cast (ref null $t) is next op
       if (ht.length > 1) ht.shift() // pop ref
       immed.push(...ht)
     }
     // br_on_cast[_fail] $l? (ref null? ht1) (ref null? ht2)
-    // FIXME: normalizer should resolve anyref|etc to (ref null any|etc)
     else if (code === 24 || code === 25) {
       let i = blockid(nodes.shift(), ctx.block),
         ht1 = reftype(nodes.shift(), ctx),
@@ -757,7 +747,6 @@ const instr = (nodes, ctx) => {
     ctx.block.push(code)
 
     // (block $x) (loop $y) - save label pointer
-    // FIXME: do in normalizer
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
     let t = nodes.shift();
@@ -767,13 +756,8 @@ const instr = (nodes, ctx) => {
     // (result i32) - doesn't require registering type
     // FIXME: Make sure it is signed positive integer (leb, not uleb) https://webassembly.github.io/gc/core/binary/instructions.html#control-instructions
     else if (t[0] === 'result') immed.push(...reftype(t[1], ctx))
-    else {
-      let typeidx = id(t[1], ctx.type), [param, result] = ctx.type[typeidx][1]
-      // (type $idx (func (result i32)))
-      if (!param?.length && result.length === 1) immed.push(...reftype(result[0], ctx))
-      // (type idx)
-      else immed.push(...uleb(typeidx))
-    }
+    // (type idx)
+    else immed.push(...uleb(id(t[1], ctx.type)))
   }
   // else
   else if (code === 5) { }
