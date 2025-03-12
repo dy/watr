@@ -39,7 +39,6 @@ export default function watr(nodes) {
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
-  ctx._ = {} // implicit types
 
   // initialize types
   nodes.filter(([kind, ...node]) => {
@@ -109,7 +108,8 @@ export default function watr(nodes) {
     // dupe to code section, save implicit type
     else if (kind === 'func') {
       let [idx, param, result] = typeuse(node, ctx);
-      idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result]);
+      idx ??= regtype(param, result, ctx)
+
       // we save idx because type can be defined after
       !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
       node.unshift(['type', idx])
@@ -120,13 +120,6 @@ export default function watr(nodes) {
 
     items.push(node)
   })
-
-  // add implicit types - main types receive aliases, implicit types are added if no explicit types exist
-  for (let n in ctx._) ctx.type[n] ??= (ctx.type.push(['func', ctx._[n]]) - 1)
-
-  // patch datacount if data === 0
-  // FIXME: let's try to return empty in datacount builder, since we filter after builder as well
-  // if (!ctx.data.length) ctx.datacount.length = 0
 
   // convert nodes to bytes
   const bin = (kind, count = true) => {
@@ -158,6 +151,13 @@ export default function watr(nodes) {
   ])
 }
 
+// consume name eg. $t ...
+const alias = (node, list) => {
+  let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
+  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
+  return name
+}
+
 // (type $id? (func param* result*))
 // (type $id? (array (mut i8)))
 // (type $id? (struct (field a)*)
@@ -184,11 +184,81 @@ const typedef = ([dfn], ctx) => {
   return [compkind, dfn, subkind, supertypes]
 }
 
-// consume name eg. $t ...
-const alias = (node, list) => {
-  let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
-  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
-  return name
+// register (implicit) type
+const regtype = (param, result, ctx, idx='$' + param + '>' + result) => (
+  (ctx.type[idx] ??= ctx.type.push(['func', [param, result]]) - 1),
+  idx
+)
+
+// consume typeuse nodes, return type index/params, or null idx if no type
+// https://webassembly.github.io/spec/core/text/modules.html#type-uses
+const typeuse = (nodes, ctx, names) => {
+  let idx, param, result
+
+  // explicit type (type 0|$name)
+  if (nodes[0]?.[0] === 'type') {
+    [, idx] = nodes.shift();
+    [param, result] = paramres(nodes, names);
+
+    const [,srcParamRes] = ctx.type[id(idx, ctx.type)] ?? err(`Unknown type ${idx}`)
+
+    // check type consistency (excludes forward refs)
+    if ((param.length || result.length) && srcParamRes.join('>') !== param + '>' + result) err(`Type ${idx} mismatch`)
+
+    return [idx, ...srcParamRes]
+  }
+
+  // implicit type (param i32 i32)(result i32)
+  return [idx, ...paramres(nodes, names)]
+}
+
+// consume (param t+)* (result t+)* sequence
+const paramres = (nodes, names = true) => {
+  // let param = [], result = []
+
+  // collect param (param i32 i64) (param $x? i32)
+  let param = fieldseq(nodes, 'param', names)
+
+  // collect result eg. (result f64 f32)(result i32)
+  let result = fieldseq(nodes, 'result')
+
+  if (nodes[0]?.[0] === 'param') err(`Unexpected param`)
+
+  return [param, result]
+}
+
+// collect sequence of field, eg. (param a) (param b c), (field a) (field b c) or (result a b) (result c)
+// optionally allow or not names
+const fieldseq = (nodes, field, names = false) => {
+  let seq = []
+  // collect field eg. (field f64 f32)(field i32)
+  while (nodes[0]?.[0] === field) {
+    let [, ...args] = nodes.shift()
+    let name = args[0]?.[0] === '$' && args.shift()
+    // expose name refs, if allowed
+    if (name) {
+      if (names) name in seq ? err(`Duplicate ${field} ${name}`) : seq[name] = seq.length
+      else err(`Unexpected ${field} name ${name}`)
+    }
+    seq.push(...args)
+  }
+  return seq
+}
+
+// consume blocktype - makes sure either type or single result is returned
+const blocktype = (nodes, ctx) => {
+  let [idx, param, result] = typeuse(nodes, ctx, 0)
+
+  // get type - can be either idx or valtype (numtype | reftype)
+  if (!param.length && !result.length) return
+
+  // (result i32) - doesn't require registering type
+  if (!param.length && result.length === 1) return ['result', ...result]
+
+  // register implicit type
+  idx ??= regtype(param, result, ctx)
+
+  return ['type', idx]
 }
 
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
@@ -196,6 +266,7 @@ const alias = (node, list) => {
 const plain = (nodes, ctx) => {
   let out = [], stack = [], label
 
+  // FIXME: make immutable, avoid shift
   while (nodes.length) {
     let node = nodes.shift()
 
@@ -227,7 +298,7 @@ const plain = (nodes, ctx) => {
       else if (node.endsWith('call_indirect')) {
         let tableidx = nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0
         let [idx, param, result] = typeuse(nodes, ctx, 0)
-        out.push(tableidx, ['type', idx ?? (ctx._[idx = '$' + param + '>' + result] = [param, result], idx)])
+        out.push(tableidx, ['type', idx ?? regtype(param, result, ctx)])
       }
 
       // mark datacount section as required
@@ -281,80 +352,6 @@ const plain = (nodes, ctx) => {
   }
 
   return out
-}
-
-// consume typeuse nodes, return type index/params, or null idx if no type
-// https://webassembly.github.io/spec/core/text/modules.html#type-uses
-const typeuse = (nodes, ctx, names) => {
-  let idx, param, result
-
-  // explicit type (type 0|$name)
-  if (nodes[0]?.[0] === 'type') {
-    [, idx] = nodes.shift();
-    [param, result] = paramres(nodes, names);
-
-    // check type consistency (excludes forward refs)
-    if ((param.length || result.length) && idx in ctx.type)
-      if (ctx.type[id(idx, ctx.type)][1].join('>') !== param + '>' + result) err(`Type ${idx} mismatch`)
-
-    return [idx]
-  }
-
-  // implicit type (param i32 i32)(result i32)
-  [param, result] = paramres(nodes, names)
-
-  return [, param, result]
-}
-
-// consume (param t+)* (result t+)* sequence
-const paramres = (nodes, names = true) => {
-  // let param = [], result = []
-
-  // collect param (param i32 i64) (param $x? i32)
-  let param = fieldseq(nodes, 'param', names)
-
-  // collect result eg. (result f64 f32)(result i32)
-  let result = fieldseq(nodes, 'result')
-
-  if (nodes[0]?.[0] === 'param') err(`Unexpected param`)
-
-  return [param, result]
-}
-
-// collect sequence of field, eg. (param a) (param b c), (field a) (field b c) or (result a b) (result c)
-// optionally allow or not names
-const fieldseq = (nodes, field, names = false) => {
-  let seq = []
-  // collect field eg. (field f64 f32)(field i32)
-  while (nodes[0]?.[0] === field) {
-    let [, ...args] = nodes.shift()
-    let name = args[0]?.[0] === '$' && args.shift()
-    // expose name refs, if allowed
-    if (name) {
-      if (names) name in seq ? err(`Duplicate ${field} ${name}`) : seq[name] = seq.length
-      else err(`Unexpected ${field} name ${name}`)
-    }
-    seq.push(...args)
-  }
-  return seq
-}
-
-// consume blocktype - makes sure either type or single result is returned
-const blocktype = (nodes, ctx) => {
-  let [idx, param, result] = typeuse(nodes, ctx, 0)
-
-  // direct idx (no params/result needed)
-  if (idx != null) return ['type', idx]
-
-  // get type - can be either idx or valtype (numtype | reftype)
-  if (!param.length && !result.length) return
-
-  // (result i32) - doesn't require registering type
-  if (!param.length && result.length === 1) return ['result', ...result]
-
-  // (param i32 i32)? (result i32 i32) - implicit type
-  ctx._[idx = '$' + param + '>' + result] = [param, result]
-  return ['type', idx]
 }
 
 
