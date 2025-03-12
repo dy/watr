@@ -92,10 +92,10 @@ print(src, {
 
 &nbsp; | Size (gzipped) | Performance
 ---|---|---
-watr | 6.2 kb | 11.6 op/s
-[spec/wast.js](https://github.com/WebAssembly/spec/tree/main/interpreter#javascript-library) | 216 kb | 7.1 op/s
-[wabt](https://github.com/WebAssembly/wabt) | 282 kb | 2.3 op/s
-[wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 kb | 1.34 op/s
+watr | 7.5 kb | 6.0 op/s
+[spec/wast.js](https://github.com/WebAssembly/spec/tree/main/interpreter#javascript-library) | 216 kb | 2.2 op/s
+[wabt](https://github.com/WebAssembly/wabt) | 282 kb | 1.2 op/s
+[wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 kb | 0.7 op/s
 
 <!--
 ## Projects using watr

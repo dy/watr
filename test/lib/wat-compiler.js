@@ -696,7 +696,6 @@ var ModuleBuilder = class {
     return this.codes.find((func) => func.name === name);
   }
   getMemory(name) {
-    console.log(name, this.memories);
     return this.memories.find((mem) => mem.name === name);
   }
   getType(name) {
