@@ -7,6 +7,14 @@ import { clone, err } from './util.js'
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
 
+// iterating context
+let cur, idx
+
+// advance until condition meets
+const skip = (is, from = idx, l) => {
+  while (l = is(cur[idx])) idx += l
+  return cur.slice(from, idx)
+}
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
@@ -20,28 +28,24 @@ export default function watr(nodes) {
   if (typeof nodes === 'string') nodes = parse(nodes);
   else nodes = clone(nodes)
 
+  cur = nodes, idx = 0
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
-  if (nodes[0] === 'module') nodes.shift(), nodes[0]?.[0] === '$' && nodes.shift()
+  if (nodes[0] === 'module') idx++, cur[idx]?.[0] === '$' && idx++
   // single node, not module
-  else if (typeof nodes[0] === 'string') nodes = [nodes]
+  else if (typeof nodes[0] === 'string') cur = [nodes]
 
   // binary abbr "\00" "\0x61" ...
-  if (nodes[0] === 'binary') {
-    nodes.shift()
-    return Uint8Array.from(str(nodes.map(i => i.slice(1, -1)).join('')))
-  }
+  if (cur[idx] === 'binary') return Uint8Array.from(str(cur.slice(++idx).map(i => i.slice(1, -1)).join('')))
+
   // quote "a" "b"
-  else if (nodes[0] === 'quote') {
-    nodes.shift()
-    return watr(nodes.map(i => i.slice(1, -1)).join(''))
-  }
+  if (cur[idx] === 'quote') return watr(cur.slice(++idx).map(i => i.slice(1, -1)).join(''))
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
 
   // initialize types
-  nodes.filter(([kind, ...node]) => {
+  cur.slice(idx).filter(([kind, ...node]) => {
     // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
     if (kind === 'rec') {
       // node contains a list of subtypes, (type ...) or (type (sub final? ...))
@@ -67,6 +71,7 @@ export default function watr(nodes) {
 
     else return true
   })
+
 
   // prepare/normalize nodes
   .forEach(([kind, ...node]) => {
