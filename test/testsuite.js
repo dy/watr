@@ -161,7 +161,7 @@ t.mute('/test/official/utf8-import-module.wast', async function () { await file(
 t.mute('/test/official/utf8-invalid-encoding.wast', async function () { await file(this.name, { spectest }) })
 
 // extensions
-t.todo('/test/official/proposals/annotations/annotations.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/annotations/annotations.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/annotations/id.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/annotations/simd_lane.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/annotations/token.wast', async function () { await file(this.name, { spectest }) })

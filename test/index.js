@@ -128,7 +128,7 @@ export async function file(path, imports = {}) {
       // sync up with libwabt
       let wabtBuffer
       // compare with libwabt only if not binary flag
-      if (node[1] === 'binary' || node[1] === 'quote') console.warn(`module: skip ${node[1]}`)
+      if (node[1] === 'binary' || node[1] === 'quote') console.warn(`module: skip wabt ${node[1]}`)
       else try {
         wabtBuffer = wat2wasm(print(node)).buffer
         if (wabtBuffer) is(buf, wabtBuffer, 'module: same as wat2wasm ' + lastComment?.trim())

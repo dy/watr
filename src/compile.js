@@ -24,7 +24,7 @@ const skip = (is, from = idx, l) => {
  */
 export default function watr(nodes) {
   // normalize to (module ...) form
-  if (typeof nodes === 'string') nodes = parse(nodes)
+  if (typeof nodes === 'string') nodes = parse(nodes) || []
   else nodes = clone(nodes)
 
   cur = nodes, idx = 0
@@ -157,8 +157,8 @@ export default function watr(nodes) {
 
 // consume name eg. $t ...
 const alias = (node, list) => {
-  let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
-  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
+  let name = (node[0]?.[0] === '$') && node.shift();
+  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : !name[1] ? err(`Empty name`) : list[name] = list.length; // save alias
   return name
 }
 
