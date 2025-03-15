@@ -111,6 +111,9 @@ t('parse: comments', () => {
   let tokens = parse('(an (; inline ;) comment\n;; line comment\n1)')
   is(tokens, ['an', 'comment', '1'])
 
+  tokens = parse('(an (;inline;) comment\n;; line comment\n1)')
+  is(tokens, ['an', 'comment', '1'])
+
   tokens = parse('(an (; inline ;) comment\n;; line comment\n1)', {comments: true})
   is(tokens, ['an', '(; inline ;)', 'comment', ';; line comment\n', '1'])
 })

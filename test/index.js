@@ -101,7 +101,7 @@ export async function file(path, imports = {}) {
   // src = src.replace(/\\(.)/g, '$1');
 
   // parse
-  let nodes = parse(src, { comments: true })
+  let nodes = parse(src, { comments: true, annotations: true })
   freeze(nodes)
 
   // test runtime
@@ -121,18 +121,17 @@ export async function file(path, imports = {}) {
   function ex(node) {
     // (module $name) - creates module instance, collects exports
     if (node[0] === 'module') {
-      // strip comments
-      // console.log('module', node)
-      node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' || el[1] === '@' ? [] : [el]) : [el.flatMap(uncomment)] })
+      // strip comments, annotations
+      node = parse(print(node))
       buf = compile(node)
 
       // sync up with libwabt
       let wabtBuffer
-      try {
+      // compare with libwabt only if not binary flag
+      if (node[1] === 'binary' || node[1] === 'quote') console.warn(`module: skip ${node[1]}`)
+      else try {
         wabtBuffer = wat2wasm(print(node)).buffer
-        // compare with libwabt only if not binary flag
-        if (node[1] === 'binary') console.warn('module: skip binary')
-        else if (wabtBuffer) is(buf, wabtBuffer, 'module: same as wat2wasm ' + lastComment?.trim())
+        if (wabtBuffer) is(buf, wabtBuffer, 'module: same as wat2wasm ' + lastComment?.trim())
       } catch (e) {
         console.warn(e.message, { ...e })
       }
@@ -236,7 +235,7 @@ export async function file(path, imports = {}) {
         if (/v128\.const/i.test(code) && /range/.test(msg)) return // ignore out-of-range v128.const tests
         if (/v128\.const/i.test(code) && /operator/.test(msg)) return // ignore bad tokens
         nodes = parse(code)
-        nodes = typeof nodes[0] === 'string' ? nodes[0] === 'module' ? nodes : ['module', nodes] : ['module', ...nodes]
+        nodes = !nodes ? nodes : typeof nodes[0] === 'string' ? nodes[0] === 'module' ? nodes : ['module', nodes] : ['module', ...nodes]
         throws(() => ex(nodes), msg, msg)
         // let err
         // try {ex(nodes)} catch (e) {err=e}

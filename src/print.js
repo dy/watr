@@ -23,6 +23,8 @@ export default function print(tree, options = {}) {
 
     let content = node[0]
 
+    if (!content) return ''
+
     // flat node (no deep subnodes), eg. (i32.const 1), (module (export "") 1)
     let flat = !!newline && node.length < 4
     let curIndent = indent.repeat(level + 1)
