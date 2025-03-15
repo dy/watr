@@ -25,11 +25,11 @@ export default (str, o={ comments: false, annotations: false }) => {
       c = str[i]
       if (q) {
         push()
-        if (str[i-1] === '\\') push()
+        if (str[i-1] === '\\') push() // "\\""
         else if (c === '"') commit(), q = 0
       }
       else if (c === '"') {
-        commit(), q = c, push()
+        commit(), q = c, push() // "..."
       }
       else if (c === '(') {
         commit(), i++
@@ -37,12 +37,11 @@ export default (str, o={ comments: false, annotations: false }) => {
         else {
           root = level, level = []
           parseLevel()
-          if (level[0]?.[0] === '@' && !o.annotations); else
-          root.push(level)
+          if (level[0]?.[0] === '@' && !o.annotations); else root.push(level) // (@...)
           level = root
         }
       }
-      else if (c === ';' && str[i+1] === ';') commit(), comment = str.slice(i, i = str.indexOf('\n', i) + 1 || str.length), o.comments && level.push(comment)  // ; ...
+      else if (c === ';' && str[i+1] === ';') commit(), comment = str.slice(i, i = str.indexOf('\n', i) + 1 || str.length), o.comments && level.push(comment)  // ;; ...
       else if (c <= ' ') commit(), i++
       else if (c === ')') return commit(), i++
       else push()
