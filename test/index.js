@@ -123,7 +123,7 @@ export async function file(path, imports = {}) {
     if (node[0] === 'module') {
       // strip comments
       // console.log('module', node)
-      node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
+      node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' || el[1] === '@' ? [] : [el]) : [el.flatMap(uncomment)] })
       buf = compile(node)
 
       // sync up with libwabt
