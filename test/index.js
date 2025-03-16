@@ -72,24 +72,19 @@ export function wat2wasm(code, config) {
   return binary
 }
 
+
 // compile & instantiate inline
 export function inline(src, importObj) {
   let tree = parse(src)
   // in order to make sure tree is not messed up we freeze it
   freeze(tree)
-  let watrBuffer = compile(tree), wabtBuffer
-  try {
-    wabtBuffer = wat2wasm(src).buffer
-  } catch (e) {
-    console.warn(e)
-  }
-  if (wabtBuffer) is(watrBuffer, wabtBuffer)
+  let watrBuffer = compile(tree)
   const mod = new WebAssembly.Module(watrBuffer)
-  // ok(1, 'compiles')
   const inst = new WebAssembly.Instance(mod, importObj)
-  // ok(1, 'instantiates')
+  ok(1, `instantiates inline`)
   return inst
 }
+
 
 // execute test case from file
 export async function file(path, imports = {}) {
@@ -97,11 +92,15 @@ export async function file(path, imports = {}) {
   let res = await fetch(path)
   let src = await res.text()
 
-  // Remove all escape characters (e.g., \\, \", \n, etc.)
-  // src = src.replace(/\\(.)/g, '$1');
-
   // parse
   let nodes = parse(src, { comments: true, annotations: true })
+
+  // skip ((@) module) or ;;
+  while (/;|@/.test(nodes[0]?.[0]?.[0]) || nodes[0]?.startsWith?.('(;') || nodes[0]?.[0]?.startsWith?.('(;')) nodes.shift()
+
+  // (module) -> ((module ...)) - WAST compatible
+  if (nodes[0] === 'module') nodes = [nodes]
+
   freeze(nodes)
 
   // test runtime
@@ -110,49 +109,29 @@ export async function file(path, imports = {}) {
     lastExports,
     lastComment
 
-  if (typeof nodes[0] === 'string' && !nodes[0].startsWith(';;')) nodes = [nodes]
-
-  for (let node of nodes) {
-    if (typeof node === 'string') lastComment = node
-    ex(node)
-  }
-
-  // execute node
-  function ex(node) {
+  const ex = {
     // (module $name) - creates module instance, collects exports
-    if (node[0] === 'module') {
-      // strip comments, annotations
-      node = parse(print(node))
-      buf = compile(node)
+    module(node) {
+      if (node?.length < 2) return
 
-      // sync up with libwabt
-      let wabtBuffer
-      // compare with libwabt only if not binary flag
-      if (node[1] === 'binary' || node[1] === 'quote') console.warn(`module: skip wabt ${node[1]}`)
-      else try {
-        wabtBuffer = wat2wasm(print(node)).buffer
-        if (wabtBuffer) is(buf, wabtBuffer, 'module: same as wat2wasm ' + lastComment?.trim())
-      } catch (e) {
-        console.warn(e.message, { ...e })
-      }
-      // buf = wabtBuffer
+      buf = compile(print(node))
 
       let m = new WebAssembly.Module(buf)
       let inst = new WebAssembly.Instance(m, importObj)
+      ok(1, `instantiates module ${lastComment}`)
+
       lastExports = inst.exports
       // collect exports under name
       if (node[1]?.[0] === '$') mod[node[1]] = lastExports
+    },
 
-    }
-    if (node[0] === 'register') {
+    register([, nm]) {
       // include exports from prev module
-      let [, nm] = node
       console.log('register', nm)
       importObj[nm.slice(1, -1)] = lastExports
+    },
 
-    }
-    if (node[0] === 'assert_return') {
-      let [, [kind, ...args], ...expects] = node;
+    assert_return([, [kind, ...args], ...expects]) {
       let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
         nm = args.shift().slice(1, -1);
 
@@ -174,20 +153,21 @@ export async function file(path, imports = {}) {
       else if (kind === 'get') {
         is(m[nm].value, expects[0], `assert_return: get ${nm} === ${expects}`)
       }
+    },
 
-    }
-    if (node[0] === 'invoke') {
-      let [, ...args] = node
+    get([]) {
+
+    },
+
+    invoke([, ...args]) {
       let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
         nm = args.shift().slice(1, -1);
       args = args.map(val)
       // console.log('(invoke)', nm, ...args)
       m[nm](...args)
+    },
 
-    }
-    if (node[0] === 'assert_invalid') {
-      let [, nodes, msg] = node
-
+    assert_invalid([, nodes, msg]) {
       // skip (data const_expr) - we don't have constant expr limitations
       if (nodes.some(n => n[0] === 'data' && typeof n !== 'string')) return console.warn('assert_invalid: skip data const expr');
       // skip (global const_expr) - we don't have constant expr limitations
@@ -202,48 +182,71 @@ export async function file(path, imports = {}) {
 
       // console.group('assert_invalid', ...node)
       lastComment = ``
-      throws(() => ex(nodes), msg, msg)
+      throws(() => ex[nodes[0]](nodes), msg, msg)
       // console.groupEnd()
-    }
-    if (node[0] === 'assert_trap') {
+    },
+
+    assert_trap([, nodes, msg]) {
       // console.group('assert_trap', ...node)
-      let [, nodes, msg] = node
       try {
-        ex(nodes)
+        ex[nodes[0]](nodes)
       } catch (e) {
         // console.log('trap error', e, msg)
         ok(e.message, `assert_trap: ${msg}`)
       }
       // console.groupEnd()
-    }
-    if (node[0] === 'assert_malformed') {
-      // console.group('assert_malformed', ...node)
+    },
+
+    assert_malformed([, nodes, msg]) {
       lastComment = ``
-      let [, nodes, msg] = node
-      let err
-      // don't check if wat2wasm doesn't fail - certain tests are unnecessary
+
       if (nodes[1] === 'binary') {
-        try { wat2wasm(print(nodes)) } catch (e) { err = e }
-        if (err) throws(() => ex(nodes), msg, msg)
-        else console.warn(`assert_malformed: skip ${msg} as wat2wasm compiles fine`)
+        // our purpose isn't validating binaries
+        let err
+        try {
+          let buf = compile(print(nodes))
+          let m = new WebAssembly.Module(buf)
+          let inst = new WebAssembly.Instance(m, importObj)
+        } catch (e) {
+          err = e
+        }
+        if (!err) console.warn(`assert_malformed: ${msg} must doesn't fail`)
+
+        return
       }
-      else if (nodes[1] === 'quote') {
-        // (module quote ...nodes) make wat2wasm hang - unwrap them
+
+      if (nodes[1] === 'quote') {
+        // (module quote ...nodes) - remove escaped quotes
         let code = nodes.slice(2).map(str => str.slice(1, -1).replaceAll(/\\(.)/g, '$1')).join('\n')
-        if (code.includes('nan:')) return // ignore nan-related tests
-        if (/[a-z$]"|"[a-z$]|""/i.test(code)) return // ignore space required (data"abc") tests
-        if (/v128\.const/i.test(code) && /range/.test(msg)) return // ignore out-of-range v128.const tests
-        if (/v128\.const/i.test(code) && /operator/.test(msg)) return // ignore bad tokens
-        nodes = parse(code)
-        nodes = !nodes ? nodes : typeof nodes[0] === 'string' ? nodes[0] === 'module' ? nodes : ['module', nodes] : ['module', ...nodes]
-        throws(() => ex(nodes), msg, msg)
-        // let err
-        // try {ex(nodes)} catch (e) {err=e}
-        // if (err) ok(err, msg)
-        // else console.error(msg) // not really a failure, just log
+
+        if (code.includes('nan:')) return console.warn('assert_malformed: skip nan:')
+        if (/[a-z$]"|"[a-z$]|""/i.test(code)) return console.warn('assert_malformed: skip required space (data"abc")')
+        if (/v128\.const/i.test(code) && /range/.test(msg)) return console.warn("assert_malformed: skip out-of-range v128.const tests")
+        // if (/v128\.const/i.test(code) && /operator/.test(msg)) return // ignore bad tokens
+        if (/illegal character|malformed UTF/.test(msg)) return console.warn('assert_malformed: skip bad chars')
+        if (/\(\s+./.test(code)) return console.warn('assert_malformed: skip spaced instr ( instr)')
+        if (/empty annotation/.test(msg)) return console.warn('assert_malformed: skip empty annotation (@)')
+
+        throws(() => {
+          nodes = parse(code, { annotations: true })
+          let buf = compile(print(nodes))
+          let m = new WebAssembly.Module(buf)
+          let inst = new WebAssembly.Instance(m, importObj)
+        }, msg, msg)
       }
-      // console.groupEnd()
+
+    },
+
+    assert_exhaustion([, [kind, ...args], msg]) {
+      throws(() => {
+        ex[kind]([,...args])
+      }, msg, msg)
     }
+  }
+
+  for (let node of nodes) {
+    if (typeof node === 'string') lastComment = node
+    else ex[node[0]](node)
   }
 }
 

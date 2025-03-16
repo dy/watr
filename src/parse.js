@@ -7,23 +7,33 @@
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
 
+import { err } from "./util.js"
+
 export default (str, o={ comments: false, annotations: false }) => {
-  let i = 0, level = [], buf = '', comment
+  let i = 0, root = [], buf = '', comment = 0
 
-  // push buffer onto level stack, reset buffer
-  const commit = () => buf && (
-    level.push(buf),
-    buf = ''
-  )
+  const parseLevel = (level) => {
+    // push buffer onto level, reset buffer
+    const commit = () => buf && (
+      (!comment || o.comments) && level.push(buf),
+      buf = ''
+    )
+    const push = () => buf += str[i++]
 
-  // push one character to buffer, make sure it's legal
-  const push = () => buf += str[i++]
-
-  const parseLevel = () => {
-    for (let c, root, q; i < str.length;) {
-
+    for (let c, q, sublevel; i < str.length;) {
       c = str[i]
-      if (q) {
+      // (;;)
+      if (comment > 0) {
+        push()
+        if (c === '(' && str[i] === ';') push(), comment++ // (;(;;);)
+        else if (c === ';' && str[i] === ')') push(), comment == 1 && (commit(), comment--)
+      }
+      // ;;
+      else if (comment < 0) {
+        push()
+        if (c === '\n' || c === '\r') commit(), comment = 0
+      }
+      else if (q) {
         push()
         if (str[i-1] === '\\') push() // "\\""
         else if (c === '"') commit(), q = 0
@@ -32,25 +42,26 @@ export default (str, o={ comments: false, annotations: false }) => {
         commit(), q = c, push() // "..."
       }
       else if (c === '(') {
-        commit(), i++
-        if (str[i] === ';') comment = str.slice(i-1, i = str.indexOf(';)', i) + 2), o.comments && level.push(comment) // (; ... ;)
+        commit()
+        if (str[i+1] === ';') push(), push(), comment = 1 // (; ... ;)
         else {
-          root = level, level = []
-          parseLevel()
-          if (level[0]?.[0] === '@' && !o.annotations); else root.push(level) // (@...)
-          level = root
+          i++
+          parseLevel(sublevel = [])
+          if (str[i++] !== ')') err(`Unclosed paren`)
+          if (sublevel[0]?.[0] === '@' && !o.annotations); else level.push(sublevel) // (@...)
         }
       }
-      else if (c === ';' && str[i+1] === ';') commit(), comment = str.slice(i, i = str.indexOf('\n', i) + 1 || str.length), o.comments && level.push(comment)  // ;; ...
+      else if (c === ';' && str[i+1] === ';') commit(), push(), push(), comment = -1  // ;; ...
       else if (c <= ' ') commit(), i++
-      else if (c === ')') return commit(), i++
+      else if (c === ')') return commit()
       else push()
     }
 
     commit()
   }
 
-  parseLevel()
+  parseLevel(root)
+  if (i < str.length) err(`Parens mismatch`)
 
-  return level.length > 1 ? level : level[0]
+  return root.length > 1 ? root : root[0] || []
 }

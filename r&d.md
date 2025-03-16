@@ -191,7 +191,7 @@
 + no time wasted
 + better codebase org
 
-## [ ] Normalize or not? -> too little value. Try instead immutable, streamlined types
+## [x] Normalize or not? -> too little value. Try instead immutable, streamlined types
 
 + Allows unraveling mutable code
   ? can we make it immutable in-place?
@@ -203,3 +203,13 @@
 - Current code seems to be more compact
 + Better order separation
   ? can we separate separately?
+
+## [x] No wabt for testing? -> let's get rid of
+
+- it is not reliable baseline
+  - some tests not fail as expected
+  - some things it cannot compile
+  - it hangs with binaries
+  - it has unnecessary full spec tests
+- wasm/spec is what we're aiming for
+- we needed it until we had repl, now we can compare against spec right away

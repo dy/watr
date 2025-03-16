@@ -120,7 +120,7 @@ t('parse: comments', () => {
 
 t('parse: nul', () => {
   const tokens = parse(' \n\t')
-  is(tokens, undefined)
+  is(tokens, [])
 })
 
 t.skip('parse: error', () => {
@@ -207,5 +207,5 @@ t('parse: export name', () => {
 })
 
 t('parse: quote', () => {
-  let tokens = parse(`(import \\"\\" \\"\\" (global $foo i32))(global $foo i32 (i32.const 0))`)
+  let tokens = parse(`(import "" "" (global $foo i32))(global $foo i32 (i32.const 0))`)
 })

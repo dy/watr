@@ -99,6 +99,8 @@
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
 * [ ] All tests
+* [ ] Remove unnecessary checks: end label, param names
+* [ ] Type declarations with map file
 
 ## REPL
 

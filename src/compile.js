@@ -34,10 +34,10 @@ export default function watr(nodes) {
   else if (typeof nodes[0] === 'string') cur = [nodes]
 
   // binary abbr "\00" "\0x61" ...
-  if (cur[idx] === 'binary') return Uint8Array.from(str(cur.slice(++idx).map(i => i.slice(1, -1)).join('')))
+  if (cur[idx] === 'binary') return Uint8Array.from( str( cur.slice(++idx).map(i => i.slice(1, -1)).join('') ) )
 
   // quote "a" "b"
-  if (cur[idx] === 'quote') return watr(cur.slice(++idx).map(i => i.slice(1, -1)).join(''))
+  if (cur[idx] === 'quote') return watr( String.fromCharCode(...str( cur.slice(++idx).map(i => i.slice(1, -1)).join('') )) )
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
@@ -921,12 +921,12 @@ const parseUint = (v, max = 0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+
 const escape = { n: 10, r: 13, t: 9, v: 1, '"': 34, "'": 39, '\\': 92 }
 
 // build string binary
-const str = str => {
+const str = s => {
   let res = [], i = 0, c, BSLASH = 92
   // https://webassembly.github.io/spec/core/text/values.html#strings
-  for (; i < str.length;) {
-    c = str.charCodeAt(i++)
-    res.push(c === BSLASH ? escape[str[i++]] || parseInt(str.slice(i - 1, ++i), 16) : c)
+  for (; i < s.length;) {
+    c = s.charCodeAt(i++)
+    res.push(c === BSLASH ? escape[s[i++]] || parseInt(s.slice(i - 1, ++i), 16) : c)
   }
   return res
 }

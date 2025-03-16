@@ -1,3 +1,4 @@
+(module
 ;; FIRE_WIDTH = 320
 ;; FIRE_HEIGHT = 168
 ;; FIRE_WIDTH * FIRE_HEIGHT = 53760
@@ -105,3 +106,4 @@
 
     ;; loop if i != 0
     (br_if 0 (local.get $i))))
+)
