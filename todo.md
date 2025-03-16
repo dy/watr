@@ -101,6 +101,8 @@
 * [ ] All tests
 * [ ] Remove unnecessary checks: end label, param names
 * [ ] Type declarations with map file
+* [ ] Prettify: keep comments
+* [ ] VSCode formatter plugin
 
 ## REPL
 

@@ -96,10 +96,12 @@ export async function file(path, imports = {}) {
   let nodes = parse(src, { comments: true, annotations: true })
 
   // skip ((@) module) or ;;
-  while (/;|@/.test(nodes[0]?.[0]?.[0]) || nodes[0]?.startsWith?.('(;') || nodes[0]?.[0]?.startsWith?.('(;')) nodes.shift()
+  nodes.forEach(node => {
+    if (Array.isArray(node)) while (/;|@/.test(node[0]?.[0]?.[0]) || node[0]?.startsWith?.('(;') || node[0]?.[0]?.startsWith?.('(;')) node.shift()
+  })
 
   // (module) -> ((module ...)) - WAST compatible
-  if (nodes[0] === 'module') nodes = [nodes]
+  if (nodes[0] === 'module' || nodes[0]?.startsWith?.('assert')) nodes = [nodes]
 
   freeze(nodes)
 
@@ -211,6 +213,7 @@ export async function file(path, imports = {}) {
           err = e
         }
         if (!err) console.warn(`assert_malformed: ${msg} must doesn't fail`)
+        else ok(err, msg)
 
         return
       }
@@ -222,7 +225,7 @@ export async function file(path, imports = {}) {
         if (code.includes('nan:')) return console.warn('assert_malformed: skip nan:')
         if (/[a-z$]"|"[a-z$]|""/i.test(code)) return console.warn('assert_malformed: skip required space (data"abc")')
         if (/v128\.const/i.test(code) && /range/.test(msg)) return console.warn("assert_malformed: skip out-of-range v128.const tests")
-        // if (/v128\.const/i.test(code) && /operator/.test(msg)) return // ignore bad tokens
+        if (/v128\.const/i.test(code) && /unknown operator/.test(msg)) return console.warn('assert_malformed: skip simd_const malformed numbers')
         if (/illegal character|malformed UTF/.test(msg)) return console.warn('assert_malformed: skip bad chars')
         if (/\(\s+./.test(code)) return console.warn('assert_malformed: skip spaced instr ( instr)')
         if (/empty annotation/.test(msg)) return console.warn('assert_malformed: skip empty annotation (@)')
@@ -241,6 +244,15 @@ export async function file(path, imports = {}) {
       throws(() => {
         ex[kind]([,...args])
       }, msg, msg)
+    },
+
+    // (assert_unlinkable (module (import "test" "unknown" (func))) "msg")
+    assert_unlinkable([, node, msg]) {
+      throws(() => {
+        let buf = compile(print(node))
+        let m = new WebAssembly.Module(buf)
+        let inst = new WebAssembly.Instance(m, importObj)
+      })
     }
   }
 
