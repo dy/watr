@@ -220,7 +220,7 @@ export async function file(path, imports = {}) {
 
       if (nodes[1] === 'quote') {
         // (module quote ...nodes) - remove escaped quotes
-        let code = nodes.slice(2).map(str => str.slice(1, -1).replaceAll(/\\(.)/g, '$1')).join('\n')
+        let code = nodes.slice(2).map(str => str.slice(1, -1)).join('\n')
 
         if (code.includes('nan:')) return console.warn('assert_malformed: skip nan:')
         if (/[a-z$]"|"[a-z$]|""/i.test(code)) return console.warn('assert_malformed: skip required space (data"abc")')
