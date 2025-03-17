@@ -34,10 +34,10 @@ export default function watr(nodes) {
   else if (typeof nodes[0] === 'string') cur = [nodes]
 
   // binary abbr "\00" "\0x61" ...
-  if (cur[idx] === 'binary') return Uint8Array.from( str( cur.slice(++idx).map(i => i.slice(1, -1)).join('') ) )
+  if (cur[idx] === 'binary') return Uint8Array.from(str(cur.slice(++idx).map(unquote).join('')))
 
   // quote "a" "b"
-  if (cur[idx] === 'quote') return watr( String.fromCharCode(...str( cur.slice(++idx).map(i => i.slice(1, -1)).join('') )) )
+  if (cur[idx] === 'quote') return watr(String.fromCharCode(...str(cur.slice(++idx).map(unquote).join(''))))
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
@@ -71,7 +71,6 @@ export default function watr(nodes) {
     else return true
   })
 
-
     // prepare/normalize nodes
     .forEach(([kind, ...node]) => {
       let imported // if node needs to be imported
@@ -104,7 +103,7 @@ export default function watr(nodes) {
       // data abbr
       // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
       else if (kind === 'memory' && node[0]?.[0] === 'data') {
-        let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
+        let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(unquote).join('').length / 65536) // FIXME: figure out actual data size
         ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
         node = [m, m]
       }
@@ -158,7 +157,11 @@ export default function watr(nodes) {
 // consume name eg. $t ...
 const alias = (node, list) => {
   let name = (node[0]?.[0] === '$') && node.shift();
-  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : !name[1] ? err(`Empty name`) : list[name] = list.length; // save alias
+  if (name) {
+    name in list && err(`Duplicate ${list.name} ${name}`);
+    !name[1] && err(`Empty name`);
+    list[name] = list.length; // save alias
+  }
   return name
 }
 
@@ -407,7 +410,7 @@ const build = [,
     }
     else err(`Unknown kind ${kind}`)
 
-    return ([...vec(str(mod.slice(1, -1))), ...vec(str(field.slice(1, -1))), KIND[kind], ...details])
+    return ([...vec(str(unquote(mod))), ...vec(str(unquote(field))), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
@@ -426,7 +429,7 @@ const build = [,
   ([t, init], ctx) => [...fieldtype(t, ctx), ...expr(init, ctx)],
 
   //  (export "name" (func|table|mem $name|idx))
-  ([nm, [kind, l]], ctx) => ([...vec(str(nm.slice(1, -1))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
+  ([nm, [kind, l]], ctx) => ([...vec(str(unquote(nm))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
 
   // (start $main)
   ([l], ctx) => uleb(id(l, ctx.func)),
@@ -581,7 +584,7 @@ const build = [,
             // passive: 1
             [1]
       ),
-      ...vec(str(inits.map(i => i.slice(1, -1)).join('')))
+      ...vec(str(inits.map(unquote).join('')))
     ])
   },
 
@@ -930,6 +933,8 @@ const str = s => {
   }
   return res
 }
+
+const unquote = s => s.slice(1, -1)
 
 // serialize binary array
 const vec = a => [...uleb(a.length), ...a.flat()]

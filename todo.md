@@ -103,6 +103,7 @@
 * [ ] Type declarations with map file
 * [ ] Prettify: keep comments
 * [ ] VSCode formatter plugin
+* [ ] Ignore particular test cases instead of excluding full test (like const)
 
 ## REPL
 
