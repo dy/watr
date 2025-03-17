@@ -81,7 +81,7 @@ export default function watr(nodes) {
 
       // index, alias
       let items = ctx[kind];
-      let name = alias(node, items);
+      let nm = alias(node, items);
 
       // export abbr
       // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
@@ -96,7 +96,7 @@ export default function watr(nodes) {
         if (node[1]?.[0] === 'elem') {
           let [reftype, [, ...els]] = node
           node = [els.length, els.length, reftype]
-          ctx.elem.push([['table', name || items.length], ['i32.const', '0'], reftype, ...els])
+          ctx.elem.push([['table', nm || items.length], ['i32.const', '0'], reftype, ...els])
         }
       }
 
@@ -156,13 +156,13 @@ export default function watr(nodes) {
 
 // consume name eg. $t ...
 const alias = (node, list) => {
-  let name = (node[0]?.[0] === '$') && node.shift();
-  if (name) {
-    name in list && err(`Duplicate ${list.name} ${name}`);
-    !name[1] && err(`Empty name`);
-    list[name] = list.length; // save alias
+  let nm = (node[0]?.[0] === '$') && node.shift();
+  if (nm) {
+    nm in list && err(`Duplicate ${list.name} ${nm}`);
+    !nm[1] && err(`Empty name`);
+    list[nm] = list.length; // save alias
   }
-  return name
+  return nm
 }
 
 // (type $id? (func param* result*))
@@ -235,11 +235,11 @@ const fieldseq = (nodes, field, names = false) => {
   // collect field eg. (field f64 f32)(field i32)
   while (nodes[0]?.[0] === field) {
     let [, ...args] = nodes.shift()
-    let name = args[0]?.[0] === '$' && args.shift()
+    let nm = args[0]?.[0] === '$' && args.shift()
     // expose name refs, if allowed
-    if (name) {
-      if (names) name in seq ? err(`Duplicate ${field} ${name}`) : seq[name] = seq.length
-      else err(`Unexpected ${field} name ${name}`)
+    if (nm) {
+      if (names) nm in seq ? err(`Duplicate ${field} ${nm}`) : seq[nm] = seq.length
+      else err(`Unexpected ${field} name ${nm}`)
     }
     seq.push(...args)
   }
@@ -534,9 +534,9 @@ const build = [,
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
       if (types[0]?.[0] === '$') {
-        let name = types.shift()
-        if (name in ctx.local) err(`Duplicate local ${name}`)
-        else ctx.local[name] = ctx.local.length
+        let nm = types.shift()
+        if (nm in ctx.local) err(`Duplicate local ${nm}`)
+        else ctx.local[nm] = ctx.local.length
       }
       ctx.local.push(...types)
     }
