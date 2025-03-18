@@ -105,6 +105,7 @@
 * [ ] VSCode formatter plugin
 * [ ] Ignore particular test cases instead of excluding full test (like const)
 * [ ] Better `str`, `id` test, `name`: there's suboptimal code atm
+  * [ ] `id` test skips important malformed cases
 
 ## REPL
 
