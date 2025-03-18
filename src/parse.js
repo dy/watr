@@ -39,7 +39,7 @@ export default (str, o={ comments: false, annotations: false }) => {
         else if (c === '"') commit(), q = 0
       }
       else if (c === '"') {
-        commit(), q = c, push() // "..."
+        buf !== '$' && commit(), q = c, push() // "..."
       }
       else if (c === '(') {
         commit()
