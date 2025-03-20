@@ -227,3 +227,16 @@
   + that suggests names must be valid unicode byte sequences
   + we can safely use text encoder
   * only datastring may have raw bytes sequence
+
+* Difference of parser vs compiler is that parser applies generic syntax structure normalization, whereas compiler (normalizer part of it) normalizes depending on node kind
+  * It's not actually normalizer, normally it's called parser, and what now is called parser normally is called lexer.
+
+1. Normalize strings in parse.js
+  - brings aspect of semantics rather than plain tokens parsing into parser
+  - it screws up errors look, since user sees normalized tokens instead of raw
+    ~ html also sort-of does that
+  - parser doesn't have to know about meaning of tokens, like `data` vs `import` vs `$`
+  + string token normalization in general sense is still parsing
+  + there's way too many places where id is used, take expr within data, elem, table; (inline) type idx, params, instr
+    - an exception: it will know about data token to handle string a bit differently (Latin-1 maybe)
+  - it's not very nice parser normalizes $abc to $"abc" - it is deabbr stage

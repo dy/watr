@@ -1,4 +1,4 @@
-import t, { is, ok, same } from 'tst'
+import t, { is, ok, same, throws } from 'tst'
 import parse from '../src/parse.js'
 
 t('parser: s-expr', () => {
@@ -207,5 +207,9 @@ t('parse: export name', () => {
 })
 
 t('parse: quote', () => {
-  let tokens = parse(`(import "" "" (global $foo i32))(global $foo i32 (i32.const 0))`)
+  let tokens = parse(`(import "" "abc" (global $foo i32))(global $foo i32 (i32.const 0))`)
+})
+
+t('parse: unclosed quote', () => {
+  throws(() => parse(`(import "" ")`))
 })
