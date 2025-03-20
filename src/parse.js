@@ -1,47 +1,68 @@
-const OPAREN = 40, CPAREN = 41, OBRACK = 91, CBRACK = 93, SPACE = 32, DQUOTE = 34, PERIOD = 46,
-  _0 = 48, _9 = 57, SEMIC = 59, NEWLINE = 32, PLUS = 43, MINUS = 45, COLON = 58, BSLASH = 39
 
 /**
- * Parses a wasm text string and constructs a nested array structure (AST).
+ * Parses a WASM text string into sequence of tokens (AST) without semantics yet.
  *
- * @param {string} str - The input string with WAT code to parse.
- * @param {object} options - Parse options, like comments, etc.
+ * @param {string} s - The input string with WAT code to parse.
+ * @param {object} options - Parse options, like comments, annotations, etc.
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
-export default (str, o={ comments: false }) => {
-  let i = 0, level = [], buf = '', comment = ''
 
-  const commit = () => buf && (
-    level.push(buf),
-    buf = ''
-  )
+import { err } from "./util.js"
 
-  const parseLevel = () => {
-    for (let c, root, q; i < str.length;) {
+export default (s, o={ comments: false, annotations: false }) => {
+  let i = 0, root = [], buf = '', comment = 0
 
-      c = str.charCodeAt(i)
-      if (q) {
-        buf += str[i++]
-        if (str[i-1] === '\\') buf += str[i++]
-        else if (c === DQUOTE) commit(), q = 0
+  const parseLevel = (level) => {
+    let c, q, sublevel // current char, is "", is $
+
+    // push buffer onto level, reset buffer
+    const commit = () => buf && (
+      (!comment || o.comments) && level.push(buf),
+      buf = ''
+    )
+    const push = () => buf += s[i++]
+
+    while (i < s.length) {
+      c = s[i]
+      // (;;)
+      if (comment > 0) {
+        push()
+        if (c === '(' && s[i] === ';') push(), comment++ // (;(;;);)
+        else if (c === ';' && s[i] === ')') push(), comment == 1 && (commit(), comment--)
       }
-      else if (c === DQUOTE) {
-        commit(), q = c, buf += str[i++]
+      // ;;
+      else if (comment < 0) {
+        push()
+        if (c === '\n' || c === '\r') commit(), comment = 0
       }
-      else if (c === OPAREN) {
-        if (str.charCodeAt(i + 1) === SEMIC) comment = str.slice(i, i = str.indexOf(';)', i) + 2), o.comments && level.push(comment) // (; ... ;)
-        else commit(), i++, (root = level).push(level = []), parseLevel(), level = root
+      else if (q) {
+        push()
+        if (c === '\\') push()
+        else if (c === '"') commit(), q = 0
       }
-      else if (c === SEMIC) comment = str.slice(i, i = str.indexOf('\n', i) + 1 || str.length), o.comments && level.push(comment)  // ; ...
-      else if (c <= SPACE) commit(), i++
-      else if (c === CPAREN) return commit(), i++
-      else buf += str[i++]
+      else if (c === '"') q = 1, buf != '$' && commit(), push()  // "..."
+      else if (c === '(') {
+        commit()
+        if (s[i+1] === ';') push(), push(), comment = 1 // (; ... ;)
+        else {
+          i++
+          parseLevel(sublevel = [])
+          if (s[i++] !== ')') err(`Unclosed paren`)
+          if (sublevel[0]?.[0] === '@' && !o.annotations); else level.push(sublevel) // (@...)
+        }
+      }
+      else if (c === ';' && s[i+1] === ';') commit(), push(), push(), comment = -1  // ;; ...
+      // https://webassembly.github.io/annotations/core/text/lexical.html#white-space
+      else if (c <= ' ') commit(), i++
+      else if (c === ')') return commit()
+      else push()
     }
 
     commit()
   }
 
-  parseLevel()
+  parseLevel(root)
+  if (i < s.length) err(`Parens mismatch`)
 
-  return level.length > 1 ? level : level[0]
+  return root.length > 1 ? root : root[0] || []
 }

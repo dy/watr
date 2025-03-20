@@ -85,7 +85,11 @@
 * [x] GC
   * [x] Recursive types
     * [x] normalize subtypes to list, skip single recusion abbr
-* [ ] Exceptions, memory64, annotations, code_metadata, js_strings
+* [ ] immutable compiler
+* [ ] Exceptions
+* [ ] memory64
+* [ ] annotations, code_metadata
+* [ ] js_strings
 * [ ] Features
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [x] All main ones (readme)
@@ -95,6 +99,13 @@
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
 * [ ] All tests
+* [ ] Remove unnecessary checks: end label, param names
+* [ ] Type declarations with map file
+* [ ] Prettify: keep comments
+* [ ] VSCode formatter plugin
+* [ ] Ignore particular test cases instead of excluding full test (like const)
+* [ ] Better `str`, `id` test, `name`: there's suboptimal code atm
+  * [ ] `id` test skips important malformed cases
 
 ## REPL
 

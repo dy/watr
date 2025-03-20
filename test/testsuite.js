@@ -55,7 +55,7 @@ t.mute('/test/official/i32.wast', async function () { await file(this.name, { sp
 t.mute('/test/official/i64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/if.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/imports.wast', async function () { await file(this.name, { spectest: { ...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }) } }) })
-t.mute('/test/official/inline-module.wast', async function () { await file(this.name, { spectest }) })
+t.skip('/test/official/inline-module.wast', async function () { await file(this.name, { spectest }) }) // doesn't test anything
 t.mute('/test/official/int_exprs.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/int_literals.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/labels.wast', async function () { await file(this.name, { spectest }) })
@@ -161,10 +161,10 @@ t.mute('/test/official/utf8-import-module.wast', async function () { await file(
 t.mute('/test/official/utf8-invalid-encoding.wast', async function () { await file(this.name, { spectest }) })
 
 // extensions
-t.todo('/test/official/proposals/annotations/annotations.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/annotations/id.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/annotations/simd_lane.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/annotations/token.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/annotations/annotations.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/annotations/id.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/annotations/simd_lane.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/annotations/token.wast', async function () { await file(this.name, { spectest }) })
 
 t.todo('/test/official/proposals/custom-page-sizes/custom-page-sizes-invalid.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/custom-page-sizes/custom-page-sizes.wast', async function () { await file(this.name, { spectest }) })

@@ -111,13 +111,16 @@ t('parse: comments', () => {
   let tokens = parse('(an (; inline ;) comment\n;; line comment\n1)')
   is(tokens, ['an', 'comment', '1'])
 
+  tokens = parse('(an (;inline;) comment\n;; line comment\n1)')
+  is(tokens, ['an', 'comment', '1'])
+
   tokens = parse('(an (; inline ;) comment\n;; line comment\n1)', {comments: true})
   is(tokens, ['an', '(; inline ;)', 'comment', ';; line comment\n', '1'])
 })
 
 t('parse: nul', () => {
   const tokens = parse(' \n\t')
-  is(tokens, undefined)
+  is(tokens, [])
 })
 
 t.skip('parse: error', () => {
@@ -204,5 +207,5 @@ t('parse: export name', () => {
 })
 
 t('parse: quote', () => {
-  let tokens = parse(`(import \\"\\" \\"\\" (global $foo i32))(global $foo i32 (i32.const 0))`)
+  let tokens = parse(`(import "" "" (global $foo i32))(global $foo i32 (i32.const 0))`)
 })

@@ -191,7 +191,7 @@
 + no time wasted
 + better codebase org
 
-## [ ] Normalize or not? -> too little value. Try instead immutable, streamlined types
+## [x] Normalize or not? -> too little value. Try instead immutable, streamlined types
 
 + Allows unraveling mutable code
   ? can we make it immutable in-place?
@@ -203,3 +203,27 @@
 - Current code seems to be more compact
 + Better order separation
   ? can we separate separately?
+
+## [x] No wabt for testing? -> let's get rid of
+
+- it is not reliable baseline
+  - some tests not fail as expected
+  - some things it cannot compile
+  - it hangs with binaries
+  - it has unnecessary full spec tests
+- wasm/spec is what we're aiming for
+- we needed it until we had repl, now we can compare against spec right away
+
+## [ ] Str encoding, special characters
+
+* $"\41B" == $"AB" == $"A\42" == $"\41\42" == $"\u{41}\u{42}"
+* $"\t" == $"\09" == $"\u{09}"
+* $"" == $"\ef\98\9a\ef\92\a9" == $"\u{f61a}\u{f4a9}"
+* Strings generally have to handle unicodes properly, but same way maintain binary data https://webassembly.github.io/annotations/core/text/values.html#strings
+* Names must be strings of valid unicode characters
+
+* Standard suggests converting $xxx -> $"xxx"
+  + that saves print function + produces valid token
+  + that suggests names must be valid unicode byte sequences
+  + we can safely use text encoder
+  * only datastring may have raw bytes sequence

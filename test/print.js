@@ -1,6 +1,7 @@
 import t, { is, ok, same } from 'tst'
 import print from '../src/print.js'
 import { wat2wasm } from './index.js'
+import parse from '../src/parse.js'
 
 t('print: basics', () => {
   const tree = [
@@ -62,6 +63,6 @@ t('print: doesnt break samples', async t => {
     let res = await fetch(path)
     let src = await res.text()
     const dino = print(src)
-    wat2wasm(dino)
+    ok(parse(dino), path)
   }
 })
