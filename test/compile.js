@@ -1093,9 +1093,9 @@ t('case: data full cases', () => {
   (data $d11 (memory $m) (offset (i32.const 0)))
   (data $d12 (memory $m) (offset (i32.const 0)) "" "a" "bc" "")
   `
-  // inline(src)
-  let mod = new WebAssembly.Module(compile(src))
-  new WebAssembly.Instance(mod)
+  inline(src)
+  // let mod = new WebAssembly.Module(compile(src))
+  // new WebAssembly.Instance(mod)
   // NOTE: https://github.com/WebAssembly/wabt/issues/2518 - libwabt is corrupted
   // is(compile(parse(src)), wat2wasm(src).buffer)
 })

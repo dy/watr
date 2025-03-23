@@ -28,7 +28,7 @@ t('print: basics', () => {
 
   is(
     print(`(import "Math" "random" (func $random (result f32)))`, { newline: '', indent: '' }),
-    `(import \"Math\" \"random\"(func $random(result f32)))`
+    `(import \"Math\" \"random\"(func $"random"(result f32)))`
   )
 })
 

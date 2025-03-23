@@ -2,7 +2,7 @@ import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
 import parse from './parse.js'
-import { clone, err } from './util.js'
+import { clone, err, str } from './util.js'
 
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
@@ -34,10 +34,10 @@ export default function watr(nodes) {
   else if (typeof nodes[0] === 'string') cur = [nodes]
 
   // binary abbr "\00" "\0x61" ...
-  if (cur[idx] === 'binary') return Uint8Array.from(str(cur.slice(++idx).map(unquote).join('')))
+  if (cur[idx] === 'binary') return Uint8Array.from(cur.slice(++idx).map(unquote).map(str).flat())
 
   // quote "a" "b"
-  if (cur[idx] === 'quote') return watr(String.fromCodePoint(...str(cur.slice(++idx).map(unquote).join(''))))
+  if (cur[idx] === 'quote') return watr(String.fromCodePoint(...cur.slice(++idx).map(unquote).map(str).flat()))
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
@@ -96,6 +96,7 @@ export default function watr(nodes) {
         if (node[1]?.[0] === 'elem') {
           let [reftype, [, ...els]] = node
           node = [els.length, els.length, reftype]
+          // FIXME: remove nm, use just idx instead
           ctx.elem.push([['table', nm || items.length], ['i32.const', '0'], reftype, ...els])
         }
       }
@@ -114,6 +115,7 @@ export default function watr(nodes) {
         idx ??= regtype(param, result, ctx)
 
         // we save idx because type can be defined after
+        // FIXME: plainify/normalize after
         !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
         node.unshift(['type', idx])
       }
@@ -154,13 +156,9 @@ export default function watr(nodes) {
   ])
 }
 
-// normalize name token, eg. $t or $ "t"
-const decoder = new TextDecoder
-const name = (s) => s[1] === '"' ? '$' + decoder.decode(Uint8Array.from(str(s.slice(2,-1)))) : s
-
 // consume section name eg. $t ...
 const alias = (node, list) => {
-  let nm = (node[0]?.[0] === '$') && name(node.shift());
+  let nm = (node[0]?.[0] === '$') && node.shift();
   if (nm) {
     nm in list && err(`Duplicate ${list.name} ${nm}`);
     !nm[1] && err(`Empty name`);
@@ -239,7 +237,7 @@ const fieldseq = (nodes, field, names = false) => {
   // collect field eg. (field f64 f32)(field i32)
   while (nodes[0]?.[0] === field) {
     let [, ...args] = nodes.shift()
-    let nm = args[0]?.[0] === '$' && name(args.shift())
+    let nm = args[0]?.[0] === '$' && args.shift()
     // expose name refs, if allowed
     if (nm) {
       if (names) nm in seq ? err(`Duplicate ${field} ${nm}`) : seq[nm] = seq.length
@@ -278,10 +276,11 @@ const plain = (nodes, ctx) => {
     if (typeof node === 'string') {
       out.push(node)
 
+      // resolve optionals
       // block typeuse?
       if (node === 'block' || node === 'if' || node === 'loop') {
         // (loop $l?)
-        if (nodes[0]?.[0] === '$') label = name(nodes.shift()), out.push(label), stack.push(label)
+        if (nodes[0]?.[0] === '$') label = nodes.shift(), out.push(label), stack.push(label)
 
         out.push(blocktype(nodes, ctx))
       }
@@ -289,7 +288,7 @@ const plain = (nodes, ctx) => {
       // else $label
       // end $label - make sure it matches block label
       else if (node === 'else' || node === 'end') {
-        if (nodes[0]?.[0] === '$') (node === 'end' ? stack.pop() : label) !== (label = name(nodes.shift())) && err(`Mismatched label ${label}`)
+        if (nodes[0]?.[0] === '$') (node === 'end' ? stack.pop() : label) !== (label = nodes.shift()) && err(`Mismatched label ${label}`)
       }
 
       // select (result i32 i32 i32)?
@@ -300,7 +299,7 @@ const plain = (nodes, ctx) => {
       // call_indirect $table? $typeidx
       // return_call_indirect $table? $typeidx
       else if (node.endsWith('call_indirect')) {
-        let tableidx = nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? name(nodes.shift()) : 0
+        let tableidx = nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0
         let [idx, param, result] = typeuse(nodes, ctx, 0)
         out.push(tableidx, ['type', idx ?? regtype(param, result, ctx)])
       }
@@ -311,14 +310,14 @@ const plain = (nodes, ctx) => {
       }
 
       // table.init tableidx? elemidx -> table.init tableidx elemidx
-      else if (node === 'table.init') out.push((nodes[1][0] === '$' || !isNaN(nodes[1])) ? name(nodes.shift()) : 0, name(nodes.shift()))
+      else if (node === 'table.init') out.push((nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift())
 
       // table.* tableidx?
       else if (node.startsWith('table.')) {
-        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? name(nodes.shift()) : 0)
+        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
 
         // table.copy tableidx? tableidx?
-        if (node === 'table.copy') out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? name(nodes.shift()) : 0)
+        if (node === 'table.copy') out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
       }
     }
 
@@ -342,7 +341,7 @@ const plain = (nodes, ctx) => {
         if (node[node.length - 1]?.[0] === 'then') then = plain(node.pop(), ctx)
 
         // label?
-        if (node[0]?.[0] === '$') immed.push(name(node.shift()))
+        if (node[0]?.[0] === '$') immed.push(node.shift())
 
         // blocktype?
         immed.push(blocktype(node, ctx))
@@ -432,7 +431,7 @@ const build = [,
   // (global $id? (mut i32) (i32.const 42))
   ([t, init], ctx) => [...fieldtype(t, ctx), ...expr(init, ctx)],
 
-  //  (export "name" (func|table|mem $name|idx))
+  // (export "name" (func|table|mem $name|idx))
   ([nm, [kind, l]], ctx) => ([...vec(str(unquote(nm))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
 
   // (start $main)
@@ -538,7 +537,7 @@ const build = [,
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
       if (types[0]?.[0] === '$') {
-        let nm = name(types.shift())
+        let nm = types.shift()
         if (nm in ctx.local) err(`Duplicate local ${nm}`)
         else ctx.local[nm] = ctx.local.length
       }
@@ -588,7 +587,7 @@ const build = [,
             // passive: 1
             [1]
       ),
-      ...vec(str(inits.map(unquote).join('')))
+      ...vec(inits.map(unquote).map(str).flat())
     ])
   },
 
@@ -758,7 +757,7 @@ const instr = (nodes, ctx) => {
     ctx.block.push(code)
 
     // (block $x) (loop $y) - save label pointer
-    if (nodes[0]?.[0] === '$') ctx.block[name(nodes.shift())] = ctx.block.length
+    if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
     let t = nodes.shift();
 
@@ -821,7 +820,7 @@ const instr = (nodes, ctx) => {
   else if (code == 0x0e) {
     let args = []
     while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
-      args.push(...uleb(blockid(name(nodes.shift()), ctx.block)))
+      args.push(...uleb(blockid(nodes.shift(), ctx.block)))
     }
     args.unshift(...uleb(args.length - 1))
     immed.push(...args)
@@ -879,12 +878,12 @@ const instr = (nodes, ctx) => {
 const expr = (node, ctx) => [...instr([node], ctx), 0x0b]
 
 // deref id node to numeric idx
-const id = (nm, list, n) => (n = nm[0] === '$' ? list[name(nm)] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
+const id = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
 
 // block id - same as id but for block
 // index indicates how many block items to pop
 const blockid = (nm, block, i) => (
-  i = nm?.[0] === '$' ? block.length - block[name(nm)] : +nm,
+  i = nm?.[0] === '$' ? block.length - block[nm] : +nm,
   isNaN(i) || i > block.length ? err(`Bad label ${nm}`) : i
 )
 
@@ -922,34 +921,6 @@ const limits = (node) => (
 // check if node is valid int in a range
 // we put extra condition for index ints for tests complacency
 const parseUint = (v, max = 0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
-
-
-// escape codes
-const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
-
-// build string binary
-// https://webassembly.github.io/spec/core/text/values.html#strings
-const encoder = new TextEncoder
-const str = s => {
-  let res = [], i = 0, c, code
-  while (i < s.length) {
-    c = s[i++]
-
-    if (c === '\\') {
-      c = s[i++]
-      // \u{abcd}
-      if (c === 'u') code = parseInt(s.slice(++i, i = s.indexOf('}', i)), 16), i++
-      // \n, \10
-      else code = escape[c] || parseInt(c + s[i++], 16)
-    }
-    else code = c.codePointAt(0)
-
-    code <= 255 ? res.push(code) : res.push(...encoder.encode(String.fromCharCode(code)))
-  }
-
-  // then use text encoder
-  return res
-}
 
 const unquote = s => s.slice(1, -1)
 
