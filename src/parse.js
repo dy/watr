@@ -22,8 +22,8 @@ export default (s, o = { comments: false, annotations: false }) => {
   // push buffer onto level, reset buffer
   const commit = () => (
     // we try to store strings as raw bytes and ids as strings
+    $ ? level.push(`$"${tdec.decode(Uint8Array.from(str(buf)))}"`) :
     q ? level.push(str(buf)) :
-    $ ? level.push('$' + tdec.decode(Uint8Array.from(str(buf)))) :
     buf && (!comment || o.comments) && level.push(buf),
     buf = '', $ = q = null
   )
@@ -90,7 +90,7 @@ const str = s => {
   const commit = () => (buf && bytes.push(...tenc.encode(buf)), buf = '')
 
   while (i < s.length) {
-    c = s[i++], code = 0
+    c = s[i++], code = null
 
     if (c === '\\') {
       // \u{abcd}
@@ -106,10 +106,10 @@ const str = s => {
       // \*
       else c += s[i]
     }
-
-    code ? (commit(), bytes.push(code)) : buf += c
+    code != null ? (commit(), bytes.push(code)) : buf += c
   }
   commit()
 
+  bytes.valueOf = () => `"${s}"` // for serialization
   return bytes
 }

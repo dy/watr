@@ -30,25 +30,26 @@ export default function print(tree, options = {}) {
     let curIndent = indent.repeat(level + 1)
 
     for (let i = 1; i < node.length; i++) {
-      let subnode = node[i]
+      const sub = node[i].valueOf() // "\00abc\ff" strings are stored as arrays but have ._ with original value
+
       // (<keyword> ...)
-      if (Array.isArray(subnode)) {
+      if (Array.isArray(sub)) {
         // check if it's still flat
-        if (flat) flat = subnode.every(subnode => !Array.isArray(subnode))
+        if (flat) flat = sub.every(sub => !Array.isArray(sub))
 
         // new line
-        content += newline + curIndent + printNode(subnode, level + 1)
+        content += newline + curIndent + printNode(sub, level + 1)
       }
       // data chunks "\00..."
       else if (node[0] === 'data')   {
         flat = false;
         if (newline || content[content.length-1] !== ')') content += newline || ' '
-        content += curIndent + subnode
+        content += curIndent + sub
       }
       // inline nodes
       else {
         if (newline || content[content.length-1] !== ')') content += ' '
-        content += subnode
+        content += sub
       }
     }
 

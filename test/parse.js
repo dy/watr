@@ -8,12 +8,12 @@ t('parser: s-expr', () => {
 
 t('parser: s-expr named', () => {
   const tree = parse('(module $hello)')
-  is(tree, ['module', '$hello'])
+  is(tree, ['module', '$"hello"'])
 })
 
 t('parser: ref labels as children', () => {
   const tree = parse('(elem (i32.const 0) $f1 $f2)')
-  is(tree, ['elem', ['i32.const', '0'], '$f1', '$f2'])
+  is(tree, ['elem', ['i32.const', '0'], '$"f1"', '$"f2"'])
 })
 
 t('parser: s-expr number params', () => {
@@ -46,7 +46,7 @@ t('parser: many stack instructions', () => {
 t('parser: children', () => {
   const code = '(func $answer (result i32) (i32.add (i32.const 20) (i32.const 22)))'
   const tree = parse(code)
-  is(tree, ['func', '$answer', ['result', 'i32'], ['i32.add', ['i32.const', '20'], ['i32.const', '22']]])
+  is(tree, ['func', '$"answer"', ['result', 'i32'], ['i32.add', ['i32.const', '20'], ['i32.const', '22']]])
 })
 
 t('parser: minimal export function', () => {
@@ -71,8 +71,8 @@ t('parse: param', () => {
 })
 
 t('parse: label', () => {
-  const tokens = parse('$$hi')
-  is(tokens, '$$hi')
+  const tokens = parse('$"$hi" $$hi')
+  is(tokens, ['$"$hi"', '$"$hi"'])
 })
 
 t('parse: number', () => {
@@ -140,7 +140,7 @@ t('parse: complex case 1', () => {
 ;; (should) be a comment
 and (; another ;) line 0x312 43.23
 )`)
-  is(tokens, [['hello', '$hi', [119, 111, 114, 108, 100]], 'and', 'line', '0x312', '43.23'])
+  is(tokens, [['hello', '$"hi"', [119, 111, 114, 108, 100]], 'and', 'line', '0x312', '43.23'])
 })
 
 t('parse: minimal function', () => {
@@ -150,7 +150,7 @@ t('parse: minimal function', () => {
 
 t('parse: multiple functions', () => {
   let tokens = parse('(func $a) (func $b)')
-  is(tokens, [['func', '$a'], ['func', '$b']])
+  is(tokens, [['func', '$"a"'], ['func', '$"b"']])
 })
 
 t('parse: elseif', () => {
@@ -178,7 +178,7 @@ t('parse: export name', () => {
 
 t('parse: quotes', () => {
   let tokens = parse(`(import "" "abc" (global $foo i32))(global $foo i32 (i32.const 0))`)
-  is(tokens, [['import', [], [97, 98, 99], ['global', '$foo', 'i32']], ['global', '$foo', 'i32', ['i32.const', '0']]])
+  is(tokens, [['import', [], [97, 98, 99], ['global', '$"foo"', 'i32']], ['global', '$"foo"', 'i32', ['i32.const', '0']]])
 })
 
 t('parse: unclosed quote', () => {
