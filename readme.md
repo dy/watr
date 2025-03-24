@@ -7,7 +7,7 @@ Useful for high-level languages or dynamic (in-browser) compilation.<br/>
 
 ## Features
 
-* [full spec syntax](https://webassembly.github.io/spec/core/text/index.html)
+* [x] [full spec syntax](https://webassembly.github.io/spec/core/text/index.html), [official testsuite](https://github.com/WebAssembly/testsuite)
 * [x] [mutable globals](https://github.com/WebAssembly/mutable-global), [extended const](https://github.com/WebAssembly/extended-const/blob/main/proposals/extended-const/Overview.md), [nontrapping float to int](https://github.com/WebAssembly/nontrapping-float-to-int-conversions), [sign extension](https://github.com/WebAssembly/sign-extension-ops)
 * [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md), [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md)
 * [x] [simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md), [relaxed simd](https://github.com/WebAssembly/relaxed-simd), [fixed-width simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
