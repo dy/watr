@@ -172,7 +172,7 @@ const typedef = ([dfn], ctx) => {
   [compkind, ...dfn] = dfn // composite type kind
 
   if (compkind === 'func') dfn = paramres(dfn), ctx.type['$' + dfn.join('>')] ??= ctx.type.length
-  else if (compkind === 'struct') dfn = fieldseq(dfn, 'field', true)
+  else if (compkind === 'struct') dfn = fieldseq(dfn, 'field')
   else if (compkind === 'array') [dfn] = dfn
 
   return [compkind, dfn, subkind, supertypes]
@@ -186,13 +186,13 @@ const regtype = (param, result, ctx, idx = '$' + param + '>' + result) => (
 
 // consume typeuse nodes, return type index/params, or null idx if no type
 // https://webassembly.github.io/spec/core/text/modules.html#type-uses
-const typeuse = (nodes, ctx, names) => {
+const typeuse = (nodes, ctx) => {
   let idx, param, result
 
   // explicit type (type 0|$name)
   if (nodes[0]?.[0] === 'type') {
     [, idx] = nodes.shift();
-    [param, result] = paramres(nodes, names);
+    [param, result] = paramres(nodes);
 
     const [, srcParamRes] = ctx.type[id(idx, ctx.type)] ?? err(`Unknown type ${idx}`)
 
@@ -203,15 +203,15 @@ const typeuse = (nodes, ctx, names) => {
   }
 
   // implicit type (param i32 i32)(result i32)
-  return [idx, ...paramres(nodes, names)]
+  return [idx, ...paramres(nodes)]
 }
 
 // consume (param t+)* (result t+)* sequence
-const paramres = (nodes, names = true) => {
+const paramres = (nodes) => {
   // let param = [], result = []
 
   // collect param (param i32 i64) (param $x? i32)
-  let param = fieldseq(nodes, 'param', names)
+  let param = fieldseq(nodes, 'param')
 
   // collect result eg. (result f64 f32)(result i32)
   let result = fieldseq(nodes, 'result')
@@ -223,17 +223,14 @@ const paramres = (nodes, names = true) => {
 
 // collect sequence of field, eg. (param a) (param b c), (field a) (field b c) or (result a b) (result c)
 // optionally allow or not names
-const fieldseq = (nodes, field, names = false) => {
+const fieldseq = (nodes, field) => {
   let seq = []
   // collect field eg. (field f64 f32)(field i32)
   while (nodes[0]?.[0] === field) {
     let [, ...args] = nodes.shift()
     let nm = args[0]?.[0] === '$' && args.shift()
     // expose name refs, if allowed
-    if (nm) {
-      if (names) nm in seq ? err(`Duplicate ${field} ${nm}`) : seq[nm] = seq.length
-      else err(`Unexpected ${field} name ${nm}`)
-    }
+    if (nm) nm in seq ? err(`Duplicate ${field} ${nm}`) : seq[nm] = seq.length
     seq.push(...args)
   }
   return seq
@@ -284,7 +281,7 @@ const plain = (nodes, ctx) => {
 
       // select (result i32 i32 i32)?
       else if (node === 'select') {
-        out.push(paramres(nodes, 0)[1])
+        out.push(paramres(nodes)[1])
       }
 
       // call_indirect $table? $typeidx

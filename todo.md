@@ -97,15 +97,15 @@
   * [ ] Wasm3
 * [x] Print: make it as nice as AI
 * [ ] Bench binaryen
-* [ ] replace wabt with spec/wasm for tests
+* [x] ~~replace wabt with spec/wasm for tests~~ we just use direct compile instead, we can compare against other compilers in repl
 * [ ] All tests
-* [ ] Remove unnecessary checks: end label, param names
+* [x] Remove unnecessary checks: end label, param names
 * [ ] Type declarations with map file
 * [ ] Prettify: keep comments
 * [ ] VSCode formatter plugin
 * [ ] Ignore particular test cases instead of excluding full test (like const)
 * [x] Better `str`, `id` test, `name`: there's suboptimal code atm. We need better name parsing
-  * [ ] `id` test skips important malformed cases
+  * [x] `id` test skips important malformed cases
   * [x] move string / name logic to compiler/prepare stage, it's not parser duty
 * [x] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
 * [x] Split strings into unicode / binary parts
