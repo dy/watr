@@ -80,8 +80,7 @@ export default (s, o = { comments: false, annotations: false }) => {
 
 
 
-// const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
-const escape = { n: '\n', r: '\r', t: '\t', '"':'"', "'": "'", '\\': '\\' }
+const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
 
 // convert string to bytes sequence
 const str = s => {
@@ -100,7 +99,7 @@ const str = s => {
         i++ // '}'
       }
       // \n, \t, \r
-      else if (escape[s[i]]) c = escape[s[i++]]
+      else if (escape[s[i]]) code = escape[s[i++]]
       // \00 - raw bytes
       else if (!isNaN(code = parseInt(s[i] + s[i + 1], 16))) i++, i++
       // \*
