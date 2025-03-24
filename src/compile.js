@@ -98,7 +98,7 @@ export default function watr(nodes) {
           let [reftype, [, ...els]] = node
           node = [els.length, els.length, reftype]
           // FIXME: remove nm, use just idx instead
-          ctx.elem.push([['table', nm || items.length], ['i32.const', '0'], reftype, ...els])
+          ctx.elem.push([['table', nm || items.length], ['i32.const', 0], reftype, ...els])
         }
       }
 

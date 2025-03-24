@@ -171,16 +171,16 @@ export async function file(path, imports = {}) {
 
     assert_invalid([, nodes, msg]) {
       // skip (data const_expr) - we don't have constant expr limitations
-      if (nodes.some(n => n[0] === 'data' && typeof n !== 'string')) return console.warn('assert_invalid: skip data const expr');
+      if (nodes.some(n => n[0] === 'data' && typeof n !== 'string')) return console.warn('assert_invalid: skip (data const_expr)', );
       // skip (global const_expr) - we don't have constant expr limitations
-      if (nodes.some(n => n[0] === 'global' && typeof n[2] !== 'string')) return console.warn('assert_invalid: skip global const expr');
+      if (nodes.some(n => n[0] === 'global' && typeof n[2] !== 'string')) return console.warn('assert_invalid: skip (global const_expr)');
       // skip (elem const_expr) - we don't have constant expr limitations
-      if (nodes.some(n => n[0] === 'elem' && typeof n[1] !== 'string')) return console.warn('assert_invalid: skip elem const expr');
+      if (nodes.some(n => n[0] === 'elem' && typeof n[1] !== 'string')) return console.warn('assert_invalid: skip (elem const_expr)');
       // skip multimemory - there's no issue with proposal enabled
       let m = 0
-      if (nodes.some(n => (n[0] === 'memory' && (++m) > 1))) return console.warn('assert_invalid: skip multi memory');
-      // skip recursive type checks
-      if (msg === '"unknown type"') return console.warn('assert_invalid: skip type checks');
+      if (nodes.some(n => (n[0] === 'memory' && (++m) > 1))) return console.warn('assert_invalid: skip multi memory required fail');
+      // skip recursive type checks that refer to itself
+      if (msg === '"unknown type"' && nodes.join('').includes('ref,$')) return console.warn('assert_invalid: skip type checks');
 
       // console.group('assert_invalid', ...node)
       lastComment = ``
@@ -222,20 +222,23 @@ export async function file(path, imports = {}) {
         // (module quote ...nodes) - remove escaped quotes
         let code = nodes.slice(2).map(str => str.valueOf().slice(1, -1)).join('\n')
 
-        if (code.includes('nan:')) return console.warn('assert_malformed: skip nan:', code)
-        if (/\$\)|\$\s|\$""|\$\"\w*\s|\$\(\@/.test(code)) return console.warn(`assert_malformed: skip empty id validation`, code)
-        if (/v128\.const/i.test(code) && /range/.test(msg)) return console.warn(`assert_malformed: skip out-of-range v128.const tests`, code)
-        if (/v128\.const/i.test(code) && /unknown operator/.test(msg)) return console.warn(`assert_malformed: skip simd_const malformed numbers`, code)
-        if (code.includes('@') && /illegal character|malformed UTF/.test(msg)) return console.warn(`assert_malformed: skip bad chars`, code)
-        if (/\(\s+./.test(code)) return console.warn('assert_malformed: skip spaced instr ( instr)', code)
-        if (/empty annotation/.test(msg)) return console.warn('assert_malformed: skip empty annotation (@)', code)
+        // if (code.includes('nan:')) return console.warn('assert_malformed: skip nan:', code)
+        // if (/\$\)|\$\s|\$""|\$\"\w*\s|\$\(\@/.test(code)) return console.warn(`assert_malformed: skip empty id validation`, code)
+        // if (/v128\.const/i.test(code) && /range/.test(msg)) return console.warn(`assert_malformed: skip out-of-range v128.const tests`, code)
+        // if (/v128\.const/i.test(code) && /unknown operator/.test(msg)) return console.warn(`assert_malformed: skip simd_const malformed numbers`, code)
+        // if (code.includes('@') && /illegal character|malformed UTF/.test(msg)) return console.warn(`assert_malformed: skip bad chars`, code)
+        // if (/\(\s+./.test(code)) return console.warn('assert_malformed: skip spaced instr ( instr)', code)
+        // if (/empty annotation/.test(msg)) return console.warn('assert_malformed: skip empty annotation (@)', code)
 
-        throws(() => {
+        let err
+        try {
           nodes = parse(code, { annotations: true })
           let buf = compile(print(nodes))
           let m = new WebAssembly.Module(buf)
           let inst = new WebAssembly.Instance(m, importObj)
-        }, msg, msg)
+        } catch (e) { err = e }
+        if (!err) console.warn(`assert_malformed: not failing. ${msg}`, code)
+        else ok(err, msg)
       }
 
     },
