@@ -182,20 +182,13 @@ export async function file(path, imports = {}) {
       // skip recursive type checks that refer to itself
       if (msg === '"unknown type"' && nodes.join('').includes('ref,$')) return console.warn('assert_invalid: skip type checks');
 
-      // console.group('assert_invalid', ...node)
       lastComment = ``
       throws(() => ex[nodes[0]](nodes), msg, msg)
-      // console.groupEnd()
     },
 
     assert_trap([, nodes, msg]) {
       // console.group('assert_trap', ...node)
-      try {
-        ex[nodes[0]](nodes)
-      } catch (e) {
-        // console.log('trap error', e, msg)
-        ok(e.message, `assert_trap: ${msg}`)
-      }
+      throws(() => ex[nodes[0]](nodes), `assert_trap: ${msg}`)
       // console.groupEnd()
     },
 
@@ -237,6 +230,7 @@ export async function file(path, imports = {}) {
           let m = new WebAssembly.Module(buf)
           let inst = new WebAssembly.Instance(m, importObj)
         } catch (e) { err = e }
+        // FIXME: try to cover all low-hanging malformed cases
         if (!err) console.warn(`assert_malformed: not failing. ${msg}`, code)
         else ok(err, msg)
       }

@@ -47,7 +47,7 @@ export default function watr(nodes) {
       // add rest of subtypes as regular type nodes with subtype flag
       for (let i = 0; i < node.length; i++) {
         let [, ...subnode] = node[i]
-        alias(subnode, ctx.type);
+        name(subnode, ctx.type);
         (subnode = typedef(subnode, ctx)).push(i ? true : [ctx.type.length, node.length])
         ctx.type.push(subnode)
       }
@@ -57,7 +57,7 @@ export default function watr(nodes) {
     // (type (struct (field a)*)
     // (type (sub final? $nm* (struct|array|func ...)))
     else if (kind === 'type') {
-      alias(node, ctx.type);
+      name(node, ctx.type);
       ctx.type.push(typedef(node, ctx));
     }
     // other sections may have id
@@ -76,7 +76,7 @@ export default function watr(nodes) {
 
       // index, alias
       let items = ctx[kind];
-      let nm = alias(node, items);
+      name(node, items);
 
       // export abbr
       // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
@@ -91,8 +91,7 @@ export default function watr(nodes) {
         if (node[1]?.[0] === 'elem') {
           let [reftype, [, ...els]] = node
           node = [els.length, els.length, reftype]
-          // FIXME: remove nm, use just idx instead
-          ctx.elem.push([['table', nm || items.length], ['i32.const', 0], reftype, ...els])
+          ctx.elem.push([['table', items.length], ['i32.const', 0], reftype, ...els])
         }
       }
 
@@ -152,7 +151,7 @@ export default function watr(nodes) {
 }
 
 // consume section name eg. $t ...
-const alias = (node, list) => {
+const name = (node, list) => {
   let nm = (node[0]?.[0] === '$') && node.shift();
   if (nm) nm in list ? err(`Duplicate ${list.name} ${nm}`) : list[nm] = list.length; // save alias
   return nm
