@@ -73,7 +73,8 @@ export default (s, o = { comments: false, annotations: false }) => {
   }
 
   parseLevel()
-  if (i < s.length) err(`Unbalanced syntax`)
+
+  if (i < s.length) err() // likely unbalanced syntax
 
   return level.length > 1 ? level : level[0] || []
 }
