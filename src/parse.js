@@ -110,7 +110,7 @@ const str = s => {
   commit()
 
   // display representation. Note - it's not actionable string, just WAT fragment, don't use as code value.
-  // eg. "a\\b" is stored as "a\b"
+  // eg. "a\\b" is shown as "a\\b", but bytes value is "a\b"
   bytes.valueOf = () => `"${s}"`
   return bytes
 }
