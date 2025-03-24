@@ -6,24 +6,14 @@ t('parser: s-expr', () => {
   is(tree, ['module'])
 })
 
-t.skip('parser: s-expr no instruction (throws)', () => {
-  try {
-    parse('()')
-  } catch (error) {
-    ok(/Empty/.test(error.message))
-    return
-  }
-  throw 'Failed'
-})
-
 t('parser: s-expr named', () => {
   const tree = parse('(module $hello)')
-  is(tree, ['module', '$"hello"'])
+  is(tree, ['module', '$hello'])
 })
 
 t('parser: ref labels as children', () => {
   const tree = parse('(elem (i32.const 0) $f1 $f2)')
-  is(tree, ['elem', ['i32.const', '0'], '$"f1"', '$"f2"'])
+  is(tree, ['elem', ['i32.const', '0'], '$f1', '$f2'])
 })
 
 t('parser: s-expr number params', () => {
@@ -56,18 +46,18 @@ t('parser: many stack instructions', () => {
 t('parser: children', () => {
   const code = '(func $answer (result i32) (i32.add (i32.const 20) (i32.const 22)))'
   const tree = parse(code)
-  is(tree, ['func', '$"answer"', ['result', 'i32'], ['i32.add', ['i32.const', '20'], ['i32.const', '22']]])
+  is(tree, ['func', '$answer', ['result', 'i32'], ['i32.add', ['i32.const', '20'], ['i32.const', '22']]])
 })
 
 t('parser: minimal export function', () => {
   const code = '(func (export "answer") (result i32) (i32.const 42))'
   const tree = parse(code)
-  is(tree, ['func', ['export', '"answer"'], ['result', 'i32'], ['i32.const', '42']])
+  is(tree, ['func', ['export', [97, 110, 115, 119, 101, 114]], ['result', 'i32'], ['i32.const', '42']])
 })
 
-t('parser: children', () => {
+t('parser: data single byte', () => {
   const tree = parse(`(data (i32.const 0) "\\2a")`)
-  is(tree, ['data', ['i32.const', '0'], '"\\2a"'])
+  is(tree, ['data', ['i32.const', '0'], [42]])
 })
 
 t('parse: instr', () => {
@@ -82,17 +72,7 @@ t('parse: param', () => {
 
 t('parse: label', () => {
   const tokens = parse('$$hi')
-  is(tokens, '$"$hi"')
-})
-
-t.skip('parse: string', () => {
-  const r = String.raw
-  const tokens = parse(r`"hello""ano\"t\n\ther""more"`)
-  expect(tokens).to.deep.equal([
-    { value: 'hello', kind: 'string', index: 0 },
-    { value: r`ano\"t\n\ther`, kind: 'string', index: 7 },
-    { value: 'more', kind: 'string', index: 22 }
-  ])
+  is(tokens, '$$hi')
 })
 
 t('parse: number', () => {
@@ -119,14 +99,6 @@ t('parse: comments', () => {
 t('parse: nul', () => {
   const tokens = parse(' \n\t')
   is(tokens, [])
-})
-
-t.skip('parse: error', () => {
-  try {
-    let tree = parse('§what')
-  } catch (e) {
-    ok(/syntax/.test(e.message))
-  }
 })
 
 t('parse: number', t => {
@@ -168,17 +140,17 @@ t('parse: complex case 1', () => {
 ;; (should) be a comment
 and (; another ;) line 0x312 43.23
 )`)
-  is(tokens, [['hello', '$"hi"', '"world"'], 'and', 'line', '0x312', '43.23'])
+  is(tokens, [['hello', '$hi', [119, 111, 114, 108, 100]], 'and', 'line', '0x312', '43.23'])
 })
 
 t('parse: minimal function', () => {
   let tokens = parse('(func (export "answer") (result i32) (i32.const 42))')
-  is(tokens, ['func', ['export', '"answer"'], ['result', 'i32'], ['i32.const', '42']])
+  is(tokens, ['func', ['export', [97, 110, 115, 119, 101, 114]], ['result', 'i32'], ['i32.const', '42']])
 })
 
 t('parse: multiple functions', () => {
   let tokens = parse('(func $a) (func $b)')
-  is(tokens, [['func', '$"a"'], ['func', '$"b"']])
+  is(tokens, [['func', '$a'], ['func', '$b']])
 })
 
 t('parse: elseif', () => {
@@ -190,7 +162,7 @@ t('parse: data', () => {
   let tokens = parse('(data (i32.const 4) "`.-,_:^!~;r+|()=>l?icv[]tzj7*f{}sYTJ1unyIFowe2h3Za4X%5P$mGAUbpK960#H&DRQ80WMB@N")')
   is(tokens, [
     'data', ['i32.const', '4'],
-    '"`.-,_:^!~;r+|()=>l?icv[]tzj7*f{}sYTJ1unyIFowe2h3Za4X%5P$mGAUbpK960#H&DRQ80WMB@N"'
+    [96, 46, 45, 44, 95, 58, 94, 33, 126, 59, 114, 43, 124, 40, 41, 61, 62, 108, 63, 105, 99, 118, 91, 93, 116, 122, 106, 55, 42, 102, 123, 125, 115, 89, 84, 74, 49, 117, 110, 121, 73, 70, 111, 119, 101, 50, 104, 51, 90, 97, 52, 88, 37, 53, 80, 36, 109, 71, 65, 85, 98, 112, 75, 57, 54, 48, 35, 72, 38, 68, 82, 81, 56, 48, 87, 77, 66, 64, 78]
   ])
 })
 
@@ -201,12 +173,12 @@ t('parse: immediate comment end', () => {
 
 t('parse: export name', () => {
   let tokens = parse(`(func (export "~!@#$%^&*()_+\`-={}|[]\\\\:\\\";'<>?,./ \\\\") (result i32) (i32.const 6))`)
-  is(tokens, ['func', ['export', '"~!@#$%^&*()_+`-={}|[]\\:\";\'<>?,./ \\"'], ['result', 'i32'], ['i32.const', '6']])
+  is(tokens, ['func', ['export', [126, 33, 64, 35, 36, 37, 94, 38, 42, 40, 41, 95, 43, 96, 45, 61, 123, 125, 124, 91, 93, 92, 58, 34, 59, 39, 60, 62, 63, 44, 46, 47, 32, 92]], ['result', 'i32'], ['i32.const', '6']])
 })
 
-t('parse: quote', () => {
+t('parse: quotes', () => {
   let tokens = parse(`(import "" "abc" (global $foo i32))(global $foo i32 (i32.const 0))`)
-  is(tokens, [['import', '""', '"abc"', ['global', '$"foo"', 'i32']], ['global', '$"foo"', 'i32', ['i32.const', '0']]])
+  is(tokens, [['import', [], [97, 98, 99], ['global', '$foo', 'i32']], ['global', '$foo', 'i32', ['i32.const', '0']]])
 })
 
 t('parse: unclosed quote', () => {

@@ -7,25 +7,25 @@
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
 
-import { err } from "./util.js"
+import { err, tenc, tdec } from "./util.js"
 
-const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
-const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
 export default (s, o = { comments: false, annotations: false }) => {
   let i = 0, // pointer
     c, // current char
-    q, // is quote
-    $, // is identifier
+    q, // is string
     level = [], // current level
     buf = '', // current collected string
-    comment = 0 // is comment
+    comment = 0, // is comment
+    $ // is id
 
   // push buffer onto level, reset buffer
-  const commit = () => buf && (
-    $ && !q && (buf += '"'), // $xxx -> $"xxx"
-    (!comment || o.comments) && level.push(buf),
-    buf = '', $ = 0
+  const commit = () => (
+    // we try to store strings as raw bytes and ids as strings
+    q ? level.push(str(buf)) :
+    $ ? level.push('$' + tdec.decode(Uint8Array.from(str(buf)))) :
+    buf && (!comment || o.comments) && level.push(buf),
+    buf = '', $ = q = null
   )
   const next = () => buf += s[i++]
 
@@ -34,28 +34,9 @@ export default (s, o = { comments: false, annotations: false }) => {
       c = s[i]
       // "...", $"..."
       if (q) {
-        // \u{abcd}
-        if (c === '\\' && s[i + 1] === 'u') {
-          i++, i++, i++; // 'u{'
-          buf += String.fromCodePoint(parseInt(s.slice(i, i = s.indexOf('}', i)), 16));
-          i++; // '}'
-        }
-        // \n, \t, \r
-        else if (c === '\\' && escape[s[i + 1]]) i++, buf += String.fromCodePoint(escape[s[i++]])
-        // \xx - raw bytes
-        // we split string if binary chunk is not convertible to unicode, eg. "123\ca\cb456" -> "123" "\ca\cb" "456"
-        // for names and exports it cannot be non-unicode, for data it is easier to detect raw strings
-        // FIXME: try making it shorter
-        else if (c === '\\' && !isNaN(parseInt(s[i + 1] + s[i + 2], 16))) {
-          let from = i, raw
-          while (s[i] === '\\' && !isNaN(parseInt(s[i + 1] + s[i + 2], 16))) i += 3;
-          raw = s.slice(from, i)
-          // try handling bytes to unicode
-          try { buf += textDecoder.decode(str(raw)) }
-          // if failed - insert a separate string with raw bytes only
-          catch { buf != '"' && (buf += '"', commit()), buf = `"${raw}"`, commit(), s[i] === '"' ? (i++, q = 0) : buf = '"' }
-        }
-        else next(), c === '"' && (commit(), q = 0)
+        if (c === '\\') next(), next()
+        else if (c === '"') i++, commit()
+        else next()
       }
       // (;;)
       else if (comment > 0) {
@@ -70,8 +51,8 @@ export default (s, o = { comments: false, annotations: false }) => {
       }
       // https://webassembly.github.io/annotations/core/text/lexical.html#white-space
       else if (c <= ' ') commit(), i++
-      else if (c === '$') next(), !$ && s[i] !== '"' && (buf += '"'), $ = 1
-      else if (c === '"') q = 1, buf !== '$' && commit(), next()
+      else if (c === '$' && !$) $ = 1, i++
+      else if (c === '"') !$ && commit(), q = 1, i++
       else if (c === '(') {
         commit()
         if (s[i + 1] === ';') next(), next(), comment = 1 // (; ... ;)
@@ -95,4 +76,40 @@ export default (s, o = { comments: false, annotations: false }) => {
   // if (i < s.length) err(`Unbalanced syntax`)
 
   return level.length > 1 ? level : level[0] || []
+}
+
+
+
+// const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
+const escape = { n: '\n', r: '\r', t: '\t', '"':'"', "'": "'", '\\': '\\' }
+
+// convert string to bytes sequence
+const str = s => {
+  let bytes = [], i = 0, code, c, buf = ''
+
+  const commit = () => (buf && bytes.push(...tenc.encode(buf)), buf = '')
+
+  while (i < s.length) {
+    c = s[i++], code = 0
+
+    if (c === '\\') {
+      // \u{abcd}
+      if (s[i] === 'u') {
+        i++, i++ // 'u{'
+        c = String.fromCodePoint(parseInt(s.slice(i, i = s.indexOf('}', i)), 16))
+        i++ // '}'
+      }
+      // \n, \t, \r
+      else if (escape[s[i]]) c = escape[s[i++]]
+      // \00 - raw bytes
+      else if (!isNaN(code = parseInt(s[i] + s[i + 1], 16))) i++, i++
+      // \*
+      else c += s[i]
+    }
+
+    code ? (commit(), bytes.push(code)) : buf += c
+  }
+  commit()
+
+  return bytes
 }

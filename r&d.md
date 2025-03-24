@@ -240,3 +240,13 @@
   + there's way too many places where id is used, take expr within data, elem, table; (inline) type idx, params, instr
     - an exception: it will know about data token to handle string a bit differently (Latin-1 maybe)
   - it's not very nice parser normalizes $abc to $"abc" - it is deabbr stage
+
+2. Split strings by normal unicode and binary chunks, eg. "abc\defgh" becomes "abc" "\de" "fgh"
+
+  - we don't need it: if there's raw non-unicode byte, whole string is raw.
+  - messy, code is repetitive and heavy
+
+3. If string contains raw non-unicode bytes (non-encodable to unicode) - keep it ~~raw~~ bytes array.
+
+  + happens on moment of string insertion only, no repetitiveness
+  ? How do we detect non-unicode string?
