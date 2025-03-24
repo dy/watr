@@ -79,7 +79,7 @@ export default function watr(nodes) {
       name(node, items);
 
       // export abbr
-      // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
+      // (table|memory|global|func|tag id? (export n)* ...) -> (table|memory|global|func|tag id ...) (export n (table|memory|global|func id))
       while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
 
       // for import nodes - redirect output to import
@@ -140,6 +140,7 @@ export default function watr(nodes) {
     ...bin(SECTION.func),
     ...bin(SECTION.table),
     ...bin(SECTION.memory),
+    ...bin(SECTION.tag),
     ...bin(SECTION.global),
     ...bin(SECTION.export),
     ...bin(SECTION.start, false),
@@ -579,7 +580,10 @@ const build = [,
   },
 
   // datacount
-  (nodes, ctx) => uleb(ctx.data.length)
+  (nodes, ctx) => uleb(ctx.data.length),
+
+  // tag
+  (nodes, ctx) => []
 ]
 
 // build reftype, either direct absheaptype or wrapped heaptype https://webassembly.github.io/gc/core/binary/types.html#reference-types
