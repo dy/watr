@@ -135,7 +135,7 @@ export async function file(path, imports = {}) {
 
     assert_return([, [kind, ...args], ...expects]) {
       let m = args[0]?.[0] === '$' ? mod[args.shift()?.valueOf()] : lastExports,
-        nm = args.shift()?.valueOf().slice(1,-1);
+        nm = new TextDecoder('utf-8', {ignoreBOM: true}).decode(Uint8Array.from(args.shift()));
 
       // console.log('assert_return', kind, nm, 'args:', ...args, 'expects:', ...expects)
 

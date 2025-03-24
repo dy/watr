@@ -109,6 +109,8 @@ const str = s => {
   }
   commit()
 
-  bytes.valueOf = () => `"${s}"` // for serialization
+  // display representation. Note - it's not actionable string, just WAT fragment, don't use as code value.
+  // eg. "a\\b" is stored as "a\b"
+  bytes.valueOf = () => `"${s}"`
   return bytes
 }
