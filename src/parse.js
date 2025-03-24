@@ -51,7 +51,7 @@ export default (s, o = { comments: false, annotations: false }) => {
       }
       // https://webassembly.github.io/annotations/core/text/lexical.html#white-space
       else if (c <= ' ') commit(), i++
-      else if (c === '$' && !$) $ = 1, i++
+      else if (c === '$' && !$ && !buf) $ = 1, i++
       else if (c === '"') !$ && commit(), q = 1, i++
       else if (c === '(') {
         commit()
@@ -73,7 +73,7 @@ export default (s, o = { comments: false, annotations: false }) => {
   }
 
   parseLevel()
-  // if (i < s.length) err(`Unbalanced syntax`)
+  if (i < s.length) err(`Unbalanced syntax`)
 
   return level.length > 1 ? level : level[0] || []
 }

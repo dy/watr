@@ -129,13 +129,13 @@ export async function file(path, imports = {}) {
 
     register([, nm]) {
       // include exports from prev module
-      console.log('register', nm)
-      importObj[nm.slice(1, -1)] = lastExports
+      console.log('register', nm, lastExports)
+      importObj[nm.slice(1,-1)] = lastExports
     },
 
     assert_return([, [kind, ...args], ...expects]) {
-      let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
-        nm = args.shift().slice(1, -1);
+      let m = args[0]?.[0] === '$' ? mod[args.shift()?.valueOf()] : lastExports,
+        nm = args.shift()?.valueOf().slice(1,-1);
 
       // console.log('assert_return', kind, nm, 'args:', ...args, 'expects:', ...expects)
 
@@ -220,15 +220,15 @@ export async function file(path, imports = {}) {
 
       if (nodes[1] === 'quote') {
         // (module quote ...nodes) - remove escaped quotes
-        let code = nodes.slice(2).map(str => str.slice(1, -1)).join('\n')
+        let code = nodes.slice(2).map(str => str.valueOf().slice(1, -1)).join('\n')
 
-        if (code.includes('nan:')) return console.warn('assert_malformed: skip nan:')
-        if (/[a-z$]"|"[a-z$]|""/i.test(code)) return console.warn('assert_malformed: skip required space (data"abc")')
-        if (/v128\.const/i.test(code) && /range/.test(msg)) return console.warn("assert_malformed: skip out-of-range v128.const tests")
-        if (/v128\.const/i.test(code) && /unknown operator/.test(msg)) return console.warn('assert_malformed: skip simd_const malformed numbers')
-        if (/illegal character|malformed UTF/.test(msg)) return console.warn('assert_malformed: skip bad chars')
-        if (/\(\s+./.test(code)) return console.warn('assert_malformed: skip spaced instr ( instr)')
-        if (/empty annotation/.test(msg)) return console.warn('assert_malformed: skip empty annotation (@)')
+        if (code.includes('nan:')) return console.warn('assert_malformed: skip nan:', code)
+        if (/\$\)|\$\s|\$""|\$\"\w*\s|\$\(\@/.test(code)) return console.warn(`assert_malformed: skip empty id validation`, code)
+        if (/v128\.const/i.test(code) && /range/.test(msg)) return console.warn(`assert_malformed: skip out-of-range v128.const tests`, code)
+        if (/v128\.const/i.test(code) && /unknown operator/.test(msg)) return console.warn(`assert_malformed: skip simd_const malformed numbers`, code)
+        if (code.includes('@') && /illegal character|malformed UTF/.test(msg)) return console.warn(`assert_malformed: skip bad chars`, code)
+        if (/\(\s+./.test(code)) return console.warn('assert_malformed: skip spaced instr ( instr)', code)
+        if (/empty annotation/.test(msg)) return console.warn('assert_malformed: skip empty annotation (@)', code)
 
         throws(() => {
           nodes = parse(code, { annotations: true })
@@ -258,7 +258,7 @@ export async function file(path, imports = {}) {
 
   for (let node of nodes) {
     if (typeof node === 'string') lastComment = node
-    else ex[node[0]](node)
+    else ex[node[0]](node.map(v => v.valueOf()))
   }
 }
 

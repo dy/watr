@@ -88,7 +88,7 @@
 * [ ] immutable compiler
 * [ ] Exceptions
 * [ ] memory64
-* [ ] annotations, code_metadata
+* [x] annotations, code_metadata
 * [ ] js_strings
 * [ ] Features
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
@@ -104,8 +104,11 @@
 * [ ] Prettify: keep comments
 * [ ] VSCode formatter plugin
 * [ ] Ignore particular test cases instead of excluding full test (like const)
-* [ ] Better `str`, `id` test, `name`: there's suboptimal code atm
+* [x] Better `str`, `id` test, `name`: there's suboptimal code atm. We need better name parsing
   * [ ] `id` test skips important malformed cases
+  * [x] move string / name logic to compiler/prepare stage, it's not parser duty
+* [x] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
+* [x] Split strings into unicode / binary parts
 
 ## REPL
 

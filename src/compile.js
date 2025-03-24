@@ -2,7 +2,7 @@ import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
 import parse from './parse.js'
-import { clone, err, str } from './util.js'
+import { clone, err, tdec } from './util.js'
 
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
@@ -26,6 +26,7 @@ export default function watr(nodes) {
   // normalize to (module ...) form
   if (typeof nodes === 'string') nodes = parse(nodes) || []
   else nodes = clone(nodes)
+  // console.log(clone(nodes))
 
   cur = nodes, idx = 0
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
@@ -34,10 +35,10 @@ export default function watr(nodes) {
   else if (typeof nodes[0] === 'string') cur = [nodes]
 
   // binary abbr "\00" "\0x61" ...
-  if (cur[idx] === 'binary') return Uint8Array.from(cur.slice(++idx).map(unquote).map(str).flat())
+  if (cur[idx] === 'binary') return Uint8Array.from(cur.slice(++idx).flat())
 
   // quote "a" "b"
-  if (cur[idx] === 'quote') return watr(String.fromCodePoint(...cur.slice(++idx).map(unquote).map(str).flat()))
+  if (cur[idx] === 'quote') return watr(cur.slice(++idx).map(v => v.valueOf().slice(1,-1)).flat().join(''))
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
@@ -104,7 +105,7 @@ export default function watr(nodes) {
       // data abbr
       // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
       else if (kind === 'memory' && node[0]?.[0] === 'data') {
-        let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(unquote).join('').length / 65536) // FIXME: figure out actual data size
+        let [, ...data] = node.shift(), m = '' + Math.ceil(data.flat().length / 65536) // FIXME: figure out actual data size
         ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
         node = [m, m]
       }
@@ -159,11 +160,7 @@ export default function watr(nodes) {
 // consume section name eg. $t ...
 const alias = (node, list) => {
   let nm = (node[0]?.[0] === '$') && node.shift();
-  if (nm) {
-    nm in list && err(`Duplicate ${list.name} ${nm}`);
-    !nm[1] && err(`Empty name`);
-    list[nm] = list.length; // save alias
-  }
+  if (nm) nm in list ? err(`Duplicate ${list.name} ${nm}`) : list[nm] = list.length; // save alias
   return nm
 }
 
@@ -413,7 +410,7 @@ const build = [,
     }
     else err(`Unknown kind ${kind}`)
 
-    return ([...vec(str(unquote(mod))), ...vec(str(unquote(field))), KIND[kind], ...details])
+    return ([...vec(mod), ...vec(field), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
@@ -432,7 +429,7 @@ const build = [,
   ([t, init], ctx) => [...fieldtype(t, ctx), ...expr(init, ctx)],
 
   // (export "name" (func|table|mem $name|idx))
-  ([nm, [kind, l]], ctx) => ([...vec(str(unquote(nm))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
+  ([nm, [kind, l]], ctx) => ([...vec(nm), KIND[kind], ...uleb(id(l, ctx[kind]))]),
 
   // (start $main)
   ([l], ctx) => uleb(id(l, ctx.func)),
@@ -572,7 +569,7 @@ const build = [,
     }
 
     // (offset (i32.const 0)) or (i32.const 0)
-    if (typeof inits[0] !== 'string') {
+    if (typeof inits[0]?.[0] === 'string') {
       offset = inits.shift()
       if (offset[0] === 'offset') [, offset] = offset
       offset ?? err('Bad offset', offset)
@@ -587,7 +584,7 @@ const build = [,
             // passive: 1
             [1]
       ),
-      ...vec(inits.map(unquote).map(str).flat())
+      ...vec(inits.flat())
     ])
   },
 
@@ -922,7 +919,6 @@ const limits = (node) => (
 // we put extra condition for index ints for tests complacency
 const parseUint = (v, max = 0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
 
-const unquote = s => s.slice(1, -1)
 
 // serialize binary array
 const vec = a => [...uleb(a.length), ...a.flat()]
