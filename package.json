@@ -12,6 +12,7 @@
   "type": "module",
   "scripts": {
     "test": "node test",
+    "types": "npx tsc src/*.js watr.js --allowJs --declaration --emitDeclarationOnly --declarationMap --outDir types",
     "postinstall": "git submodule update --init --recursive"
   },
   "repository": {

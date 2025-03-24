@@ -100,7 +100,7 @@
 * [x] ~~replace wabt with spec/wasm for tests~~ we just use direct compile instead, we can compare against other compilers in repl
 * [ ] All tests
 * [x] Remove unnecessary checks: end label, param names
-* [ ] Type declarations with map file
+* [x] Type declarations with map file
 * [ ] Prettify: keep comments
 * [ ] VSCode formatter plugin
 * [ ] Ignore particular test cases instead of excluding full test (like const)
