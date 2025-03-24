@@ -140,9 +140,13 @@
 * [ ] copy as binary
 * [ ] make a component? going to need it for jz, piezo
 
+## Uses
+
+* [ ] twgl with collection of wasm-rendered webgl tweets
+
 ## Backlog
 
-* [ ] wat-based wat-compiler
+* [ ] jz-based watr
 * [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
   * [ ] It can also compile module right away 'let {a,b} = watr`(export a)`'
 

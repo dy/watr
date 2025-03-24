@@ -111,7 +111,7 @@ export default function watr(nodes) {
         // we save idx because type can be defined after
         // FIXME: plainify/normalize after
         !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
-        node.unshift(['type', idx])
+        node = [['type', idx]]
       }
 
       // import writes to import section amd adds placeholder for (kind) section
@@ -809,8 +809,7 @@ const instr = (nodes, ctx) => {
     while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
       args.push(...uleb(blockid(nodes.shift(), ctx.block)))
     }
-    args.unshift(...uleb(args.length - 1))
-    immed.push(...args)
+    immed.push(...uleb(args.length - 1), ...args)
   }
 
   // select (result t+)
