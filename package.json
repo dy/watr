@@ -24,11 +24,28 @@
     "watr.js",
     "watr.d.ts"
   ],
+  "types": "./types/watr.d.ts",
+  "typesVersions": {
+    "*": {
+      "compile": ["./types/compile.d.ts"],
+      "compile.js": ["./types/compile.d.ts"],
+      "const": ["./types/const.d.ts"],
+      "const.js": ["./types/const.d.ts"],
+      "parse": ["./types/parse.d.ts"],
+      "parse.js": ["./types/parse.d.ts"],
+      "print": ["./types/print.d.ts"],
+      "print.js": ["./types/print.d.ts"],
+      "util": ["./types/util.d.ts"],
+      "util.js": ["./types/util.d.ts"],
+      "watr": ["./types/watr.d.ts"],
+      "watr.js": ["./types/watr.d.ts"]
+    }
+  },
   "keywords": [
     "wat",
     "wasm",
+    "wasm compiler",
     "wat2wasm",
-    "compiler",
     "wabt",
     "pretty-print",
     "webassembly",
