@@ -40,20 +40,6 @@ const {double} = instance.exports
 double(108) // 216
 ```
 
-### Parse
-
-Parse input wasm text into syntax tree.
-
-```js
-import { parse } from 'watr'
-
-parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))`)
-// [
-//   'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
-//   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
-// ]
-```
-
 ### Print
 
 Format input wasm text or syntax tree into minified or pretty form.
@@ -86,7 +72,21 @@ print(src, {
 // (func(export "double")(param f64)(result f64)(f64.mul(local.get 0)(f64.const 2)))
 ```
 
-<!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
+<!--
+### Parse
+
+Parse input wasm text into syntax tree.
+
+```js
+import { parse } from 'watr'
+
+parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))`)
+// [
+//   'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
+//   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
+// ]
+```
+-->
 
 ## Alternatives
 
