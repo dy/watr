@@ -10,12 +10,6 @@ INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b
 // iterating context
 let cur, idx
 
-// advance until condition meets
-const skip = (is, from = idx, l) => {
-  while (l = is(cur[idx])) idx += l
-  return cur.slice(from, idx)
-}
-
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
  *
@@ -264,7 +258,7 @@ const blocktype = (nodes, ctx) => {
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const plain = (nodes, ctx) => {
-  let out = [], stack = [], label
+  let out = []
 
   while (nodes.length) {
     let node = nodes.shift()
@@ -277,7 +271,7 @@ const plain = (nodes, ctx) => {
       // block typeuse?
       if (node === 'block' || node === 'if' || node === 'loop') {
         // (loop $l?)
-        if (nodes[0]?.[0] === '$') label = nodes.shift(), out.push(label), stack.push(label)
+        if (nodes[0]?.[0] === '$') out.push(nodes.shift())
 
         out.push(blocktype(nodes, ctx))
       }
@@ -285,7 +279,7 @@ const plain = (nodes, ctx) => {
       // else $label
       // end $label - make sure it matches block label
       else if (node === 'else' || node === 'end') {
-        if (nodes[0]?.[0] === '$') (node === 'end' ? stack.pop() : label) !== (label = nodes.shift()) && err(`Mismatched label ${label}`)
+        if (nodes[0]?.[0] === '$') nodes.shift()
       }
 
       // select (result i32 i32 i32)?
