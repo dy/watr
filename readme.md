@@ -29,7 +29,8 @@ Compile wasm text or syntax tree into wasm binary.
 ```js
 import { compile } from 'watr'
 
-const buffer = compile(`(func (export "double")
+const buffer = compile(`
+(func (export "double")
   (param f64) (result f64)
   (f64.mul (local.get 0) (f64.const 2))
 )`)
