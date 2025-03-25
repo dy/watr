@@ -23,29 +23,33 @@ export default function print(tree, options = {}) {
 
     let content = node[0]
 
+    if (!content) return ''
+
     // flat node (no deep subnodes), eg. (i32.const 1), (module (export "") 1)
     let flat = !!newline && node.length < 4
     let curIndent = indent.repeat(level + 1)
 
     for (let i = 1; i < node.length; i++) {
+      const sub = node[i].valueOf() // "\00abc\ff" strings are stored as arrays but have ._ with original value
+
       // (<keyword> ...)
-      if (Array.isArray(node[i])) {
+      if (Array.isArray(sub)) {
         // check if it's still flat
-        if (flat) flat = node[i].every(subnode => !Array.isArray(subnode))
+        if (flat) flat = sub.every(sub => !Array.isArray(sub))
 
         // new line
-        content += newline + curIndent + printNode(node[i], level + 1)
+        content += newline + curIndent + printNode(sub, level + 1)
       }
       // data chunks "\00..."
       else if (node[0] === 'data')   {
         flat = false;
         if (newline || content[content.length-1] !== ')') content += newline || ' '
-        content += curIndent + node[i]
+        content += curIndent + sub
       }
       // inline nodes
       else {
         if (newline || content[content.length-1] !== ')') content += ' '
-        content += node[i]
+        content += sub
       }
     }
 

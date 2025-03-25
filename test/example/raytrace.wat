@@ -1,3 +1,4 @@
+(module
 (import "Math" "sin" (func $sin (param f32) (result f32)))
 
 (memory (export "mem") 4)
@@ -384,3 +385,4 @@
       (i32.ne
         (local.tee $y (i32.add (local.get $y) (i32.const 1)))
         (i32.const 200)))))
+)

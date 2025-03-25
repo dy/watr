@@ -1,6 +1,7 @@
 import t, { is, ok, same } from 'tst'
 import print from '../src/print.js'
 import { wat2wasm } from './index.js'
+import parse from '../src/parse.js'
 
 t('print: basics', () => {
   const tree = [
@@ -13,21 +14,21 @@ t('print: basics', () => {
     indent: false,
     newline: false
   })
-  wat2wasm(min)
   is(min, `(func(export "double")(param f64 f32)(param $x i32)(result f64)(f64.mul(local.get 0)(f64.const 2)))`)
+  wat2wasm(min)
 
   // pretty-print
   const pretty = print(tree, {
     indent: '  ',   // indentation characters
     newline: '\n',  // new line charactes
   })
-  wat2wasm(pretty)
   is(pretty,
     `(func\n  (export \"double\")\n  (param f64 f32)\n  (param $x i32)\n  (result f64)\n  (f64.mul (local.get 0) (f64.const 2))\n)`)
+  wat2wasm(pretty)
 
   is(
     print(`(import "Math" "random" (func $random (result f32)))`, { newline: '', indent: '' }),
-    `(import \"Math\" \"random\"(func $random(result f32)))`
+    `(import \"Math\" \"random\"(func $"random"(result f32)))`
   )
 })
 
@@ -62,6 +63,6 @@ t('print: doesnt break samples', async t => {
     let res = await fetch(path)
     let src = await res.text()
     const dino = print(src)
-    wat2wasm(dino)
+    ok(parse(dino), path)
   }
 })

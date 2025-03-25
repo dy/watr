@@ -1,41 +1,72 @@
-const OPAREN = 40, CPAREN = 41, OBRACK = 91, CBRACK = 93, SPACE = 32, DQUOTE = 34, PERIOD = 46,
-  _0 = 48, _9 = 57, SEMIC = 59, NEWLINE = 32, PLUS = 43, MINUS = 45, COLON = 58, BSLASH = 39
 
 /**
- * Parses a wasm text string and constructs a nested array structure (AST).
+ * Parses (lexes) a WASM text string into tree of tokens without semantics yet.
  *
- * @param {string} str - The input string with WAT code to parse.
- * @param {object} options - Parse options, like comments, etc.
+ * @param {string} s - The input string with WAT code to parse.
+ * @param {object} options - Parse options, like comments, annotations, etc.
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
-export default (str, o={ comments: false }) => {
-  let i = 0, level = [], buf = '', comment = ''
 
-  const commit = () => buf && (
-    level.push(buf),
-    buf = ''
+import { err, tenc, tdec } from "./util.js"
+
+
+export default (s, o = { comments: false, annotations: false }) => {
+  let i = 0, // pointer
+    c, // current char
+    q, // is string
+    level = [], // current level
+    buf = '', // current collected string
+    comment = 0, // is comment
+    $ // is id
+
+  // push buffer onto level, reset buffer
+  const commit = () => (
+    // we try to store strings as raw bytes and ids as strings
+    $ ? level.push(`$"${tdec.decode(Uint8Array.from(str(buf)))}"`) :
+    q ? level.push(str(buf)) :
+    buf && (!comment || o.comments) && level.push(buf),
+    buf = '', $ = q = null
   )
+  const next = () => buf += s[i++]
 
-  const parseLevel = () => {
-    for (let c, root, q; i < str.length;) {
-
-      c = str.charCodeAt(i)
+  const parseLevel = (parent = level) => {
+    while (i < s.length) {
+      c = s[i]
+      // "...", $"..."
       if (q) {
-        buf += str[i++]
-        if (str[i-1] === '\\') buf += str[i++]
-        else if (c === DQUOTE) commit(), q = 0
+        if (c === '\\') next(), next()
+        else if (c === '"') i++, commit()
+        else next()
       }
-      else if (c === DQUOTE) {
-        commit(), q = c, buf += str[i++]
+      // (;;)
+      else if (comment > 0) {
+        next()
+        if (c === '(' && s[i] === ';') next(), comment++ // (;(;;);)
+        else if (c === ';' && s[i] === ')') next(), comment == 1 && (commit(), comment--)
       }
-      else if (c === OPAREN) {
-        if (str.charCodeAt(i + 1) === SEMIC) comment = str.slice(i, i = str.indexOf(';)', i) + 2), o.comments && level.push(comment) // (; ... ;)
-        else commit(), i++, (root = level).push(level = []), parseLevel(), level = root
+      // ;;
+      else if (comment < 0) {
+        next()
+        if (c === '\n' || c === '\r') commit(), comment = 0
       }
-      else if (c === SEMIC) comment = str.slice(i, i = str.indexOf('\n', i) + 1 || str.length), o.comments && level.push(comment)  // ; ...
-      else if (c <= SPACE) commit(), i++
-      else if (c === CPAREN) return commit(), i++
-      else buf += str[i++]
+      // https://webassembly.github.io/annotations/core/text/lexical.html#white-space
+      else if (c <= ' ') commit(), i++
+      else if (c === '$' && !$ && !buf) $ = 1, i++
+      else if (c === '"') !$ && commit(), q = 1, i++
+      else if (c === '(') {
+        commit()
+        if (s[i + 1] === ';') next(), next(), comment = 1 // (; ... ;)
+        else {
+          i++, level = [] // parent is saved on entry
+          parseLevel()
+          if (s[i++] !== ')') err(`Unbalanced syntax`)
+          if (level[0]?.[0] === '@' && !o.annotations); else parent.push(level) // (@...)
+          level = parent
+        }
+      }
+      else if (c === ')') return commit()
+      else if (c === ';' && s[i + 1] === ';') commit(), next(), next(), comment = -1  // ;; ...
+      else next()
     }
 
     commit()
@@ -43,5 +74,44 @@ export default (str, o={ comments: false }) => {
 
   parseLevel()
 
-  return level.length > 1 ? level : level[0]
+  if (i < s.length) err() // likely unbalanced syntax
+
+  return level.length > 1 ? level : level[0] || []
+}
+
+
+
+const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
+
+// convert string to bytes sequence
+const str = s => {
+  let bytes = [], i = 0, code, c, buf = ''
+
+  const commit = () => (buf && bytes.push(...tenc.encode(buf)), buf = '')
+
+  while (i < s.length) {
+    c = s[i++], code = null
+
+    if (c === '\\') {
+      // \u{abcd}
+      if (s[i] === 'u') {
+        i++, i++ // 'u{'
+        c = String.fromCodePoint(parseInt(s.slice(i, i = s.indexOf('}', i)), 16))
+        i++ // '}'
+      }
+      // \n, \t, \r
+      else if (escape[s[i]]) code = escape[s[i++]]
+      // \00 - raw bytes
+      else if (!isNaN(code = parseInt(s[i] + s[i + 1], 16))) i++, i++
+      // \*
+      else c += s[i]
+    }
+    code != null ? (commit(), bytes.push(code)) : buf += c
+  }
+  commit()
+
+  // display representation. Note - it's not actionable string, just WAT fragment, don't use as code value.
+  // eg. "a\\b" is shown as "a\\b", but bytes value is "a\b"
+  bytes.valueOf = () => `"${s}"`
+  return bytes
 }

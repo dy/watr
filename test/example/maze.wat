@@ -1,3 +1,5 @@
+(module
+
 (import "Math" "random" (func $random (result f32)))
 (import "Math" "sin" (func $sin (param f32) (result f32)))
 (import "env" "t" (func $timer (param i32))) ;; 1:start, 0:stop
@@ -814,3 +816,4 @@
       (i32.lt_s
         (local.tee $x (i32.add (local.get $x) (i32.const 1)))
         (i32.const 320)))))
+)

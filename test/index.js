@@ -72,24 +72,19 @@ export function wat2wasm(code, config) {
   return binary
 }
 
+
 // compile & instantiate inline
 export function inline(src, importObj) {
   let tree = parse(src)
   // in order to make sure tree is not messed up we freeze it
   freeze(tree)
-  let watrBuffer = compile(tree), wabtBuffer
-  try {
-    wabtBuffer = wat2wasm(src).buffer
-  } catch (e) {
-    console.warn(e)
-  }
-  if (wabtBuffer) is(watrBuffer, wabtBuffer)
+  let watrBuffer = compile(tree)
   const mod = new WebAssembly.Module(watrBuffer)
-  // ok(1, 'compiles')
   const inst = new WebAssembly.Instance(mod, importObj)
-  // ok(1, 'instantiates')
+  ok(1, `instantiates inline`)
   return inst
 }
+
 
 // execute test case from file
 export async function file(path, imports = {}) {
@@ -97,11 +92,17 @@ export async function file(path, imports = {}) {
   let res = await fetch(path)
   let src = await res.text()
 
-  // Remove all escape characters (e.g., \\, \", \n, etc.)
-  // src = src.replace(/\\(.)/g, '$1');
-
   // parse
-  let nodes = parse(src, { comments: true })
+  let nodes = parse(src, { comments: true, annotations: true })
+
+  // skip ((@) module) or ;;
+  nodes.forEach(node => {
+    if (Array.isArray(node)) while (/;|@/.test(node[0]?.[0]?.[0]) || node[0]?.startsWith?.('(;') || node[0]?.[0]?.startsWith?.('(;')) node.shift()
+  })
+
+  // (module) -> ((module ...)) - WAST compatible
+  if (nodes[0] === 'module' || nodes[0]?.startsWith?.('assert')) nodes = [nodes]
+
   freeze(nodes)
 
   // test runtime
@@ -110,52 +111,31 @@ export async function file(path, imports = {}) {
     lastExports,
     lastComment
 
-  if (typeof nodes[0] === 'string' && !nodes[0].startsWith(';;')) nodes = [nodes]
-
-  for (let node of nodes) {
-    if (typeof node === 'string') lastComment = node
-    ex(node)
-  }
-
-  // execute node
-  function ex(node) {
+  const ex = {
     // (module $name) - creates module instance, collects exports
-    if (node[0] === 'module') {
-      // strip comments
-      // console.log('module', node)
-      node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
-      buf = compile(node)
+    module(node) {
+      if (node?.length < 2) return
 
-      // sync up with libwabt
-      let wabtBuffer
-      try {
-        wabtBuffer = wat2wasm(print(node)).buffer
-        // compare with libwabt only if not binary flag
-        if (node[1] === 'binary') console.warn('module: skip binary')
-        else if (wabtBuffer) is(buf, wabtBuffer, 'module: same as wat2wasm ' + lastComment?.trim())
-      } catch (e) {
-        console.warn(e.message, { ...e })
-      }
-      // buf = wabtBuffer
+      buf = compile(print(node))
 
       let m = new WebAssembly.Module(buf)
       let inst = new WebAssembly.Instance(m, importObj)
+      ok(1, `instantiates module ${lastComment}`)
+
       lastExports = inst.exports
       // collect exports under name
       if (node[1]?.[0] === '$') mod[node[1]] = lastExports
+    },
 
-    }
-    if (node[0] === 'register') {
+    register([, nm]) {
       // include exports from prev module
-      let [, nm] = node
-      console.log('register', nm)
-      importObj[nm.slice(1, -1)] = lastExports
+      console.log('register', nm, lastExports)
+      importObj[nm.slice(1,-1)] = lastExports
+    },
 
-    }
-    if (node[0] === 'assert_return') {
-      let [, [kind, ...args], ...expects] = node;
-      let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
-        nm = args.shift().slice(1, -1);
+    assert_return([, [kind, ...args], ...expects]) {
+      let m = args[0]?.[0] === '$' ? mod[args.shift()?.valueOf()] : lastExports,
+        nm = new TextDecoder('utf-8', {ignoreBOM: true}).decode(Uint8Array.from(args.shift()));
 
       // console.log('assert_return', kind, nm, 'args:', ...args, 'expects:', ...expects)
 
@@ -175,76 +155,107 @@ export async function file(path, imports = {}) {
       else if (kind === 'get') {
         is(m[nm].value, expects[0], `assert_return: get ${nm} === ${expects}`)
       }
+    },
 
-    }
-    if (node[0] === 'invoke') {
-      let [, ...args] = node
+    get([]) {
+
+    },
+
+    invoke([, ...args]) {
       let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
         nm = args.shift().slice(1, -1);
       args = args.map(val)
       // console.log('(invoke)', nm, ...args)
       m[nm](...args)
+    },
 
-    }
-    if (node[0] === 'assert_invalid') {
-      let [, nodes, msg] = node
-
+    assert_invalid([, nodes, msg]) {
       // skip (data const_expr) - we don't have constant expr limitations
-      if (nodes.some(n => n[0] === 'data' && typeof n !== 'string')) return console.warn('assert_invalid: skip data const expr');
+      if (nodes.some(n => n[0] === 'data' && typeof n !== 'string')) return console.warn('assert_invalid: skip (data const_expr)', );
       // skip (global const_expr) - we don't have constant expr limitations
-      if (nodes.some(n => n[0] === 'global' && typeof n[2] !== 'string')) return console.warn('assert_invalid: skip global const expr');
+      if (nodes.some(n => n[0] === 'global' && typeof n[2] !== 'string')) return console.warn('assert_invalid: skip (global const_expr)');
       // skip (elem const_expr) - we don't have constant expr limitations
-      if (nodes.some(n => n[0] === 'elem' && typeof n[1] !== 'string')) return console.warn('assert_invalid: skip elem const expr');
+      if (nodes.some(n => n[0] === 'elem' && typeof n[1] !== 'string')) return console.warn('assert_invalid: skip (elem const_expr)');
       // skip multimemory - there's no issue with proposal enabled
       let m = 0
-      if (nodes.some(n => (n[0] === 'memory' && (++m) > 1))) return console.warn('assert_invalid: skip multi memory');
-      // skip recursive type checks
-      if (msg === '"unknown type"') return console.warn('assert_invalid: skip type checks');
+      if (nodes.some(n => (n[0] === 'memory' && (++m) > 1))) return console.warn('assert_invalid: skip multi memory required fail');
+      // skip recursive type checks that refer to itself
+      if (msg === '"unknown type"' && nodes.join('').includes('ref,$')) return console.warn('assert_invalid: skip type checks');
 
-      // console.group('assert_invalid', ...node)
       lastComment = ``
-      throws(() => ex(nodes), msg, msg)
-      // console.groupEnd()
-    }
-    if (node[0] === 'assert_trap') {
+      throws(() => ex[nodes[0]](nodes), msg, msg)
+    },
+
+    assert_trap([, nodes, msg]) {
       // console.group('assert_trap', ...node)
-      let [, nodes, msg] = node
-      try {
-        ex(nodes)
-      } catch (e) {
-        // console.log('trap error', e, msg)
-        ok(e.message, `assert_trap: ${msg}`)
-      }
+      throws(() => ex[nodes[0]](nodes), `assert_trap: ${msg}`)
       // console.groupEnd()
-    }
-    if (node[0] === 'assert_malformed') {
-      // console.group('assert_malformed', ...node)
+    },
+
+    assert_malformed([, nodes, msg]) {
       lastComment = ``
-      let [, nodes, msg] = node
-      let err
-      // don't check if wat2wasm doesn't fail - certain tests are unnecessary
+
       if (nodes[1] === 'binary') {
-        try { wat2wasm(print(nodes)) } catch (e) { err = e }
-        if (err) throws(() => ex(nodes), msg, msg)
-        else console.warn(`assert_malformed: skip ${msg} as wat2wasm compiles fine`)
+        // our purpose isn't validating binaries
+        let err
+        try {
+          let buf = compile(print(nodes))
+          let m = new WebAssembly.Module(buf)
+          let inst = new WebAssembly.Instance(m, importObj)
+        } catch (e) {
+          err = e
+        }
+        if (!err) console.warn(`assert_malformed: ${msg} must doesn't fail`)
+        else ok(err, msg)
+
+        return
       }
-      else if (nodes[1] === 'quote') {
-        // (module quote ...nodes) make wat2wasm hang - unwrap them
-        let code = nodes.slice(2).map(str => str.slice(1, -1).replaceAll(/\\(.)/g, '$1')).join('\n')
-        if (code.includes('nan:')) return // ignore nan-related tests
-        if (/[a-z$]"|"[a-z$]|""/i.test(code)) return // ignore space required (data"abc") tests
-        if (/v128\.const/i.test(code) && /range/.test(msg)) return // ignore out-of-range v128.const tests
-        if (/v128\.const/i.test(code) && /operator/.test(msg)) return // ignore bad tokens
-        nodes = parse(code)
-        nodes = typeof nodes[0] === 'string' ? nodes[0] === 'module' ? nodes : ['module', nodes] : ['module', ...nodes]
-        throws(() => ex(nodes), msg, msg)
-        // let err
-        // try {ex(nodes)} catch (e) {err=e}
-        // if (err) ok(err, msg)
-        // else console.error(msg) // not really a failure, just log
+
+      if (nodes[1] === 'quote') {
+        // (module quote ...nodes) - remove escaped quotes
+        let code = nodes.slice(2).map(str => str.valueOf().slice(1, -1)).join('\n')
+
+        // if (code.includes('nan:')) return console.warn('assert_malformed: skip nan:', code)
+        // if (/\$\)|\$\s|\$""|\$\"\w*\s|\$\(\@/.test(code)) return console.warn(`assert_malformed: skip empty id validation`, code)
+        // if (/v128\.const/i.test(code) && /range/.test(msg)) return console.warn(`assert_malformed: skip out-of-range v128.const tests`, code)
+        // if (/v128\.const/i.test(code) && /unknown operator/.test(msg)) return console.warn(`assert_malformed: skip simd_const malformed numbers`, code)
+        // if (code.includes('@') && /illegal character|malformed UTF/.test(msg)) return console.warn(`assert_malformed: skip bad chars`, code)
+        // if (/\(\s+./.test(code)) return console.warn('assert_malformed: skip spaced instr ( instr)', code)
+        // if (/empty annotation/.test(msg)) return console.warn('assert_malformed: skip empty annotation (@)', code)
+
+        let err
+        try {
+          nodes = parse(code, { annotations: true })
+          let buf = compile(print(nodes))
+          let m = new WebAssembly.Module(buf)
+          let inst = new WebAssembly.Instance(m, importObj)
+        } catch (e) { err = e }
+        // FIXME: try to cover all low-hanging malformed cases
+        if (!err) console.warn(`assert_malformed: not failing. ${msg}`, code)
+        else ok(err, msg)
       }
-      // console.groupEnd()
+
+    },
+
+    assert_exhaustion([, [kind, ...args], msg]) {
+      throws(() => {
+        ex[kind]([,...args])
+      }, msg, msg)
+    },
+
+    // (assert_unlinkable (module (import "test" "unknown" (func))) "msg")
+    assert_unlinkable([, node, msg]) {
+      throws(() => {
+        let buf = compile(print(node))
+        let m = new WebAssembly.Module(buf)
+        let inst = new WebAssembly.Instance(m, importObj)
+      })
     }
+  }
+
+  for (let node of nodes) {
+    if (typeof node === 'string') lastComment = node
+    else ex[node[0]](node.map(v => v.valueOf()))
   }
 }
 

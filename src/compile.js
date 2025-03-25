@@ -2,54 +2,52 @@ import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
 import parse from './parse.js'
-import { clone, err } from './util.js'
+import { clone, err, tdec } from './util.js'
 
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
 
+// iterating context
+let cur, idx
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
  *
  * @param {string|Array} nodes - The WAT tree or string to be compiled to WASM binary.
- * @param {Object} opt - opt.fullSize for fixed-width uleb encoding
  * @returns {Uint8Array} The compiled WASM binary data.
  */
 export default function watr(nodes) {
   // normalize to (module ...) form
-  if (typeof nodes === 'string') nodes = parse(nodes);
+  if (typeof nodes === 'string') nodes = parse(nodes) || []
   else nodes = clone(nodes)
+  // console.log(clone(nodes))
 
+  cur = nodes, idx = 0
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
-  if (nodes[0] === 'module') nodes.shift(), nodes[0]?.[0] === '$' && nodes.shift()
+  if (nodes[0] === 'module') idx++, cur[idx]?.[0] === '$' && idx++
   // single node, not module
-  else if (typeof nodes[0] === 'string') nodes = [nodes]
+  else if (typeof nodes[0] === 'string') cur = [nodes]
 
   // binary abbr "\00" "\0x61" ...
-  if (nodes[0] === 'binary') {
-    nodes.shift()
-    return Uint8Array.from(str(nodes.map(i => i.slice(1, -1)).join('')))
-  }
+  if (cur[idx] === 'binary') return Uint8Array.from(cur.slice(++idx).flat())
+
   // quote "a" "b"
-  else if (nodes[0] === 'quote') {
-    nodes.shift()
-    return watr(nodes.map(i => i.slice(1, -1)).join(''))
-  }
+  if (cur[idx] === 'quote') return watr(cur.slice(++idx).map(v => v.valueOf().slice(1,-1)).flat().join(''))
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
 
   // initialize types
-  nodes.filter(([kind, ...node]) => {
+  cur.slice(idx).filter(([kind, ...node]) => {
     // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
     if (kind === 'rec') {
       // node contains a list of subtypes, (type ...) or (type (sub final? ...))
       // convert rec type into regular type (first subtype) with stashed subtypes length
       // add rest of subtypes as regular type nodes with subtype flag
       for (let i = 0; i < node.length; i++) {
-        let [,...subnode] = node[i]
-        alias(subnode, ctx.type);
+        let [, ...subnode] = node[i]
+        name(subnode, ctx.type);
         (subnode = typedef(subnode, ctx)).push(i ? true : [ctx.type.length, node.length])
         ctx.type.push(subnode)
       }
@@ -59,7 +57,7 @@ export default function watr(nodes) {
     // (type (struct (field a)*)
     // (type (sub final? $nm* (struct|array|func ...)))
     else if (kind === 'type') {
-      alias(node, ctx.type);
+      name(node, ctx.type);
       ctx.type.push(typedef(node, ctx));
     }
     // other sections may have id
@@ -68,58 +66,59 @@ export default function watr(nodes) {
     else return true
   })
 
-  // prepare/normalize nodes
-  .forEach(([kind, ...node]) => {
-    let imported // if node needs to be imported
+    // prepare/normalize nodes
+    .forEach(([kind, ...node]) => {
+      let imported // if node needs to be imported
 
-    // import abbr
-    // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
-    if (kind === 'import') [kind, ...node] = (imported = node).pop()
+      // import abbr
+      // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
+      if (kind === 'import') [kind, ...node] = (imported = node).pop()
 
-    // index, alias
-    let items = ctx[kind];
-    let name = alias(node, items);
+      // index, alias
+      let items = ctx[kind];
+      name(node, items);
 
-    // export abbr
-    // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
+      // export abbr
+      // (table|memory|global|func|tag id? (export n)* ...) -> (table|memory|global|func|tag id ...) (export n (table|memory|global|func id))
+      while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
 
-    // for import nodes - redirect output to import
-    if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
+      // for import nodes - redirect output to import
+      if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
 
-    // table abbr
-    if (kind === 'table') {
-      // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-      if (node[1]?.[0] === 'elem') {
-        let [reftype, [, ...els]] = node
-        node = [els.length, els.length, reftype]
-        ctx.elem.push([['table', name || items.length], ['i32.const', '0'], reftype, ...els])
+      // table abbr
+      if (kind === 'table') {
+        // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
+        if (node[1]?.[0] === 'elem') {
+          let [reftype, [, ...els]] = node
+          node = [els.length, els.length, reftype]
+          ctx.elem.push([['table', items.length], ['i32.const', 0], reftype, ...els])
+        }
       }
-    }
 
-    // data abbr
-    // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
-    else if (kind === 'memory' && node[0]?.[0] === 'data') {
-      let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
-      ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
-      node = [m, m]
-    }
+      // data abbr
+      // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
+      else if (kind === 'memory' && node[0]?.[0] === 'data') {
+        let [, ...data] = node.shift(), m = '' + Math.ceil(data.flat().length / 65536) // FIXME: figure out actual data size
+        ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
+        node = [m, m]
+      }
 
-    // dupe to code section, save implicit type
-    else if (kind === 'func') {
-      let [idx, param, result] = typeuse(node, ctx);
-      idx ??= regtype(param, result, ctx)
+      // dupe to code section, save implicit type
+      else if (kind === 'func') {
+        let [idx, param, result] = typeuse(node, ctx);
+        idx ??= regtype(param, result, ctx)
 
-      // we save idx because type can be defined after
-      !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
-      node.unshift(['type', idx])
-    }
+        // we save idx because type can be defined after
+        // FIXME: plainify/normalize after
+        !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
+        node = [['type', idx]]
+      }
 
-    // import writes to import section amd adds placeholder for (kind) section
-    if (imported) ctx.import.push([...imported, [kind, ...node]]), node = null
+      // import writes to import section amd adds placeholder for (kind) section
+      if (imported) ctx.import.push([...imported, [kind, ...node]]), node = null
 
-    items.push(node)
-  })
+      items.push(node)
+    })
 
   // convert nodes to bytes
   const bin = (kind, count = true) => {
@@ -141,6 +140,7 @@ export default function watr(nodes) {
     ...bin(SECTION.func),
     ...bin(SECTION.table),
     ...bin(SECTION.memory),
+    ...bin(SECTION.tag),
     ...bin(SECTION.global),
     ...bin(SECTION.export),
     ...bin(SECTION.start, false),
@@ -151,11 +151,11 @@ export default function watr(nodes) {
   ])
 }
 
-// consume name eg. $t ...
-const alias = (node, list) => {
-  let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
-  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
-  return name
+// consume section name eg. $t ...
+const name = (node, list) => {
+  let nm = (node[0]?.[0] === '$') && node.shift();
+  if (nm) nm in list ? err(`Duplicate ${list.name} ${nm}`) : list[nm] = list.length; // save alias
+  return nm
 }
 
 // (type $id? (func param* result*))
@@ -172,29 +172,29 @@ const typedef = ([dfn], ctx) => {
   [compkind, ...dfn] = dfn // composite type kind
 
   if (compkind === 'func') dfn = paramres(dfn), ctx.type['$' + dfn.join('>')] ??= ctx.type.length
-  else if (compkind === 'struct') dfn = fieldseq(dfn, 'field', true)
+  else if (compkind === 'struct') dfn = fieldseq(dfn, 'field')
   else if (compkind === 'array') [dfn] = dfn
 
   return [compkind, dfn, subkind, supertypes]
 }
 
 // register (implicit) type
-const regtype = (param, result, ctx, idx='$' + param + '>' + result) => (
+const regtype = (param, result, ctx, idx = '$' + param + '>' + result) => (
   (ctx.type[idx] ??= ctx.type.push(['func', [param, result]]) - 1),
   idx
 )
 
 // consume typeuse nodes, return type index/params, or null idx if no type
 // https://webassembly.github.io/spec/core/text/modules.html#type-uses
-const typeuse = (nodes, ctx, names) => {
+const typeuse = (nodes, ctx) => {
   let idx, param, result
 
   // explicit type (type 0|$name)
   if (nodes[0]?.[0] === 'type') {
     [, idx] = nodes.shift();
-    [param, result] = paramres(nodes, names);
+    [param, result] = paramres(nodes);
 
-    const [,srcParamRes] = ctx.type[id(idx, ctx.type)] ?? err(`Unknown type ${idx}`)
+    const [, srcParamRes] = ctx.type[id(idx, ctx.type)] ?? err(`Unknown type ${idx}`)
 
     // check type consistency (excludes forward refs)
     if ((param.length || result.length) && srcParamRes.join('>') !== param + '>' + result) err(`Type ${idx} mismatch`)
@@ -203,15 +203,15 @@ const typeuse = (nodes, ctx, names) => {
   }
 
   // implicit type (param i32 i32)(result i32)
-  return [idx, ...paramres(nodes, names)]
+  return [idx, ...paramres(nodes)]
 }
 
 // consume (param t+)* (result t+)* sequence
-const paramres = (nodes, names = true) => {
+const paramres = (nodes) => {
   // let param = [], result = []
 
   // collect param (param i32 i64) (param $x? i32)
-  let param = fieldseq(nodes, 'param', names)
+  let param = fieldseq(nodes, 'param')
 
   // collect result eg. (result f64 f32)(result i32)
   let result = fieldseq(nodes, 'result')
@@ -223,17 +223,14 @@ const paramres = (nodes, names = true) => {
 
 // collect sequence of field, eg. (param a) (param b c), (field a) (field b c) or (result a b) (result c)
 // optionally allow or not names
-const fieldseq = (nodes, field, names = false) => {
+const fieldseq = (nodes, field) => {
   let seq = []
   // collect field eg. (field f64 f32)(field i32)
   while (nodes[0]?.[0] === field) {
     let [, ...args] = nodes.shift()
-    let name = args[0]?.[0] === '$' && args.shift()
+    let nm = args[0]?.[0] === '$' && args.shift()
     // expose name refs, if allowed
-    if (name) {
-      if (names) name in seq ? err(`Duplicate ${field} ${name}`) : seq[name] = seq.length
-      else err(`Unexpected ${field} name ${name}`)
-    }
+    if (nm) nm in seq ? err(`Duplicate ${field} ${nm}`) : seq[nm] = seq.length
     seq.push(...args)
   }
   return seq
@@ -258,7 +255,7 @@ const blocktype = (nodes, ctx) => {
 // abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const plain = (nodes, ctx) => {
-  let out = [], stack = [], label
+  let out = []
 
   while (nodes.length) {
     let node = nodes.shift()
@@ -267,10 +264,11 @@ const plain = (nodes, ctx) => {
     if (typeof node === 'string') {
       out.push(node)
 
+      // resolve optionals
       // block typeuse?
       if (node === 'block' || node === 'if' || node === 'loop') {
         // (loop $l?)
-        if (nodes[0]?.[0] === '$') label = nodes.shift(), out.push(label), stack.push(label)
+        if (nodes[0]?.[0] === '$') out.push(nodes.shift())
 
         out.push(blocktype(nodes, ctx))
       }
@@ -278,12 +276,12 @@ const plain = (nodes, ctx) => {
       // else $label
       // end $label - make sure it matches block label
       else if (node === 'else' || node === 'end') {
-        if (nodes[0]?.[0] === '$') (node === 'end' ? stack.pop() : label) !== (label = nodes.shift()) && err(`Mismatched label ${label}`)
+        if (nodes[0]?.[0] === '$') nodes.shift()
       }
 
       // select (result i32 i32 i32)?
       else if (node === 'select') {
-        out.push(paramres(nodes, 0)[1])
+        out.push(paramres(nodes)[1])
       }
 
       // call_indirect $table? $typeidx
@@ -403,7 +401,7 @@ const build = [,
     }
     else err(`Unknown kind ${kind}`)
 
-    return ([...vec(str(mod.slice(1, -1))), ...vec(str(field.slice(1, -1))), KIND[kind], ...details])
+    return ([...vec(mod), ...vec(field), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
@@ -421,8 +419,8 @@ const build = [,
   // (global $id? (mut i32) (i32.const 42))
   ([t, init], ctx) => [...fieldtype(t, ctx), ...expr(init, ctx)],
 
-  //  (export "name" (func|table|mem $name|idx))
-  ([nm, [kind, l]], ctx) => ([...vec(str(nm.slice(1, -1))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
+  // (export "name" (func|table|mem $name|idx))
+  ([nm, [kind, l]], ctx) => ([...vec(nm), KIND[kind], ...uleb(id(l, ctx[kind]))]),
 
   // (start $main)
   ([l], ctx) => uleb(id(l, ctx.func)),
@@ -527,9 +525,9 @@ const build = [,
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
       if (types[0]?.[0] === '$') {
-        let name = types.shift()
-        if (name in ctx.local) err(`Duplicate local ${name}`)
-        else ctx.local[name] = ctx.local.length
+        let nm = types.shift()
+        if (nm in ctx.local) err(`Duplicate local ${nm}`)
+        else ctx.local[nm] = ctx.local.length
       }
       ctx.local.push(...types)
     }
@@ -562,7 +560,7 @@ const build = [,
     }
 
     // (offset (i32.const 0)) or (i32.const 0)
-    if (typeof inits[0] !== 'string') {
+    if (typeof inits[0]?.[0] === 'string') {
       offset = inits.shift()
       if (offset[0] === 'offset') [, offset] = offset
       offset ?? err('Bad offset', offset)
@@ -577,12 +575,15 @@ const build = [,
             // passive: 1
             [1]
       ),
-      ...vec(str(inits.map(i => i.slice(1, -1)).join('')))
+      ...vec(inits.flat())
     ])
   },
 
   // datacount
-  (nodes, ctx) => uleb(ctx.data.length)
+  (nodes, ctx) => uleb(ctx.data.length),
+
+  // tag
+  (nodes, ctx) => []
 ]
 
 // build reftype, either direct absheaptype or wrapped heaptype https://webassembly.github.io/gc/core/binary/types.html#reference-types
@@ -641,7 +642,7 @@ const instr = (nodes, ctx) => {
     // ref.test|cast (ref null? $t|heaptype)
     else if (code >= 20 && code <= 23) {
       let ht = reftype(nodes.shift(), ctx)
-      if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop()+1) // ref.test|cast (ref null $t) is next op
+      if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop() + 1) // ref.test|cast (ref null $t) is next op
       if (ht.length > 1) ht.shift() // pop ref
       immed.push(...ht)
     }
@@ -651,7 +652,7 @@ const instr = (nodes, ctx) => {
         ht1 = reftype(nodes.shift(), ctx),
         ht2 = reftype(nodes.shift(), ctx),
         castflags = ((ht2[0] !== REFTYPE.ref) << 1) | (ht1[0] !== REFTYPE.ref)
-        immed.push(castflags, ...uleb(i), ht1.pop(), ht2.pop()) // we take only abstype or
+      immed.push(castflags, ...uleb(i), ht1.pop(), ht2.pop()) // we take only abstype or
     }
   }
 
@@ -812,8 +813,7 @@ const instr = (nodes, ctx) => {
     while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
       args.push(...uleb(blockid(nodes.shift(), ctx.block)))
     }
-    args.unshift(...uleb(args.length - 1))
-    immed.push(...args)
+    immed.push(...uleb(args.length - 1), ...args)
   }
 
   // select (result t+)
@@ -912,20 +912,6 @@ const limits = (node) => (
 // we put extra condition for index ints for tests complacency
 const parseUint = (v, max = 0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
 
-
-// escape codes
-const escape = { n: 10, r: 13, t: 9, v: 1, '"': 34, "'": 39, '\\': 92 }
-
-// build string binary
-const str = str => {
-  let res = [], i = 0, c, BSLASH = 92
-  // https://webassembly.github.io/spec/core/text/values.html#strings
-  for (; i < str.length;) {
-    c = str.charCodeAt(i++)
-    res.push(c === BSLASH ? escape[str[i++]] || parseInt(str.slice(i - 1, ++i), 16) : c)
-  }
-  return res
-}
 
 // serialize binary array
 const vec = a => [...uleb(a.length), ...a.flat()]
