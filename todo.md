@@ -85,7 +85,11 @@
 * [x] GC
   * [x] Recursive types
     * [x] normalize subtypes to list, skip single recusion abbr
-* [ ] Exceptions, memory64, annotations, code_metadata, js_strings
+* [x] annotations
+  * [ ] named sections
+  * [ ] branch hints
+* [ ] Try removing all quotes
+* [ ] Exceptions, memory64, code_metadata, js_strings
 * [ ] Features
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [x] All main ones (readme)

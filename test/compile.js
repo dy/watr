@@ -3,6 +3,23 @@ import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import {inline, file, wat2wasm, save} from './index.js'
 
+t('compile: annotations are stripped', () => {
+  let src = `
+    (module (@a)
+      (@b) (func (@c) (export "answer") (@d) (result i32)
+        (@e) (i32.const 42)
+      )
+    )
+  `
+  let { answer } = inline(src).exports
+  is(answer(), 42)
+})
+
+t('compile: annotations with content', () => {
+  let src = `(module (@name "test") (func (export "f") (result i32) (@inline hint) (i32.const 1)))`
+  let { f } = inline(src).exports
+  is(f(), 1)
+})
 
 t('compile: reexport func', () => {
   let src = `

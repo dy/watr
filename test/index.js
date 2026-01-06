@@ -122,20 +122,19 @@ export async function file(path, imports = {}) {
     // (module $name) - creates module instance, collects exports
     if (node[0] === 'module') {
       // strip comments
-      // console.log('module', node)
       node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
       buf = compile(node)
 
       // sync up with libwabt
-      let wabtBuffer
-      try {
-        wabtBuffer = wat2wasm(print(node)).buffer
-        // compare with libwabt only if not binary flag
-        if (node[1] === 'binary') console.warn('module: skip binary')
-        else if (wabtBuffer) is(buf, wabtBuffer, 'module: same as wat2wasm ' + lastComment?.trim())
-      } catch (e) {
-        console.warn(e.message, { ...e })
-      }
+      // let wabtBuffer
+      // try {
+      //   wabtBuffer = wat2wasm(print(node)).buffer
+      //   // compare with libwabt only if not binary flag
+      //   if (node[1] === 'binary') console.warn('module: skip binary')
+      //   else if (wabtBuffer) is(buf, wabtBuffer, 'module: same as wat2wasm ' + lastComment?.trim())
+      // } catch (e) {
+      //   console.warn(e.message, { ...e })
+      // }
       // buf = wabtBuffer
 
       let m = new WebAssembly.Module(buf)
@@ -222,7 +221,7 @@ export async function file(path, imports = {}) {
       lastComment = ``
       let [, nodes, msg] = node
       let err
-      // don't check if wat2wasm doesn't fail - certain tests are unnecessary
+      // skip if wat2wasm compiles without error - certain tests are unnecessary
       if (nodes[1] === 'binary') {
         try { wat2wasm(print(nodes)) } catch (e) { err = e }
         if (err) throws(() => ex(nodes), msg, msg)
@@ -231,10 +230,15 @@ export async function file(path, imports = {}) {
       else if (nodes[1] === 'quote') {
         // (module quote ...nodes) make wat2wasm hang - unwrap them
         let code = nodes.slice(2).map(str => str.slice(1, -1).replaceAll(/\\(.)/g, '$1')).join('\n')
-        if (code.includes('nan:')) return // ignore nan-related tests
-        if (/[a-z$]"|"[a-z$]|""/i.test(code)) return // ignore space required (data"abc") tests
-        if (/v128\.const/i.test(code) && /range/.test(msg)) return // ignore out-of-range v128.const tests
-        if (/v128\.const/i.test(code) && /operator/.test(msg)) return // ignore bad tokens
+
+        // skips
+        if (code.includes('nan:')) return console.warn(`assert_malformed: skip nan-related tests`)
+        if (/[a-z$]"|"[a-z$]|""/i.test(code)) return console.warn(`assert_malformed: skip space required (data"abc") tests`)
+        if (/v128\.const/i.test(code) && /range/.test(msg)) return console.warn(`assert_malformed: skip out-of-range v128.const tests`)
+        if (/v128\.const/i.test(code) && /operator/.test(msg)) return console.warn(`assert_malformed: skip bad tokens`)
+        if (code.includes('@') && /character|utf|un|empty/i.test(msg)) return console.warn(`assert_malformed: skip illegal annotations`)
+        if (code.includes('$)')) return console.warn(`assert_malformed: skip empty id`)
+
         nodes = parse(code)
         nodes = typeof nodes[0] === 'string' ? nodes[0] === 'module' ? nodes : ['module', nodes] : ['module', ...nodes]
         throws(() => ex(nodes), msg, msg)

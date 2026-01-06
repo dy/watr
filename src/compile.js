@@ -1,12 +1,14 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE, ESCAPE } from './const.js'
 import parse from './parse.js'
-import { clone, err } from './util.js'
+import { clone, err, unescape } from './util.js'
 
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
 
+// recursively strip all annotation nodes from AST
+const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' ? null : node.map(unannot).filter(n => n != null)) : node
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
@@ -20,6 +22,9 @@ export default function watr(nodes) {
   if (typeof nodes === 'string') nodes = parse(nodes);
   else nodes = clone(nodes)
 
+  // strip annotations (text-format only)
+  nodes = unannot(nodes) || []
+
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
   if (nodes[0] === 'module') nodes.shift(), nodes[0]?.[0] === '$' && nodes.shift()
   // single node, not module
@@ -28,12 +33,12 @@ export default function watr(nodes) {
   // binary abbr "\00" "\0x61" ...
   if (nodes[0] === 'binary') {
     nodes.shift()
-    return Uint8Array.from(str(nodes.map(i => i.slice(1, -1)).join('')))
+    return Uint8Array.from(str(...nodes))
   }
   // quote "a" "b"
   else if (nodes[0] === 'quote') {
     nodes.shift()
-    return watr(nodes.map(i => i.slice(1, -1)).join(''))
+    return watr(nodes.map(unescape).join(''))
   }
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
@@ -100,7 +105,7 @@ export default function watr(nodes) {
     // data abbr
     // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
     else if (kind === 'memory' && node[0]?.[0] === 'data') {
-      let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
+      let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(unescape).join('').length / 65536) // FIXME: figure out actual data size
       ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
       node = [m, m]
     }
@@ -278,7 +283,7 @@ const plain = (nodes, ctx) => {
       // else $label
       // end $label - make sure it matches block label
       else if (node === 'else' || node === 'end') {
-        if (nodes[0]?.[0] === '$') (node === 'end' ? stack.pop() : label) !== (label = nodes.shift()) && err(`Mismatched label ${label}`)
+        if (nodes[0]?.[0] === '$') (node === 'end' ? stack.pop() : label) !== (label = nodes.shift()) && err(`Mismatched ${node} label ${label}`)
       }
 
       // select (result i32 i32 i32)?
@@ -403,7 +408,7 @@ const build = [,
     }
     else err(`Unknown kind ${kind}`)
 
-    return ([...vec(str(mod.slice(1, -1))), ...vec(str(field.slice(1, -1))), KIND[kind], ...details])
+    return ([...vec(str(mod)), ...vec(str(field)), KIND[kind], ...details])
   },
 
   // (func $name? ...params result ...body)
@@ -422,7 +427,7 @@ const build = [,
   ([t, init], ctx) => [...fieldtype(t, ctx), ...expr(init, ctx)],
 
   //  (export "name" (func|table|mem $name|idx))
-  ([nm, [kind, l]], ctx) => ([...vec(str(nm.slice(1, -1))), KIND[kind], ...uleb(id(l, ctx[kind]))]),
+  ([nm, [kind, l]], ctx) => ([...vec(str(nm)), KIND[kind], ...uleb(id(l, ctx[kind]))]),
 
   // (start $main)
   ([l], ctx) => uleb(id(l, ctx.func)),
@@ -577,7 +582,7 @@ const build = [,
             // passive: 1
             [1]
       ),
-      ...vec(str(inits.map(i => i.slice(1, -1)).join('')))
+      ...vec(str(...inits))
     ])
   },
 
@@ -913,16 +918,38 @@ const limits = (node) => (
 const parseUint = (v, max = 0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
 
 
-// escape codes
-const escape = { n: 10, r: 13, t: 9, v: 1, '"': 34, "'": 39, '\\': 92 }
 
-// build string binary
-const str = str => {
-  let res = [], i = 0, c, BSLASH = 92
-  // https://webassembly.github.io/spec/core/text/values.html#strings
-  for (; i < str.length;) {
-    c = str.charCodeAt(i++)
-    res.push(c === BSLASH ? escape[str[i++]] || parseInt(str.slice(i - 1, ++i), 16) : c)
+// build string binary - convert WAT string to byte array
+const enc = new TextEncoder()
+const str = (...parts) => {
+  let s = parts.map(s => s[0] === '"' ? s.slice(1, -1) : s).join(''), res = []
+  for (let i = 0; i < s.length; i++) {
+    let c = s.charCodeAt(i)
+    if (c === 92) { // backslash
+      let n = s[i + 1]
+      // \u{...} unicode - decode and UTF-8 encode
+      if (n === 'u' && s[i + 2] === '{') {
+        let hex = s.slice(i + 3, i = s.indexOf('}', i + 3))
+        res.push(...enc.encode(String.fromCodePoint(parseInt(hex, 16))))
+        i++
+      }
+      // Named escape
+      else if (ESCAPE[n]) {
+        res.push(ESCAPE[n])
+        i += 1 // skip the named char after backslash
+      }
+      // \xx hex byte (raw byte, not UTF-8 decoded)
+      else {
+        res.push(parseInt(s.slice(i + 1, i + 3), 16))
+        i += 2 // skip the two hex digits
+      }
+    }
+    // Multi-byte char - UTF-8 encode
+    else if (c > 255) {
+      res.push(...enc.encode(s[i]))
+    }
+    // Raw byte
+    else res.push(c)
   }
   return res
 }
