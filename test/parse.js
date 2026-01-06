@@ -1,9 +1,44 @@
-import t, { is, ok, same } from 'tst'
+import t, { is, ok, same, throws } from 'tst'
 import parse from '../src/parse.js'
 
 t('parser: s-expr', () => {
   const tree = parse('(module)')
   is(tree, ['module'])
+})
+
+t('parser: annotation simple', () => {
+  const tree = parse('(@a)')
+  is(tree, ['@a'])
+})
+
+t('parser: annotation with content', () => {
+  const tree = parse('(@a x y z)')
+  is(tree, ['@a', 'x', 'y', 'z'])
+})
+
+t('parser: annotation with nested', () => {
+  const tree = parse('(@a (b c))')
+  is(tree, ['@a', ['b', 'c']])
+})
+
+t('parser: annotation in module', () => {
+  const tree = parse('(module (@a) (func))')
+  is(tree, ['module', ['@a'], ['func']])
+})
+
+t('parser: annotation with special chars', () => {
+  const tree = parse('(@@) (@$) (@+)')
+  is(tree, [['@@'], ['@$'], ['@+']])
+})
+
+t('parser: annotation empty id', () => {
+  const tree = parse('(@)')
+  is(tree, ['@'])
+})
+
+t('parser: annotations semicolon', () => {
+  const tree = parse(`(@a , ; ] [ }} }x{ ({) ,{{};}] ;)`)
+  is(tree, ['@a', ',', ';', ']', '[', '}}', '}x{', ['{'], ',{{};}]', ';'])
 })
 
 t.skip('parser: s-expr no instruction (throws)', () => {
