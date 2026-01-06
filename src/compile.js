@@ -7,8 +7,8 @@ import { clone, err, str } from './util.js'
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
 
-// recursively strip all annotation nodes from AST
-const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' ? null : node.map(unannot).filter(n => n != null)) : node
+// recursively strip all annotation nodes from AST, except @custom
+const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' && node[0] !== '@custom' ? null : node.map(unannot).filter(n => n != null)) : node
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
@@ -22,7 +22,7 @@ export default function watr(nodes) {
   if (typeof nodes === 'string') nodes = parse(nodes);
   else nodes = clone(nodes)
 
-  // strip annotations (text-format only)
+  // strip annotations (text-format only), except @custom which becomes binary custom sections
   nodes = unannot(nodes) || []
 
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
@@ -66,6 +66,10 @@ export default function watr(nodes) {
     else if (kind === 'type') {
       alias(node, ctx.type);
       ctx.type.push(typedef(node, ctx));
+    }
+    // (@custom "name" placement? data)
+    else if (kind === '@custom') {
+      ctx.custom.push(node)  // node is just the arguments, not including @custom
     }
     // other sections may have id
     else if (kind === 'start' || kind === 'export') ctx[kind].push(node)
@@ -132,6 +136,9 @@ export default function watr(nodes) {
       .filter(Boolean)  // filter out (type, imported) placeholders
       .map(item => build[kind](item, ctx))
       .filter(Boolean)  // filter out unrenderable things (subtype or data.length)
+
+    // Custom sections - each is output as separate section with own header
+    if (kind === SECTION.custom) return items.flatMap(content => [kind, ...vec(content)])
 
     return !items.length ? [] : [kind, ...vec(count ? vec(items) : items)]
   }
@@ -354,7 +361,21 @@ const plain = (nodes, ctx) => {
 
 
 // build section binary [by section codes] (non consuming)
-const build = [,
+const build = [
+  // (@custom "name" placement? data)
+  // placement is optional: (before|after section) or (before first)|(after last)
+  // For now we ignore placement and just output the custom section
+  ([name, ...rest], ctx) => {
+    // Check if second arg is placement directive
+    let data = rest
+    if (rest[0]?.[0] === 'before' || rest[0]?.[0] === 'after') {
+      // Skip placement for now - would need more complex section ordering
+      data = rest.slice(1)
+    }
+
+    // Custom section format: name (vec string) + raw content bytes
+    return [...vec(str(name)), ...str(...data)]
+  },
   // type kinds
   // (func params result)
   // (array i8)

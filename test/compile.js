@@ -21,6 +21,90 @@ t('compile: annotations with content', () => {
   is(f(), 1)
 })
 
+t('compile: custom sections', () => {
+  let src = `
+    (module
+      (@custom "my-section" "hello")
+      (func (export "answer") (result i32) (i32.const 42))
+    )
+  `
+  let wasm = compile(parse(src))
+
+  // Check that custom section exists in binary
+  // Custom sections start with section id 0
+  let view = new DataView(wasm.buffer)
+  let found = false
+  let pos = 8 // skip magic + version
+
+  while (pos < wasm.length) {
+    let sectionId = view.getUint8(pos++)
+    let sectionSize = wasm[pos++] // simplified: assuming size < 128
+
+    if (sectionId === 0) {
+      // Read name length
+      let nameLen = wasm[pos++]
+      let name = String.fromCharCode(...wasm.slice(pos, pos + nameLen))
+      pos += nameLen
+
+      if (name === 'my-section') {
+        let data = String.fromCharCode(...wasm.slice(pos, pos + sectionSize - nameLen - 1))
+        is(data, 'hello', 'custom section has correct data')
+        found = true
+        break
+      }
+    } else {
+      pos += sectionSize
+    }
+  }
+
+  ok(found, 'custom section found in binary')
+
+  // Should still instantiate and work (custom sections are ignored by runtime)
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.answer(), 42)
+})
+
+t('compile: custom sections with placement', () => {
+  let src = `
+    (module
+      (@custom "before-func" (before func) "data1")
+      (func (export "f") (result i32) (i32.const 1))
+      (@custom "after-func" (after func) "data2")
+    )
+  `
+  let wasm = compile(parse(src))
+
+  // Verify both custom sections are present
+  let sections = []
+  let pos = 8
+  while (pos < wasm.length) {
+    let sectionId = wasm[pos++]
+    let sectionSize = wasm[pos++]
+    if (sectionId === 0) {
+      let nameLen = wasm[pos++]
+      let name = String.fromCharCode(...wasm.slice(pos, pos + nameLen))
+      pos += nameLen
+      let data = String.fromCharCode(...wasm.slice(pos, pos + sectionSize - nameLen - 1))
+      sections.push({ name, data })
+      pos += sectionSize - nameLen - 1
+    } else {
+      pos += sectionSize
+    }
+  }
+
+  is(sections.length, 2, 'two custom sections found')
+  is(sections[0].name, 'before-func')
+  is(sections[0].data, 'data1')
+  is(sections[1].name, 'after-func')
+  is(sections[1].data, 'data2')
+
+  // Should still work
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.f(), 1)
+})
+
 t('compile: reexport func', () => {
   let src = `
     (export "f0" (func 0))
