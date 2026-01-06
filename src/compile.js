@@ -91,7 +91,7 @@ export default function watr(nodes) {
 
       // export abbr
       // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-      while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
+      while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items?.length]])
 
       // for import nodes - redirect output to import
       if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
@@ -124,10 +124,17 @@ export default function watr(nodes) {
         node.unshift(['type', idx])
       }
 
+      // tag has a type similar to func
+      else if (kind === 'tag') {
+        let [idx, param] = typeuse(node, ctx);
+        idx ??= regtype(param, [], ctx)
+        node.unshift(['type', idx])
+      }
+
       // import writes to import section amd adds placeholder for (kind) section
       if (imported) ctx.import.push([...imported, [kind, ...node]]), node = null
 
-      items.push(node)
+      items?.push(node)
     })
 
   // convert nodes to bytes
@@ -153,6 +160,7 @@ export default function watr(nodes) {
     ...bin(SECTION.func),
     ...bin(SECTION.table),
     ...bin(SECTION.memory),
+    ...bin(SECTION.tag),
     ...bin(SECTION.global),
     ...bin(SECTION.export),
     ...bin(SECTION.start, false),
@@ -166,7 +174,7 @@ export default function watr(nodes) {
 // consume name eg. $t ...
 const alias = (node, list) => {
   let name = (node[0]?.[0] === '$' || node[0]?.[0] == null) && node.shift();
-  if (name) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
+  if (name && list) name in list ? err(`Duplicate ${list.name} ${name}`) : list[name] = list.length; // save alias
   return name
 }
 
@@ -418,6 +426,10 @@ const build = [
       let [[, typeidx]] = dfn
       details = uleb(id(typeidx, ctx.type))
     }
+    else if (kind === 'tag') {
+      let [[, typeidx]] = dfn
+      details = [0x00, ...uleb(id(typeidx, ctx.type))]
+    }
     else if (kind === 'memory') {
       details = limits(dfn)
     }
@@ -588,10 +600,10 @@ const build = [
     }
 
     // (offset (i32.const 0)) or (i32.const 0)
-    if (typeof inits[0] !== 'string') {
+    if (typeof inits[0] !== 'string' && inits[0]) {
       offset = inits.shift()
-      if (offset[0] === 'offset') [, offset] = offset
-      offset ?? err('Bad offset', offset)
+      if (offset?.[0] === 'offset') [, offset] = offset
+      else offset ?? err('Bad offset', offset)
     }
 
     return ([
@@ -610,6 +622,9 @@ const build = [
   // datacount
   (nodes, ctx) => uleb(ctx.data.length)
 ]
+
+// (tag $id? (param i32)*) - tags for exception handling
+build[SECTION.tag] = ([[, typeidx]], ctx) => [0x00, ...uleb(id(typeidx, ctx.type))]
 
 // build reftype, either direct absheaptype or wrapped heaptype https://webassembly.github.io/gc/core/binary/types.html#reference-types
 const reftype = (t, ctx) => (
