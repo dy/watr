@@ -2,7 +2,7 @@ import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE, ESCAPE } from './const.js'
 import parse from './parse.js'
-import { clone, err, unescape } from './util.js'
+import { clone, err, str } from './util.js'
 
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
@@ -38,7 +38,7 @@ export default function watr(nodes) {
   // quote "a" "b"
   else if (nodes[0] === 'quote') {
     nodes.shift()
-    return watr(nodes.map(unescape).join(''))
+    return watr(nodes.map(s=>s.slice(1,-1)).join(''))
   }
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
@@ -105,7 +105,7 @@ export default function watr(nodes) {
     // data abbr
     // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
     else if (kind === 'memory' && node[0]?.[0] === 'data') {
-      let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(unescape).join('').length / 65536) // FIXME: figure out actual data size
+      let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s=>s.slice(1,-1)).join('').length / 65536) // FIXME: figure out actual data size
       ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
       node = [m, m]
     }
@@ -916,43 +916,6 @@ const limits = (node) => (
 // check if node is valid int in a range
 // we put extra condition for index ints for tests complacency
 const parseUint = (v, max = 0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
-
-
-
-// build string binary - convert WAT string to byte array
-const enc = new TextEncoder()
-const str = (...parts) => {
-  let s = parts.map(s => s[0] === '"' ? s.slice(1, -1) : s).join(''), res = []
-  for (let i = 0; i < s.length; i++) {
-    let c = s.charCodeAt(i)
-    if (c === 92) { // backslash
-      let n = s[i + 1]
-      // \u{...} unicode - decode and UTF-8 encode
-      if (n === 'u' && s[i + 2] === '{') {
-        let hex = s.slice(i + 3, i = s.indexOf('}', i + 3))
-        res.push(...enc.encode(String.fromCodePoint(parseInt(hex, 16))))
-        i++
-      }
-      // Named escape
-      else if (ESCAPE[n]) {
-        res.push(ESCAPE[n])
-        i += 1 // skip the named char after backslash
-      }
-      // \xx hex byte (raw byte, not UTF-8 decoded)
-      else {
-        res.push(parseInt(s.slice(i + 1, i + 3), 16))
-        i += 2 // skip the two hex digits
-      }
-    }
-    // Multi-byte char - UTF-8 encode
-    else if (c > 255) {
-      res.push(...enc.encode(s[i]))
-    }
-    // Raw byte
-    else res.push(c)
-  }
-  return res
-}
 
 // serialize binary array
 const vec = a => [...uleb(a.length), ...a.flat()]

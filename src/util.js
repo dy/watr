@@ -8,44 +8,47 @@ export const sepRE = /^_|_$|[^\da-f]_|_[^\da-f]/i
 
 export const intRE = /^[+-]?(?:0x[\da-f]+|\d+)$/i
 
-/**
- * Unescapes a WAT string literal, removing quotes and decoding all escape sequences.
- * Handles: \n, \t, \r, \v, \", \', \\, \xx (hex bytes as UTF-8), \u{...} (unicode)
- *
- * @param {string} str - String with quotes and escapes, e.g. '"hello\\nworld"'
- * @returns {string} Unescaped string without quotes, e.g. 'hello\nworld'
- */
-export const unescape = str => {
-  // Remove surrounding quotes if present
-  str = str[0] === '"' ? str.slice(1, -1) : str
+// build string binary - convert WAT string to byte array
+const enc = new TextEncoder()
+export const str = (...parts) => {
+  let s = parts.map(s => s[0] === '"' ? s.slice(1, -1) : s).join(''), res = []
 
-  let res = '', i = 0
-  while (i < str.length) {
-    let c = str.charCodeAt(i)
+  for (let i = 0; i < s.length; i++) {
+    let c = s.charCodeAt(i)
     if (c === 92) { // backslash
-      let n = str[i+1]
-      // \u{...} unicode escape
-      if (n === 'u' && str[i+2] === '{') {
-        let hex = str.slice(i+3, i = str.indexOf('}', i+3))
-        res += String.fromCodePoint(parseInt(hex, 16))
-        i++
+      let n = s[i + 1]
+      // \u{...} unicode - decode and UTF-8 encode
+      if (n === 'u' && s[i + 2] === '{') {
+        let hex = s.slice(i + 3, i = s.indexOf('}', i + 3))
+        res.push(...enc.encode(String.fromCodePoint(parseInt(hex, 16))))
+        // i now points to '}', loop i++ will move past it
       }
       // Named escape
       else if (ESCAPE[n]) {
-        res += String.fromCharCode(ESCAPE[n])
-        i += 2
+        res.push(ESCAPE[n])
+        i++ // skip the named char, loop i++ will move past backslash
       }
-      // \xx hex byte(s) - collect UTF-8 sequence and decode
+      // \xx hex byte (raw byte, not UTF-8 decoded)
       else {
-        let bytes = []
-        while (i < str.length && str[i] === '\\') {
-          bytes.push(parseInt(str.slice(i+1, i+3), 16))
-          i += 3
-        }
-        res += new TextDecoder().decode(new Uint8Array(bytes))
+        res.push(parseInt(s.slice(i + 1, i + 3), 16))
+        i += 2 // skip two hex digits, loop i++ will complete the skip
       }
     }
-    else res += str[i++]
+    // Multi-byte char - UTF-8 encode
+    else if (c > 255) {
+      res.push(...enc.encode(s[i]))
+    }
+    // Raw byte
+    else res.push(c)
   }
   return res
 }
+
+/**
+ * Unescapes a WAT string literal by parsing escapes to bytes, then UTF-8 decoding.
+ * Reuses str() for escape parsing to eliminate duplication.
+ *
+ * @param {string} s - String with quotes and escapes, e.g. '"hello\\nworld"'
+ * @returns {string} Unescaped string without quotes, e.g. 'hello\nworld'
+ */
+export const unescape = s => new TextDecoder().decode(new Uint8Array(str(s)))
