@@ -38,7 +38,7 @@ export default function watr(nodes) {
   // quote "a" "b"
   else if (nodes[0] === 'quote') {
     nodes.shift()
-    return watr(nodes.map(s=>s.slice(1,-1)).join(''))
+    return watr(nodes.map(s => s.slice(1, -1)).join(''))
   }
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
@@ -53,7 +53,7 @@ export default function watr(nodes) {
       // convert rec type into regular type (first subtype) with stashed subtypes length
       // add rest of subtypes as regular type nodes with subtype flag
       for (let i = 0; i < node.length; i++) {
-        let [,...subnode] = node[i]
+        let [, ...subnode] = node[i]
         alias(subnode, ctx.type);
         (subnode = typedef(subnode, ctx)).push(i ? true : [ctx.type.length, node.length])
         ctx.type.push(subnode)
@@ -77,58 +77,58 @@ export default function watr(nodes) {
     else return true
   })
 
-  // prepare/normalize nodes
-  .forEach(([kind, ...node]) => {
-    let imported // if node needs to be imported
+    // prepare/normalize nodes
+    .forEach(([kind, ...node]) => {
+      let imported // if node needs to be imported
 
-    // import abbr
-    // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
-    if (kind === 'import') [kind, ...node] = (imported = node).pop()
+      // import abbr
+      // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
+      if (kind === 'import') [kind, ...node] = (imported = node).pop()
 
-    // index, alias
-    let items = ctx[kind];
-    let name = alias(node, items);
+      // index, alias
+      let items = ctx[kind];
+      let name = alias(node, items);
 
-    // export abbr
-    // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
-    while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
+      // export abbr
+      // (table|memory|global|func id? (export n)* ...) -> (table|memory|global|func id ...) (export n (table|memory|global|func id))
+      while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
 
-    // for import nodes - redirect output to import
-    if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
+      // for import nodes - redirect output to import
+      if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
 
-    // table abbr
-    if (kind === 'table') {
-      // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-      if (node[1]?.[0] === 'elem') {
-        let [reftype, [, ...els]] = node
-        node = [els.length, els.length, reftype]
-        ctx.elem.push([['table', name || items.length], ['i32.const', '0'], reftype, ...els])
+      // table abbr
+      if (kind === 'table') {
+        // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
+        if (node[1]?.[0] === 'elem') {
+          let [reftype, [, ...els]] = node
+          node = [els.length, els.length, reftype]
+          ctx.elem.push([['table', name || items.length], ['i32.const', '0'], reftype, ...els])
+        }
       }
-    }
 
-    // data abbr
-    // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
-    else if (kind === 'memory' && node[0]?.[0] === 'data') {
-      let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s=>s.slice(1,-1)).join('').length / 65536) // FIXME: figure out actual data size
-      ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
-      node = [m, m]
-    }
+      // data abbr
+      // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
+      else if (kind === 'memory' && node[0]?.[0] === 'data') {
+        let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
+        ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
+        node = [m, m]
+      }
 
-    // dupe to code section, save implicit type
-    else if (kind === 'func') {
-      let [idx, param, result] = typeuse(node, ctx);
-      idx ??= regtype(param, result, ctx)
+      // dupe to code section, save implicit type
+      else if (kind === 'func') {
+        let [idx, param, result] = typeuse(node, ctx);
+        idx ??= regtype(param, result, ctx)
 
-      // we save idx because type can be defined after
-      !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
-      node.unshift(['type', idx])
-    }
+        // we save idx because type can be defined after
+        !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
+        node.unshift(['type', idx])
+      }
 
-    // import writes to import section amd adds placeholder for (kind) section
-    if (imported) ctx.import.push([...imported, [kind, ...node]]), node = null
+      // import writes to import section amd adds placeholder for (kind) section
+      if (imported) ctx.import.push([...imported, [kind, ...node]]), node = null
 
-    items.push(node)
-  })
+      items.push(node)
+    })
 
   // convert nodes to bytes
   const bin = (kind, count = true) => {
@@ -191,7 +191,7 @@ const typedef = ([dfn], ctx) => {
 }
 
 // register (implicit) type
-const regtype = (param, result, ctx, idx='$' + param + '>' + result) => (
+const regtype = (param, result, ctx, idx = '$' + param + '>' + result) => (
   (ctx.type[idx] ??= ctx.type.push(['func', [param, result]]) - 1),
   idx
 )
@@ -206,7 +206,7 @@ const typeuse = (nodes, ctx, names) => {
     [, idx] = nodes.shift();
     [param, result] = paramres(nodes, names);
 
-    const [,srcParamRes] = ctx.type[id(idx, ctx.type)] ?? err(`Unknown type ${idx}`)
+    const [, srcParamRes] = ctx.type[id(idx, ctx.type)] ?? err(`Unknown type ${idx}`)
 
     // check type consistency (excludes forward refs)
     if ((param.length || result.length) && srcParamRes.join('>') !== param + '>' + result) err(`Type ${idx} mismatch`)
@@ -667,7 +667,7 @@ const instr = (nodes, ctx) => {
     // ref.test|cast (ref null? $t|heaptype)
     else if (code >= 20 && code <= 23) {
       let ht = reftype(nodes.shift(), ctx)
-      if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop()+1) // ref.test|cast (ref null $t) is next op
+      if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop() + 1) // ref.test|cast (ref null $t) is next op
       if (ht.length > 1) ht.shift() // pop ref
       immed.push(...ht)
     }
@@ -677,7 +677,7 @@ const instr = (nodes, ctx) => {
         ht1 = reftype(nodes.shift(), ctx),
         ht2 = reftype(nodes.shift(), ctx),
         castflags = ((ht2[0] !== REFTYPE.ref) << 1) | (ht1[0] !== REFTYPE.ref)
-        immed.push(castflags, ...uleb(i), ht1.pop(), ht2.pop()) // we take only abstype or
+      immed.push(castflags, ...uleb(i), ht1.pop(), ht2.pop()) // we take only abstype or
     }
   }
 
@@ -906,10 +906,12 @@ const blockid = (nm, block, i) => (
 // consume align/offset params
 const memarg = (args) => {
   let align, offset, k, v
-  while (args[0]?.includes('=')) [k, v] = args.shift().split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
-
-  if (offset < 0 || offset > 0xffffffff) err(`Bad offset ${offset}`)
-  if (align <= 0 || align > 0xffffffff) err(`Bad align ${align}`)
+  while (args[0]?.includes('=')) {
+    [k, v] = args.shift().split('='), v = v.replaceAll('_', '')
+    k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
+  }
+  if ((offset < 0 || offset > 0xffffffff)) err(`Bad offset ${offset}`)
+  if ((align <= 0 || align > 0xffffffff)) err(`Bad align ${align}`)
   if (align) ((align = Math.log2(align)) % 1) && err(`Bad align ${align}`)
   return [align, offset]
 }
