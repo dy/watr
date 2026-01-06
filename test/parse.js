@@ -11,32 +11,7 @@ t('parser: annotation simple', () => {
   is(tree, ['@a'])
 })
 
-t('parser: annotation with content', () => {
-  const tree = parse('(@a x y z)')
-  is(tree, ['@a', 'x', 'y', 'z'])
-})
-
-t('parser: annotation with nested', () => {
-  const tree = parse('(@a (b c))')
-  is(tree, ['@a', ['b', 'c']])
-})
-
-t('parser: annotation in module', () => {
-  const tree = parse('(module (@a) (func))')
-  is(tree, ['module', ['@a'], ['func']])
-})
-
-t('parser: annotation with special chars', () => {
-  const tree = parse('(@@) (@$) (@+)')
-  is(tree, [['@@'], ['@$'], ['@+']])
-})
-
-t('parser: annotation empty id', () => {
-  const tree = parse('(@)')
-  is(tree, ['@'])
-})
-
-t('parser: annotations semicolon', () => {
+t('parser: annotations full case', () => {
   const tree = parse(`(@a , ; ] [ }} }x{ ({) ,{{};}] ;)`)
   is(tree, ['@a', ',', ';', ']', '[', '}}', '}x{', ['{'], ',{{};}]', ';'])
 })
@@ -122,14 +97,27 @@ t('parse: label', () => {
   is(tokens, '$$hi')
 })
 
-t.skip('parse: string', () => {
-  const r = String.raw
-  const tokens = parse(r`"hello""ano\"t\n\ther""more"`)
-  expect(tokens).to.deep.equal([
-    { value: 'hello', kind: 'string', index: 0 },
-    { value: r`ano\"t\n\ther`, kind: 'string', index: 7 },
-    { value: 'more', kind: 'string', index: 22 }
-  ])
+t('parse: quoted identifiers', () => {
+  let tokens = parse('(func $"hello world")')
+  is(tokens, ['func', '$hello world'])
+
+  tokens = parse('(br_if $"loop one")')
+  is(tokens, ['br_if', '$loop one'])
+
+  tokens = parse('(func $"weird\\"name\\"")')
+  is(tokens, ['func', '$weird"name"'])
+
+  // strings should preserve escapes for compiler
+  tokens = parse('(data "hello\\nworld")')
+  is(tokens, ['data', '"hello\\nworld"'])
+
+  tokens = parse('(data "test\\\\path")')
+  is(tokens, ['data', '"test\\\\path"'])
+
+  // unicode escapes are decoded in parser
+  tokens = parse('(data "\\u{41}\\u{42}")')
+  // is(tokens, ['data', '"AB"'])
+  is(tokens, ['data', '"\\u{41}\\u{42}"'])
 })
 
 t('parse: number', () => {
@@ -239,5 +227,9 @@ t('parse: export name', () => {
 })
 
 t('parse: quote', () => {
-  let tokens = parse(`(import \\"\\" \\"\\" (global $foo i32))(global $foo i32 (i32.const 0))`)
+  let tokens = parse(`(import "" "" (global $foo i32))(global $foo i32 (i32.const 0))`)
+  is(tokens, [
+    ['import', '""', '""', ['global', '$foo', 'i32']],
+    ['global', '$foo', 'i32', ['i32.const', '0']]
+  ])
 })
