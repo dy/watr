@@ -106,3 +106,59 @@ INSTR.forEach((entry, i) => {
   INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]
   if (imm) INSTR.imm[op] = imm
 })
+
+// Extended instruction metadata for mnemonic-driven dispatch
+// Format: code => { indices: [{ field, idxFn? }], ... }
+export const INSTR_HANDLERS = {
+  0xfb: { // GC instructions
+    0: { indices: [{ field: 'type' }] }, // struct.new
+    1: { indices: [{ field: 'type' }] }, // struct.new_default
+    2: { indices: [{ field: 'type' }, { field: 'field' }] }, // struct.get (field by name)
+    3: { indices: [{ field: 'type' }, { field: 'field' }] }, // struct.get_s
+    4: { indices: [{ field: 'type' }, { field: 'field' }] }, // struct.get_u
+    5: { indices: [{ field: 'type' }, { field: 'field' }] }, // struct.set
+    6: { indices: [{ field: 'type' }] }, // array.new
+    7: { indices: [{ field: 'type' }] }, // array.new_default
+    8: { indices: [{ field: 'type' }, { value: true }] }, // array.new_fixed (counts elements)
+    9: { indices: [{ field: 'type' }, { field: 'data' }] }, // array.new_data
+    10: { indices: [{ field: 'type' }, { field: 'elem' }] }, // array.new_elem
+    11: { indices: [{ field: 'type' }] }, // array.get
+    12: { indices: [{ field: 'type' }] }, // array.get_s
+    13: { indices: [{ field: 'type' }] }, // array.get_u
+    14: { indices: [{ field: 'type' }] }, // array.set
+    15: {}, // array.len
+    16: { indices: [{ field: 'type' }] }, // array.fill
+    17: { indices: [{ field: 'type' }, { field: 'type' }] }, // array.copy
+    18: { indices: [{ field: 'type' }, { field: 'data' }] }, // array.init_data
+    19: { indices: [{ field: 'type' }, { field: 'elem' }] }, // array.init_elem
+    20: { reftype: true }, // ref.test
+    21: {}, // unused
+    22: { reftype: true }, // ref.cast
+    23: {}, // unused
+    24: { reftype2: true }, // br_on_cast
+    25: { reftype2: true }, // br_on_cast_fail
+    26: {}, // any.convert_extern
+    27: {}, // extern.convert_any
+    28: {}, // ref.i31
+    29: {}, // i31.get_s
+    30: {}, // i31.get_u
+  },
+  0xfc: { // Bulk memory/table operations
+    0x08: { indices: [{ field: 'data' }, { field: 'memory' }] }, // memory.init (dataidx, memidx)
+    0x09: { indices: [{ field: 'data' }] }, // data.drop
+    0x0a: { indices: [{ field: 'memory' }, { field: 'memory' }] }, // memory.copy
+    0x0b: { indices: [{ field: 'memory', optional: true }] }, // memory.fill (memidx optional)
+    0x0c: { indices: [{ field: 'table' }, { field: 'elem' }] }, // table.init (special: reversed order)
+    0x0d: { indices: [{ field: 'elem' }] }, // elem.drop
+    0x0e: { indices: [{ field: 'table' }, { field: 'table' }] }, // table.copy
+    0x0f: { indices: [{ field: 'table' }] }, // table.grow
+    0x10: { indices: [{ field: 'table' }] }, // table.size
+    0x11: { indices: [{ field: 'table' }] }, // table.fill
+  },
+  0xfd: { // SIMD instructions
+    memarg: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b], // memarg only (v128.load*)
+    laneidx: [0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22], // memarg + laneidx
+    memargLane: [0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b], // memarg + optional laneidx (load*_lane)
+    memargStoreLane: [0x5c, 0x5d, 0x5e, 0x5f, 0x60, 0x61, 0x62, 0x63], // memarg + laneidx (store*_lane)
+  }
+}

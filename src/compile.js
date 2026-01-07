@@ -1,25 +1,33 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE, INSTR_HANDLERS } from './const.js'
 import parse from './parse.js'
-import { clone, err, tdec } from './util.js'
+import { err, tdec } from './util.js'
 
-// immediate type dispatchers - simple index lookups
-const immFn = {
-  localidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.local)),
-  globalidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.global)),
-  funcidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.func)),
-  typeidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.type)),
-  tableidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.table)),
-  labelidx: (nodes, ctx) => uleb(blockid(nodes.shift(), ctx.block)),
-  dataidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.data)),
-  elemidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.elem)),
-  laneidx: (nodes) => uleb(parseUint(nodes.shift())),
-  i32: (nodes) => encode.i32(nodes.shift()),
-  i64: (nodes) => encode.i64(nodes.shift()),
-  f32: (nodes) => encode.f32(nodes.shift()),
-  f64: (nodes) => encode.f64(nodes.shift()),
+// Immediate type metadata - flattened structure
+// Maps immediate type => [field, idxFn] or [encodeFn] or [singleFn]
+const IMM_SPECS = {
+  localidx: ['local', 'id'],
+  globalidx: ['global', 'id'],
+  funcidx: ['func', 'id'],
+  typeidx: ['type', 'id'],
+  tableidx: ['table', 'id'],
+  labelidx: ['block', 'blockid'],
+  dataidx: ['data', 'id'],
+  elemidx: ['elem', 'id'],
+  laneidx: 'parseUint',  // single function name
+  i32: 'i32',
+  i64: 'i64',
+  f32: 'f32',
+  f64: 'f64',
 }
+
+// Helper to check if node is a valid index reference
+const isIdx = n => n?.[0] === '$' || !isNaN(n)
+
+// Helper for optional index immediate
+const takeOptIdx = (nodes, ctx, field, defaultVal = 0) =>
+  uleb(id(isIdx(nodes[0]) ? nodes.shift() : defaultVal, ctx[field]))
 
 // iterating context
 let cur, idx
@@ -30,7 +38,9 @@ let cur, idx
  * @param {string|Array} nodes - The WAT tree or string to be compiled to WASM binary.
  * @returns {Uint8Array} The compiled WASM binary data.
  */
-export default function watr(nodes) {
+export default function compile(nodes) {
+  // deep clone array to avoid mutating input
+  const clone = a => a.map(i => Array.isArray(i) ? clone(i) : i)
   // normalize to (module ...) form
   if (typeof nodes === 'string') nodes = parse(nodes) || []
   else nodes = clone(nodes)
@@ -46,7 +56,7 @@ export default function watr(nodes) {
   if (cur[idx] === 'binary') return Uint8Array.from(cur.slice(++idx).flat())
 
   // quote "a" "b"
-  if (cur[idx] === 'quote') return watr(cur.slice(++idx).map(v => v.valueOf().slice(1,-1)).flat().join(''))
+  if (cur[idx] === 'quote') return compile(cur.slice(++idx).map(v => v.valueOf().slice(1,-1)).flat().join(''))
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
@@ -129,8 +139,8 @@ export default function watr(nodes) {
         let [idx, param, result] = typeuse(node, ctx);
         idx ??= regtype(param, result, ctx)
 
-        // we save idx because type can be defined after
-        !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
+        // flatten + normalize function body
+        !imported && ctx.code.push([[idx, param, result], ...normalize(node, ctx)])
         node = [['type', idx]]
       }
 
@@ -181,6 +191,114 @@ export default function watr(nodes) {
   ])
 }
 
+
+// --- normalize helpers ---
+const isInstr = s => typeof s === 'string' && Array.isArray(INSTR[s])
+const isImmed = n => !Array.isArray(n) || 'type,param,result,ref'.includes(n[0])
+const optIdx2 = nodes => [isIdx(nodes[0]) ? nodes.shift() : 0, isIdx(nodes[0]) ? nodes.shift() : 0]
+// --- end normalize helpers ---
+
+
+// --- normalize function (was in normalize.js) ---
+export function normalize(nodes, ctx) {
+  const out = []
+  nodes = [...nodes]
+  while (nodes.length) {
+    let node = nodes.shift()
+    if (typeof node === 'string') {
+      out.push(node)
+      if (node === 'block' || node === 'if' || node === 'loop') {
+        if (nodes[0]?.[0] === '$') out.push(nodes.shift())
+        out.push(blocktype(nodes, ctx))
+      } else if (node === 'else' || node === 'end') { if (nodes[0]?.[0] === '$') nodes.shift() }
+      else if (node === 'select') out.push(paramres(nodes)[1])
+      else if (node.endsWith('call_indirect')) {
+        let tableidx = isIdx(nodes[0]) ? nodes.shift() : 0, [idx, param, result] = typeuse(nodes, ctx)
+        out.push(tableidx, ['type', idx ?? regtype(param, result, ctx)])
+      } else if (node === 'table.init') out.push(isIdx(nodes[1]) ? nodes.shift() : 0, nodes.shift())
+      else if (node === 'table.copy' || node === 'memory.copy') out.push(...optIdx2(nodes))
+      else if (node.startsWith('table.')) out.push(isIdx(nodes[0]) ? nodes.shift() : 0)
+      else if (node === 'memory.init') {
+        out.push(...(isIdx(nodes[1]) ? [nodes.shift(), nodes.shift()].reverse() : [nodes.shift(), 0]))
+        ctx.datacount && (ctx.datacount[0] = true)
+      } else if (node === 'data.drop' || node === 'array.new_data' || node === 'array.init_data') {
+        node === 'data.drop' && out.push(nodes.shift())
+        ctx.datacount && (ctx.datacount[0] = true)
+      } else if (node.startsWith('memory.') && isIdx(nodes[0])) out.push(nodes.shift())
+    } else if (Array.isArray(node)) {
+      const op = node[0]
+      if (typeof op !== 'string' || !isInstr(op)) { out.push(node); continue }
+      const parts = node.slice(1)
+      if (op === 'block' || op === 'loop') {
+        out.push(op)
+        if (parts[0]?.[0] === '$') out.push(parts.shift())
+        out.push(blocktype(parts, ctx), ...normalize(parts, ctx), 'end')
+      } else if (op === 'if') {
+        let then = [], els = []
+        if (parts.at(-1)?.[0] === 'else') els = normalize(parts.pop().slice(1), ctx)
+        if (parts.at(-1)?.[0] === 'then') then = normalize(parts.pop().slice(1), ctx)
+        let immed = [op]
+        if (parts[0]?.[0] === '$') immed.push(parts.shift())
+        immed.push(blocktype(parts, ctx))
+        out.push(...normalize(parts, ctx), ...immed, ...then)
+        els.length && out.push('else', ...els)
+        out.push('end')
+      } else {
+        const imm = []
+        while (parts.length && isImmed(parts[0])) imm.push(parts.shift())
+        out.push(...normalize(parts, ctx), op, ...imm)
+        nodes.unshift(...out.splice(out.length - 1 - imm.length))
+      }
+    } else out.push(node)
+  }
+  return out
+}
+// --- end normalize ---
+
+
+// --- Type helpers ---
+// Register implicit type, return index
+const regtype = (param, result, ctx, idx = '$' + param + '>' + result) => (ctx.type[idx] ??= ctx.type.push(['func', [param, result]]) - 1, idx)
+
+// Collect field sequence: (field a) (field b c) -> [a, b, c]
+const fieldseq = (nodes, field) => {
+  let seq = []
+  while (nodes[0]?.[0] === field) {
+    let [, ...args] = nodes.shift(), nm = args[0]?.[0] === '$' && args.shift()
+    if (nm) nm in seq ? (() => { throw Error(`Duplicate ${field} ${nm}`) })() : seq[nm] = seq.length
+    seq.push(...args)
+  }
+  return seq
+}
+
+// Consume (param ...)* (result ...)*
+const paramres = (nodes) => {
+  let param = fieldseq(nodes, 'param'), result = fieldseq(nodes, 'result')
+  if (nodes[0]?.[0] === 'param') throw Error('Unexpected param')
+  return [param, result]
+}
+
+// Consume typeuse: (type idx)? (param ...)* (result ...)*
+const typeuse = (nodes, ctx) => {
+  if (nodes[0]?.[0] !== 'type') return [, ...paramres(nodes)]
+  let [, idx] = nodes.shift(), [param, result] = paramres(nodes)
+  const entry = ctx.type[(typeof idx === 'string' && isNaN(idx)) ? ctx.type[idx] : +idx]
+  if (!entry) throw Error(`Unknown type ${idx}`)
+  if ((param.length || result.length) && entry[1].join('>') !== param + '>' + result) throw Error(`Type ${idx} mismatch`)
+  return [idx, ...entry[1]]
+}
+
+// Resolve blocktype: void | (result t) | (type idx)
+const blocktype = (nodes, ctx) => {
+  let [idx, param, result] = typeuse(nodes, ctx)
+  if (!param.length && !result.length) return
+  if (!param.length && result.length === 1) return ['result', ...result]
+  return ['type', idx ?? regtype(param, result, ctx)]
+}
+// --- End type helpers ---
+
+
+
 // consume section name eg. $t ...
 const name = (node, list) => {
   let nm = (node[0]?.[0] === '$') && node.shift();
@@ -206,174 +324,6 @@ const typedef = ([dfn], ctx) => {
   else if (compkind === 'array') [dfn] = dfn
 
   return [compkind, dfn, subkind, supertypes]
-}
-
-// register (implicit) type
-const regtype = (param, result, ctx, idx = '$' + param + '>' + result) => (
-  (ctx.type[idx] ??= ctx.type.push(['func', [param, result]]) - 1),
-  idx
-)
-
-// consume typeuse nodes, return type index/params, or null idx if no type
-// https://webassembly.github.io/spec/core/text/modules.html#type-uses
-const typeuse = (nodes, ctx) => {
-  let idx, param, result
-
-  // explicit type (type 0|$name)
-  if (nodes[0]?.[0] === 'type') {
-    [, idx] = nodes.shift();
-    [param, result] = paramres(nodes);
-
-    const [, srcParamRes] = ctx.type[id(idx, ctx.type)] ?? err(`Unknown type ${idx}`)
-
-    // check type consistency (excludes forward refs)
-    if ((param.length || result.length) && srcParamRes.join('>') !== param + '>' + result) err(`Type ${idx} mismatch`)
-
-    return [idx, ...srcParamRes]
-  }
-
-  // implicit type (param i32 i32)(result i32)
-  return [idx, ...paramres(nodes)]
-}
-
-// consume (param t+)* (result t+)* sequence
-const paramres = (nodes) => {
-  // let param = [], result = []
-
-  // collect param (param i32 i64) (param $x? i32)
-  let param = fieldseq(nodes, 'param')
-
-  // collect result eg. (result f64 f32)(result i32)
-  let result = fieldseq(nodes, 'result')
-
-  if (nodes[0]?.[0] === 'param') err(`Unexpected param`)
-
-  return [param, result]
-}
-
-// collect sequence of field, eg. (param a) (param b c), (field a) (field b c) or (result a b) (result c)
-// optionally allow or not names
-const fieldseq = (nodes, field) => {
-  let seq = []
-  // collect field eg. (field f64 f32)(field i32)
-  while (nodes[0]?.[0] === field) {
-    let [, ...args] = nodes.shift()
-    let nm = args[0]?.[0] === '$' && args.shift()
-    // expose name refs, if allowed
-    if (nm) nm in seq ? err(`Duplicate ${field} ${nm}`) : seq[nm] = seq.length
-    seq.push(...args)
-  }
-  return seq
-}
-
-// consume blocktype - makes sure either type or single result is returned
-const blocktype = (nodes, ctx) => {
-  let [idx, param, result] = typeuse(nodes, ctx, 0)
-
-  // get type - can be either idx or valtype (numtype | reftype)
-  if (!param.length && !result.length) return
-
-  // (result i32) - doesn't require registering type
-  if (!param.length && result.length === 1) return ['result', ...result]
-
-  // register implicit type
-  idx ??= regtype(param, result, ctx)
-
-  return ['type', idx]
-}
-
-// abbr blocks, loops, ifs; collect implicit types via typeuses; resolve optional immediates
-// https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
-const plain = (nodes, ctx) => {
-  let out = []
-
-  while (nodes.length) {
-    let node = nodes.shift()
-
-    // lookup is slower than sequence of known ifs
-    if (typeof node === 'string') {
-      out.push(node)
-
-      // resolve optionals
-      // block typeuse?
-      if (node === 'block' || node === 'if' || node === 'loop') {
-        // (loop $l?)
-        if (nodes[0]?.[0] === '$') out.push(nodes.shift())
-
-        out.push(blocktype(nodes, ctx))
-      }
-
-      // else $label
-      // end $label - make sure it matches block label
-      else if (node === 'else' || node === 'end') {
-        if (nodes[0]?.[0] === '$') nodes.shift()
-      }
-
-      // select (result i32 i32 i32)?
-      else if (node === 'select') {
-        out.push(paramres(nodes)[1])
-      }
-
-      // call_indirect $table? $typeidx
-      // return_call_indirect $table? $typeidx
-      else if (node.endsWith('call_indirect')) {
-        let tableidx = nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0
-        let [idx, param, result] = typeuse(nodes, ctx, 0)
-        out.push(tableidx, ['type', idx ?? regtype(param, result, ctx)])
-      }
-
-      // mark datacount section as required
-      else if (node === 'memory.init' || node === 'data.drop' || node === 'array.new_data' || node === 'array.init_data') {
-        ctx.datacount[0] = true
-      }
-
-      // table.init tableidx? elemidx -> table.init tableidx elemidx
-      else if (node === 'table.init') out.push((nodes[1][0] === '$' || !isNaN(nodes[1])) ? nodes.shift() : 0, nodes.shift())
-
-      // table.* tableidx?
-      else if (node.startsWith('table.')) {
-        out.push(nodes[0]?.[0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
-
-        // table.copy tableidx? tableidx?
-        if (node === 'table.copy') out.push(nodes[0][0] === '$' || !isNaN(nodes[0]) ? nodes.shift() : 0)
-      }
-    }
-
-    else {
-      // (block ...) -> block ... end
-      if (node[0] === 'block' || node[0] === 'loop') {
-        out.push(...plain(node, ctx), 'end')
-      }
-
-      // (if ...) -> if ... end
-      else if (node[0] === 'if') {
-        let then = [], els = [], immed = [node.shift()]
-        // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
-        // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
-        if (node[node.length - 1]?.[0] === 'else') {
-          els = plain(node.pop(), ctx)
-          // ignore empty else
-          // https://webassembly.github.io/spec/core/text/instructions.html#abbreviations
-          if (els.length === 1) els.length = 0
-        }
-        if (node[node.length - 1]?.[0] === 'then') then = plain(node.pop(), ctx)
-
-        // label?
-        if (node[0]?.[0] === '$') immed.push(node.shift())
-
-        // blocktype?
-        immed.push(blocktype(node, ctx))
-
-        if (typeof node[0] === 'string') err('Unfolded condition')
-
-        out.push(...plain(node, ctx), ...immed, ...then, ...els, 'end')
-      }
-      // keep nested instruction as-is - instr() handles recursion
-      else out.push(plain(node, ctx))
-    }
-  }
-
-  return out
 }
 
 
@@ -656,7 +606,7 @@ const instr = (nodes, ctx) => {
 
   let out = [], op = nodes.shift(), immed, code
 
-  // consume group
+  // consume nested group - recursively process args first, then instruction
   if (Array.isArray(op)) {
     immed = instr(op, ctx)
     while (op.length) out.push(...instr(op, ctx))
@@ -664,98 +614,73 @@ const instr = (nodes, ctx) => {
     return out
   }
 
-  [...immed] = isNaN(op[0]) && INSTR[op] || err(`Unknown instruction ${op}`)
+  ;[...immed] = isNaN(op[0]) && INSTR[op] || err(`Unknown instruction ${op}`)
   code = immed[0]
 
   // gc-related
   // https://webassembly.github.io/gc/core/binary/instructions.html#reference-instructions
   if (code === 0x0fb) {
     [, code] = immed
+    const spec = INSTR_HANDLERS[0xfb]?.[code]
 
-    // struct.new $t ... array.set $t
-    if ((code >= 0 && code <= 14) || (code >= 16 && code <= 19)) {
-      let tidx = id(nodes.shift(), ctx.type)
-      immed.push(...uleb(tidx))
+    if (spec?.indices) {
+      // Handle instructions with index-based immediates
+      for (const idx of spec.indices) {
+        if (idx.field) {
+          const field = idx.field
+          let val = nodes.shift()
 
-      // struct.get|set* $t $f - read field by index from struct definition (ctx.type[structidx][dfnidx])
-      if (code >= 2 && code <= 5) immed.push(...uleb(id(nodes.shift(), ctx.type[tidx][1])))
-      // array.new_fixed $t n
-      else if (code === 8) immed.push(...uleb(nodes.shift()))
-      // array.new_data|init_data $t $d
-      else if (code === 9 || code === 18) immed.push(...uleb(id(nodes.shift(), ctx.data)))
-      // array.new_elem|init_elem $t $e
-      else if (code === 10 || code === 19) immed.push(...uleb(id(nodes.shift(), ctx.elem)))
-      // array.copy $t $t
-      else if (code === 17) immed.push(...uleb(id(nodes.shift(), ctx.type)))
-    }
-    // ref.test|cast (ref null? $t|heaptype)
-    else if (code >= 20 && code <= 23) {
+          // Special case: struct.get|set* need field index lookup from struct definition
+          if (field === 'field' && immed[immed.length - 1] !== undefined) {
+            const tidx = immed[immed.length - 1] // last pushed value is typeidx
+            immed.push(...uleb(id(val, ctx.type[tidx][1])))
+          } else {
+            immed.push(...uleb(id(val, ctx[field] || ctx.type)))
+          }
+        } else if (idx.value) {
+          // Value immediate (counts, not indices)
+          immed.push(...uleb(nodes.shift()))
+        }
+      }
+    } else if (spec?.reftype) {
+      // ref.test|cast - single reftype argument
       let ht = reftype(nodes.shift(), ctx)
       if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop() + 1) // ref.test|cast (ref null $t) is next op
       if (ht.length > 1) ht.shift() // pop ref
       immed.push(...ht)
-    }
-    // br_on_cast[_fail] $l? (ref null? ht1) (ref null? ht2)
-    else if (code === 24 || code === 25) {
+    } else if (spec?.reftype2) {
+      // br_on_cast[_fail] - labelidx + two reftypes
       let i = blockid(nodes.shift(), ctx.block),
         ht1 = reftype(nodes.shift(), ctx),
         ht2 = reftype(nodes.shift(), ctx),
         castflags = ((ht2[0] !== REFTYPE.ref) << 1) | (ht1[0] !== REFTYPE.ref)
-      immed.push(castflags, ...uleb(i), ht1.pop(), ht2.pop()) // we take only abstype or
+      immed.push(castflags, ...uleb(i), ht1.pop(), ht2.pop())
     }
   }
 
   // bulk memory: (memory.init) (memory.copy) (data.drop) (memory.fill)
   // table ops: (table.init|copy|grow|size|fill) (elem.drop)
-  // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
   else if (code == 0xfc) {
     [, code] = immed
-    // Check if next node is an immediate (number or $name), not a nested instruction
-    const isImm = n => typeof n === 'number' || (typeof n === 'string' && (n[0] === '$' || !isNaN(n)))
+    const spec = INSTR_HANDLERS[0xfc]?.[code]
 
-    // memory.init dataidx | memory.init memidx dataidx (binary: dataidx memidx)
-    // In single-memory case: memory.init dataidx
-    // In multi-memory case: memory.init memidx dataidx (first arg is memory, second is data)
-    if (code === 0x08) {
-      // Take first immediate
-      let first = nodes.shift()
-      // If next is also an immediate, we're in multi-memory mode: memidx dataidx
-      if (isImm(nodes[0])) {
-        let second = nodes.shift()
-        immed.push(...uleb(id(second, ctx.data)), ...uleb(id(first, ctx.memory)))
-      } else {
-        // Single memory mode: first arg is dataidx
-        immed.push(...uleb(id(first, ctx.data)), ...uleb(0))
+    // Special case: table.init has reversed WAT/binary order (need elemidx after tableidx consumed)
+    if (code === 0x0c) {
+      let tableidx = nodes.shift()
+      let elemidx = nodes.shift()
+      immed.push(...uleb(id(elemidx, ctx.elem)), ...uleb(id(tableidx, ctx.table)))
+    } else if (spec?.indices) {
+      // Generic index handler for all other 0xfc instructions
+      for (const idx of spec.indices) {
+        if (idx.optional) {
+          // For optional indices, check if next node is an index
+          const val = isIdx(nodes[0]) ? nodes.shift() : 0
+          immed.push(...uleb(id(val, ctx[idx.field])))
+        } else {
+          const val = nodes.shift()
+          immed.push(...uleb(id(val, ctx[idx.field])))
+        }
       }
-    }
-    // data.drop idx
-    else if (code === 0x09) {
-      immed.push(...uleb(id(nodes.shift(), ctx.data)))
-    }
-    // memory.copy dstmem srcmem
-    else if (code === 0x0a) {
-      immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)), ...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
-    }
-    // memory.fill memidx
-    else if (code === 0x0b) {
-      immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
-    }
-
-    // elem.drop elemidx
-    else if (code === 0x0d) {
-      immed.push(...uleb(id(nodes.shift(), ctx.elem)))
-    }
-    // table.init tableidx elemidx -> 0xfc 0x0c elemidx tableidx
-    else if (code === 0x0c) {
-      immed.push(...uleb(id(nodes[1], ctx.elem)), ...uleb(id(nodes.shift(), ctx.table)))
-      nodes.shift()
-    }
-    // table.* tableidx?
-    // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
-    else if (code >= 0x0c && code < 0x13) {
-      immed.push(...uleb(id(nodes.shift(), ctx.table)))
-      // table.copy tableidx? tableidx?
-      if (code === 0x0e) immed.push(...uleb(id(nodes.shift(), ctx.table)))
     }
   }
 
@@ -820,33 +745,32 @@ const instr = (nodes, ctx) => {
     // (block $x) (loop $y) - save label pointer
     if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
-    let t = nodes.shift();
+    // blocktype is already normalized to: (result t) | (type idx) | undefined
+    let t = nodes.shift()
 
     // void
     if (!t) immed.push(TYPE.void)
-    // (result i32) - doesn't require registering type
-    // FIXME: Make sure it is signed positive integer (leb, not uleb) https://webassembly.github.io/gc/core/binary/instructions.html#control-instructions
+    // (result i32)
     else if (t[0] === 'result') immed.push(...reftype(t[1], ctx))
     // (type idx)
     else immed.push(...uleb(id(t[1], ctx.type)))
   }
-  // else
+  // else - already normalized (label discarded)
   else if (code === 5) { }
   // then
   else if (code === 6) immed = [] // ignore
-
-  // call_indirect $table (type $typeName) ...nodes
-  // return_call_indirect $table (type $typeName) ... nodes
-  else if (code == 0x11 || code == 0x13) {
-    immed.push(
-      ...uleb(id(nodes[1][1], ctx.type)),
-      ...uleb(id(nodes.shift(), ctx.table))
-    )
-    nodes.shift()
+  // end - already normalized (label discarded)
+  else if (code == 0x0b) {
+    ctx.block.pop()
   }
 
-  // end
-  else if (code == 0x0b) ctx.block.pop()
+  // call_indirect - already normalized to: tableidx (type idx)
+  // return_call_indirect - already normalized to: tableidx (type idx)
+  else if (code == 0x11 || code == 0x13) {
+    let tableidx = nodes.shift()
+    let [, idx] = nodes.shift() // (type idx)
+    immed.push(...uleb(id(idx, ctx.type)), ...uleb(id(tableidx, ctx.table)))
+  }
 
   // br_table 1 2 3 4  0  selector result?
   else if (code == 0x0e) {
@@ -857,10 +781,10 @@ const instr = (nodes, ctx) => {
     immed.push(...uleb(args.length - 1), ...args)
   }
 
-  // select (result t+)
+  // select - already normalized to result array
   else if (code == 0x1b) {
-    let result = nodes.shift()
-    // 0x1b -> 0x1c
+    let result = nodes.shift() || []
+    // 0x1b -> 0x1c if typed select
     if (result.length) immed.push(immed.pop() + 1, ...vec(result.map(t => reftype(t, ctx))))
   }
 
@@ -878,13 +802,34 @@ const instr = (nodes, ctx) => {
 
   // memory.grow|size memidx - multi-memory proposal (optional arg)
   else if (code == 0x3f || code == 0x40) {
-    const isMemIdx = n => (typeof n === 'string' && (n[0] === '$' || !isNaN(n))) || typeof n === 'number'
-    immed.push(...uleb(id(isMemIdx(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
+    immed.push(...takeOptIdx(nodes, ctx, 'memory'))
   }
 
-  // dispatch simple immediate types: localidx, globalidx, funcidx, typeidx, tableidx, labelidx, laneidx, i32, i64, f32, f64
-  else if (immFn[INSTR.imm[op]]) {
-    immed.push(...immFn[INSTR.imm[op]](nodes, ctx))
+  // dispatch simple immediate types via IMM_SPECS metadata
+  else if (INSTR.imm[op]) {
+    const spec = IMM_SPECS[INSTR.imm[op]]
+    if (spec) {
+      if (typeof spec === 'string') {
+        // Simple function spec (laneidx, i32, i64, f32, f64)
+        const fn = spec
+        if (fn === 'parseUint') {
+          // Raw uint8 immediate (lane index)
+          immed.push(parseUint(nodes.shift(), 0xff))
+        } else {
+          // Encoding function immediate (i32, i64, f32, f64)
+          const valFn = encode[fn]
+          immed.push(...valFn(nodes.shift()))
+        }
+      } else {
+        // Array spec [field, idxFn]
+        const [field, fn] = spec
+        if (fn === 'id' || fn === 'blockid') {
+          // Index-based immediate
+          const idFn = fn === 'blockid' ? blockid : id
+          immed.push(...uleb(idFn(nodes.shift(), ctx[field])))
+        }
+      }
+    }
   }
 
   out.push(...immed)
