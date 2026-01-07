@@ -1,11 +1,11 @@
 import t, { is, ok, same } from 'tst'
 import print from '../src/print.js'
-import { wat2wasm } from './index.js'
 import parse from '../src/parse.js'
+import compile from '../src/compile.js'
 
 t('print: basics', () => {
   const tree = [
-    'func', ['export', '"double"'], ['param', 'f64', 'f32'], ['param', '$x', 'i32'], ['result', 'f64'],
+    'func', ['export', '"double"'], ['param', 'f64', 'f32'], ['param', '$"x"', 'i32'], ['result', 'f64'],
     ['f64.mul', ['local.get', 0], ['f64.const', 2]]
   ]
 
@@ -14,8 +14,7 @@ t('print: basics', () => {
     indent: false,
     newline: false
   })
-  is(min, `(func(export "double")(param f64 f32)(param $x i32)(result f64)(f64.mul(local.get 0)(f64.const 2)))`)
-  wat2wasm(min)
+  is(min, `(func(export "double")(param f64 f32)(param $"x" i32)(result f64)(f64.mul(local.get 0)(f64.const 2)))`)
 
   // pretty-print
   const pretty = print(tree, {
@@ -23,8 +22,7 @@ t('print: basics', () => {
     newline: '\n',  // new line charactes
   })
   is(pretty,
-    `(func\n  (export \"double\")\n  (param f64 f32)\n  (param $x i32)\n  (result f64)\n  (f64.mul (local.get 0) (f64.const 2))\n)`)
-  wat2wasm(pretty)
+    `(func\n  (export \"double\")\n  (param f64 f32)\n  (param $\"x\" i32)\n  (result f64)\n  (f64.mul (local.get 0) (f64.const 2))\n)`)
 
   is(
     print(`(import "Math" "random" (func $random (result f32)))`, { newline: '', indent: '' }),
