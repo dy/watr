@@ -1,6 +1,6 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE, INSTR_META } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE, INSTR_META, FIELD_TYPE } from './const.js'
 import parse from './parse.js'
 import { err, tdec } from './util.js'
 
@@ -628,39 +628,37 @@ const instr = (nodes, ctx) => {
   // Multi-byte opcodes: ULEB-encode the secondary opcode
   if (immed.length > 1) immed = [immed[0], ...uleb(immed[1])]
 
-  // Try custom handler first (@ prefixed specs)
-  if (spec = INSTR.spec[op]) {
+  // Unified metadata dispatch
+  if (spec = INSTR_META[op]) {
+    // Check if it's a handler (exists in H) or special string
     if (spec === 'null') {} // No-op (else, then)
     else if (spec === 'reversed') {
       // Special case: table.init has reversed argument order
       let t = nodes.shift(), e = nodes.shift()
       immed.push(...uleb(id(e, ctx.elem)), ...uleb(id(t, ctx.table)))
     }
-    else if (H[spec]) H[spec](nodes, ctx, immed, op)
-    else err(`Unknown handler ${spec}`)
-    return out.push(...immed), out
-  }
-
-  // Try immediate type spec (simple or multi-field)
-  if (spec = INSTR.imm[op]) {
-    // Multi-field spec: parse space-separated fields like "type field" or "data memory"
-    if (spec.includes(' ')) {
+    else if (H[spec]) {
+      // Custom handler
+      H[spec](nodes, ctx, immed, op)
+    }
+    // Multi-field spec: parse space-separated fields
+    else if (spec.includes(' ')) {
       spec.split(' ').forEach(f => {
         if (f === '*') immed.push(...uleb(nodes.shift()))
         else if (f === 'field') immed.push(...uleb(id(nodes.shift(), ctx.type[immed[immed.length - 1]][1])))
         else {
           const opt = f[0] === '?', field = opt ? f.slice(1) : f
-          const immSpec = INSTR_META[field]
+          const immSpec = FIELD_TYPE[field]
           if (!immSpec) err(`Unknown field ${field}`)
           const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
           typeof immSpec === 'string' ? immed.push(...encode[immSpec](val)) : immed.push(...uleb((immSpec[1] === 'blockid' ? blockid : id)(val, ctx[immSpec[0]])))
         }
       })
     }
-    // Simple immediate: lookup in INSTR_META
+    // Simple field spec: lookup in FIELD_TYPE
     else {
       const opt = spec[0] === '?', field = opt ? spec.slice(1) : spec
-      const immSpec = INSTR_META[field]
+      const immSpec = FIELD_TYPE[field]
       if (!immSpec) err(`Unknown immediate type ${field}`)
       const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
       typeof immSpec === 'string' ?

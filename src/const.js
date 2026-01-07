@@ -143,9 +143,11 @@ export const INSTR = [
   // WAT escape codes: https://webassembly.github.io/spec/core/text/values.html#strings
   ESCAPE = { n: 10, r: 13, t: 9, v: 11, '"': 34, "'": 39, '\\': 92 }
 
-// Build instruction index: INSTR['i32.const'] = [0x41], INSTR.imm['i32.const'] = 'i32', INSTR.spec['block'] = 'block'
-INSTR.imm = {}
-INSTR.spec = {}
+// Build instruction index and metadata
+// INSTR['i32.const'] = [0x41] (opcode)
+// INSTR_META['i32.const'] = 'i32' (field spec) or 'block' (handler name)
+// Note: '@' prefix in source strings is documentation only, stripped here
+export const INSTR_META = {}
 INSTR.forEach((entry, i) => {
   if (!entry) return
   // Handle nested arrays for multi-byte opcodes (0xfb, 0xfc, 0xfd)
@@ -155,10 +157,7 @@ INSTR.forEach((entry, i) => {
       let [op, ...rest] = sub.split(' ')
       let spec = rest.join(' ')
       INSTR[op] = [i, j]
-      if (spec) {
-        if (spec[0] === '@') INSTR.spec[op] = spec.slice(1) // Custom handler
-        else INSTR.imm[op] = spec // Simple immediate
-      }
+      if (spec) INSTR_META[op] = spec[0] === '@' ? spec.slice(1) : spec
     })
     return
   }
@@ -166,15 +165,12 @@ INSTR.forEach((entry, i) => {
   let [op, ...rest] = entry.split(' ')
   let spec = rest.join(' ')
   INSTR[op] = [i]
-  if (spec) {
-    if (spec[0] === '@') INSTR.spec[op] = spec.slice(1) // Custom handler
-    else INSTR.imm[op] = spec // Simple immediate
-  }
+  if (spec) INSTR_META[op] = spec[0] === '@' ? spec.slice(1) : spec
 })
 
-// Immediate type definitions - how to parse/encode immediate values
-// Format: immType => ['contextField', 'idFn'] or 'encodeFn'
-export const INSTR_META = {
+// Field type definitions - how to parse/encode field types in immediates
+// Format: fieldType => ['contextField', 'idFn'] or 'encodeFn'
+export const FIELD_TYPE = {
   // Index types: [context field, id function]
   localidx: ['local', 'id'], globalidx: ['global', 'id'], funcidx: ['func', 'id'], typeidx: ['type', 'id'],
   tableidx: ['table', 'id'], labelidx: ['block', 'blockid'], dataidx: ['data', 'id'], elemidx: ['elem', 'id'],
