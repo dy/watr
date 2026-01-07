@@ -96,8 +96,8 @@
   * [x] Type declarations with map file
 * [x] ~~Full immutability via idx~~ no benefit: theoretical purity over self-documented simplicity; no perf gain
 * [x] Split strings into unicode / binary parts
-* [ ] mnemonic algo
-  * [ ] plain() should also do flat or nested, to simplify tree for instr
+* [x] mnemonic algo
+  * [x] plain() should also do flat ~~or nested~~, to simplify tree for instr
 * [ ] Prettify printer: keep comments
 * [ ] Ignore particular test cases instead of excluding full test (like const)
 * [ ] Better `str`, `id` test, `name`: there's suboptimal code atm. We need better name parsing

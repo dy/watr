@@ -581,21 +581,21 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 
 
 
-// Instruction metadata: handlers (functions), multi-field specs (arrays), or simple specs (strings)
+// Pre-defined instruction handlers (with @ prefix for direct lookup))
 const HANDLE = {
-  null: () => {},
-  reversed: (n, c, i) => { let t = n.shift(), e = n.shift(); i.push(...uleb(id(e, c.elem)), ...uleb(id(t, c.table))) },
-  block: (n, c, i) => (c.block.push(i[0]), n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
-  end: (n, c) => c.block.pop(),
-  call_indirect: (n, c, i) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
-  br_table: (n, c, i) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || n[0][0] === '$')) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
-  select: (n, c, i) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
-  ref_null: (n, c, i) => (t => i.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
-  memarg: (n, c, i, op) => i.push(...memargEnc(n, op)),
-  opt_memory: (n, c, i) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
-  reftype: (n, c, i) => (ht => (ht[0] !== REFTYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
-  reftype2: (n, c, i) => (([b, h1, h2]) => i.push(((h2[0] !== REFTYPE.ref) << 1) | (h1[0] !== REFTYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
-  v128const: (n, _c, i) => {
+  '@null': (_n, _c) => { },
+  '@reversed': (n, c, i) => { let t = n.shift(), e = n.shift(); i.push(...uleb(id(e, c.elem)), ...uleb(id(t, c.table))) },
+  '@block': (n, c, i) => (c.block.push(i[0]), n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
+  '@end': (_n, c) => c.block.pop(),
+  '@call_indirect': (n, c, i) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
+  '@br_table': (n, c, i) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || n[0][0] === '$')) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
+  '@select': (n, c, i) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
+  '@ref_null': (n, c, i) => (t => i.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
+  '@memarg': (n, c, i, op) => i.push(...memargEnc(n, op)),
+  '@opt_memory': (n, c, i) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
+  '@reftype': (n, c, i) => (ht => (ht[0] !== REFTYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
+  '@reftype2': (n, c, i) => (([b, h1, h2]) => i.push(((h2[0] !== REFTYPE.ref) << 1) | (h1[0] !== REFTYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
+  '@v128const': (n, _c, i) => {
     let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3; num = +num
     if (t[0] === 'i') {
       let arr = num === 16 ? new Uint8Array(16) : num === 8 ? new Uint16Array(8) : num === 4 ? new Uint32Array(4) : new BigUint64Array(2)
@@ -607,25 +607,57 @@ const HANDLE = {
       i.push(...arr)
     }
   },
-  shuffle: (n, _c, i) => { for (let j = 0; j < 16; j++) i.push(parseUint(n.shift(), 32)) },
-  memlane: (n, _c, i, op) => (i.push(...memargEnc(n, op)), i.push(...uleb(parseUint(n.shift()))))
+  '@shuffle': (n, _c, i) => { for (let j = 0; j < 16; j++) i.push(parseUint(n.shift(), 32)) },
+  '@memlane': (n, _c, i, op) => (i.push(...memargEnc(n, op)), i.push(...uleb(parseUint(n.shift())))),
+  // Special markers (no @ prefix needed in INSTR definitions)
+  '*': (n, _c, i) => i.push(...uleb(n.shift())),
+  field: (n, c, i) => i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1])))
 }
 
+// Context lookup map for *idx fields
+const CTX = { func: 'func', type: 'type', table: 'table', memory: 'memory', global: 'global', local: 'local', data: 'data', elem: 'elem' }
+
+// Generate field encoder function
+const mkEnc = spec => {
+  // Only memoryidx can be optional (indicated by '?' prefix)
+  if (spec === '?memoryidx') return (n, c, i) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory)))
+  if (spec === 'labelidx') return (n, c, i) => i.push(...uleb(blockid(n.shift(), c.block)))
+  if (spec === 'laneidx') return (n, _c, i) => i.push(parseUint(n.shift(), 0xff))
+
+  if (spec.endsWith('idx')) {
+    const ctx = CTX[spec.slice(0, -3)]
+    return (n, c, i) => i.push(...uleb(id(n.shift(), c[ctx])))
+  }
+
+  const enc = encode[spec]
+  return (n, _c, i) => i.push(...enc(n.shift()))
+}
+
+
 // Populate INSTR and HANDLE from INSTR array
-for (let op = 0; op < INSTR.length; op++) {
-  const item = INSTR[op]
-  if (!item) continue
-  const proc = (str, bytes) => {
-    const [name, ...rest] = str.split(' ')
-    const spec = rest.join(' ')
-    INSTR[name] = bytes
-    if (spec) {
-      const clean = spec[0] === '@' ? spec.slice(1) : spec
-      HANDLE[name] = HANDLE[clean] || (clean.includes(' ') ? clean.split(' ') : clean)
+(function populate(items, pre) {
+  for (let op = 0, item; op < items.length; op++) if (item = items[op]) {
+    // Nested array (0xfb, 0xfc, 0xfd opcodes)
+    if (Array.isArray(item)) populate(item, op)
+
+    else {
+      const [name, ...rest] = item.split(' ')
+
+      // Store opcode bytes
+      INSTR[name] = pre ? [pre, op] : [op]
+
+      // Generate handler if spec exists
+      if (!HANDLE[name] && rest.length) {
+        if (rest.length > 1) {
+          const encoders = rest.map(s => HANDLE[s] ?? mkEnc(s))
+          HANDLE[name] = (n, c, i) => encoders.map(enc => enc(n, c, i))
+        }
+        else HANDLE[name] = HANDLE[rest[0]] ?? mkEnc(rest[0])
+      }
     }
   }
-  Array.isArray(item) ? item.forEach((sub, j) => sub && proc(sub, [op, j])) : proc(item, [op])
-}
+})(INSTR);
+
 
 // Unified instruction encoder - fully declarative
 const instr = (nodes, ctx) => {
@@ -656,8 +688,8 @@ const instr = (nodes, ctx) => {
         const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
         name.endsWith('idx')
           ? name === 'labelidx' ? immed.push(...uleb(blockid(val, ctx.block)))
-          : name === 'laneidx' ? immed.push(parseUint(val, 0xff))
-          : immed.push(...uleb(id(val, ctx[name.slice(0, -3)])))
+            : name === 'laneidx' ? immed.push(parseUint(val, 0xff))
+              : immed.push(...uleb(id(val, ctx[name.slice(0, -3)])))
           : immed.push(...encode[name](val))
       }
 
