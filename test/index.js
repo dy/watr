@@ -6,8 +6,8 @@ import compile from '../src/compile.js'
 import { throws, ok, is } from 'tst'
 
 import './parse.js'
-import './compile.js'
 import './print.js'
+import './compile.js'
 import './testsuite.js'
 // import './bench.js'
 
