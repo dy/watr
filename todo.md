@@ -152,6 +152,8 @@
 
 ## Backlog
 
+* [ ] twgl with collection of wasm-rendered webgl tweets
+* [ ] jz-based watr
 * [ ] wat-based wat-compiler
 * [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
   * [ ] It can also compile module right away 'let {a,b} = watr`(export a)`'

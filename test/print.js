@@ -1,5 +1,6 @@
 import t, { is, ok, same } from 'tst'
 import print from '../src/print.js'
+import parse from '../src/parse.js'
 import { wat2wasm } from './index.js'
 
 t('print: basics', () => {
@@ -61,7 +62,7 @@ t('print: doesnt break samples', async t => {
   for (let path of files) {
     let res = await fetch(path)
     let src = await res.text()
-    const dino = print(src)
-    wat2wasm(dino)
+    const printed = print(src)
+    ok(parse(printed), path)
   }
 })
