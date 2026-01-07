@@ -16,12 +16,13 @@ let cur, idx
 export default function compile(nodes) {
   // deep clone array to avoid mutating input
   const clone = a => a.map(i => Array.isArray(i) ? clone(i) : i)
+
   // normalize to (module ...) form
   if (typeof nodes === 'string') nodes = parse(nodes) || []
   else nodes = clone(nodes)
-  // console.log(clone(nodes))
 
   cur = nodes, idx = 0
+
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
   if (nodes[0] === 'module') idx++, cur[idx]?.[0] === '$' && idx++
   // single node, not module
@@ -31,7 +32,7 @@ export default function compile(nodes) {
   if (cur[idx] === 'binary') return Uint8Array.from(cur.slice(++idx).flat())
 
   // quote "a" "b"
-  if (cur[idx] === 'quote') return compile(cur.slice(++idx).map(v => v.valueOf().slice(1,-1)).flat().join(''))
+  if (cur[idx] === 'quote') return compile(cur.slice(++idx).map(v => v.valueOf().slice(1, -1)).flat().join(''))
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
@@ -42,10 +43,9 @@ export default function compile(nodes) {
     // (@custom "name" placement? data) - custom section support
     if (kind === '@custom') {
       ctx.custom.push(node)
-      return false
     }
     // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
-    if (kind === 'rec') {
+    else if (kind === 'rec') {
       // node contains a list of subtypes, (type ...) or (type (sub final? ...))
       // convert rec type into regular type (first subtype) with stashed subtypes length
       // add rest of subtypes as regular type nodes with subtype flag
@@ -170,16 +170,7 @@ export default function compile(nodes) {
 // if node is a valid index reference
 const isIdx = n => n?.[0] === '$' || !isNaN(n)
 
-// Helper for optional index immediate
-const takeOptIdx = (nodes, ctx, field, defaultVal = 0) =>
-  uleb(id(isIdx(nodes[0]) ? nodes.shift() : defaultVal, ctx[field]))
-
-const isInstr = s => typeof s === 'string' && Array.isArray(INSTR[s])
-const isImmed = n => !Array.isArray(n) || 'type,param,result,ref'.includes(n[0])
-const optIdx2 = nodes => [isIdx(nodes[0]) ? nodes.shift() : 0, isIdx(nodes[0]) ? nodes.shift() : 0]
-
-
-// --- normalize function (was in normalize.js) ---
+// normalize & flatten function body, collect types info, rectify structure
 export function normalize(nodes, ctx) {
   const out = []
   nodes = [...nodes]
@@ -190,30 +181,39 @@ export function normalize(nodes, ctx) {
       if (node === 'block' || node === 'if' || node === 'loop') {
         if (nodes[0]?.[0] === '$') out.push(nodes.shift())
         out.push(blocktype(nodes, ctx))
-      } else if (node === 'else' || node === 'end') { if (nodes[0]?.[0] === '$') nodes.shift() }
+      }
+      else if (node === 'else' || node === 'end') {
+        if (nodes[0]?.[0] === '$') nodes.shift()
+      }
       else if (node === 'select') out.push(paramres(nodes)[1])
       else if (node.endsWith('call_indirect')) {
         let tableidx = isIdx(nodes[0]) ? nodes.shift() : 0, [idx, param, result] = typeuse(nodes, ctx)
         out.push(tableidx, ['type', idx ?? regtype(param, result, ctx)])
-      } else if (node === 'table.init') out.push(isIdx(nodes[1]) ? nodes.shift() : 0, nodes.shift())
-      else if (node === 'table.copy' || node === 'memory.copy') out.push(...optIdx2(nodes))
+      }
+      else if (node === 'table.init') out.push(isIdx(nodes[1]) ? nodes.shift() : 0, nodes.shift())
+      else if (node === 'table.copy' || node === 'memory.copy') out.push(isIdx(nodes[0]) ? nodes.shift() : 0, isIdx(nodes[0]) ? nodes.shift() : 0)
       else if (node.startsWith('table.')) out.push(isIdx(nodes[0]) ? nodes.shift() : 0)
       else if (node === 'memory.init') {
         out.push(...(isIdx(nodes[1]) ? [nodes.shift(), nodes.shift()].reverse() : [nodes.shift(), 0]))
         ctx.datacount && (ctx.datacount[0] = true)
-      } else if (node === 'data.drop' || node === 'array.new_data' || node === 'array.init_data') {
+      }
+      else if (node === 'data.drop' || node === 'array.new_data' || node === 'array.init_data') {
         node === 'data.drop' && out.push(nodes.shift())
         ctx.datacount && (ctx.datacount[0] = true)
-      } else if (node.startsWith('memory.') && isIdx(nodes[0])) out.push(nodes.shift())
-    } else if (Array.isArray(node)) {
+      }
+      else if (node.startsWith('memory.') && isIdx(nodes[0])) out.push(nodes.shift())
+    }
+    else if (Array.isArray(node)) {
       const op = node[0]
-      if (typeof op !== 'string' || !isInstr(op)) { out.push(node); continue }
+      // Check if node is a valid instruction (string with opcode in INSTR)
+      if (typeof op !== 'string' || !Array.isArray(INSTR[op])) { out.push(node); continue }
       const parts = node.slice(1)
       if (op === 'block' || op === 'loop') {
         out.push(op)
         if (parts[0]?.[0] === '$') out.push(parts.shift())
         out.push(blocktype(parts, ctx), ...normalize(parts, ctx), 'end')
-      } else if (op === 'if') {
+      }
+      else if (op === 'if') {
         let then = [], els = []
         if (parts.at(-1)?.[0] === 'else') els = normalize(parts.pop().slice(1), ctx)
         if (parts.at(-1)?.[0] === 'then') then = normalize(parts.pop().slice(1), ctx)
@@ -223,9 +223,11 @@ export function normalize(nodes, ctx) {
         out.push(...normalize(parts, ctx), ...immed, ...then)
         els.length && out.push('else', ...els)
         out.push('end')
-      } else {
+      }
+      else {
         const imm = []
-        while (parts.length && isImmed(parts[0])) imm.push(parts.shift())
+        // Collect immediate operands (non-arrays or special forms like type/param/result/ref)
+        while (parts.length && (!Array.isArray(parts[0]) || 'type,param,result,ref'.includes(parts[0][0]))) imm.push(parts.shift())
         out.push(...normalize(parts, ctx), op, ...imm)
         nodes.unshift(...out.splice(out.length - 1 - imm.length))
       }
@@ -233,11 +235,8 @@ export function normalize(nodes, ctx) {
   }
   return out
 }
-// --- end normalize ---
 
-
-// --- Type helpers ---
-// Register implicit type, return index
+// Register implicit function type definition, return type index (not related to reftype)
 const regtype = (param, result, ctx, idx = '$' + param + '>' + result) => (ctx.type[idx] ??= ctx.type.push(['func', [param, result]]) - 1, idx)
 
 // Collect field sequence: (field a) (field b c) -> [a, b, c]
@@ -275,7 +274,6 @@ const blocktype = (nodes, ctx) => {
   if (!param.length && result.length === 1) return ['result', ...result]
   return ['type', idx ?? regtype(param, result, ctx)]
 }
-// --- End type helpers ---
 
 
 
@@ -565,7 +563,8 @@ const build = [
 // (tag $id? (param i32)*) - tags for exception handling
 build[SECTION.tag] = ([[, typeidx]], ctx) => [0x00, ...uleb(id(typeidx, ctx.type))]
 
-// build reftype, either direct absheaptype or wrapped heaptype https://webassembly.github.io/gc/core/binary/types.html#reference-types
+// Build reference type encoding (ref/refnull forms, not related to regtype which handles func types)
+// https://webassembly.github.io/gc/core/binary/types.html#reference-types
 const reftype = (t, ctx) => (
   t[0] === 'ref' ?
     t[1] == 'null' ?
@@ -589,7 +588,7 @@ const H = {
   select: (n, c, i) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
   ref_null: (n, c, i) => (t => i.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
   memarg: (n, c, i, op) => i.push(...memargEnc(n, op)),
-  opt_memory: (n, c, i) => i.push(...takeOptIdx(n, c, 'memory')),
+  opt_memory: (n, c, i) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
   reftype: (n, c, i) => (ht => (ht[0] !== REFTYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
   reftype2: (n, c, i) => (([b, h1, h2]) => i.push(((h2[0] !== REFTYPE.ref) << 1) | (h1[0] !== REFTYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
   // SIMD special handlers
@@ -631,7 +630,7 @@ const instr = (nodes, ctx) => {
   // Unified metadata dispatch
   if (spec = INSTR_META[op]) {
     // Check if it's a handler (exists in H) or special string
-    if (spec === 'null') {} // No-op (else, then)
+    if (spec === 'null') { } // No-op (else, then)
     else if (spec === 'reversed') {
       // Special case: table.init has reversed argument order
       let t = nodes.shift(), e = nodes.shift()
@@ -651,7 +650,13 @@ const instr = (nodes, ctx) => {
           const immSpec = FIELD_TYPE[field]
           if (!immSpec) err(`Unknown field ${field}`)
           const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
-          typeof immSpec === 'string' ? immed.push(...encode[immSpec](val)) : immed.push(...uleb((immSpec[1] === 'blockid' ? blockid : id)(val, ctx[immSpec[0]])))
+          // Parse spec: 'context idFn' or 'encodeFn'
+          if (immSpec.includes(' ')) {
+            const [ctxField, idFn] = immSpec.split(' ')
+            immed.push(...uleb((idFn === 'blockid' ? blockid : id)(val, ctx[ctxField])))
+          } else {
+            immed.push(...encode[immSpec](val))
+          }
         }
       })
     }
@@ -661,9 +666,13 @@ const instr = (nodes, ctx) => {
       const immSpec = FIELD_TYPE[field]
       if (!immSpec) err(`Unknown immediate type ${field}`)
       const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
-      typeof immSpec === 'string' ?
-        immSpec === 'parseUint' ? immed.push(parseUint(val, 0xff)) : immed.push(...encode[immSpec](val)) :
-        immed.push(...uleb((immSpec[1] === 'blockid' ? blockid : id)(val, ctx[immSpec[0]])))
+      // Parse spec: 'context idFn' or 'encodeFn'
+      if (immSpec.includes(' ')) {
+        const [ctxField, idFn] = immSpec.split(' ')
+        immed.push(...uleb((idFn === 'blockid' ? blockid : id)(val, ctx[ctxField])))
+      } else {
+        immSpec === 'parseUint' ? immed.push(parseUint(val, 0xff)) : immed.push(...encode[immSpec](val))
+      }
     }
   }
 

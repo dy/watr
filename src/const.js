@@ -1,12 +1,10 @@
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
-// Format: 'name' or 'name imm' where imm is spec immediate type
+// Format: 'name', 'name imm', 'name @handler' or 'name *'
 // Immediate types: blocktype, labelidx, funcidx, typeidx, tableidx, memidx, globalidx, localidx, dataidx, elemidx
 // Value types: i32, i64, f32, f64, v128
-// Special: memarg, heaptype, laneidx, * (custom handler)
 export const INSTR = [
-  // 0x00-0x0a: control
+  // 0x00-0x1a: control
   'unreachable', 'nop', 'block @block', 'loop @block', 'if @block', 'else @null', 'then @null', , , , ,
-  // 0x0b-0x1a: control cont.
   'end @end', 'br labelidx', 'br_if labelidx', 'br_table @br_table', 'return', 'call funcidx', 'call_indirect @call_indirect', 'return_call funcidx', 'return_call_indirect @call_indirect', 'call_ref typeidx', 'return_call_ref typeidx', , , , ,
   // 0x1a-0x1f: parametric
   'drop', 'select @select', '', , , ,
@@ -115,12 +113,22 @@ export const INSTR = [
     'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max',
     'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s'
   ]
-],
-  SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, tag: 13, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 },
-  RECTYPE = { sub: 0x50, subfinal: 0x4F, rec: 0x4E },
-  DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, ...RECTYPE },
-  HEAPTYPE = { exn: 0x75, noexn: 0x74, nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A },
-  REFTYPE = {
+]
+
+// Binary section type codes
+export const SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, tag: 13, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 }
+
+// Recursion group opcodes
+export const RECTYPE = { sub: 0x50, subfinal: 0x4F, rec: 0x4E }
+
+// Type definition opcodes
+export const DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, ...RECTYPE }
+
+// Heap type codes for GC
+export const HEAPTYPE = { exn: 0x75, noexn: 0x74, nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A }
+
+// Reference type codes and abbreviations
+export const REFTYPE = {
     // absheaptype abbrs
     nullfuncref: HEAPTYPE.nofunc,
     nullexternref: HEAPTYPE.noextern,
@@ -137,16 +145,18 @@ export const INSTR = [
 
     // ref, refnull
     ref: 0x64 /* -0x1c */, refnull: 0x63 /* -0x1d */
-  },
-  TYPE = { i8: 0x78, i16: 0x77, i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B, ...HEAPTYPE, ...REFTYPE },
-  KIND = { func: 0, table: 1, memory: 2, global: 3, tag: 4 },
-  // WAT escape codes: https://webassembly.github.io/spec/core/text/values.html#strings
-  ESCAPE = { n: 10, r: 13, t: 9, v: 11, '"': 34, "'": 39, '\\': 92 }
+  }
 
-// Build instruction index and metadata
-// INSTR['i32.const'] = [0x41] (opcode)
-// INSTR_META['i32.const'] = 'i32' (field spec) or 'block' (handler name)
-// Note: '@' prefix in source strings is documentation only, stripped here
+// Value type codes (primitives + references)
+export const TYPE = { i8: 0x78, i16: 0x77, i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B, ...HEAPTYPE, ...REFTYPE }
+
+// Import/export kind codes
+export const KIND = { func: 0, table: 1, memory: 2, global: 3, tag: 4 }
+
+// WAT string escape sequences
+export const ESCAPE = { n: 10, r: 13, t: 9, v: 11, '"': 34, "'": 39, '\\': 92 }
+
+// Instruction metadata - unified handler names and field specs (@ prefix stripped from INSTR)
 export const INSTR_META = {}
 INSTR.forEach((entry, i) => {
   if (!entry) return
@@ -168,14 +178,9 @@ INSTR.forEach((entry, i) => {
   if (spec) INSTR_META[op] = spec[0] === '@' ? spec.slice(1) : spec
 })
 
-// Field type definitions - how to parse/encode field types in immediates
-// Format: fieldType => ['contextField', 'idFn'] or 'encodeFn'
+// Field types - 'context idFn' or 'encodeFn' for immediate operands
 export const FIELD_TYPE = {
-  // Index types: [context field, id function]
-  localidx: ['local', 'id'], globalidx: ['global', 'id'], funcidx: ['func', 'id'], typeidx: ['type', 'id'],
-  tableidx: ['table', 'id'], labelidx: ['block', 'blockid'], dataidx: ['data', 'id'], elemidx: ['elem', 'id'],
-  memidx: ['memory', 'id'],
-
-  // Value types: encode function name
+  localidx: 'local id', globalidx: 'global id', funcidx: 'func id', typeidx: 'type id',
+  tableidx: 'table id', labelidx: 'block blockid', dataidx: 'data id', elemidx: 'elem id', memidx: 'memory id',
   laneidx: 'parseUint', i32: 'i32', i64: 'i64', f32: 'f32', f64: 'f64'
 }
