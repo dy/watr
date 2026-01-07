@@ -564,9 +564,7 @@ const build = [
     }
 
     const bytes = []
-    ctx.cur = [body, 0]
-    while (ctx.cur[1] < body.length) bytes.push(...instr(body, ctx))
-    ctx.cur = null
+    while (body.length) bytes.push(...instr(body, ctx))
     bytes.push(0x0b)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
@@ -638,20 +636,15 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 
 
 // consume one instruction from nodes sequence
-// uses ctx.cur = [nodes, index] for immutable traversal
 const instr = (nodes, ctx) => {
-  // continue same array or start new
-  let i = ctx.cur?.[0] === nodes ? ctx.cur[1] : (ctx.cur = [nodes, 0], 0)
-  if (i >= nodes.length) return []
+  if (!nodes?.length) return []
 
-  let out = [], op = nodes[i++], immed, code
+  let out = [], op = nodes.shift(), immed, code
 
   // consume group
   if (Array.isArray(op)) {
-    ctx.cur[1] = i
     immed = instr(op, ctx)
-    while (ctx.cur[1] < ctx.cur[0].length) out.push(...instr(ctx.cur[0], ctx))
-    ctx.cur[0] = nodes; ctx.cur[1] = i  // restore
+    while (op.length) out.push(...instr(op, ctx))
     out.push(...immed)
     return out
   }
@@ -666,34 +659,34 @@ const instr = (nodes, ctx) => {
 
     // struct.new $t ... array.set $t
     if ((code >= 0 && code <= 14) || (code >= 16 && code <= 19)) {
-      let tidx = id(nodes[i++], ctx.type)
+      let tidx = id(nodes.shift(), ctx.type)
       immed.push(...uleb(tidx))
 
       // struct.get|set* $t $f - read field by index from struct definition (ctx.type[structidx][dfnidx])
-      if (code >= 2 && code <= 5) immed.push(...uleb(id(nodes[i++], ctx.type[tidx][1])))
+      if (code >= 2 && code <= 5) immed.push(...uleb(id(nodes.shift(), ctx.type[tidx][1])))
       // array.new_fixed $t n
-      else if (code === 8) immed.push(...uleb(nodes[i++]))
+      else if (code === 8) immed.push(...uleb(nodes.shift()))
       // array.new_data|init_data $t $d
-      else if (code === 9 || code === 18) immed.push(...uleb(id(nodes[i++], ctx.data)))
+      else if (code === 9 || code === 18) immed.push(...uleb(id(nodes.shift(), ctx.data)))
       // array.new_elem|init_elem $t $e
-      else if (code === 10 || code === 19) immed.push(...uleb(id(nodes[i++], ctx.elem)))
+      else if (code === 10 || code === 19) immed.push(...uleb(id(nodes.shift(), ctx.elem)))
       // array.copy $t $t
-      else if (code === 17) immed.push(...uleb(id(nodes[i++], ctx.type)))
+      else if (code === 17) immed.push(...uleb(id(nodes.shift(), ctx.type)))
     }
     // ref.test|cast (ref null? $t|heaptype)
     else if (code >= 20 && code <= 23) {
-      let ht = reftype(nodes[i++], ctx)
+      let ht = reftype(nodes.shift(), ctx)
       if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop() + 1) // ref.test|cast (ref null $t) is next op
-      if (ht.length > 1) ht.shift() // pop ref - this is a local array, ok to mutate
+      if (ht.length > 1) ht.shift() // pop ref
       immed.push(...ht)
     }
     // br_on_cast[_fail] $l? (ref null? ht1) (ref null? ht2)
     else if (code === 24 || code === 25) {
-      let bi = blockid(nodes[i++], ctx.block),
-        ht1 = reftype(nodes[i++], ctx),
-        ht2 = reftype(nodes[i++], ctx),
+      let i = blockid(nodes.shift(), ctx.block),
+        ht1 = reftype(nodes.shift(), ctx),
+        ht2 = reftype(nodes.shift(), ctx),
         castflags = ((ht2[0] !== REFTYPE.ref) << 1) | (ht1[0] !== REFTYPE.ref)
-      immed.push(castflags, ...uleb(bi), ht1.pop(), ht2.pop()) // we take only abstype or
+      immed.push(castflags, ...uleb(i), ht1.pop(), ht2.pop()) // we take only abstype or
     }
   }
 
@@ -706,43 +699,48 @@ const instr = (nodes, ctx) => {
     const isImm = n => typeof n === 'number' || (typeof n === 'string' && (n[0] === '$' || !isNaN(n)))
 
     // memory.init dataidx | memory.init memidx dataidx (binary: dataidx memidx)
+    // In single-memory case: memory.init dataidx
+    // In multi-memory case: memory.init memidx dataidx (first arg is memory, second is data)
     if (code === 0x08) {
-      let first = nodes[i++]
-      if (isImm(nodes[i])) {
-        let second = nodes[i++]
+      // Take first immediate
+      let first = nodes.shift()
+      // If next is also an immediate, we're in multi-memory mode: memidx dataidx
+      if (isImm(nodes[0])) {
+        let second = nodes.shift()
         immed.push(...uleb(id(second, ctx.data)), ...uleb(id(first, ctx.memory)))
       } else {
+        // Single memory mode: first arg is dataidx
         immed.push(...uleb(id(first, ctx.data)), ...uleb(0))
       }
     }
     // data.drop idx
     else if (code === 0x09) {
-      immed.push(...uleb(id(nodes[i++], ctx.data)))
+      immed.push(...uleb(id(nodes.shift(), ctx.data)))
     }
     // memory.copy dstmem srcmem
     else if (code === 0x0a) {
-      immed.push(...uleb(id(isImm(nodes[i]) ? nodes[i++] : 0, ctx.memory)), ...uleb(id(isImm(nodes[i]) ? nodes[i++] : 0, ctx.memory)))
+      immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)), ...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
     }
     // memory.fill memidx
     else if (code === 0x0b) {
-      immed.push(...uleb(id(isImm(nodes[i]) ? nodes[i++] : 0, ctx.memory)))
+      immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
     }
 
     // elem.drop elemidx
     else if (code === 0x0d) {
-      immed.push(...uleb(id(nodes[i++], ctx.elem)))
+      immed.push(...uleb(id(nodes.shift(), ctx.elem)))
     }
     // table.init tableidx elemidx -> 0xfc 0x0c elemidx tableidx
     else if (code === 0x0c) {
-      immed.push(...uleb(id(nodes[i+1], ctx.elem)), ...uleb(id(nodes[i++], ctx.table)))
-      i++
+      immed.push(...uleb(id(nodes[1], ctx.elem)), ...uleb(id(nodes.shift(), ctx.table)))
+      nodes.shift()
     }
     // table.* tableidx?
     // abbrs https://webassembly.github.io/spec/core/text/instructions.html#id1
     else if (code >= 0x0c && code < 0x13) {
-      immed.push(...uleb(id(nodes[i++], ctx.table)))
+      immed.push(...uleb(id(nodes.shift(), ctx.table)))
       // table.copy tableidx? tableidx?
-      if (code === 0x0e) immed.push(...uleb(id(nodes[i++], ctx.table)))
+      if (code === 0x0e) immed.push(...uleb(id(nodes.shift(), ctx.table)))
     }
   }
 
@@ -753,46 +751,49 @@ const instr = (nodes, ctx) => {
     immed = [0xfd, ...uleb(code)]
     // (v128.load offset? align?)
     if (code <= 0x0b) {
-      let a, o; [a, o, i] = memarg(nodes, i)
+      const [a, o] = memarg(nodes)
       immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
     }
     // (v128.load_lane offset? align? idx)
     else if (code >= 0x54 && code <= 0x5d) {
-      let a, o; [a, o, i] = memarg(nodes, i)
+      const [a, o] = memarg(nodes)
       immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
       // (v128.load_lane_zero)
-      if (code <= 0x5b) immed.push(...uleb(nodes[i++]))
+      if (code <= 0x5b) immed.push(...uleb(nodes.shift()))
     }
     // (i8x16.shuffle 0 1 ... 15 a b)
     else if (code === 0x0d) {
-      for (let j = 0; j < 16; j++) immed.push(parseUint(nodes[i++], 32))
+      // i8, i16, i32 - bypass the encoding
+      for (let i = 0; i < 16; i++) immed.push(parseUint(nodes.shift(), 32))
     }
     // (v128.const i32x4 1 2 3 4)
     else if (code === 0x0c) {
-      let [t, n] = nodes[i++].split('x'),
+      let [t, n] = nodes.shift().split('x'),
         bits = +t.slice(1),
-        stride = bits >>> 3
+        stride = bits >>> 3 // i16 -> 2, f32 -> 4
       n = +n
+      // i8, i16, i32 - bypass the encoding
       if (t[0] === 'i') {
         let arr = n === 16 ? new Uint8Array(16) : n === 8 ? new Uint16Array(8) : n === 4 ? new Uint32Array(4) : new BigUint64Array(2)
-        for (let j = 0; j < n; j++) {
-          let s = nodes[i++], v = encode[t].parse(s)
-          arr[j] = v
+        for (let i = 0; i < n; i++) {
+          let s = nodes.shift(), v = encode[t].parse(s)
+          arr[i] = v
         }
         immed.push(...(new Uint8Array(arr.buffer)))
       }
+      // f32, f64 - encode
       else {
         let arr = new Uint8Array(16)
-        for (let j = 0; j < n; j++) {
-          let s = nodes[i++], v = encode[t](s)
-          arr.set(v, j * stride)
+        for (let i = 0; i < n; i++) {
+          let s = nodes.shift(), v = encode[t](s)
+          arr.set(v, i * stride)
         }
         immed.push(...arr)
       }
     }
     // (i8x16.extract_lane_s 0 ...)
     else if (code >= 0x15 && code <= 0x22) {
-      immed.push(...uleb(parseUint(nodes[i++])))
+      immed.push(...uleb(parseUint(nodes.shift())))
     }
   }
 
@@ -802,13 +803,14 @@ const instr = (nodes, ctx) => {
     ctx.block.push(code)
 
     // (block $x) (loop $y) - save label pointer
-    if (nodes[i]?.[0] === '$') ctx.block[nodes[i++]] = ctx.block.length
+    if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
 
-    let t = nodes[i++]
+    let t = nodes.shift();
 
     // void
     if (!t) immed.push(TYPE.void)
-    // (result i32)
+    // (result i32) - doesn't require registering type
+    // FIXME: Make sure it is signed positive integer (leb, not uleb) https://webassembly.github.io/gc/core/binary/instructions.html#control-instructions
     else if (t[0] === 'result') immed.push(...reftype(t[1], ctx))
     // (type idx)
     else immed.push(...uleb(id(t[1], ctx.type)))
@@ -816,38 +818,38 @@ const instr = (nodes, ctx) => {
   // else
   else if (code === 5) { }
   // then
-  else if (code === 6) immed = []
+  else if (code === 6) immed = [] // ignore
 
   // local.get $id, local.tee $id x
   else if (code == 0x20 || code == 0x21 || code == 0x22) {
-    immed.push(...uleb(id(nodes[i++], ctx.local)))
+    immed.push(...uleb(id(nodes.shift(), ctx.local)))
   }
 
   // global.get $id, global.set $id
   else if (code == 0x23 || code == 0x24) {
-    immed.push(...uleb(id(nodes[i++], ctx.global)))
+    immed.push(...uleb(id(nodes.shift(), ctx.global)))
   }
 
   // call $func ...nodes
   // return_call $func
   else if (code == 0x10 || code == 0x12) {
-    immed.push(...uleb(id(nodes[i++], ctx.func)))
+    immed.push(...uleb(id(nodes.shift(), ctx.func)))
   }
 
   // call_indirect $table (type $typeName) ...nodes
   // return_call_indirect $table (type $typeName) ... nodes
   else if (code == 0x11 || code == 0x13) {
     immed.push(
-      ...uleb(id(nodes[i+1][1], ctx.type)),
-      ...uleb(id(nodes[i++], ctx.table))
+      ...uleb(id(nodes[1][1], ctx.type)),
+      ...uleb(id(nodes.shift(), ctx.table))
     )
-    i++
+    nodes.shift()
   }
 
   // call_ref $type
   // return_call_ref $type
   else if (code == 0x14 || code == 0x15) {
-    immed.push(...uleb(id(nodes[i++], ctx.type)))
+    immed.push(...uleb(id(nodes.shift(), ctx.type)))
   }
 
   // end
@@ -857,34 +859,34 @@ const instr = (nodes, ctx) => {
   // br_if $label cond result?
   // br_on_null $l, br_on_non_null $l
   else if (code == 0x0c || code == 0x0d || code == 0xd5 || code == 0xd6) {
-    immed.push(...uleb(blockid(nodes[i++], ctx.block)))
+    immed.push(...uleb(blockid(nodes.shift(), ctx.block)))
   }
 
   // br_table 1 2 3 4  0  selector result?
   else if (code == 0x0e) {
     let args = []
-    while (nodes[i] && (!isNaN(nodes[i]) || nodes[i][0] === '$')) {
-      args.push(...uleb(blockid(nodes[i++], ctx.block)))
+    while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
+      args.push(...uleb(blockid(nodes.shift(), ctx.block)))
     }
     immed.push(...uleb(args.length - 1), ...args)
   }
 
   // select (result t+)
   else if (code == 0x1b) {
-    let result = nodes[i++]
+    let result = nodes.shift()
     // 0x1b -> 0x1c
     if (result.length) immed.push(immed.pop() + 1, ...vec(result.map(t => reftype(t, ctx))))
   }
 
   // ref.func $id
   else if (code == 0xd2) {
-    immed.push(...uleb(id(nodes[i++], ctx.func)))
+    immed.push(...uleb(id(nodes.shift(), ctx.func)))
   }
 
   // ref.null func
   else if (code == 0xd0) {
-    let t = nodes[i++]
-    immed.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, ctx.type))))
+    let t = nodes.shift()
+    immed.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, ctx.type)))) // func->funcref, extern->externref
   }
 
   // binary/unary (i32.add a b) - no immed
@@ -892,29 +894,30 @@ const instr = (nodes, ctx) => {
 
   // i32.store align=n offset=m
   else if (code >= 0x28 && code <= 0x3e) {
-    let a, o; [a, o, i] = memarg(nodes, i)
+    let [a, o] = memarg(nodes)
     immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
   }
 
   // i32.const 123, f32.const 123.45
   else if (code >= 0x41 && code <= 0x44) {
-    immed.push(...encode[op.split('.')[0]](nodes[i++]))
+    immed.push(...encode[op.split('.')[0]](nodes.shift()))
   }
 
   // memory.grow|size memidx - multi-memory proposal
+  // https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions
   else if (code == 0x3f || code == 0x40) {
+    // Only consume next node as memory index if it's a number or $name, not an instruction
     const isMemIdx = n => (typeof n === 'string' && (n[0] === '$' || !isNaN(n))) || typeof n === 'number'
-    immed.push(...uleb(id(isMemIdx(nodes[i]) ? nodes[i++] : 0, ctx.memory)))
+    immed.push(...uleb(id(isMemIdx(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
   }
 
   // table.get|set $id
   else if (code == 0x25 || code == 0x26) {
-    immed.push(...uleb(id(nodes[i++], ctx.table)))
+    immed.push(...uleb(id(nodes.shift(), ctx.table)))
   }
 
   out.push(...immed)
 
-  ctx.cur[1] = i  // write back index
   return out
 }
 
@@ -931,13 +934,15 @@ const blockid = (nm, block, i) => (
   isNaN(i) || i > block.length ? err(`Bad label ${nm}`) : i
 )
 
-// consume align/offset params, return [align, offset, newIndex]
-const memarg = (nodes, i, align, offset, k, v) => {
-  while (nodes[i]?.includes?.('=')) [k, v] = nodes[i++].split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
+// consume align/offset params
+const memarg = (args) => {
+  let align, offset, k, v
+  while (args[0]?.includes('=')) [k, v] = args.shift().split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
+
   if (offset < 0 || offset > 0xffffffff) err(`Bad offset ${offset}`)
   if (align <= 0 || align > 0xffffffff) err(`Bad align ${align}`)
   if (align) ((align = Math.log2(align)) % 1) && err(`Bad align ${align}`)
-  return [align, offset, i]
+  return [align, offset]
 }
 
 // const ALIGN = {

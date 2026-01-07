@@ -213,7 +213,7 @@
 - we needed it until we had repl, now we can compare against spec right away
 
 
-## [ ] Str encoding, special characters ->
+## [x] Str encoding, special characters -> let's try storing strings as buffer
 
 * $"\41B" == $"AB" == $"A\42" == $"\41\42" == $"\u{41}\u{42}"
 * $"\t" == $"\09" == $"\u{09}"
