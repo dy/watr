@@ -157,7 +157,7 @@ f64.parse = (input, max=Number.MAX_VALUE) => {
 
     // FIXME: this is not accurate, it must be byte-perfect
     sig = parseInt(int + fract); // 0x is included in int
-    isNaN(sig) && err(`Bad float hex significand ${sig}`)
+    isNaN(sig) && err()
 
     exp = parseInt(exp, 10);
 

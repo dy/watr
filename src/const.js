@@ -49,10 +49,10 @@ export const INSTR = [
   // relaxed SIMD instructions
   'i8x16.relaxed_swizzle', 'i32x4.relaxed_trunc_f32x4_s', 'i32x4.relaxed_trunc_f32x4_u', 'i32x4.relaxed_trunc_f64x2_s_zero', 'i32x4.relaxed_trunc_f64x2_u_zero', 'f32x4.relaxed_madd', 'f32x4.relaxed_nmadd', 'f64x2.relaxed_madd', 'f64x2.relaxed_nmadd', 'i8x16.relaxed_laneselect', 'i16x8.relaxed_laneselect', 'i32x4.relaxed_laneselect', 'i64x2.relaxed_laneselect', 'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max', 'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s'
 ],
-  SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, global: 6, tag: 13, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 },
+  SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, tag: 13, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 },
   RECTYPE = { sub: 0x50, subfinal: 0x4F, rec: 0x4E },
   DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, ...RECTYPE },
-  HEAPTYPE = { nofunc: 0x73, noextern: 0x72, noexn: 0x74, none: 0x71, func: 0x70, extern: 0x6F, exn: 0x75, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A },
+  HEAPTYPE = { exn: 0x75, noexn: 0x74, nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A },
   REFTYPE = {
     // absheaptype abbrs
     nullfuncref: HEAPTYPE.nofunc,
