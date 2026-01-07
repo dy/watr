@@ -1,6 +1,6 @@
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
 // Format: 'name', 'name imm', 'name @handler' or 'name *'
-// Immediate types: blocktype, labelidx, funcidx, typeidx, tableidx, memidx, globalidx, localidx, dataidx, elemidx
+// Immediate types: blocktype, labelidx, funcidx, typeidx, tableidx, memoryidx, globalidx, localidx, dataidx, elemidx
 // Value types: i32, i64, f32, f64, v128
 export const INSTR = [
   // 0x00-0x1a: control
@@ -62,7 +62,7 @@ export const INSTR = [
   [
     'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
     'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
-    'memory.init dataidx memidx', 'data.drop dataidx', 'memory.copy memidx memidx', 'memory.fill ?memidx',
+    'memory.init dataidx memoryidx', 'data.drop dataidx', 'memory.copy memoryidx memoryidx', 'memory.fill ?memoryidx',
     'table.init @reversed', 'elem.drop elemidx', 'table.copy tableidx tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
     'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u'
   ],
