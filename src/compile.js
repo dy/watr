@@ -377,6 +377,7 @@ const plain = (nodes, ctx) => {
 
         out.push(...plain(node, ctx), ...immed, ...then, ...els, 'end')
       }
+      // keep nested instruction as-is - instr() handles recursion
       else out.push(plain(node, ctx))
     }
   }
