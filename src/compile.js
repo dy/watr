@@ -1,8 +1,10 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE, INSTR_META, FIELD_TYPE } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
 import parse from './parse.js'
 import { err, tdec } from './util.js'
+
+
 
 // iterating context
 let cur, idx
@@ -171,7 +173,7 @@ export default function compile(nodes) {
 const isIdx = n => n?.[0] === '$' || !isNaN(n)
 
 // normalize & flatten function body, collect types info, rectify structure
-export function normalize(nodes, ctx) {
+function normalize(nodes, ctx) {
   const out = []
   nodes = [...nodes]
   while (nodes.length) {
@@ -579,8 +581,10 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 
 
 
-// Compact handler registry
-const H = {
+// Instruction metadata: handlers (functions), multi-field specs (arrays), or simple specs (strings)
+const INSTR_META = {
+  null: () => {},
+  reversed: (n, c, i) => { let t = n.shift(), e = n.shift(); i.push(...uleb(id(e, c.elem)), ...uleb(id(t, c.table))) },
   block: (n, c, i) => (c.block.push(i[0]), n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
   end: (n, c) => c.block.pop(),
   call_indirect: (n, c, i) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
@@ -591,10 +595,8 @@ const H = {
   opt_memory: (n, c, i) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
   reftype: (n, c, i) => (ht => (ht[0] !== REFTYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
   reftype2: (n, c, i) => (([b, h1, h2]) => i.push(((h2[0] !== REFTYPE.ref) << 1) | (h1[0] !== REFTYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
-  // SIMD special handlers
   v128const: (n, _c, i) => {
-    let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3
-    num = +num
+    let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3; num = +num
     if (t[0] === 'i') {
       let arr = num === 16 ? new Uint8Array(16) : num === 8 ? new Uint16Array(8) : num === 4 ? new Uint32Array(4) : new BigUint64Array(2)
       for (let j = 0; j < num; j++) arr[j] = encode[t].parse(n.shift())
@@ -608,6 +610,20 @@ const H = {
   shuffle: (n, _c, i) => { for (let j = 0; j < 16; j++) i.push(parseUint(n.shift(), 32)) },
   memlane: (n, _c, i, op) => (i.push(...memargEnc(n, op)), i.push(...uleb(parseUint(n.shift()))))
 }
+
+// Populate INSTR and INSTR_META from INSTR array
+INSTR.forEach((e, i) => e && (Array.isArray(e)
+  ? e.forEach((s, j) => s && (([o, ...a]) => { let r = a.join(' '); INSTR[o] = [i, j]; r && (r = r[0] === '@' ? r.slice(1) : r, INSTR_META[o] = INSTR_META[r] || (r.includes(' ') ? r.split(' ') : r)) })(s.split(' ')))
+  : (([o, ...a]) => { let r = a.join(' '); INSTR[o] = [i]; r && (r = r[0] === '@' ? r.slice(1) : r, INSTR_META[o] = INSTR_META[r] || (r.includes(' ') ? r.split(' ') : r)) })(e.split(' '))
+))
+
+// Field types - 'context idFn' or 'encodeFn' for immediate operands
+const FIELD_TYPE = {
+  localidx: ['local', 'id'], globalidx: ['global', 'id'], funcidx: ['func', 'id'], typeidx: ['type', 'id'],
+  tableidx: ['table', 'id'], labelidx: ['block', 'blockid'], dataidx: ['data', 'id'], elemidx: ['elem', 'id'], memidx: ['memory', 'id'],
+  laneidx: 'parseUint', i32: 'i32', i64: 'i64', f32: 'f32', f64: 'f64'
+}
+
 
 // Unified instruction encoder - fully declarative using INSTR.spec and INSTR.imm
 const instr = (nodes, ctx) => {
@@ -629,20 +645,12 @@ const instr = (nodes, ctx) => {
 
   // Unified metadata dispatch
   if (spec = INSTR_META[op]) {
-    // Check if it's a handler (exists in H) or special string
-    if (spec === 'null') { } // No-op (else, then)
-    else if (spec === 'reversed') {
-      // Special case: table.init has reversed argument order
-      let t = nodes.shift(), e = nodes.shift()
-      immed.push(...uleb(id(e, ctx.elem)), ...uleb(id(t, ctx.table)))
-    }
-    else if (H[spec]) {
-      // Custom handler
-      H[spec](nodes, ctx, immed, op)
-    }
-    // Multi-field spec: parse space-separated fields
-    else if (spec.includes(' ')) {
-      spec.split(' ').forEach(f => {
+    // Handler function (includes null and reversed)
+    if (typeof spec === 'function') spec(nodes, ctx, immed, op)
+
+    // Multi-field spec array
+    else if (Array.isArray(spec)) {
+      spec.forEach(f => {
         if (f === '*') immed.push(...uleb(nodes.shift()))
         else if (f === 'field') immed.push(...uleb(id(nodes.shift(), ctx.type[immed[immed.length - 1]][1])))
         else {
@@ -650,9 +658,9 @@ const instr = (nodes, ctx) => {
           const immSpec = FIELD_TYPE[field]
           if (!immSpec) err(`Unknown field ${field}`)
           const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
-          // Parse spec: 'context idFn' or 'encodeFn'
-          if (immSpec.includes(' ')) {
-            const [ctxField, idFn] = immSpec.split(' ')
+          // immSpec is either [ctxField, idFn] array or encodeFn string
+          if (Array.isArray(immSpec)) {
+            const [ctxField, idFn] = immSpec
             immed.push(...uleb((idFn === 'blockid' ? blockid : id)(val, ctx[ctxField])))
           } else {
             immed.push(...encode[immSpec](val))
@@ -660,15 +668,16 @@ const instr = (nodes, ctx) => {
         }
       })
     }
-    // Simple field spec: lookup in FIELD_TYPE
+
+    // Simple field spec string
     else {
       const opt = spec[0] === '?', field = opt ? spec.slice(1) : spec
       const immSpec = FIELD_TYPE[field]
       if (!immSpec) err(`Unknown immediate type ${field}`)
       const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
-      // Parse spec: 'context idFn' or 'encodeFn'
-      if (immSpec.includes(' ')) {
-        const [ctxField, idFn] = immSpec.split(' ')
+      // immSpec is either [ctxField, idFn] array or encodeFn string
+      if (Array.isArray(immSpec)) {
+        const [ctxField, idFn] = immSpec
         immed.push(...uleb((idFn === 'blockid' ? blockid : id)(val, ctx[ctxField])))
       } else {
         immSpec === 'parseUint' ? immed.push(parseUint(val, 0xff)) : immed.push(...encode[immSpec](val))

@@ -96,13 +96,4 @@ export namespace KIND {
     let tag_1: number;
     export { tag_1 as tag };
 }
-export const ESCAPE: {
-    n: number;
-    r: number;
-    t: number;
-    v: number;
-    '"': number;
-    "'": number;
-    '\\': number;
-};
 //# sourceMappingURL=const.d.ts.map

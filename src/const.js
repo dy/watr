@@ -152,35 +152,3 @@ export const TYPE = { i8: 0x78, i16: 0x77, i32: 0x7f, i64: 0x7e, f32: 0x7d, f64:
 
 // Import/export kind codes
 export const KIND = { func: 0, table: 1, memory: 2, global: 3, tag: 4 }
-
-// WAT string escape sequences
-export const ESCAPE = { n: 10, r: 13, t: 9, v: 11, '"': 34, "'": 39, '\\': 92 }
-
-// Instruction metadata - unified handler names and field specs (@ prefix stripped from INSTR)
-export const INSTR_META = {}
-INSTR.forEach((entry, i) => {
-  if (!entry) return
-  // Handle nested arrays for multi-byte opcodes (0xfb, 0xfc, 0xfd)
-  if (Array.isArray(entry)) {
-    entry.forEach((sub, j) => {
-      if (!sub) return
-      let [op, ...rest] = sub.split(' ')
-      let spec = rest.join(' ')
-      INSTR[op] = [i, j]
-      if (spec) INSTR_META[op] = spec[0] === '@' ? spec.slice(1) : spec
-    })
-    return
-  }
-  // Handle regular entries
-  let [op, ...rest] = entry.split(' ')
-  let spec = rest.join(' ')
-  INSTR[op] = [i]
-  if (spec) INSTR_META[op] = spec[0] === '@' ? spec.slice(1) : spec
-})
-
-// Field types - 'context idFn' or 'encodeFn' for immediate operands
-export const FIELD_TYPE = {
-  localidx: 'local id', globalidx: 'global id', funcidx: 'func id', typeidx: 'type id',
-  tableidx: 'table id', labelidx: 'block blockid', dataidx: 'data id', elemidx: 'elem id', memidx: 'memory id',
-  laneidx: 'parseUint', i32: 'i32', i64: 'i64', f32: 'f32', f64: 'f64'
-}
