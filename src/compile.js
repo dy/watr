@@ -7,8 +7,8 @@ import { clone, err, str } from './util.js'
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
 
-// recursively strip all annotation nodes from AST, except @custom and @metadata.code.branch_hint
-const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@metadata.code.branch_hint') ? null : node.map(unannot).filter(n => n != null)) : node
+// recursively strip all annotation nodes from AST, except @custom and @metadata.code.*
+const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@metadata.code.') ? null : node.map(unannot).filter(n => n != null)) : node
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
@@ -168,18 +168,16 @@ export default function watr(nodes) {
     ...bin(SECTION.datacount, false),
   ]
 
-  // Build code section first (populates ctx.branchHints)
+  // Build code section first (populates ctx.meta)
   const codeSection = bin(SECTION.code)
 
-  // Build branch hints custom section if any hints were collected
-  if (ctx.branchHints?.length) {
-    const HINT_NAME = [25, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2e, 0x63, 0x6f, 0x64, 0x65, 0x2e, 0x62, 0x72, 0x61, 0x6e, 0x63, 0x68, 0x5f, 0x68, 0x69, 0x6e, 0x74]
-    let content = [...uleb(ctx.branchHints.length)]
-    for (let [funcIdx, hints] of ctx.branchHints) {
-      content.push(...uleb(funcIdx), ...uleb(hints.length))
-      for (let [offset, hint] of hints) content.push(...uleb(offset), 1, hint)
-    }
-    out.push(0, ...uleb(HINT_NAME.length + content.length), ...HINT_NAME, ...content)
+  // Build code metadata custom sections: metadata.code.<type>
+  for (const type in ctx.meta) {
+    const name = vec(str(`"metadata.code.${type}"`))
+    const content = vec(ctx.meta[type].map(([funcIdx, instances]) =>
+      [...uleb(funcIdx), ...vec(instances.map(([pos, data]) => [...uleb(pos), ...vec(str(data))]))]
+    ))
+    out.push(0, ...vec([...name, ...content]))
   }
 
   out.push(...codeSection, ...bin(SECTION.data))
@@ -301,9 +299,11 @@ const plain = (nodes, ctx) => {
   while (nodes.length) {
     let node = nodes.shift()
 
-    // branch hint annotation - pass through as marker with hint value (0=unlikely, 1=likely based on 5th char)
-    if (Array.isArray(node) && node[0] === '@metadata.code.branch_hint') {
-      out.push(['@hint', node[1][4] === '1' ? 1 : 0])
+    // code metadata annotations - pass through as marker with metadata type and data
+    // (@metadata.code.<type> data:str)
+    if (Array.isArray(node) && node[0]?.startsWith?.('@metadata.code.')) {
+      let type = node[0].slice(15) // remove '@metadata.code.' prefix
+      out.push(['@metadata', type, node[1]])
       continue
     }
 
@@ -375,9 +375,9 @@ const plain = (nodes, ctx) => {
 
       // (if ...) -> if ... end
       else if (node[0] === 'if') {
-        // Pop pending branch hint if present
-        let hint = out[out.length - 1]?.[0] === '@hint' && out.pop()
-        
+        // Pop pending metadata (branch_hint) if present
+        let meta = out[out.length - 1]?.[0] === '@metadata' && out.pop()
+
         let then = [], els = [], immed = [node.shift()]
         // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
         // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
@@ -397,8 +397,8 @@ const plain = (nodes, ctx) => {
 
         if (typeof node[0] === 'string') err('Unfolded condition')
 
-        // conditions, hint (if any), if, then, else, end
-        out.push(...plain(node, ctx), ...(hint ? [hint] : []), ...immed, ...then, ...els, 'end')
+        // conditions, metadata (if any), if, then, else, end
+        out.push(...plain(node, ctx), ...(meta ? [meta] : []), ...immed, ...then, ...els, 'end')
       }
       else out.push(plain(node, ctx))
     }
@@ -601,7 +601,7 @@ const build = [
     ctx.local.name = 'local'
     ctx.block.name = 'block'
 
-    // Track current code index for branch hints
+    // Track current code index for code metadata
     if (ctx._codeIdx === undefined) ctx._codeIdx = 0
     let codeIdx = ctx._codeIdx++
 
@@ -616,20 +616,20 @@ const build = [
       ctx.local.push(...types)
     }
 
-    ctx._pendingHint = undefined
+    ctx._meta = null
     const bytes = []
     while (body.length) bytes.push(...instr(body, ctx))
     bytes.push(0x0b)
 
-    // Extract hint placeholders, collect [offset, hint] pairs
-    const hints = [], cleanBytes = []
-    for (const b of bytes) b?.hint !== undefined ? hints.push([cleanBytes.length, b.hint]) : cleanBytes.push(b)
+    // Extract metadata placeholders (arrays), group by type
+    const metaByType = {}, cleanBytes = []
+    for (const b of bytes)
+      if (Array.isArray(b)) for (const [type, data] of b) (metaByType[type] ??= []).push([cleanBytes.length, data])
+      else cleanBytes.push(b)
 
-    // Store [funcIdx, hints] for this function
-    if (hints.length) {
-      ctx.branchHints ??= []
-      ctx.branchHints.push([ctx.import.filter(imp => imp[2][0] === 'func').length + codeIdx, hints])
-    }
+    // Store metadata for this function, grouped by type
+    const funcIdx = ctx.import.filter(imp => imp[2][0] === 'func').length + codeIdx
+    for (const type in metaByType) ((ctx.meta ??= {})[type] ??= []).push([funcIdx, metaByType[type]])
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     // we skip locals provided by params
@@ -702,15 +702,19 @@ const instr = (nodes, ctx) => {
   let out = [], op = nodes.shift(), immed, code
   const isImm = n => typeof n === 'string' || typeof n === 'number'
 
-  // Handle branch hint marker - store hint for next hintable instruction
-  if (op?.[0] === '@hint') { ctx._pendingHint = op[1]; return nodes.length ? instr(nodes, ctx) : [] }
+  // Handle code metadata marker - store for next instruction
+  // ['@metadata', type, data]
+  if (op?.[0] === '@metadata') {
+    ;(ctx._meta ??= []).push(op.slice(1))
+    return nodes.length ? instr(nodes, ctx) : []
+  }
 
   // consume group
   if (Array.isArray(op)) {
     immed = instr(op, ctx)
     while (op.length) out.push(...instr(op, ctx))
-    // Insert hint placeholder before hintable instruction (if/br_if)
-    if (ctx._pendingHint !== undefined && (immed[0] === 0x04 || immed[0] === 0x0d)) out.push({ hint: ctx._pendingHint }), ctx._pendingHint = undefined
+    // Insert metadata placeholder before instruction
+    if (ctx._meta) out.push(ctx._meta), ctx._meta = null
     out.push(...immed)
     return out
   }
@@ -971,8 +975,8 @@ const instr = (nodes, ctx) => {
     immed.push(...uleb(id(nodes.shift(), ctx.table)))
   }
 
-  // Insert hint placeholder before hintable instruction in flat form (if/br_if)
-  if (ctx._pendingHint !== undefined && (code === 0x04 || code === 0x0d)) out.push({ hint: ctx._pendingHint }), ctx._pendingHint = undefined
+  // Insert metadata placeholder before instruction in flat form
+  if (ctx._meta) out.push(ctx._meta), ctx._meta = null
 
   out.push(...immed)
 

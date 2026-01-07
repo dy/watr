@@ -195,6 +195,163 @@ t('compile: branch hints - multiple hints in one function', () => {
   is(inst.exports.test(1, 0), 5)
 })
 
+t('compile: trace_inst metadata', () => {
+  let src = `
+    (module
+      (func (export "test") (result i32)
+        (@metadata.code.trace_inst "\\01\\00\\00\\00")
+        (i32.const 42)
+      )
+    )
+  `
+  let wasm = compile(parse(src))
+
+  // Check that trace_inst section exists
+  let pos = 8
+  let foundTraceInst = false
+  while (pos < wasm.length) {
+    let sectionId = wasm[pos++]
+    let sectionSize = wasm[pos++]
+
+    if (sectionId === 0) {
+      let nameLen = wasm[pos]
+      let name = String.fromCharCode(...wasm.slice(pos + 1, pos + 1 + nameLen))
+      if (name === 'metadata.code.trace_inst') {
+        foundTraceInst = true
+        break
+      }
+    }
+    pos += sectionSize
+  }
+  ok(foundTraceInst, 'trace_inst section found')
+
+  // Module should still work
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.test(), 42)
+})
+
+t('compile: custom code metadata', () => {
+  let src = `
+    (module
+      (func (export "test") (result i32)
+        (@metadata.code.hotness "\\01")
+        (i32.const 100)
+        (@metadata.code.custom "aaa\\13bb")
+        return
+      )
+    )
+  `
+  let wasm = compile(parse(src))
+
+  // Check that custom metadata sections exist
+  let pos = 8
+  let foundHotness = false
+  let foundCustom = false
+  while (pos < wasm.length) {
+    let sectionId = wasm[pos++]
+    let sectionSize = wasm[pos++]
+
+    if (sectionId === 0) {
+      let nameLen = wasm[pos]
+      let name = String.fromCharCode(...wasm.slice(pos + 1, pos + 1 + nameLen))
+      if (name === 'metadata.code.hotness') foundHotness = true
+      if (name === 'metadata.code.custom') foundCustom = true
+    }
+    pos += sectionSize
+  }
+  ok(foundHotness, 'hotness section found')
+  ok(foundCustom, 'custom section found')
+
+  // Module should still work
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.test(), 100)
+})
+
+t('compile: multiple metadata types in same function', () => {
+  let src = `
+    (module
+      (func (export "test") (param i32) (result i32)
+        (@metadata.code.branch_hint "\\01")
+        (if (result i32) (local.get 0)
+          (then
+            (@metadata.code.trace_inst "\\02\\00\\00\\00")
+            (i32.const 1)
+          )
+          (else
+            (@metadata.code.trace_inst "\\03\\00\\00\\00")
+            (i32.const 0)
+          )
+        )
+      )
+    )
+  `
+  let wasm = compile(parse(src))
+
+  // Check for both section types
+  let pos = 8
+  let foundBranchHint = false
+  let foundTraceInst = false
+  while (pos < wasm.length) {
+    let sectionId = wasm[pos++]
+    let sectionSize = wasm[pos++]
+
+    if (sectionId === 0) {
+      let nameLen = wasm[pos]
+      let name = String.fromCharCode(...wasm.slice(pos + 1, pos + 1 + nameLen))
+      if (name === 'metadata.code.branch_hint') foundBranchHint = true
+      if (name === 'metadata.code.trace_inst') foundTraceInst = true
+    }
+    pos += sectionSize
+  }
+  ok(foundBranchHint, 'branch_hint section found')
+  ok(foundTraceInst, 'trace_inst section found')
+
+  // Module should work
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.test(1), 1)
+  is(inst.exports.test(0), 0)
+})
+
+t('compile: function-level metadata (at start of function body)', () => {
+  let src = `
+    (module
+      (func (export "hot") (result i32)
+        (@metadata.code.hotness "\\01")
+        (i32.const 1)
+      )
+      (func (export "cold") (result i32)
+        (i32.const 0)
+      )
+    )
+  `
+  let wasm = compile(parse(src))
+
+  // Check for hotness section
+  let pos = 8
+  let foundHotness = false
+  while (pos < wasm.length) {
+    let sectionId = wasm[pos++]
+    let sectionSize = wasm[pos++]
+
+    if (sectionId === 0) {
+      let nameLen = wasm[pos]
+      let name = String.fromCharCode(...wasm.slice(pos + 1, pos + 1 + nameLen))
+      if (name === 'metadata.code.hotness') foundHotness = true
+    }
+    pos += sectionSize
+  }
+  ok(foundHotness, 'hotness section found')
+
+  // Module should work
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.hot(), 1)
+  is(inst.exports.cold(), 0)
+})
+
 t('compile: reexport func', () => {
   let src = `
     (export "f0" (func 0))

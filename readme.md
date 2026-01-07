@@ -84,7 +84,8 @@ print(src, {
 * [x] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md), [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md), [gc](https://github.com/WebAssembly/gc)
 * [x] [annotations](https://github.com/WebAssembly/annotations)
 * [x] [multiple memories](https://github.com/WebAssembly/multi-memory/blob/main/proposals/multi-memory/Overview.md)
-* [ ] [exceptions](https://github.com/WebAssembly/exception-handling), [code_metadata](https://github.com/WebAssembly/tool-conventions/blob/main/CodeMetadata.md)
+* [x] [code_metadata](https://github.com/WebAssembly/tool-conventions/blob/main/CodeMetadata.md)
+* [ ] [exceptions](https://github.com/WebAssembly/exception-handling)
 * [ ] [memory64](https://github.com/WebAssembly/memory64)
 * [ ] [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md)
 * [ ] wide arithmetic, threads, custom page size,

@@ -86,8 +86,8 @@
   * [x] Recursive types
     * [x] normalize subtypes to list, skip single recusion abbr
 * [x] annotations
-  * [ ] named sections
-  * [ ] branch hints
+  * [x] named sections
+  * [x] branch hints
 * [ ] multiple memories
 * [ ] Try removing all quotes
 * [ ] Exceptions, memory64, code_metadata, js_strings
