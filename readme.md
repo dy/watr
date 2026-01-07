@@ -2,23 +2,9 @@
 
 Light & fast WAT compiler.<br/>
 Useful for high-level languages or dynamic (in-browser) compilation.<br/>
+Supports full [spec text syntax](https://webassembly.github.io/spec/core/text/index.html) and [official testsuite](https://github.com/WebAssembly/testsuite).
 
 **[REPL](https://dy.github.io/watr/docs/repl)**
-
-## Features
-
-* [x] [full spec syntax](https://webassembly.github.io/spec/core/text/index.html), [official testsuite](https://github.com/WebAssembly/testsuite)
-* [x] [mutable globals](https://github.com/WebAssembly/mutable-global), [extended const](https://github.com/WebAssembly/extended-const/blob/main/proposals/extended-const/Overview.md), [nontrapping float to int](https://github.com/WebAssembly/nontrapping-float-to-int-conversions), [sign extension](https://github.com/WebAssembly/sign-extension-ops)
-* [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md), [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md)
-* [x] [simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md), [relaxed simd](https://github.com/WebAssembly/relaxed-simd), [fixed-width simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
-* [x] [tail_call](https://github.com/WebAssembly/tail-call)
-* [x] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md), [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md), [gc](https://github.com/WebAssembly/gc)
-* [x] [annotations](https://github.com/WebAssembly/annotations), [code_metadata](https://github.com/WebAssembly/tool-conventions/blob/main/CodeMetadata.md)
-* [ ] [exceptions](https://github.com/WebAssembly/exception-handling)
-* [ ] [multiple memories](https://github.com/WebAssembly/multi-memory/blob/master/proposals/multi-memory/Overview.md), [memory64](https://github.com/WebAssembly/memory64)
-* [ ] [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md)
-* [ ] wide arithmetic, threads, custom page size
-* [ ] wasm 3
 
 ## Usage
 
@@ -29,8 +15,7 @@ Compile wasm text or syntax tree into wasm binary.
 ```js
 import { compile } from 'watr'
 
-const buffer = compile(`
-(func (export "double")
+const buffer = compile(`(func (export "double")
   (param f64) (result f64)
   (f64.mul (local.get 0) (f64.const 2))
 )`)
@@ -39,6 +24,20 @@ const instance = new WebAssembly.Instance(module)
 const {double} = instance.exports
 
 double(108) // 216
+```
+
+### Parse
+
+Parse input wasm text into syntax tree.
+
+```js
+import { parse } from 'watr'
+
+parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))`)
+// [
+//   'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
+//   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
+// ]
 ```
 
 ### Print
@@ -73,21 +72,19 @@ print(src, {
 // (func(export "double")(param f64)(result f64)(f64.mul(local.get 0)(f64.const 2)))
 ```
 
-<!--
-### Parse
+<!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
-Parse input wasm text into syntax tree.
+## Status
 
-```js
-import { parse } from 'watr'
-
-parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))`)
-// [
-//   'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
-//   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
-// ]
-```
--->
+* [x] core
+* [x] [mutable globals](https://github.com/WebAssembly/mutable-global), [extended const](https://github.com/WebAssembly/extended-const/blob/main/proposals/extended-const/Overview.md), [sign extension](https://github.com/WebAssembly/sign-extension-ops), [nontrapping float to int](https://github.com/WebAssembly/nontrapping-float-to-int-conversions)
+* [x] [multi-value](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md), [bulk memory ops](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md), [multiple memories](https://github.com/WebAssembly/multi-memory/blob/main/proposals/multi-memory/Overview.md)
+* [x] [simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md), [relaxed simd](https://github.com/WebAssembly/relaxed-simd), [fixed-width simd](https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md)
+* [x] [tail_call](https://github.com/WebAssembly/tail-call)
+* [x] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md), [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md), [gc](https://github.com/WebAssembly/gc)
+* [x] [annotations](https://github.com/WebAssembly/annotations), [code_metadata](https://github.com/WebAssembly/tool-conventions/blob/main/CodeMetadata.md)
+* [x] [memory64](https://github.com/WebAssembly/memory64)
+* [ ] [exceptions](https://github.com/WebAssembly/exception-handling), [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md), wide arithmetic, threads, custom page size, wasm 3
 
 ## Alternatives
 
@@ -113,4 +110,4 @@ watr | 7.5 kb | 6.0 op/s
 * [WASM binary encoding](https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md)
 -->
 
-<p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>
+<p align=center><a href="https://github.com/krsnzd/license/">ॐ</a></p>

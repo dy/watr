@@ -40,6 +40,11 @@ export default function watr(nodes) {
 
   // initialize types
   cur.slice(idx).filter(([kind, ...node]) => {
+    // (@custom "name" placement? data) - custom section support
+    if (kind === '@custom') {
+      ctx.custom.push(node)
+      return false
+    }
     // (rec (type $a (sub final? $sup* (func ...))...) (type $b ...)) -> save subtypes
     if (kind === 'rec') {
       // node contains a list of subtypes, (type ...) or (type (sub final? ...))
@@ -85,22 +90,24 @@ export default function watr(nodes) {
       // for import nodes - redirect output to import
       if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
 
-      // table abbr
+      // table abbr: (table id? i64? reftype (elem ...)) -> (table id? i64? n n reftype) + (elem ...)
       if (kind === 'table') {
-        // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-        if (node[1]?.[0] === 'elem') {
-          let [reftype, [, ...els]] = node
-          node = [els.length, els.length, reftype]
-          ctx.elem.push([['table', items.length], ['i32.const', 0], reftype, ...els])
+        const is64 = node[0] === 'i64', idx = is64 ? 1 : 0
+        if (node[idx + 1]?.[0] === 'elem') {
+          let [reftype, [, ...els]] = [node[idx], node[idx + 1]]
+          node = is64 ? ['i64', els.length, els.length, reftype] : [els.length, els.length, reftype]
+          ctx.elem.push([['table', items.length], [is64 ? 'i64.const' : 'i32.const', 0], reftype, ...els])
         }
       }
 
-      // data abbr
-      // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
-      else if (kind === 'memory' && node[0]?.[0] === 'data') {
-        let [, ...data] = node.shift(), m = '' + Math.ceil(data.flat().length / 65536) // FIXME: figure out actual data size
-        ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
-        node = [m, m]
+      // data abbr: (memory id? i64? (data str)) -> (memory id? i64? n n) + (data ...)
+      else if (kind === 'memory') {
+        const is64 = node[0] === 'i64', idx = is64 ? 1 : 0
+        if (node[idx]?.[0] === 'data') {
+          let [, ...data] = node.splice(idx, 1)[0], m = '' + Math.ceil(data.flat().length / 65536) // FIXME: figure out actual data size
+          ctx.data.push([['memory', items.length], [is64 ? 'i64.const' : 'i32.const', 0], ...data])
+          node = is64 ? ['i64', m, m] : [m, m]
+        }
       }
 
       // dupe to code section, save implicit type
@@ -109,8 +116,14 @@ export default function watr(nodes) {
         idx ??= regtype(param, result, ctx)
 
         // we save idx because type can be defined after
-        // FIXME: plainify/normalize after
         !imported && ctx.code.push([[idx, param, result], ...plain(node, ctx)]) // pass param since they may have names
+        node = [['type', idx]]
+      }
+
+      // tag has a type similar to func
+      else if (kind === 'tag') {
+        let [idx, param] = typeuse(node, ctx);
+        idx ??= regtype(param, [], ctx)
         node = [['type', idx]]
       }
 
@@ -126,6 +139,9 @@ export default function watr(nodes) {
       .filter(Boolean)  // filter out (type, imported) placeholders
       .map(item => build[kind](item, ctx))
       .filter(Boolean)  // filter out unrenderable things (subtype or data.length)
+
+    // Custom sections - each is output as separate section with own header
+    if (kind === SECTION.custom) return items.flatMap(content => [kind, ...vec(content)])
 
     return !items.length ? [] : [kind, ...vec(count ? vec(items) : items)]
   }
@@ -347,7 +363,18 @@ const plain = (nodes, ctx) => {
 
 
 // build section binary [by section codes] (non consuming)
-const build = [,
+const build = [
+  // (@custom "name" placement? data) - custom section builder
+  ([name, ...rest], ctx) => {
+    // Check if second arg is placement directive (before|after section)
+    let data = rest
+    if (rest[0]?.[0] === 'before' || rest[0]?.[0] === 'after') {
+      // Skip placement for now - would need more complex section ordering
+      data = rest.slice(1)
+    }
+    // Custom section format: name (vec string) + raw content bytes
+    return [...vec(name.flat()), ...data.flat()]
+  },
   // type kinds
   // (func params result)
   // (array i8)
@@ -381,7 +408,7 @@ const build = [,
     return [DEFTYPE[kind], ...details]
   },
 
-  // (import "math" "add" (func|table|global|memory dfn?))
+  // (import "math" "add" (func|table|global|memory|tag dfn?))
   ([mod, field, [kind, ...dfn]], ctx) => {
     let details
 
@@ -389,6 +416,10 @@ const build = [,
       // we track imported funcs in func section to share namespace, and skip them on final build
       let [[, typeidx]] = dfn
       details = uleb(id(typeidx, ctx.type))
+    }
+    else if (kind === 'tag') {
+      let [[, typeidx]] = dfn
+      details = [0x00, ...uleb(id(typeidx, ctx.type))]
     }
     else if (kind === 'memory') {
       details = limits(dfn)
@@ -582,9 +613,12 @@ const build = [,
   // datacount
   (nodes, ctx) => uleb(ctx.data.length),
 
-  // tag
+  // tag - placeholder (actual tag data built via import or handled separately)
   (nodes, ctx) => []
 ]
+
+// (tag $id? (param i32)*) - tags for exception handling
+build[SECTION.tag] = ([[, typeidx]], ctx) => [0x00, ...uleb(id(typeidx, ctx.type))]
 
 // build reftype, either direct absheaptype or wrapped heaptype https://webassembly.github.io/gc/core/binary/types.html#reference-types
 const reftype = (t, ctx) => (
@@ -661,18 +695,39 @@ const instr = (nodes, ctx) => {
   // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#instruction-encoding
   else if (code == 0xfc) {
     [, code] = immed
+    // Check if next node is an immediate (number or $name), not a nested instruction
+    const isImm = n => typeof n === 'number' || (typeof n === 'string' && (n[0] === '$' || !isNaN(n)))
 
-    // memory.init idx, data.drop idx,
-    if (code === 0x08 || code === 0x09) {
+    // memory.init dataidx | memory.init memidx dataidx (binary: dataidx memidx)
+    // In single-memory case: memory.init dataidx
+    // In multi-memory case: memory.init memidx dataidx (first arg is memory, second is data)
+    if (code === 0x08) {
+      // Take first immediate
+      let first = nodes.shift()
+      // If next is also an immediate, we're in multi-memory mode: memidx dataidx
+      if (isImm(nodes[0])) {
+        let second = nodes.shift()
+        immed.push(...uleb(id(second, ctx.data)), ...uleb(id(first, ctx.memory)))
+      } else {
+        // Single memory mode: first arg is dataidx
+        immed.push(...uleb(id(first, ctx.data)), ...uleb(0))
+      }
+    }
+    // data.drop idx
+    else if (code === 0x09) {
       immed.push(...uleb(id(nodes.shift(), ctx.data)))
     }
-
-    // memory placeholders
-    if (code == 0x08 || code == 0x0b) immed.push(0)
-    else if (code === 0x0a) immed.push(0, 0)
+    // memory.copy dstmem srcmem
+    else if (code === 0x0a) {
+      immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)), ...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
+    }
+    // memory.fill memidx
+    else if (code === 0x0b) {
+      immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
+    }
 
     // elem.drop elemidx
-    if (code === 0x0d) {
+    else if (code === 0x0d) {
       immed.push(...uleb(id(nodes.shift(), ctx.elem)))
     }
     // table.init tableidx elemidx -> 0xfc 0x0c elemidx tableidx
@@ -848,10 +903,12 @@ const instr = (nodes, ctx) => {
     immed.push(...encode[op.split('.')[0]](nodes.shift()))
   }
 
-  // memory.grow|size $idx - mandatory 0x00
+  // memory.grow|size memidx - multi-memory proposal
   // https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions
   else if (code == 0x3f || code == 0x40) {
-    immed.push(0)
+    // Only consume next node as memory index if it's a number or $name, not an instruction
+    const isMemIdx = n => (typeof n === 'string' && (n[0] === '$' || !isNaN(n))) || typeof n === 'number'
+    immed.push(...uleb(id(isMemIdx(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
   }
 
   // table.get|set $id
@@ -904,13 +961,24 @@ const align = (op) => {
 }
 
 // build limits sequence (consuming)
-const limits = (node) => (
-  isNaN(parseInt(node[1])) ? [0, ...uleb(parseUint(node.shift()))] : [node[2] === 'shared' ? 3 : 1, ...uleb(parseUint(node.shift())), ...uleb(parseUint(node.shift()))]
-)
+// Memory64: i64 index type uses flags 0x04-0x07 (bit 2 = is_64)
+const limits = (node) => {
+  const is64 = node[0] === 'i64' && node.shift()
+  const shared = node[node.length - 1] === 'shared' && node.pop()
+  const hasMax = !isNaN(parseInt(node[1]))
+  const flag = (is64 ? 4 : 0) | (shared ? 2 : 0) | (hasMax ? 1 : 0)
+  const parse = is64 ? v => typeof v === 'string' ? i64.parse(v) : v : parseUint
+
+  return hasMax
+    ? [flag, ...uleb(parse(node.shift())), ...uleb(parse(node.shift()))]
+    : [flag, ...uleb(parse(node.shift()))]
+}
 
 // check if node is valid int in a range
-// we put extra condition for index ints for tests complacency
-const parseUint = (v, max = 0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
+const parseUint = (v, max = 0xFFFFFFFF) => {
+  const n = typeof v === 'string' && v[0] !== '+' ? i32.parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)
+  return n > max ? err(`Value out of range ${v}`) : n
+}
 
 
 // serialize binary array

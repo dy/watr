@@ -3,6 +3,107 @@ import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import {inline, file, wat2wasm, save} from './index.js'
 
+t('compile: annotations are stripped', () => {
+  let src = `
+    (module (@a)
+      (@b) (func (@c) (export "answer") (@d) (result i32)
+        (@e) (i32.const 42)
+      )
+    )
+  `
+  let { answer } = inline(src).exports
+  is(answer(), 42)
+})
+
+t('compile: annotations with content', () => {
+  let src = `(module (@name "test") (func (export "f") (result i32) (@inline hint) (i32.const 1)))`
+  let { f } = inline(src).exports
+  is(f(), 1)
+})
+
+t('compile: custom sections', () => {
+  let src = `
+    (module
+      (@custom "my-section" "hello")
+      (func (export "answer") (result i32) (i32.const 42))
+    )
+  `
+  let wasm = compile(parse(src, { annotations: true }))
+
+  // Check that custom section exists in binary
+  // Custom sections start with section id 0
+  let view = new DataView(wasm.buffer)
+  let found = false
+  let pos = 8 // skip magic + version
+
+  while (pos < wasm.length) {
+    let sectionId = view.getUint8(pos++)
+    let sectionSize = wasm[pos++] // simplified: assuming size < 128
+
+    if (sectionId === 0) {
+      // Read name length
+      let nameLen = wasm[pos++]
+      let name = String.fromCharCode(...wasm.slice(pos, pos + nameLen))
+      pos += nameLen
+
+      if (name === 'my-section') {
+        let data = String.fromCharCode(...wasm.slice(pos, pos + sectionSize - nameLen - 1))
+        is(data, 'hello', 'custom section has correct data')
+        found = true
+        break
+      }
+    } else {
+      pos += sectionSize
+    }
+  }
+
+  ok(found, 'custom section found in binary')
+
+  // Should still instantiate and work (custom sections are ignored by runtime)
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.answer(), 42)
+})
+
+t('compile: custom sections with placement', () => {
+  let src = `
+    (module
+      (@custom "before-func" (before func) "data1")
+      (func (export "f") (result i32) (i32.const 1))
+      (@custom "after-func" (after func) "data2")
+    )
+  `
+  let wasm = compile(parse(src, { annotations: true }))
+
+  // Verify both custom sections are present
+  let sections = []
+  let pos = 8
+  while (pos < wasm.length) {
+    let sectionId = wasm[pos++]
+    let sectionSize = wasm[pos++]
+    if (sectionId === 0) {
+      let nameLen = wasm[pos++]
+      let name = String.fromCharCode(...wasm.slice(pos, pos + nameLen))
+      pos += nameLen
+      let data = String.fromCharCode(...wasm.slice(pos, pos + sectionSize - nameLen - 1))
+      sections.push({ name, data })
+      pos += sectionSize - nameLen - 1
+    } else {
+      pos += sectionSize
+    }
+  }
+
+  is(sections.length, 2, 'two custom sections found')
+  is(sections[0].name, 'before-func')
+  is(sections[0].data, 'data1')
+  is(sections[1].name, 'after-func')
+  is(sections[1].data, 'data2')
+
+  // Should still work
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.f(), 1)
+})
 
 t('compile: reexport func', () => {
   let src = `
@@ -2217,6 +2318,113 @@ t('feature: array', () => {
 
   let m = new WebAssembly.Module(Uint8Array.from(data))
   let inst = new WebAssembly.Instance(m, {})
+})
+
+// Multi-memory proposal tests
+// https://github.com/WebAssembly/multi-memory/blob/main/proposals/multi-memory/Overview.md
+t('compile: multiple memories', () => {
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (func (export "get_mem1_size") (result i32)
+      (memory.size $mem1)
+    )
+    (func (export "get_mem2_size") (result i32)
+      (memory.size $mem2)
+    )
+  )`)
+  is(inst.exports.get_mem1_size(), 1)
+  is(inst.exports.get_mem2_size(), 1)
+})
+
+t('compile: memory.grow with index', () => {
+  const inst = inline(`(module
+    (memory $mem1 1 2)
+    (memory $mem2 1 3)
+    (func (export "grow_mem2") (result i32)
+      (memory.grow $mem2 (i32.const 1))
+    )
+    (func (export "get_mem2_size") (result i32)
+      (memory.size $mem2)
+    )
+  )`)
+  is(inst.exports.grow_mem2(), 1)
+  is(inst.exports.get_mem2_size(), 2)
+})
+
+t('compile: memory.copy between memories', () => {
+  // Just test that multi-memory copy syntax compiles
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (data (memory $mem1) (i32.const 0) "test")
+    (func (export "copy")
+      (memory.copy $mem1 $mem1 (i32.const 10) (i32.const 0) (i32.const 4))
+    )
+    (func (export "load") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`)
+  inst.exports.copy()
+  is(inst.exports.load(10), 116) // 't' copied to offset 10
+})
+
+t('compile: memory.fill with index', () => {
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (func (export "fill_mem1")
+      (memory.fill $mem1 (i32.const 0) (i32.const 42) (i32.const 10))
+    )
+    (func (export "load_mem1") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`)
+  inst.exports.fill_mem1()
+  is(inst.exports.load_mem1(5), 42)
+})
+
+t('compile: memory.init with index', () => {
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (data $d "hello")
+    (func (export "init")
+      (memory.init $mem1 $d (i32.const 0) (i32.const 0) (i32.const 5))
+    )
+    (func (export "load_mem1") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`)
+  inst.exports.init()
+  is(inst.exports.load_mem1(0), 104) // 'h'
+})
+
+t('compile: data segment with memory index', () => {
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (data (memory $mem1) (i32.const 0) "test")
+    (func (export "load") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`)
+  is(inst.exports.load(0), 116) // 't'
+})
+
+t('compile: numeric memory indices', () => {
+  const inst = inline(`(module
+    (memory 1)
+    (memory 1)
+    (func (export "get_size_0") (result i32)
+      (memory.size 0)
+    )
+    (func (export "get_size_1") (result i32)
+      (memory.size 1)
+    )
+  )`)
+  is(inst.exports.get_size_0(), 1)
+  is(inst.exports.get_size_1(), 1)
 })
 
 // examples

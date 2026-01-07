@@ -8,6 +8,7 @@ export namespace SECTION {
     export let table: number;
     export let memory: number;
     export let global: number;
+    export let tag: number;
     let _export: number;
     export { _export as export };
     export let start: number;
@@ -30,10 +31,12 @@ export namespace DEFTYPE {
 export namespace HEAPTYPE {
     export let nofunc: number;
     export let noextern: number;
+    export let noexn: number;
     export let none: number;
     let func_2: number;
     export { func_2 as func };
     export let extern: number;
+    export let exn: number;
     export let any: number;
     export let eq: number;
     export let i31: number;
@@ -47,12 +50,16 @@ export namespace REFTYPE {
     export { nullfuncref };
     import nullexternref = HEAPTYPE.noextern;
     export { nullexternref };
+    import nullexnref = HEAPTYPE.noexn;
+    export { nullexnref };
     import nullref = HEAPTYPE.none;
     export { nullref };
     import funcref = HEAPTYPE.func;
     export { funcref };
     import externref = HEAPTYPE.extern;
     export { externref };
+    import exnref = HEAPTYPE.exn;
+    export { exnref };
     import anyref = HEAPTYPE.any;
     export { anyref };
     import eqref = HEAPTYPE.eq;
@@ -86,5 +93,16 @@ export namespace KIND {
     export { memory_1 as memory };
     let global_1: number;
     export { global_1 as global };
+    let tag_1: number;
+    export { tag_1 as tag };
 }
+export const ESCAPE: {
+    n: number;
+    r: number;
+    t: number;
+    v: number;
+    '"': number;
+    "'": number;
+    '\\': number;
+};
 //# sourceMappingURL=const.d.ts.map

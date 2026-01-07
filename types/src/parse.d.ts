@@ -1,6 +1,5 @@
-declare function _default(s: any, o?: {
+declare function _default(str: string, o?: {
     comments: boolean;
-    annotations: boolean;
-}): any;
+}): any[];
 export default _default;
 //# sourceMappingURL=parse.d.ts.map

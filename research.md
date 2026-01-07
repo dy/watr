@@ -1,5 +1,3 @@
-
-
 ## [x] IR -> we collect nodes into context with scopes, but it's still valid nodes
 
 * collect section names / indexes
@@ -191,7 +189,7 @@
 + no time wasted
 + better codebase org
 
-## [x] Normalize or not? -> too little value. Try instead immutable, streamlined types
+## [ ] Normalize or not? -> too little value. Try instead immutable, streamlined types
 
 + Allows unraveling mutable code
   ? can we make it immutable in-place?
@@ -214,7 +212,8 @@
 - wasm/spec is what we're aiming for
 - we needed it until we had repl, now we can compare against spec right away
 
-## [ ] Str encoding, special characters
+
+## [ ] Str encoding, special characters ->
 
 * $"\41B" == $"AB" == $"A\42" == $"\41\42" == $"\u{41}\u{42}"
 * $"\t" == $"\09" == $"\u{09}"

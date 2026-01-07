@@ -1,5 +1,4 @@
 (module
-
 (import "Math" "random" (func $random (result f32)))
 (import "Math" "sin" (func $sin (param f32) (result f32)))
 (import "env" "t" (func $timer (param i32))) ;; 1:start, 0:stop

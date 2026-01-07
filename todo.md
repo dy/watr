@@ -85,30 +85,40 @@
 * [x] GC
   * [x] Recursive types
     * [x] normalize subtypes to list, skip single recusion abbr
-* [ ] immutable compiler
-* [ ] Exceptions
-* [ ] memory64
-* [x] annotations, code_metadata
-* [ ] js_strings
+* [x] annotations
+  * [x] named sections
+  * [x] branch hints
+* [x] multiple memories
+* [x] code_metadata
+* [ ] import immutable approach (from branch)
+  * [ ] replace wabt with direct compile instead
+  * [ ] Remove unnecessary checks: end label, param names
+  * [ ] Type declarations with map file
+  * [ ] Prettify printer: keep comments
+  * [ ] Ignore particular test cases instead of excluding full test (like const)
+  * [ ] Better `str`, `id` test, `name`: there's suboptimal code atm. We need better name parsing
+  * [ ] `id` test skips important malformed cases
+  * [ ] move string / name logic to compiler/prepare stage, it's not parser duty
+  * [ ] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
+  * [ ] Split strings into unicode / binary parts
+  * [ ] consider index-based iteration for plain() hot path only
+* [ ] VSCode formatter plugin
 * [ ] Features
+  * [ ] js_strings
+  * [ ] Exceptions
+  * [x] memory64
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [x] All main ones (readme)
   * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
   * [ ] Wasm3
 * [x] Print: make it as nice as AI
 * [ ] Bench binaryen
-* [x] ~~replace wabt with spec/wasm for tests~~ we just use direct compile instead, we can compare against other compilers in repl
-* [ ] All tests
-* [x] Remove unnecessary checks: end label, param names
-* [x] Type declarations with map file
-* [ ] Prettify: keep comments
-* [ ] VSCode formatter plugin
-* [ ] Ignore particular test cases instead of excluding full test (like const)
-* [x] Better `str`, `id` test, `name`: there's suboptimal code atm. We need better name parsing
-  * [x] `id` test skips important malformed cases
-  * [x] move string / name logic to compiler/prepare stage, it's not parser duty
-* [x] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
-* [x] Split strings into unicode / binary parts
+* [ ] replace wabt with spec/wasm for tests
+* [ ] Finish all official tests
+  * [ ] All skipped features
+* [ ] Types
+* [ ] Cleanup tests harness
+* [ ] Make sure all existing proposals are up to date
 
 ## REPL
 
@@ -140,13 +150,11 @@
 * [ ] copy as binary
 * [ ] make a component? going to need it for jz, piezo
 
-## Uses
-
-* [ ] twgl with collection of wasm-rendered webgl tweets
-
 ## Backlog
 
+* [ ] twgl with collection of wasm-rendered webgl tweets
 * [ ] jz-based watr
+* [ ] wat-based wat-compiler
 * [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
   * [ ] It can also compile module right away 'let {a,b} = watr`(export a)`'
 
