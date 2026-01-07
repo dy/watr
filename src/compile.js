@@ -623,32 +623,27 @@ const instr = (nodes, ctx) => {
     [, code] = immed
     const spec = INSTR_HANDLERS[0xfb]?.[code]
 
-    if (spec?.indices) {
-      // Handle instructions with index-based immediates
-      for (const idx of spec.indices) {
-        if (idx.field) {
-          const field = idx.field
-          let val = nodes.shift()
-
-          // Special case: struct.get|set* need field index lookup from struct definition
-          if (field === 'field' && immed[immed.length - 1] !== undefined) {
-            const tidx = immed[immed.length - 1] // last pushed value is typeidx
-            immed.push(...uleb(id(val, ctx.type[tidx][1])))
-          } else {
-            immed.push(...uleb(id(val, ctx[field] || ctx.type)))
-          }
-        } else if (idx.value) {
-          // Value immediate (counts, not indices)
+    if (Array.isArray(spec)) {
+      // Handle instructions with index-based immediates: ['type', 'field', '*', '?memory']
+      for (const field of spec) {
+        if (field === '*') {
+          // Raw value immediate (counts, not indices)
           immed.push(...uleb(nodes.shift()))
+        } else if (field === 'field') {
+          // Special case: struct.get|set* need field index lookup from struct definition
+          const tidx = immed[immed.length - 1] // last pushed value is typeidx
+          immed.push(...uleb(id(nodes.shift(), ctx.type[tidx][1])))
+        } else {
+          immed.push(...uleb(id(nodes.shift(), ctx[field] || ctx.type)))
         }
       }
-    } else if (spec?.reftype) {
+    } else if (spec === 'reftype') {
       // ref.test|cast - single reftype argument
       let ht = reftype(nodes.shift(), ctx)
       if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop() + 1) // ref.test|cast (ref null $t) is next op
       if (ht.length > 1) ht.shift() // pop ref
       immed.push(...ht)
-    } else if (spec?.reftype2) {
+    } else if (spec === 'reftype2') {
       // br_on_cast[_fail] - labelidx + two reftypes
       let i = blockid(nodes.shift(), ctx.block),
         ht1 = reftype(nodes.shift(), ctx),
@@ -669,17 +664,13 @@ const instr = (nodes, ctx) => {
       let tableidx = nodes.shift()
       let elemidx = nodes.shift()
       immed.push(...uleb(id(elemidx, ctx.elem)), ...uleb(id(tableidx, ctx.table)))
-    } else if (spec?.indices) {
-      // Generic index handler for all other 0xfc instructions
-      for (const idx of spec.indices) {
-        if (idx.optional) {
-          // For optional indices, check if next node is an index
-          const val = isIdx(nodes[0]) ? nodes.shift() : 0
-          immed.push(...uleb(id(val, ctx[idx.field])))
-        } else {
-          const val = nodes.shift()
-          immed.push(...uleb(id(val, ctx[idx.field])))
-        }
+    } else if (Array.isArray(spec)) {
+      // Generic index handler: ['data', 'memory', '?memory']
+      for (const field of spec) {
+        const optional = field[0] === '?'
+        const f = optional ? field.slice(1) : field
+        const val = optional ? (isIdx(nodes[0]) ? nodes.shift() : 0) : nodes.shift()
+        immed.push(...uleb(id(val, ctx[f])))
       }
     }
   }
@@ -689,7 +680,7 @@ const instr = (nodes, ctx) => {
   else if (code === 0xfd) {
     [, code] = immed
     immed = [0xfd, ...uleb(code)]
-    
+
     // (v128.load offset? align?)
     if (code <= 0x0b) {
       immed.push(...memargEnc(nodes, op))
