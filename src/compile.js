@@ -96,22 +96,25 @@ export default function watr(nodes) {
       // for import nodes - redirect output to import
       if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
 
-      // table abbr
+      // table abbr: (table id? i64? reftype (elem ...)) -> (table id? i64? n n reftype) + (elem ...)
       if (kind === 'table') {
-        // (table id? reftype (elem ...{n})) -> (table id? n n reftype) (elem (table id) (i32.const 0) reftype ...)
-        if (node[1]?.[0] === 'elem') {
-          let [reftype, [, ...els]] = node
-          node = [els.length, els.length, reftype]
-          ctx.elem.push([['table', name || items.length], ['i32.const', '0'], reftype, ...els])
+        const is64 = node[0] === 'i64', idx = is64 ? 1 : 0
+        if (node[idx + 1]?.[0] === 'elem') {
+          const [reftype, [, ...els]] = [node[idx], node[idx + 1]]
+          node = is64 ? ['i64', els.length, els.length, reftype] : [els.length, els.length, reftype]
+          ctx.elem.push([['table', name || items.length], [is64 ? 'i64.const' : 'i32.const', '0'], reftype, ...els])
         }
       }
 
-      // data abbr
-      // (memory id? (data str)) -> (memory id? n n) (data (memory id) (i32.const 0) str)
-      else if (kind === 'memory' && node[0]?.[0] === 'data') {
-        let [, ...data] = node.shift(), m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536) // FIXME: figure out actual data size
-        ctx.data.push([['memory', items.length], ['i32.const', 0], ...data])
-        node = [m, m]
+      // data abbr: (memory id? i64? (data str)) -> (memory id? i64? n n) + (data ...)
+      else if (kind === 'memory') {
+        const is64 = node[0] === 'i64', idx = is64 ? 1 : 0
+        if (node[idx]?.[0] === 'data') {
+          const [, ...data] = node.splice(idx, 1)[0]
+          const m = '' + Math.ceil(data.map(s => s.slice(1, -1)).join('').length / 65536)
+          ctx.data.push([['memory', items.length], [is64 ? 'i64.const' : 'i32.const', is64 ? '0' : 0], ...data])
+          node = is64 ? ['i64', m, m] : [m, m]
+        }
       }
 
       // dupe to code section, save implicit type
@@ -487,7 +490,7 @@ const build = [
   // (func $name? ...params result ...body)
   ([[, typeidx]], ctx) => (uleb(id(typeidx, ctx.type))),
 
-  // (table 1 2 funcref)
+  // (table i64? 1 2 funcref)
   (node, ctx) => {
     let lims = limits(node), t = reftype(node.shift(), ctx), [init] = node
     return init ? [0x40, 0x00, ...t, ...lims, ...expr(init, ctx)] : [...t, ...lims]
@@ -1025,13 +1028,24 @@ const align = (op) => {
 }
 
 // build limits sequence (consuming)
-const limits = (node) => (
-  isNaN(parseInt(node[1])) ? [0, ...uleb(parseUint(node.shift()))] : [node[2] === 'shared' ? 3 : 1, ...uleb(parseUint(node.shift())), ...uleb(parseUint(node.shift()))]
-)
+// Memory64: i64 index type uses flags 0x04-0x07 (bit 2 = is_64)
+const limits = (node) => {
+  const is64 = node[0] === 'i64' && node.shift()
+  const shared = node[node.length - 1] === 'shared' && node.pop()
+  const hasMax = !isNaN(parseInt(node[1]))
+  const flag = (is64 ? 4 : 0) | (shared ? 2 : 0) | (hasMax ? 1 : 0)
+  const parse = is64 ? v => typeof v === 'string' ? i64.parse(v) : v : parseUint
 
-// check if node is valid int in a range
-// we put extra condition for index ints for tests complacency
-const parseUint = (v, max = 0xFFFFFFFF) => (typeof v === 'string' && v[0] !== '+' ? (typeof max === 'bigint' ? i64 : i32).parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)) > max ? err(`Value out of range ${v}`) : v
+  return hasMax
+    ? [flag, ...uleb(parse(node.shift())), ...uleb(parse(node.shift()))]
+    : [flag, ...uleb(parse(node.shift()))]
+}
+
+// parse uint with range check for 32-bit (let VM validate 64-bit)
+const parseUint = (v, max = 0xFFFFFFFF) => {
+  const n = typeof v === 'string' && v[0] !== '+' ? i32.parse(v) : typeof v === 'number' ? v : err(`Bad int ${v}`)
+  return n > max ? err(`Value out of range ${v}`) : n
+}
 
 // serialize binary array
 const vec = a => [...uleb(a.length), ...a.flat()]

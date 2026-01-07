@@ -83,7 +83,8 @@ print(src, {
 * [x] [tail_call](https://github.com/WebAssembly/tail-call)
 * [x] [ref types](https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md), [func refs](https://github.com/WebAssembly/function-references/blob/main/proposals/function-references/Overview.md), [gc](https://github.com/WebAssembly/gc)
 * [x] [annotations](https://github.com/WebAssembly/annotations), [code_metadata](https://github.com/WebAssembly/tool-conventions/blob/main/CodeMetadata.md)
-* [ ] [exceptions](https://github.com/WebAssembly/exception-handling), [memory64](https://github.com/WebAssembly/memory64), [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md), wide arithmetic, threads, custom page size, wasm 3
+* [x] [memory64](https://github.com/WebAssembly/memory64)
+* [ ] [exceptions](https://github.com/WebAssembly/exception-handling), [js strings](https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md), wide arithmetic, threads, custom page size, wasm 3
 
 ## Alternatives
 

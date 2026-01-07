@@ -182,10 +182,15 @@ t.todo('/test/official/proposals/exception-handling/try_table.wast', async funct
 
 // gc tests are now integrated into main tests (array.wast, struct.wast, ref_cast.wast, etc.)
 
+// memory64 tests
+t('/test/official/memory64.wast', async function () { await file(this.name, { spectest }) })
+t('/test/official/memory64-imports.wast', async function () { await file(this.name, { spectest }) })
+
 t.todo('/test/official/proposals/memory64/array.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/memory64/memory.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/memory64/memory64.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/proposals/memory64/table.wast', async function () { await file(this.name, { spectest }) })
+
 
 // relaxed-simd tests are now integrated into main tests
 

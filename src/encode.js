@@ -2,21 +2,35 @@ import { err, intRE, sepRE } from './util.js'
 
 // encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
 
-// uleb
+// uleb - handles both 32-bit and 64-bit values
 export const uleb = (n, buffer = []) => {
   if (n == null) return buffer
-  if (typeof n === 'string') n = i32.parse(n)
+  if (typeof n === 'string') n = /[_x]/i.test(n) ? BigInt(n.replaceAll('_', '')) : i32.parse(n)
 
-  let byte = n & 0b01111111;
-  n = n >>> 7;
+  // Handle BigInt for 64-bit values
+  if (typeof n === 'bigint') {
+    while (true) {
+      const byte = Number(n & 0x7Fn)
+      n >>= 7n
+      if (n === 0n) {
+        buffer.push(byte)
+        break
+      }
+      buffer.push(byte | 0x80)
+    }
+    return buffer
+  }
+
+  // Handle regular numbers for 32-bit values
+  let byte = n & 0x7f
+  n >>>= 7
 
   if (n === 0) {
-    buffer.push(byte);
-    return buffer;
-  } else {
-    buffer.push(byte | 0b10000000);
-    return uleb(n, buffer);
+    buffer.push(byte)
+    return buffer
   }
+  buffer.push(byte | 0x80)
+  return uleb(n, buffer)
 }
 
 // fixed-width uleb

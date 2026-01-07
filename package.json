@@ -11,7 +11,7 @@
   },
   "type": "module",
   "scripts": {
-    "test": "node test",
+    "test": "node --experimental-wasm-memory64 test",
     "postinstall": "git submodule update --init --recursive"
   },
   "repository": {

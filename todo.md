@@ -89,10 +89,13 @@
   * [x] named sections
   * [x] branch hints
 * [x] multiple memories
+* [x] code_metadata
 * [ ] try immutable approach (from branch)
 * [ ] Try removing all quotes
-* [ ] Exceptions, memory64, code_metadata, js_strings
 * [ ] Features
+  * [ ] js_strings
+  * [ ] Exceptions
+  * [x] memory64
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [x] All main ones (readme)
   * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
@@ -102,6 +105,9 @@
 * [ ] replace wabt with spec/wasm for tests
 * [ ] Finish all official tests
   * [ ] All skipped features
+* [ ] Types
+* [ ] Cleanup tests harness
+* [ ] Make sure all existing proposals are up to date
 
 ## REPL
 
