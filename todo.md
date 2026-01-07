@@ -90,7 +90,7 @@
   * [x] branch hints
 * [x] multiple memories
 * [x] code_metadata
-* [x] ~~try immutable approach (from branch)~~ -> analyzed, applied 1 clean simplification (br_table)
+* [ ] try immutable approach (from branch)
   * [ ] consider index-based iteration for plain() hot path only
 * [ ] Try removing all quotes
 * [ ] Features
