@@ -77,17 +77,9 @@ export function inline(src, importObj) {
   let tree = parse(src)
   // in order to make sure tree is not messed up we freeze it
   freeze(tree)
-  let watrBuffer = compile(tree), wabtBuffer
-  try {
-    wabtBuffer = wat2wasm(src).buffer
-  } catch (e) {
-    console.warn(e)
-  }
-  if (wabtBuffer) is(watrBuffer, wabtBuffer)
+  let watrBuffer = compile(tree)
   const mod = new WebAssembly.Module(watrBuffer)
-  // ok(1, 'compiles')
   const inst = new WebAssembly.Instance(mod, importObj)
-  // ok(1, 'instantiates')
   return inst
 }
 
@@ -123,7 +115,7 @@ export async function file(path, imports = {}) {
     if (node[0] === 'module') {
       // strip comments
       node = node.flatMap(function uncomment(el) { return !el ? [el] : typeof el === 'string' ? (el[1] === ';' ? [] : [el]) : [el.flatMap(uncomment)] })
-      
+
       try {
         buf = compile(node)
         let m = new WebAssembly.Module(buf)

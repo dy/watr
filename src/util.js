@@ -8,8 +8,10 @@ export const sepRE = /^_|_$|[^\da-f]_|_[^\da-f]/i
 
 export const intRE = /^[+-]?(?:0x[\da-f]+|\d+)$/i
 
+export const tenc = new TextEncoder();
+export const tdec = new TextDecoder('utf-8', { fatal: true });
+
 // build string binary - convert WAT string to byte array
-const enc = new TextEncoder()
 export const str = (...parts) => {
   let s = parts.map(s => s[0] === '"' ? s.slice(1, -1) : s).join(''), res = []
 
@@ -20,7 +22,7 @@ export const str = (...parts) => {
       // \u{...} unicode - decode and UTF-8 encode
       if (n === 'u' && s[i + 2] === '{') {
         let hex = s.slice(i + 3, i = s.indexOf('}', i + 3))
-        res.push(...enc.encode(String.fromCodePoint(parseInt(hex, 16))))
+        res.push(...tenc.encode(String.fromCodePoint(parseInt(hex, 16))))
         // i now points to '}', loop i++ will move past it
       }
       // Named escape
@@ -36,7 +38,7 @@ export const str = (...parts) => {
     }
     // Multi-byte char - UTF-8 encode
     else if (c > 255) {
-      res.push(...enc.encode(s[i]))
+      res.push(...tenc.encode(s[i]))
     }
     // Raw byte
     else res.push(c)

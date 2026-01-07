@@ -5,10 +5,10 @@ const OPAREN = 40, CPAREN = 41, OBRACK = 91, CBRACK = 93, SPACE = 32, DQUOTE = 3
 
 
 /**
- * Parses a wasm text string and constructs a nested array structure (AST).
+ * Parses (lexes) a WASM text string into tree of tokens without semantics yet.
  *
  * @param {string} str - The input string with WAT code to parse.
- * @param {object} options - Parse options, like comments, etc.
+ * @param {object} options - Parse options, like comments, annotations, etc.
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
 export default (str, o={ comments: false }) => {

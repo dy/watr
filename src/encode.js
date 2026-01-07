@@ -157,6 +157,8 @@ f64.parse = (input, max=Number.MAX_VALUE) => {
 
     // FIXME: this is not accurate, it must be byte-perfect
     sig = parseInt(int + fract); // 0x is included in int
+    isNaN(sig) && err(`Bad float hex significand ${sig}`)
+
     exp = parseInt(exp, 10);
 
     // 0x10a.fbc = 0x10afbc * 16⁻³ = 266.9833984375
