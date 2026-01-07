@@ -1,33 +1,8 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE, INSTR_HANDLERS } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE, INSTR_META } from './const.js'
 import parse from './parse.js'
 import { err, tdec } from './util.js'
-
-// Immediate type metadata - flattened structure
-// Maps immediate type => [field, idxFn] or [encodeFn] or [singleFn]
-const IMM_SPECS = {
-  localidx: ['local', 'id'],
-  globalidx: ['global', 'id'],
-  funcidx: ['func', 'id'],
-  typeidx: ['type', 'id'],
-  tableidx: ['table', 'id'],
-  labelidx: ['block', 'blockid'],
-  dataidx: ['data', 'id'],
-  elemidx: ['elem', 'id'],
-  laneidx: 'parseUint',  // single function name
-  i32: 'i32',
-  i64: 'i64',
-  f32: 'f32',
-  f64: 'f64',
-}
-
-// Helper to check if node is a valid index reference
-const isIdx = n => n?.[0] === '$' || !isNaN(n)
-
-// Helper for optional index immediate
-const takeOptIdx = (nodes, ctx, field, defaultVal = 0) =>
-  uleb(id(isIdx(nodes[0]) ? nodes.shift() : defaultVal, ctx[field]))
 
 // iterating context
 let cur, idx
@@ -192,11 +167,16 @@ export default function compile(nodes) {
 }
 
 
-// --- normalize helpers ---
+// if node is a valid index reference
+const isIdx = n => n?.[0] === '$' || !isNaN(n)
+
+// Helper for optional index immediate
+const takeOptIdx = (nodes, ctx, field, defaultVal = 0) =>
+  uleb(id(isIdx(nodes[0]) ? nodes.shift() : defaultVal, ctx[field]))
+
 const isInstr = s => typeof s === 'string' && Array.isArray(INSTR[s])
 const isImmed = n => !Array.isArray(n) || 'type,param,result,ref'.includes(n[0])
 const optIdx2 = nodes => [isIdx(nodes[0]) ? nodes.shift() : 0, isIdx(nodes[0]) ? nodes.shift() : 0]
-// --- end normalize helpers ---
 
 
 // --- normalize function (was in normalize.js) ---
@@ -600,13 +580,42 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 
 
 
-// consume one instruction from nodes sequence
+// Compact handler registry
+const H = {
+  block: (n, c, i) => (c.block.push(i[0]), n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
+  end: (n, c) => c.block.pop(),
+  call_indirect: (n, c, i) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
+  br_table: (n, c, i) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || n[0][0] === '$')) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
+  select: (n, c, i) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
+  ref_null: (n, c, i) => (t => i.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
+  memarg: (n, c, i, op) => i.push(...memargEnc(n, op)),
+  opt_memory: (n, c, i) => i.push(...takeOptIdx(n, c, 'memory')),
+  reftype: (n, c, i) => (ht => (ht[0] !== REFTYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
+  reftype2: (n, c, i) => (([b, h1, h2]) => i.push(((h2[0] !== REFTYPE.ref) << 1) | (h1[0] !== REFTYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
+  // SIMD special handlers
+  v128const: (n, _c, i) => {
+    let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3
+    num = +num
+    if (t[0] === 'i') {
+      let arr = num === 16 ? new Uint8Array(16) : num === 8 ? new Uint16Array(8) : num === 4 ? new Uint32Array(4) : new BigUint64Array(2)
+      for (let j = 0; j < num; j++) arr[j] = encode[t].parse(n.shift())
+      i.push(...new Uint8Array(arr.buffer))
+    } else {
+      let arr = new Uint8Array(16)
+      for (let j = 0; j < num; j++) arr.set(encode[t](n.shift()), j * stride)
+      i.push(...arr)
+    }
+  },
+  shuffle: (n, _c, i) => { for (let j = 0; j < 16; j++) i.push(parseUint(n.shift(), 32)) },
+  memlane: (n, _c, i, op) => (i.push(...memargEnc(n, op)), i.push(...uleb(parseUint(n.shift()))))
+}
+
+// Unified instruction encoder - fully declarative using INSTR.spec and INSTR.imm
 const instr = (nodes, ctx) => {
   if (!nodes?.length) return []
+  let out = [], op = nodes.shift(), immed, spec
 
-  let out = [], op = nodes.shift(), immed, code
-
-  // consume nested group - recursively process args first, then instruction
+  // Nested group: recurse
   if (Array.isArray(op)) {
     immed = instr(op, ctx)
     while (op.length) out.push(...instr(op, ctx))
@@ -615,215 +624,52 @@ const instr = (nodes, ctx) => {
   }
 
   ;[...immed] = isNaN(op[0]) && INSTR[op] || err(`Unknown instruction ${op}`)
-  code = immed[0]
 
-  // gc-related
-  // https://webassembly.github.io/gc/core/binary/instructions.html#reference-instructions
-  if (code === 0x0fb) {
-    [, code] = immed
-    const spec = INSTR_HANDLERS[0xfb]?.[code]
+  // Multi-byte opcodes: ULEB-encode the secondary opcode
+  if (immed.length > 1) immed = [immed[0], ...uleb(immed[1])]
 
-    if (Array.isArray(spec)) {
-      // Handle instructions with index-based immediates: ['type', 'field', '*', '?memory']
-      for (const field of spec) {
-        if (field === '*') {
-          // Raw value immediate (counts, not indices)
-          immed.push(...uleb(nodes.shift()))
-        } else if (field === 'field') {
-          // Special case: struct.get|set* need field index lookup from struct definition
-          const tidx = immed[immed.length - 1] // last pushed value is typeidx
-          immed.push(...uleb(id(nodes.shift(), ctx.type[tidx][1])))
-        } else {
-          immed.push(...uleb(id(nodes.shift(), ctx[field] || ctx.type)))
+  // Try custom handler first (@ prefixed specs)
+  if (spec = INSTR.spec[op]) {
+    if (spec === 'null') {} // No-op (else, then)
+    else if (spec === 'reversed') {
+      // Special case: table.init has reversed argument order
+      let t = nodes.shift(), e = nodes.shift()
+      immed.push(...uleb(id(e, ctx.elem)), ...uleb(id(t, ctx.table)))
+    }
+    else if (H[spec]) H[spec](nodes, ctx, immed, op)
+    else err(`Unknown handler ${spec}`)
+    return out.push(...immed), out
+  }
+
+  // Try immediate type spec (simple or multi-field)
+  if (spec = INSTR.imm[op]) {
+    // Multi-field spec: parse space-separated fields like "type field" or "data memory"
+    if (spec.includes(' ')) {
+      spec.split(' ').forEach(f => {
+        if (f === '*') immed.push(...uleb(nodes.shift()))
+        else if (f === 'field') immed.push(...uleb(id(nodes.shift(), ctx.type[immed[immed.length - 1]][1])))
+        else {
+          const opt = f[0] === '?', field = opt ? f.slice(1) : f
+          const immSpec = INSTR_META[field]
+          if (!immSpec) err(`Unknown field ${field}`)
+          const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
+          typeof immSpec === 'string' ? immed.push(...encode[immSpec](val)) : immed.push(...uleb((immSpec[1] === 'blockid' ? blockid : id)(val, ctx[immSpec[0]])))
         }
-      }
-    } else if (spec === 'reftype') {
-      // ref.test|cast - single reftype argument
-      let ht = reftype(nodes.shift(), ctx)
-      if (ht[0] !== REFTYPE.ref) immed.push(code = immed.pop() + 1) // ref.test|cast (ref null $t) is next op
-      if (ht.length > 1) ht.shift() // pop ref
-      immed.push(...ht)
-    } else if (spec === 'reftype2') {
-      // br_on_cast[_fail] - labelidx + two reftypes
-      let i = blockid(nodes.shift(), ctx.block),
-        ht1 = reftype(nodes.shift(), ctx),
-        ht2 = reftype(nodes.shift(), ctx),
-        castflags = ((ht2[0] !== REFTYPE.ref) << 1) | (ht1[0] !== REFTYPE.ref)
-      immed.push(castflags, ...uleb(i), ht1.pop(), ht2.pop())
+      })
+    }
+    // Simple immediate: lookup in INSTR_META
+    else {
+      const opt = spec[0] === '?', field = opt ? spec.slice(1) : spec
+      const immSpec = INSTR_META[field]
+      if (!immSpec) err(`Unknown immediate type ${field}`)
+      const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
+      typeof immSpec === 'string' ?
+        immSpec === 'parseUint' ? immed.push(parseUint(val, 0xff)) : immed.push(...encode[immSpec](val)) :
+        immed.push(...uleb((immSpec[1] === 'blockid' ? blockid : id)(val, ctx[immSpec[0]])))
     }
   }
 
-  // bulk memory: (memory.init) (memory.copy) (data.drop) (memory.fill)
-  // table ops: (table.init|copy|grow|size|fill) (elem.drop)
-  else if (code == 0xfc) {
-    [, code] = immed
-    const spec = INSTR_HANDLERS[0xfc]?.[code]
-
-    // Special case: table.init has reversed WAT/binary order (need elemidx after tableidx consumed)
-    if (code === 0x0c) {
-      let tableidx = nodes.shift()
-      let elemidx = nodes.shift()
-      immed.push(...uleb(id(elemidx, ctx.elem)), ...uleb(id(tableidx, ctx.table)))
-    } else if (Array.isArray(spec)) {
-      // Generic index handler: ['data', 'memory', '?memory']
-      for (const field of spec) {
-        const optional = field[0] === '?'
-        const f = optional ? field.slice(1) : field
-        const val = optional ? (isIdx(nodes[0]) ? nodes.shift() : 0) : nodes.shift()
-        immed.push(...uleb(id(val, ctx[f])))
-      }
-    }
-  }
-
-  // v128s: (v128.load x) etc
-  // https://github.com/WebAssembly/simd/blob/master/proposals/simd/BinarySIMD.md
-  else if (code === 0xfd) {
-    [, code] = immed
-    immed = [0xfd, ...uleb(code)]
-
-    // (v128.load offset? align?)
-    if (code <= 0x0b) {
-      immed.push(...memargEnc(nodes, op))
-    }
-    // (v128.load_lane offset? align? idx)
-    else if (code >= 0x54 && code <= 0x5d) {
-      immed.push(...memargEnc(nodes, op))
-      // (v128.load_lane_zero) - optional laneidx for 0x54-0x5b
-      if (code <= 0x5b) immed.push(...uleb(parseUint(nodes.shift())))
-    }
-    // (i8x16.shuffle 0 1 ... 15 a b)
-    else if (code === 0x0d) {
-      // i8, i16, i32 - bypass the encoding
-      for (let i = 0; i < 16; i++) immed.push(parseUint(nodes.shift(), 32))
-    }
-    // (v128.const i32x4 1 2 3 4)
-    else if (code === 0x0c) {
-      let [t, n] = nodes.shift().split('x'),
-        bits = +t.slice(1),
-        stride = bits >>> 3 // i16 -> 2, f32 -> 4
-      n = +n
-      // i8, i16, i32 - bypass the encoding
-      if (t[0] === 'i') {
-        let arr = n === 16 ? new Uint8Array(16) : n === 8 ? new Uint16Array(8) : n === 4 ? new Uint32Array(4) : new BigUint64Array(2)
-        for (let i = 0; i < n; i++) {
-          let s = nodes.shift(), v = encode[t].parse(s)
-          arr[i] = v
-        }
-        immed.push(...(new Uint8Array(arr.buffer)))
-      }
-      // f32, f64 - encode
-      else {
-        let arr = new Uint8Array(16)
-        for (let i = 0; i < n; i++) {
-          let s = nodes.shift(), v = encode[t](s)
-          arr.set(v, i * stride)
-        }
-        immed.push(...arr)
-      }
-    }
-    // (i8x16.extract_lane_s 0 ...)
-    else if (code >= 0x15 && code <= 0x22) {
-      immed.push(...uleb(parseUint(nodes.shift())))
-    }
-  }
-
-  // control block abbrs
-  // block ..., loop ..., if ...
-  else if (code === 2 || code === 3 || code === 4) {
-    ctx.block.push(code)
-
-    // (block $x) (loop $y) - save label pointer
-    if (nodes[0]?.[0] === '$') ctx.block[nodes.shift()] = ctx.block.length
-
-    // blocktype is already normalized to: (result t) | (type idx) | undefined
-    let t = nodes.shift()
-
-    // void
-    if (!t) immed.push(TYPE.void)
-    // (result i32)
-    else if (t[0] === 'result') immed.push(...reftype(t[1], ctx))
-    // (type idx)
-    else immed.push(...uleb(id(t[1], ctx.type)))
-  }
-  // else - already normalized (label discarded)
-  else if (code === 5) { }
-  // then
-  else if (code === 6) immed = [] // ignore
-  // end - already normalized (label discarded)
-  else if (code == 0x0b) {
-    ctx.block.pop()
-  }
-
-  // call_indirect - already normalized to: tableidx (type idx)
-  // return_call_indirect - already normalized to: tableidx (type idx)
-  else if (code == 0x11 || code == 0x13) {
-    let tableidx = nodes.shift()
-    let [, idx] = nodes.shift() // (type idx)
-    immed.push(...uleb(id(idx, ctx.type)), ...uleb(id(tableidx, ctx.table)))
-  }
-
-  // br_table 1 2 3 4  0  selector result?
-  else if (code == 0x0e) {
-    let args = []
-    while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
-      args.push(...uleb(blockid(nodes.shift(), ctx.block)))
-    }
-    immed.push(...uleb(args.length - 1), ...args)
-  }
-
-  // select - already normalized to result array
-  else if (code == 0x1b) {
-    let result = nodes.shift() || []
-    // 0x1b -> 0x1c if typed select
-    if (result.length) immed.push(immed.pop() + 1, ...vec(result.map(t => reftype(t, ctx))))
-  }
-
-  // ref.null heaptype
-  else if (code == 0xd0) {
-    let t = nodes.shift()
-    immed.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, ctx.type)))) // func->funcref, extern->externref
-  }
-
-  // memarg: loads/stores
-  else if (code >= 0x28 && code <= 0x3e) {
-    immed.push(...memargEnc(nodes, op))
-  }
-
-  // memory.grow|size memidx - multi-memory proposal (optional arg)
-  else if (code == 0x3f || code == 0x40) {
-    immed.push(...takeOptIdx(nodes, ctx, 'memory'))
-  }
-
-  // dispatch simple immediate types via IMM_SPECS metadata
-  else if (INSTR.imm[op]) {
-    const spec = IMM_SPECS[INSTR.imm[op]]
-    if (spec) {
-      if (typeof spec === 'string') {
-        // Simple function spec (laneidx, i32, i64, f32, f64)
-        const fn = spec
-        if (fn === 'parseUint') {
-          // Raw uint8 immediate (lane index)
-          immed.push(parseUint(nodes.shift(), 0xff))
-        } else {
-          // Encoding function immediate (i32, i64, f32, f64)
-          const valFn = encode[fn]
-          immed.push(...valFn(nodes.shift()))
-        }
-      } else {
-        // Array spec [field, idxFn]
-        const [field, fn] = spec
-        if (fn === 'id' || fn === 'blockid') {
-          // Index-based immediate
-          const idFn = fn === 'blockid' ? blockid : id
-          immed.push(...uleb(idFn(nodes.shift(), ctx[field])))
-        }
-      }
-    }
-  }
-
-  out.push(...immed)
-
-  return out
+  return out.push(...immed), out
 }
 
 // instantiation time value initializer (consuming) - we redirect to instr

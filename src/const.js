@@ -5,21 +5,21 @@
 // Special: memarg, heaptype, laneidx, * (custom handler)
 export const INSTR = [
   // 0x00-0x0a: control
-  'unreachable', 'nop', 'block blocktype', 'loop blocktype', 'if blocktype', 'else', 'then', , , , ,
+  'unreachable', 'nop', 'block @block', 'loop @block', 'if @block', 'else @null', 'then @null', , , , ,
   // 0x0b-0x1a: control cont.
-  'end', 'br labelidx', 'br_if labelidx', 'br_table *', 'return', 'call funcidx', 'call_indirect *', 'return_call funcidx', 'return_call_indirect *', 'call_ref typeidx', 'return_call_ref typeidx', , , , ,
+  'end @end', 'br labelidx', 'br_if labelidx', 'br_table @br_table', 'return', 'call funcidx', 'call_indirect @call_indirect', 'return_call funcidx', 'return_call_indirect @call_indirect', 'call_ref typeidx', 'return_call_ref typeidx', , , , ,
   // 0x1a-0x1f: parametric
-  'drop', 'select *', '', , , ,
+  'drop', 'select @select', '', , , ,
   // 0x20-0x27: variable
   'local.get localidx', 'local.set localidx', 'local.tee localidx', 'global.get globalidx', 'global.set globalidx', 'table.get tableidx', 'table.set tableidx', ,
   // 0x28-0x3e: memory
-  'i32.load memarg', 'i64.load memarg', 'f32.load memarg', 'f64.load memarg',
-  'i32.load8_s memarg', 'i32.load8_u memarg', 'i32.load16_s memarg', 'i32.load16_u memarg',
-  'i64.load8_s memarg', 'i64.load8_u memarg', 'i64.load16_s memarg', 'i64.load16_u memarg', 'i64.load32_s memarg', 'i64.load32_u memarg',
-  'i32.store memarg', 'i64.store memarg', 'f32.store memarg', 'f64.store memarg',
-  'i32.store8 memarg', 'i32.store16 memarg', 'i64.store8 memarg', 'i64.store16 memarg', 'i64.store32 memarg',
+  'i32.load @memarg', 'i64.load @memarg', 'f32.load @memarg', 'f64.load @memarg',
+  'i32.load8_s @memarg', 'i32.load8_u @memarg', 'i32.load16_s @memarg', 'i32.load16_u @memarg',
+  'i64.load8_s @memarg', 'i64.load8_u @memarg', 'i64.load16_s @memarg', 'i64.load16_u @memarg', 'i64.load32_s @memarg', 'i64.load32_u @memarg',
+  'i32.store @memarg', 'i64.store @memarg', 'f32.store @memarg', 'f64.store @memarg',
+  'i32.store8 @memarg', 'i32.store16 @memarg', 'i64.store8 @memarg', 'i64.store16 @memarg', 'i64.store32 @memarg',
   // 0x3f-0x40: memory size/grow
-  'memory.size memidx', 'memory.grow memidx',
+  'memory.size @opt_memory', 'memory.grow @opt_memory',
   // 0x41-0x44: const
   'i32.const i32', 'i64.const i64', 'f32.const f32', 'f64.const f64',
   // 0x45-0x4f: i32 comparison
@@ -48,28 +48,73 @@ export const INSTR = [
   // 0xc0-0xc4: sign extension
   'i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s', , , , , , , , , , , ,
   // 0xd0-0xd6: reference
-  'ref.null heaptype', 'ref.is_null', 'ref.func funcidx', 'ref.eq', 'ref.as_non_null', 'br_on_null labelidx', 'br_on_non_null labelidx', , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
+  'ref.null @ref_null', 'ref.is_null', 'ref.func funcidx', 'ref.eq', 'ref.as_non_null', 'br_on_null labelidx', 'br_on_non_null labelidx',
+  // 0xd7-0xfa: padding to 0xfb (36 empty slots)
+  , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
+  // 0xfb: GC instructions (nested array for multi-byte opcodes)
+  [
+    'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx field', 'struct.get_s typeidx field', 'struct.get_u typeidx field', 'struct.set typeidx field',
+    'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx *', 'array.new_data typeidx dataidx', 'array.new_elem typeidx elemidx',
+    'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx typeidx',
+    'array.init_data typeidx dataidx', 'array.init_elem typeidx elemidx', 'ref.test @reftype', '', 'ref.cast @reftype', '', 'br_on_cast @reftype2', 'br_on_cast_fail @reftype2',
+    'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u'
+  ],
 
-  // 0xFB 0xNN (0xFB shift): GC instructions
-  'struct.new typeidx', 'struct.new_default typeidx', 'struct.get *', 'struct.get_s *', 'struct.get_u *', 'struct.set *', 'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed *', 'array.new_data *', 'array.new_elem *', 'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy *', 'array.init_data *', 'array.init_elem *', 'ref.test *', '', 'ref.cast *', '', 'br_on_cast *', 'br_on_cast_fail *', 'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u', ,
+  // 0xfc: Bulk memory/table operations (nested array)
+  [
+    'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
+    'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
+    'memory.init dataidx memidx', 'data.drop dataidx', 'memory.copy memidx memidx', 'memory.fill ?memidx',
+    'table.init @reversed', 'elem.drop elemidx', 'table.copy tableidx tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
+    'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u'
+  ],
 
-  // 0xFC 0xNN (0x11b shift): misc/bulk memory
-  'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u', 'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
-  'memory.init *', 'data.drop dataidx', 'memory.copy *', 'memory.fill *', 'table.init *', 'elem.drop elemidx', 'table.copy *', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
-  'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u', ,
-
-  // 0xFD 0xNN (0x133 shift): SIMD
-  'v128.load memarg', 'v128.load8x8_s memarg', 'v128.load8x8_u memarg', 'v128.load16x4_s memarg', 'v128.load16x4_u memarg', 'v128.load32x2_s memarg', 'v128.load32x2_u memarg', 'v128.load8_splat memarg', 'v128.load16_splat memarg', 'v128.load32_splat memarg', 'v128.load64_splat memarg', 'v128.store memarg', 'v128.const *', 'i8x16.shuffle *',
-  'i8x16.swizzle', 'i8x16.splat', 'i16x8.splat', 'i32x4.splat', 'i64x2.splat', 'f32x4.splat', 'f64x2.splat',
-  'i8x16.extract_lane_s laneidx', 'i8x16.extract_lane_u laneidx', 'i8x16.replace_lane laneidx', 'i16x8.extract_lane_s laneidx', 'i16x8.extract_lane_u laneidx', 'i16x8.replace_lane laneidx', 'i32x4.extract_lane laneidx', 'i32x4.replace_lane laneidx', 'i64x2.extract_lane laneidx', 'i64x2.replace_lane laneidx', 'f32x4.extract_lane laneidx', 'f32x4.replace_lane laneidx', 'f64x2.extract_lane laneidx', 'f64x2.replace_lane laneidx',
-  'i8x16.eq', 'i8x16.ne', 'i8x16.lt_s', 'i8x16.lt_u', 'i8x16.gt_s', 'i8x16.gt_u', 'i8x16.le_s', 'i8x16.le_u', 'i8x16.ge_s', 'i8x16.ge_u', 'i16x8.eq', 'i16x8.ne', 'i16x8.lt_s', 'i16x8.lt_u', 'i16x8.gt_s', 'i16x8.gt_u', 'i16x8.le_s', 'i16x8.le_u', 'i16x8.ge_s', 'i16x8.ge_u', 'i32x4.eq', 'i32x4.ne', 'i32x4.lt_s', 'i32x4.lt_u', 'i32x4.gt_s', 'i32x4.gt_u', 'i32x4.le_s', 'i32x4.le_u', 'i32x4.ge_s', 'i32x4.ge_u', 'f32x4.eq', 'f32x4.ne', 'f32x4.lt', 'f32x4.gt', 'f32x4.le', 'f32x4.ge', 'f64x2.eq', 'f64x2.ne', 'f64x2.lt', 'f64x2.gt', 'f64x2.le', 'f64x2.ge', 'v128.not', 'v128.and', 'v128.andnot', 'v128.or', 'v128.xor', 'v128.bitselect', 'v128.any_true',
-  'v128.load8_lane *', 'v128.load16_lane *', 'v128.load32_lane *', 'v128.load64_lane *', 'v128.store8_lane *', 'v128.store16_lane *', 'v128.store32_lane *', 'v128.store64_lane *', 'v128.load32_zero memarg', 'v128.load64_zero memarg', 'f32x4.demote_f64x2_zero', 'f64x2.promote_low_f32x4',
-  'i8x16.abs', 'i8x16.neg', 'i8x16.popcnt', 'i8x16.all_true', 'i8x16.bitmask', 'i8x16.narrow_i16x8_s', 'i8x16.narrow_i16x8_u', 'f32x4.ceil', 'f32x4.floor', 'f32x4.trunc', 'f32x4.nearest', 'i8x16.shl', 'i8x16.shr_s', 'i8x16.shr_u', 'i8x16.add', 'i8x16.add_sat_s', 'i8x16.add_sat_u', 'i8x16.sub', 'i8x16.sub_sat_s', 'i8x16.sub_sat_u', 'f64x2.ceil', 'f64x2.floor', 'i8x16.min_s', 'i8x16.min_u', 'i8x16.max_s', 'i8x16.max_u', 'f64x2.trunc', 'i8x16.avgr_u',
-  'i16x8.extadd_pairwise_i8x16_s', 'i16x8.extadd_pairwise_i8x16_u', 'i32x4.extadd_pairwise_i16x8_s', 'i32x4.extadd_pairwise_i16x8_u', 'i16x8.abs', 'i16x8.neg', 'i16x8.q15mulr_sat_s', 'i16x8.all_true', 'i16x8.bitmask', 'i16x8.narrow_i32x4_s', 'i16x8.narrow_i32x4_u', 'i16x8.extend_low_i8x16_s', 'i16x8.extend_high_i8x16_s', 'i16x8.extend_low_i8x16_u', 'i16x8.extend_high_i8x16_u',
-  'i16x8.shl', 'i16x8.shr_s', 'i16x8.shr_u', 'i16x8.add', 'i16x8.add_sat_s', 'i16x8.add_sat_u', 'i16x8.sub', 'i16x8.sub_sat_s', 'i16x8.sub_sat_u', 'f64x2.nearest', 'i16x8.mul', 'i16x8.min_s', 'i16x8.min_u', 'i16x8.max_s', 'i16x8.max_u', , 'i16x8.avgr_u',
-  'i16x8.extmul_low_i8x16_s', 'i16x8.extmul_high_i8x16_s', 'i16x8.extmul_low_i8x16_u', 'i16x8.extmul_high_i8x16_u', 'i32x4.abs', 'i32x4.neg', , 'i32x4.all_true', 'i32x4.bitmask', , , 'i32x4.extend_low_i16x8_s', 'i32x4.extend_high_i16x8_s', 'i32x4.extend_low_i16x8_u', 'i32x4.extend_high_i16x8_u', 'i32x4.shl', 'i32x4.shr_s', 'i32x4.shr_u', 'i32x4.add', , , 'i32x4.sub', , , , 'i32x4.mul', 'i32x4.min_s', 'i32x4.min_u', 'i32x4.max_s', 'i32x4.max_u', 'i32x4.dot_i16x8_s', , 'i32x4.extmul_low_i16x8_s', 'i32x4.extmul_high_i16x8_s', 'i32x4.extmul_low_i16x8_u', 'i32x4.extmul_high_i16x8_u', 'i64x2.abs', 'i64x2.neg', , 'i64x2.all_true', 'i64x2.bitmask', , , 'i64x2.extend_low_i32x4_s', 'i64x2.extend_high_i32x4_s', 'i64x2.extend_low_i32x4_u', 'i64x2.extend_high_i32x4_u', 'i64x2.shl', 'i64x2.shr_s', 'i64x2.shr_u', 'i64x2.add', , , 'i64x2.sub', , , , 'i64x2.mul', 'i64x2.eq', 'i64x2.ne', 'i64x2.lt_s', 'i64x2.gt_s', 'i64x2.le_s', 'i64x2.ge_s', 'i64x2.extmul_low_i32x4_s', 'i64x2.extmul_high_i32x4_s', 'i64x2.extmul_low_i32x4_u', 'i64x2.extmul_high_i32x4_u', 'f32x4.abs', 'f32x4.neg', , 'f32x4.sqrt', 'f32x4.add', 'f32x4.sub', 'f32x4.mul', 'f32x4.div', 'f32x4.min', 'f32x4.max', 'f32x4.pmin', 'f32x4.pmax', 'f64x2.abs', 'f64x2.neg', , 'f64x2.sqrt', 'f64x2.add', 'f64x2.sub', 'f64x2.mul', 'f64x2.div', 'f64x2.min', 'f64x2.max', 'f64x2.pmin', 'f64x2.pmax', 'i32x4.trunc_sat_f32x4_s', 'i32x4.trunc_sat_f32x4_u', 'f32x4.convert_i32x4_s', 'f32x4.convert_i32x4_u', 'i32x4.trunc_sat_f64x2_s_zero', 'i32x4.trunc_sat_f64x2_u_zero', 'f64x2.convert_low_i32x4_s', 'f64x2.convert_low_i32x4_u',
-  // relaxed SIMD instructions
-  'i8x16.relaxed_swizzle', 'i32x4.relaxed_trunc_f32x4_s', 'i32x4.relaxed_trunc_f32x4_u', 'i32x4.relaxed_trunc_f64x2_s_zero', 'i32x4.relaxed_trunc_f64x2_u_zero', 'f32x4.relaxed_madd', 'f32x4.relaxed_nmadd', 'f64x2.relaxed_madd', 'f64x2.relaxed_nmadd', 'i8x16.relaxed_laneselect', 'i16x8.relaxed_laneselect', 'i32x4.relaxed_laneselect', 'i64x2.relaxed_laneselect', 'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max', 'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s'
+  // 0xfd: SIMD instructions (nested array)
+  [
+    'v128.load @memarg', 'v128.load8x8_s @memarg', 'v128.load8x8_u @memarg', 'v128.load16x4_s @memarg', 'v128.load16x4_u @memarg',
+    'v128.load32x2_s @memarg', 'v128.load32x2_u @memarg', 'v128.load8_splat @memarg', 'v128.load16_splat @memarg', 'v128.load32_splat @memarg',
+    'v128.load64_splat @memarg', 'v128.store @memarg', 'v128.const @v128const', 'i8x16.shuffle @shuffle',
+    'i8x16.swizzle', 'i8x16.splat', 'i16x8.splat', 'i32x4.splat', 'i64x2.splat', 'f32x4.splat', 'f64x2.splat',
+    'i8x16.extract_lane_s laneidx', 'i8x16.extract_lane_u laneidx', 'i8x16.replace_lane laneidx',
+    'i16x8.extract_lane_s laneidx', 'i16x8.extract_lane_u laneidx', 'i16x8.replace_lane laneidx',
+    'i32x4.extract_lane laneidx', 'i32x4.replace_lane laneidx', 'i64x2.extract_lane laneidx', 'i64x2.replace_lane laneidx',
+    'f32x4.extract_lane laneidx', 'f32x4.replace_lane laneidx', 'f64x2.extract_lane laneidx', 'f64x2.replace_lane laneidx',
+    'i8x16.eq', 'i8x16.ne', 'i8x16.lt_s', 'i8x16.lt_u', 'i8x16.gt_s', 'i8x16.gt_u', 'i8x16.le_s', 'i8x16.le_u', 'i8x16.ge_s', 'i8x16.ge_u',
+    'i16x8.eq', 'i16x8.ne', 'i16x8.lt_s', 'i16x8.lt_u', 'i16x8.gt_s', 'i16x8.gt_u', 'i16x8.le_s', 'i16x8.le_u', 'i16x8.ge_s', 'i16x8.ge_u',
+    'i32x4.eq', 'i32x4.ne', 'i32x4.lt_s', 'i32x4.lt_u', 'i32x4.gt_s', 'i32x4.gt_u', 'i32x4.le_s', 'i32x4.le_u', 'i32x4.ge_s', 'i32x4.ge_u',
+    'f32x4.eq', 'f32x4.ne', 'f32x4.lt', 'f32x4.gt', 'f32x4.le', 'f32x4.ge', 'f64x2.eq', 'f64x2.ne', 'f64x2.lt', 'f64x2.gt', 'f64x2.le', 'f64x2.ge',
+    'v128.not', 'v128.and', 'v128.andnot', 'v128.or', 'v128.xor', 'v128.bitselect', 'v128.any_true',
+    'v128.load8_lane @memlane', 'v128.load16_lane @memlane', 'v128.load32_lane @memlane', 'v128.load64_lane @memlane',
+    'v128.store8_lane @memlane', 'v128.store16_lane @memlane', 'v128.store32_lane @memlane', 'v128.store64_lane @memlane',
+    'v128.load32_zero @memarg', 'v128.load64_zero @memarg', 'f32x4.demote_f64x2_zero', 'f64x2.promote_low_f32x4',
+    'i8x16.abs', 'i8x16.neg', 'i8x16.popcnt', 'i8x16.all_true', 'i8x16.bitmask', 'i8x16.narrow_i16x8_s', 'i8x16.narrow_i16x8_u',
+    'f32x4.ceil', 'f32x4.floor', 'f32x4.trunc', 'f32x4.nearest', 'i8x16.shl', 'i8x16.shr_s', 'i8x16.shr_u',
+    'i8x16.add', 'i8x16.add_sat_s', 'i8x16.add_sat_u', 'i8x16.sub', 'i8x16.sub_sat_s', 'i8x16.sub_sat_u',
+    'f64x2.ceil', 'f64x2.floor', 'i8x16.min_s', 'i8x16.min_u', 'i8x16.max_s', 'i8x16.max_u', 'f64x2.trunc', 'i8x16.avgr_u',
+    'i16x8.extadd_pairwise_i8x16_s', 'i16x8.extadd_pairwise_i8x16_u', 'i32x4.extadd_pairwise_i16x8_s', 'i32x4.extadd_pairwise_i16x8_u',
+    'i16x8.abs', 'i16x8.neg', 'i16x8.q15mulr_sat_s', 'i16x8.all_true', 'i16x8.bitmask', 'i16x8.narrow_i32x4_s', 'i16x8.narrow_i32x4_u',
+    'i16x8.extend_low_i8x16_s', 'i16x8.extend_high_i8x16_s', 'i16x8.extend_low_i8x16_u', 'i16x8.extend_high_i8x16_u',
+    'i16x8.shl', 'i16x8.shr_s', 'i16x8.shr_u', 'i16x8.add', 'i16x8.add_sat_s', 'i16x8.add_sat_u', 'i16x8.sub', 'i16x8.sub_sat_s', 'i16x8.sub_sat_u',
+    'f64x2.nearest', 'i16x8.mul', 'i16x8.min_s', 'i16x8.min_u', 'i16x8.max_s', 'i16x8.max_u', , 'i16x8.avgr_u',
+    'i16x8.extmul_low_i8x16_s', 'i16x8.extmul_high_i8x16_s', 'i16x8.extmul_low_i8x16_u', 'i16x8.extmul_high_i8x16_u',
+    'i32x4.abs', 'i32x4.neg', , 'i32x4.all_true', 'i32x4.bitmask', , , 'i32x4.extend_low_i16x8_s', 'i32x4.extend_high_i16x8_s',
+    'i32x4.extend_low_i16x8_u', 'i32x4.extend_high_i16x8_u', 'i32x4.shl', 'i32x4.shr_s', 'i32x4.shr_u', 'i32x4.add', , , 'i32x4.sub', , , ,
+    'i32x4.mul', 'i32x4.min_s', 'i32x4.min_u', 'i32x4.max_s', 'i32x4.max_u', 'i32x4.dot_i16x8_s', ,
+    'i32x4.extmul_low_i16x8_s', 'i32x4.extmul_high_i16x8_s', 'i32x4.extmul_low_i16x8_u', 'i32x4.extmul_high_i16x8_u',
+    'i64x2.abs', 'i64x2.neg', , 'i64x2.all_true', 'i64x2.bitmask', , , 'i64x2.extend_low_i32x4_s', 'i64x2.extend_high_i32x4_s',
+    'i64x2.extend_low_i32x4_u', 'i64x2.extend_high_i32x4_u', 'i64x2.shl', 'i64x2.shr_s', 'i64x2.shr_u', 'i64x2.add', , , 'i64x2.sub', , , ,
+    'i64x2.mul', 'i64x2.eq', 'i64x2.ne', 'i64x2.lt_s', 'i64x2.gt_s', 'i64x2.le_s', 'i64x2.ge_s',
+    'i64x2.extmul_low_i32x4_s', 'i64x2.extmul_high_i32x4_s', 'i64x2.extmul_low_i32x4_u', 'i64x2.extmul_high_i32x4_u',
+    'f32x4.abs', 'f32x4.neg', , 'f32x4.sqrt', 'f32x4.add', 'f32x4.sub', 'f32x4.mul', 'f32x4.div', 'f32x4.min', 'f32x4.max', 'f32x4.pmin', 'f32x4.pmax',
+    'f64x2.abs', 'f64x2.neg', , 'f64x2.sqrt', 'f64x2.add', 'f64x2.sub', 'f64x2.mul', 'f64x2.div', 'f64x2.min', 'f64x2.max', 'f64x2.pmin', 'f64x2.pmax',
+    'i32x4.trunc_sat_f32x4_s', 'i32x4.trunc_sat_f32x4_u', 'f32x4.convert_i32x4_s', 'f32x4.convert_i32x4_u',
+    'i32x4.trunc_sat_f64x2_s_zero', 'i32x4.trunc_sat_f64x2_u_zero', 'f64x2.convert_low_i32x4_s', 'f64x2.convert_low_i32x4_u',
+    'i8x16.relaxed_swizzle', 'i32x4.relaxed_trunc_f32x4_s', 'i32x4.relaxed_trunc_f32x4_u', 'i32x4.relaxed_trunc_f64x2_s_zero',
+    'i32x4.relaxed_trunc_f64x2_u_zero', 'f32x4.relaxed_madd', 'f32x4.relaxed_nmadd', 'f64x2.relaxed_madd', 'f64x2.relaxed_nmadd',
+    'i8x16.relaxed_laneselect', 'i16x8.relaxed_laneselect', 'i32x4.relaxed_laneselect', 'i64x2.relaxed_laneselect',
+    'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max',
+    'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s'
+  ]
 ],
   SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, tag: 13, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 },
   RECTYPE = { sub: 0x50, subfinal: 0x4F, rec: 0x4E },
@@ -98,55 +143,43 @@ export const INSTR = [
   // WAT escape codes: https://webassembly.github.io/spec/core/text/values.html#strings
   ESCAPE = { n: 10, r: 13, t: 9, v: 11, '"': 34, "'": 39, '\\': 92 }
 
-// Build instruction index: INSTR['i32.const'] = [0x41], INSTR.imm['i32.const'] = 'i32'
+// Build instruction index: INSTR['i32.const'] = [0x41], INSTR.imm['i32.const'] = 'i32', INSTR.spec['block'] = 'block'
 INSTR.imm = {}
+INSTR.spec = {}
 INSTR.forEach((entry, i) => {
   if (!entry) return
-  let [op, imm] = entry.split(' ')
-  INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]
-  if (imm) INSTR.imm[op] = imm
+  // Handle nested arrays for multi-byte opcodes (0xfb, 0xfc, 0xfd)
+  if (Array.isArray(entry)) {
+    entry.forEach((sub, j) => {
+      if (!sub) return
+      let [op, ...rest] = sub.split(' ')
+      let spec = rest.join(' ')
+      INSTR[op] = [i, j]
+      if (spec) {
+        if (spec[0] === '@') INSTR.spec[op] = spec.slice(1) // Custom handler
+        else INSTR.imm[op] = spec // Simple immediate
+      }
+    })
+    return
+  }
+  // Handle regular entries
+  let [op, ...rest] = entry.split(' ')
+  let spec = rest.join(' ')
+  INSTR[op] = [i]
+  if (spec) {
+    if (spec[0] === '@') INSTR.spec[op] = spec.slice(1) // Custom handler
+    else INSTR.imm[op] = spec // Simple immediate
+  }
 })
 
-// Extended instruction metadata for mnemonic-driven dispatch
-// Format: code => [field1, field2, ...] or special string
-// Fields: 'type', 'data', 'elem', 'table', 'memory', 'field', '?' prefix = optional, '*' = raw value
-export const INSTR_HANDLERS = {
-  0xfb: { // GC instructions
-    0: ['type'],           // struct.new
-    1: ['type'],           // struct.new_default
-    2: ['type', 'field'],  // struct.get
-    3: ['type', 'field'],  // struct.get_s
-    4: ['type', 'field'],  // struct.get_u
-    5: ['type', 'field'],  // struct.set
-    6: ['type'],           // array.new
-    7: ['type'],           // array.new_default
-    8: ['type', '*'],      // array.new_fixed (type + raw count)
-    9: ['type', 'data'],   // array.new_data
-    10: ['type', 'elem'],  // array.new_elem
-    11: ['type'],          // array.get
-    12: ['type'],          // array.get_s
-    13: ['type'],          // array.get_u
-    14: ['type'],          // array.set
-    15: [],                // array.len
-    16: ['type'],          // array.fill
-    17: ['type', 'type'],  // array.copy
-    18: ['type', 'data'],  // array.init_data
-    19: ['type', 'elem'],  // array.init_elem
-    20: 'reftype',         // ref.test
-    22: 'reftype',         // ref.cast
-    24: 'reftype2',        // br_on_cast
-    25: 'reftype2',        // br_on_cast_fail
-  },
-  0xfc: { // Bulk memory/table operations
-    0x08: ['data', 'memory'],    // memory.init
-    0x09: ['data'],              // data.drop
-    0x0a: ['memory', 'memory'],  // memory.copy
-    0x0b: ['?memory'],           // memory.fill (optional)
-    0x0c: ['table', 'elem'],     // table.init (reversed in binary)
-    0x0d: ['elem'],              // elem.drop
-    0x0e: ['table', 'table'],    // table.copy
-    0x0f: ['table'],             // table.grow
-    0x10: ['table'],             // table.size
-    0x11: ['table'],             // table.fill
-  },
+// Immediate type definitions - how to parse/encode immediate values
+// Format: immType => ['contextField', 'idFn'] or 'encodeFn'
+export const INSTR_META = {
+  // Index types: [context field, id function]
+  localidx: ['local', 'id'], globalidx: ['global', 'id'], funcidx: ['func', 'id'], typeidx: ['type', 'id'],
+  tableidx: ['table', 'id'], labelidx: ['block', 'blockid'], dataidx: ['data', 'id'], elemidx: ['elem', 'id'],
+  memidx: ['memory', 'id'],
+
+  // Value types: encode function name
+  laneidx: 'parseUint', i32: 'i32', i64: 'i64', f32: 'f32', f64: 'f64'
 }
