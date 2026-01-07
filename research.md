@@ -1,5 +1,3 @@
-
-
 ## [x] IR -> we collect nodes into context with scopes, but it's still valid nodes
 
 * collect section names / indexes
