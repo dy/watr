@@ -4,8 +4,14 @@ import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from 
 import parse from './parse.js'
 import { clone, err, tdec } from './util.js'
 
-// build instructions index
-INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
+// build instructions index: INSTR['i32.const'] = [0x41], INSTR.imm['i32.const'] = 'i32'
+INSTR.imm = {}
+INSTR.forEach((entry, i) => {
+  if (!entry) return
+  let [op, imm] = entry.split(' ')
+  INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]
+  if (imm) INSTR.imm[op] = imm
+})
 
 // iterating context
 let cur, idx
