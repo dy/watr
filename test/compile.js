@@ -105,6 +105,96 @@ t('compile: custom sections with placement', () => {
   is(inst.exports.f(), 1)
 })
 
+t('compile: branch hints - br_if unlikely', () => {
+  let src = `
+    (module
+      (func (export "test") (param i32) (result i32)
+        (block (result i32)
+          (i32.const 10)
+          (@metadata.code.branch_hint "\\00")
+          (br_if 0 (local.get 0))
+          (drop)
+          (i32.const 20)
+        )
+      )
+    )
+  `
+  let wasm = compile(parse(src))
+
+  // Check that branch hints section exists
+  let pos = 8
+  let foundBranchHints = false
+  while (pos < wasm.length) {
+    let sectionId = wasm[pos++]
+    let sectionSize = wasm[pos++]
+
+    if (sectionId === 0) {
+      let nameLen = wasm[pos]
+      let name = String.fromCharCode(...wasm.slice(pos + 1, pos + 1 + nameLen))
+      if (name === 'metadata.code.branch_hint') {
+        foundBranchHints = true
+        break
+      }
+    }
+    pos += sectionSize
+  }
+  ok(foundBranchHints, 'branch hints section found')
+
+  // Should still work correctly
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.test(0), 20, 'condition false returns 20')
+  is(inst.exports.test(1), 10, 'condition true returns 10')
+})
+
+t('compile: branch hints - if likely', () => {
+  let src = `
+    (module
+      (func (export "test") (param i32) (result i32)
+        (@metadata.code.branch_hint "\\01")
+        (if (result i32) (local.get 0)
+          (then (i32.const 42))
+          (else (i32.const 0))
+        )
+      )
+    )
+  `
+  let wasm = compile(parse(src))
+
+  // Verify module works
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.test(1), 42)
+  is(inst.exports.test(0), 0)
+})
+
+t('compile: branch hints - multiple hints in one function', () => {
+  let src = `
+    (module
+      (func (export "test") (param i32 i32) (result i32)
+        (block (result i32)
+          (i32.const 5)
+          (@metadata.code.branch_hint "\\00")
+          (br_if 0 (local.get 0))
+          (drop)
+          (@metadata.code.branch_hint "\\01")
+          (if (result i32) (local.get 1)
+            (then (i32.const 10))
+            (else (i32.const 20))
+          )
+        )
+      )
+    )
+  `
+  let wasm = compile(parse(src))
+
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.test(0, 0), 20)
+  is(inst.exports.test(0, 1), 10)
+  is(inst.exports.test(1, 0), 5)
+})
+
 t('compile: reexport func', () => {
   let src = `
     (export "f0" (func 0))

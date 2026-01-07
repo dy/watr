@@ -7,8 +7,8 @@ import { clone, err, str } from './util.js'
 // build instructions index
 INSTR.forEach((op, i) => INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]);
 
-// recursively strip all annotation nodes from AST, except @custom
-const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' && node[0] !== '@custom' ? null : node.map(unannot).filter(n => n != null)) : node
+// recursively strip all annotation nodes from AST, except @custom and @metadata.code.branch_hint
+const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@metadata.code.branch_hint') ? null : node.map(unannot).filter(n => n != null)) : node
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
@@ -150,24 +150,81 @@ export default function watr(nodes) {
     return !items.length ? [] : [kind, ...vec(count ? vec(items) : items)]
   }
 
+  // Build sections that need to be in order
+  const customSection = bin(SECTION.custom)
+  const typeSection = bin(SECTION.type)
+  const importSection = bin(SECTION.import)
+  const funcSection = bin(SECTION.func)
+  const tableSection = bin(SECTION.table)
+  const memorySection = bin(SECTION.memory)
+  const tagSection = bin(SECTION.tag)
+  const globalSection = bin(SECTION.global)
+  const exportSection = bin(SECTION.export)
+  const startSection = bin(SECTION.start, false)
+  const elemSection = bin(SECTION.elem)
+  const datacountSection = bin(SECTION.datacount, false)
+  const codeSection = bin(SECTION.code)  // Build code first to collect branch hints
+  const dataSection = bin(SECTION.data)
+
+  // Build branch hints custom section (must appear before code section)
+  const buildBranchHints = () => {
+    if (!ctx.branchHints || ctx.branchHints.length === 0) return []
+
+    // Sort by function index
+    ctx.branchHints.sort((a, b) => a.funcIdx - b.funcIdx)
+
+    // Section name: "metadata.code.branch_hint"
+    const name = 'metadata.code.branch_hint'
+    const nameBytes = [...uleb(name.length), ...Array.from(name).map(c => c.charCodeAt(0))]
+
+    // Build function hints
+    const funcHintsBytes = []
+    for (const { funcIdx, hints } of ctx.branchHints) {
+      // Sort hints by offset within function
+      hints.sort((a, b) => a[0] - b[0])
+
+      // funcidx: u32
+      funcHintsBytes.push(...uleb(funcIdx))
+
+      // vec of hints
+      funcHintsBytes.push(...uleb(hints.length))
+      for (const [offset, hint] of hints) {
+        // offset: u32 (relative to function body, after locals)
+        funcHintsBytes.push(...uleb(offset))
+        // reserved: u32 (must be 1)
+        funcHintsBytes.push(...uleb(1))
+        // hint: u32 (0 = unlikely, 1 = likely)
+        funcHintsBytes.push(...uleb(hint))
+      }
+    }
+
+    // vec of function hints
+    const content = [...uleb(ctx.branchHints.length), ...funcHintsBytes]
+
+    // Custom section: id=0, then size, then name + content
+    const sectionContent = [...nameBytes, ...content]
+    return [0, ...uleb(sectionContent.length), ...sectionContent]
+  }
+
   // build final binary
   return Uint8Array.from([
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
-    ...bin(SECTION.custom),
-    ...bin(SECTION.type),
-    ...bin(SECTION.import),
-    ...bin(SECTION.func),
-    ...bin(SECTION.table),
-    ...bin(SECTION.memory),
-    ...bin(SECTION.tag),
-    ...bin(SECTION.global),
-    ...bin(SECTION.export),
-    ...bin(SECTION.start, false),
-    ...bin(SECTION.elem),
-    ...bin(SECTION.datacount, false),
-    ...bin(SECTION.code),
-    ...bin(SECTION.data)
+    ...customSection,
+    ...typeSection,
+    ...importSection,
+    ...funcSection,
+    ...tableSection,
+    ...memorySection,
+    ...tagSection,
+    ...globalSection,
+    ...exportSection,
+    ...startSection,
+    ...elemSection,
+    ...datacountSection,
+    ...buildBranchHints(),  // Branch hints must appear before code section
+    ...codeSection,
+    ...dataSection
   ])
 }
 
@@ -285,6 +342,16 @@ const plain = (nodes, ctx) => {
   while (nodes.length) {
     let node = nodes.shift()
 
+    // branch hint annotation - pass through as marker
+    if (Array.isArray(node) && node[0] === '@metadata.code.branch_hint') {
+      // Extract hint value from annotation: (@metadata.code.branch_hint "\00"|"\01")
+      let hintStr = node[1]
+      // Parse the hint value - "\00" means unlikely (0), "\01" means likely (1)
+      let hint = hintStr === '"\\01"' || hintStr === '"\x01"' ? 1 : 0
+      out.push(['@branch_hint', hint])
+      continue
+    }
+
     // lookup is slower than sequence of known ifs
     if (typeof node === 'string') {
       out.push(node)
@@ -353,6 +420,12 @@ const plain = (nodes, ctx) => {
 
       // (if ...) -> if ... end
       else if (node[0] === 'if') {
+        // Check if there's a pending branch hint that should attach to this if
+        let pendingBranchHint = null
+        if (out.length > 0 && Array.isArray(out[out.length - 1]) && out[out.length - 1][0] === '@branch_hint') {
+          pendingBranchHint = out.pop()
+        }
+        
         let then = [], els = [], immed = [node.shift()]
         // (if label? blocktype? cond*? (then instr*) (else instr*)?) -> cond*? if label? blocktype? instr* else instr*? end
         // https://webassembly.github.io/spec/core/text/instructions.html#control-instructions
@@ -372,7 +445,13 @@ const plain = (nodes, ctx) => {
 
         if (typeof node[0] === 'string') err('Unfolded condition')
 
-        out.push(...plain(node, ctx), ...immed, ...then, ...els, 'end')
+        // For branch hints, we need: condition, hint, if (so hint comes right before if)
+        const conditions = plain(node, ctx)
+        if (pendingBranchHint) {
+          out.push(...conditions, pendingBranchHint, ...immed, ...then, ...els, 'end')
+        } else {
+          out.push(...conditions, ...immed, ...then, ...els, 'end')
+        }
       }
       else out.push(plain(node, ctx))
     }
@@ -575,6 +654,10 @@ const build = [
     ctx.local.name = 'local'
     ctx.block.name = 'block'
 
+    // Track current code index for branch hints
+    if (ctx._codeIdx === undefined) ctx._codeIdx = 0
+    let codeIdx = ctx._codeIdx++
+
     // collect locals
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
@@ -586,9 +669,28 @@ const build = [
       ctx.local.push(...types)
     }
 
+    // Initialize hint tracking
+    ctx._pendingHint = undefined
+
     const bytes = []
     while (body.length) bytes.push(...instr(body, ctx))
     bytes.push(0x0b)
+
+    // Extract hint placeholders from bytes array - scan once and collect hints + clean bytes
+    const hints = [], cleanBytes = []
+    for (const b of bytes) {
+      if (b?.hint !== undefined) hints.push([cleanBytes.length, b.hint])
+      else cleanBytes.push(b)
+    }
+
+    // Store hints for this function if any were found
+    if (hints.length) {
+      ctx.branchHints ??= []
+      let importedFuncs = ctx.import.filter(imp => imp[2][0] === 'func').length
+      ctx.branchHints.push({ funcIdx: importedFuncs + codeIdx, hints })
+    }
+
+    ctx._pendingHint = undefined
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     // we skip locals provided by params
@@ -598,7 +700,7 @@ const build = [
     ctx.local = ctx.block = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    return vec([...vec(loctypes.map(([n, t]) => [...uleb(n), ...reftype(t, ctx)])), ...bytes])
+    return vec([...vec(loctypes.map(([n, t]) => [...uleb(n), ...reftype(t, ctx)])), ...cleanBytes])
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
@@ -654,7 +756,6 @@ const reftype = (t, ctx) => (
 const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[1] : t, ctx), mut];
 
 
-
 // consume one instruction from nodes sequence
 const instr = (nodes, ctx) => {
   if (!nodes?.length) return []
@@ -663,10 +764,21 @@ const instr = (nodes, ctx) => {
   // helper: check if node is immediate (not array operand)
   const isImm = n => typeof n === 'string' || typeof n === 'number'
 
+  // Handle branch hint marker - store hint for next hintable instruction
+  if (Array.isArray(op) && op[0] === '@branch_hint') {
+    ctx._pendingHint = op[1]
+    return nodes.length ? instr(nodes, ctx) : []
+  }
+
   // consume group
   if (Array.isArray(op)) {
     immed = instr(op, ctx)
     while (op.length) out.push(...instr(op, ctx))
+    // Insert hint placeholder before hintable instruction (if/br_if)
+    if (ctx._pendingHint !== undefined && (immed[0] === 0x04 || immed[0] === 0x0d)) {
+      out.push({ hint: ctx._pendingHint })
+      ctx._pendingHint = undefined
+    }
     out.push(...immed)
     return out
   }
@@ -925,6 +1037,12 @@ const instr = (nodes, ctx) => {
   // table.get|set $id
   else if (code == 0x25 || code == 0x26) {
     immed.push(...uleb(id(nodes.shift(), ctx.table)))
+  }
+
+  // Insert hint placeholder before hintable instruction in flat form (if/br_if)
+  if (ctx._pendingHint !== undefined && (code === 0x04 || code === 0x0d)) {
+    out.push({ hint: ctx._pendingHint })
+    ctx._pendingHint = undefined
   }
 
   out.push(...immed)
