@@ -319,16 +319,13 @@ const plain = (nodes, ctx) => {
       // mark datacount section as required
       else if (node === 'memory.init' || node === 'data.drop' || node === 'array.new_data' || node === 'array.init_data') {
         ctx.datacount[0] = true
+        // memory.init memidx? dataidx
+        if (node === 'memory.init') out.push(isImm(nodes[1]) ? nodes.shift() : 0, isImm(nodes[0]) ? nodes.shift() : 0)
       }
 
       // memory.* memidx? - multi-memory proposal
       else if (node === 'memory.size' || node === 'memory.grow' || node === 'memory.fill') {
         out.push(isImm(nodes[0]) ? nodes.shift() : 0)
-      }
-
-      // memory.init memidx? dataidx
-      else if (node === 'memory.init') {
-        out.push(isImm(nodes[1]) ? nodes.shift() : 0, nodes.shift())
       }
 
       // memory.copy dstmem? srcmem?
@@ -725,7 +722,7 @@ const instr = (nodes, ctx) => {
 
     // memory.init memidx dataidx (binary: dataidx memidx)
     if (code === 0x08) {
-      let [m, d] = [isImm(nodes[0]) ? nodes.shift() : 0, isImm(nodes[0]) ? nodes.shift() : 0]
+      let m = isImm(nodes[0]) ? nodes.shift() : 0, d = isImm(nodes[0]) ? nodes.shift() : 0
       immed.push(...uleb(id(d, ctx.data)), ...uleb(id(m, ctx.memory)))
     }
     // data.drop idx
