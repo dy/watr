@@ -611,27 +611,28 @@ const HANDLE = {
   '@memlane': (n, _c, i, op) => (i.push(...memargEnc(n, op)), i.push(...uleb(parseUint(n.shift())))),
   // Special markers (no @ prefix needed in INSTR definitions)
   '*': (n, _c, i) => i.push(...uleb(n.shift())),
-  field: (n, c, i) => i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1])))
-}
+  field: (n, c, i) => i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1]))),
 
-// Context lookup map for *idx fields
-const CTX = { func: 'func', type: 'type', table: 'table', memory: 'memory', global: 'global', local: 'local', data: 'data', elem: 'elem' }
+  // Field encoders - all *idx types
+  labelidx: (n, c, i) => i.push(...uleb(blockid(n.shift(), c.block))),
+  laneidx: (n, c, i) => i.push(parseUint(n.shift(), 0xff)),
+  funcidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.func))),
+  typeidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.type))),
+  tableidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.table))),
+  memoryidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.memory))),
+  globalidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.global))),
+  localidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.local))),
+  dataidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.data))),
+  elemidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.elem))),
+  '?memoryidx': (n, c, i) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
 
-// Generate field encoder function
-const mkEnc = spec => {
-  // Only memoryidx can be optional (indicated by '?' prefix)
-  if (spec === '?memoryidx') return (n, c, i) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory)))
-  if (spec === 'labelidx') return (n, c, i) => i.push(...uleb(blockid(n.shift(), c.block)))
-  if (spec === 'laneidx') return (n, _c, i) => i.push(parseUint(n.shift(), 0xff))
-
-  if (spec.endsWith('idx')) {
-    const ctx = CTX[spec.slice(0, -3)]
-    return (n, c, i) => i.push(...uleb(id(n.shift(), c[ctx])))
-  }
-
-  const enc = encode[spec]
-  return (n, _c, i) => i.push(...enc(n.shift()))
-}
+  // Value type encoders
+  i32: (n, c, i) => i.push(...encode.i32(n.shift())),
+  i64: (n, c, i) => i.push(...encode.i64(n.shift())),
+  f32: (n, c, i) => i.push(...encode.f32(n.shift())),
+  f64: (n, c, i) => i.push(...encode.f64(n.shift())),
+  v128: (n, c, i) => i.push(...encode.v128(n.shift()))
+};
 
 
 // Populate INSTR and HANDLE from INSTR array
@@ -649,10 +650,10 @@ const mkEnc = spec => {
       // Generate handler if spec exists
       if (!HANDLE[name] && rest.length) {
         if (rest.length > 1) {
-          const encoders = rest.map(s => HANDLE[s] ?? mkEnc(s))
-          HANDLE[name] = (n, c, i) => encoders.map(enc => enc(n, c, i))
+          const encoders = rest.map(s => HANDLE[s])
+          HANDLE[name] = (n, c, i) => { for (let k = 0; k < encoders.length; k++) encoders[k](n, c, i) }
         }
-        else HANDLE[name] = HANDLE[rest[0]] ?? mkEnc(rest[0])
+        else HANDLE[name] = HANDLE[rest[0]]
       }
     }
   }
