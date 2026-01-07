@@ -72,7 +72,6 @@ print(src, {
 // (func(export "double")(param f64)(result f64)(f64.mul(local.get 0)(f64.const 2)))
 ```
 
-<!-- See [REPL](https://audio-lab.github.io/watr/repl.html).-->
 
 ## Status
 
@@ -99,6 +98,7 @@ watr | 7.5 kb | 6.0 op/s
 ## Projects using watr
 
 * [piezo](https://github.com/audio-lab/piezo) – audio processing language
+* [jz](https://github.com/audio-lab/jz)
 -->
 
 <!--
