@@ -245,8 +245,6 @@ const typeuse = (nodes, ctx, names) => {
 
 // consume (param t+)* (result t+)* sequence
 const paramres = (nodes, names = true) => {
-  // let param = [], result = []
-
   // collect param (param i32 i64) (param $x? i32)
   let param = fieldseq(nodes, 'param', names)
 
@@ -259,17 +257,15 @@ const paramres = (nodes, names = true) => {
 }
 
 // collect sequence of field, eg. (param a) (param b c), (field a) (field b c) or (result a b) (result c)
-// optionally allow or not names
 const fieldseq = (nodes, field, names = false) => {
   let seq = []
   // collect field eg. (field f64 f32)(field i32)
   while (nodes[0]?.[0] === field) {
     let [, ...args] = nodes.shift()
-    let name = args[0]?.[0] === '$' && args.shift()
-    // expose name refs, if allowed
-    if (name) {
-      if (names) name in seq ? err(`Duplicate ${field} ${name}`) : seq[name] = seq.length
-      else err(`Unexpected ${field} name ${name}`)
+    let nm = args[0]?.[0] === '$' && args.shift()
+    // expose name refs if names is true, error if names is false but a name was present
+    if (nm) {
+      names ? (nm in seq ? err(`Duplicate ${field} ${nm}`) : seq[nm] = seq.length) : err(`Unexpected ${field} name ${nm}`)
     }
     seq.push(...args)
   }
@@ -322,8 +318,7 @@ const plain = (nodes, ctx) => {
         out.push(blocktype(nodes, ctx))
       }
 
-      // else $label
-      // end $label - make sure it matches block label
+      // else $label, end $label - validate label matches
       else if (node === 'else' || node === 'end') {
         if (nodes[0]?.[0] === '$') (node === 'end' ? stack.pop() : label) !== (label = nodes.shift()) && err(`Mismatched ${node} label ${label}`)
       }

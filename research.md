@@ -213,7 +213,7 @@
 - we needed it until we had repl, now we can compare against spec right away
 
 
-## [ ] Str encoding, special characters
+## [ ] Str encoding, special characters ->
 
 * $"\41B" == $"AB" == $"A\42" == $"\41\42" == $"\u{41}\u{42}"
 * $"\t" == $"\09" == $"\u{09}"
@@ -249,23 +249,3 @@
 
   + happens on moment of string insertion only, no repetitiveness
   ? How do we detect non-unicode string?
-
-## Immutable Branch Analysis (Jan 2026)
-
-**Important Discovery**: The immutable branch is OLDER than main, predating many features like memory64, tags/exceptions, code metadata, and custom sections.
-
-### Applied Optimizations:
-
-**✅ br_table simplification** - Integrated successfully
-- Before: `args.unshift(...uleb(args.length - 1)); immed.push(...args)`
-- After: `immed.push(...uleb(args.length - 1), ...args)`
-- Cleaner code, avoids array mutation, all tests pass
-
-### Rejected Changes:
-
-- **fieldseq simplification**: Removes validation for named results (breaks spec)
-- **parseUint/limits/uleb simplifications**: Missing memory64/BigInt support
-- **Parser byte arrays**: 3-6x slower parsing performance
-
-### Verdict:
-Only 1 of 13 attempted optimizations was actually beneficial. Most "simplifications" were missing features, not optimizations.
