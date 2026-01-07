@@ -581,6 +581,8 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 
 
 
+
+
 // Pre-defined instruction handlers
 const HANDLE = {
   null: () => { },
@@ -609,11 +611,10 @@ const HANDLE = {
   },
   shuffle: (n, i) => { for (let j = 0; j < 16; j++) i.push(parseUint(n.shift(), 32)) },
   memlane: (n, i, _c, op) => (i.push(...memargEnc(n, op)), i.push(...uleb(parseUint(n.shift())))),
-  // Special markers
-  '*': (n, i) => i.push(...uleb(n.shift())),
   field: (n, i, c) => i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1]))),
+  '*': (n, i) => i.push(...uleb(n.shift())),
 
-  // Field encoders - all *idx types
+  // *idx types
   labelidx: (n, i, c) => i.push(...uleb(blockid(n.shift(), c.block))),
   laneidx: (n, i) => i.push(parseUint(n.shift(), 0xff)),
   funcidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.func))),
@@ -624,48 +625,44 @@ const HANDLE = {
   localidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.local))),
   dataidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.data))),
   elemidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.elem))),
-  '?memoryidx': (n, i, c) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
+  'memoryidx?': (n, i, c) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
 
-  // Value type encoders
+  // Value type
   i32: (n, i) => i.push(...encode.i32(n.shift())),
   i64: (n, i) => i.push(...encode.i64(n.shift())),
   f32: (n, i) => i.push(...encode.f32(n.shift())),
   f64: (n, i) => i.push(...encode.f64(n.shift())),
-  v128: (n, i) => i.push(...encode.v128(n.shift()))
+  v128: (n, i) => i.push(...encode.v128(n.shift())),
+
+  // Combinations
+  'typeidx:field': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1]))) },
+  'typeidx:*': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(n.shift())) },
+  'typeidx:dataidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(id(n.shift(), c.data))) },
+  'typeidx:elemidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(id(n.shift(), c.elem))) },
+  'typeidx:typeidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(id(n.shift(), c.type))) },
+  'dataidx:memoryidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.data))); i.push(...uleb(id(n.shift(), c.memory))) },
+  'memoryidx:memoryidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.memory))); i.push(...uleb(id(n.shift(), c.memory))) },
+  'tableidx:tableidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.table))); i.push(...uleb(id(n.shift(), c.table))) }
 };
 
 
 // Populate INSTR and HANDLE from INSTR array
 (function populate(items, pre) {
-  for (let op = 0, item; op < items.length; op++) if (item = items[op]) {
+  for (let op = 0, item, nm, imm; op < items.length; op++) if (item = items[op]) {
     // Nested array (0xfb, 0xfc, 0xfd opcodes)
     if (Array.isArray(item)) populate(item, op)
-
-    else {
-      const [name, ...rest] = item.split(' ')
-
-      // Store opcode bytes
-      INSTR[name] = pre ? [pre, op] : [op]
-
-      // Generate handler if spec exists
-      if (!HANDLE[name] && rest.length) {
-        if (rest.length > 1) {
-          const encoders = rest.map(s => HANDLE[s])
-          HANDLE[name] = (n, i, c) => { for (let k = 0; k < encoders.length; k++) encoders[k](n, i, c) }
-        }
-        else HANDLE[name] = HANDLE[rest[0]]
-      }
-    }
+    else [nm, imm] = item.split(' '), INSTR[nm] = pre ? [pre, op] : [op], imm && (HANDLE[nm] = HANDLE[imm])
   }
 })(INSTR);
 
 
-// Unified instruction encoder - fully declarative
+// instruction encoder
 const instr = (nodes, ctx) => {
   if (!nodes?.length) return []
-  let out = [], op = nodes.shift(), immed, handle
 
-  // Nested group: recurse
+  let out = [], op = nodes.shift(), immed
+
+  // nested group
   if (Array.isArray(op)) {
     immed = instr(op, ctx)
     while (op.length) out.push(...instr(op, ctx))
@@ -673,13 +670,11 @@ const instr = (nodes, ctx) => {
     return out
   }
 
-  ;[...immed] = isNaN(op[0]) && INSTR[op] || err(`Unknown instruction ${op}`)
+  ;[...immed] = INSTR[op] || err(`Unknown instruction ${op}`)
 
-  // Multi-byte opcodes: ULEB-encode the secondary opcode
-  if (immed.length > 1) immed = [immed[0], ...uleb(immed[1])]
+  if (immed.length > 1) immed = [immed[0], ...uleb(immed[1])] // multibyte opcode
 
-  // Dispatch: direct handler call (all handlers are pre-computed functions)
-  if (handle = HANDLE[op]) handle(nodes, immed, ctx, op)
+  HANDLE[op]?.(nodes, immed, ctx, op)
 
   return out.push(...immed), out
 }

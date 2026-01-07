@@ -51,10 +51,10 @@ export const INSTR = [
   , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
   // 0xfb: GC instructions (nested array for multi-byte opcodes)
   [
-    'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx field', 'struct.get_s typeidx field', 'struct.get_u typeidx field', 'struct.set typeidx field',
-    'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx *', 'array.new_data typeidx dataidx', 'array.new_elem typeidx elemidx',
-    'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx typeidx',
-    'array.init_data typeidx dataidx', 'array.init_elem typeidx elemidx', 'ref.test reftype', '', 'ref.cast reftype', '', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
+    'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx:field', 'struct.get_s typeidx:field', 'struct.get_u typeidx:field', 'struct.set typeidx:field',
+    'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx:*', 'array.new_data typeidx:dataidx', 'array.new_elem typeidx:elemidx',
+    'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx:typeidx',
+    'array.init_data typeidx:dataidx', 'array.init_elem typeidx:elemidx', 'ref.test reftype', '', 'ref.cast reftype', '', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
     'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u'
   ],
 
@@ -62,8 +62,8 @@ export const INSTR = [
   [
     'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
     'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
-    'memory.init dataidx memoryidx', 'data.drop dataidx', 'memory.copy memoryidx memoryidx', 'memory.fill ?memoryidx',
-    'table.init reversed', 'elem.drop elemidx', 'table.copy tableidx tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
+    'memory.init dataidx:memoryidx', 'data.drop dataidx', 'memory.copy memoryidx:memoryidx', 'memory.fill memoryidx?',
+    'table.init reversed', 'elem.drop elemidx', 'table.copy tableidx:tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
     'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u'
   ],
 
