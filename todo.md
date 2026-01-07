@@ -94,7 +94,7 @@
   * [x] replace wabt with direct compile instead
   * [x] Remove unnecessary checks: end label, param names
   * [x] Type declarations with map file
-* [ ] ~~Full immutability via idx~~ no benefit: theoretical purity over self-documented simplicity; no perf gain
+* [x] ~~Full immutability via idx~~ no benefit: theoretical purity over self-documented simplicity; no perf gain
 * [ ] Prettify printer: keep comments
 * [ ] Ignore particular test cases instead of excluding full test (like const)
 * [ ] Better `str`, `id` test, `name`: there's suboptimal code atm. We need better name parsing
