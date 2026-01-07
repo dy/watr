@@ -640,28 +640,18 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 // consume one instruction from nodes sequence
 // uses ctx.cur = [nodes, index] for immutable traversal
 const instr = (nodes, ctx) => {
-  if (!nodes?.length) return []
-  
-  // Setup: set current if different array, otherwise continue
-  let i
-  if (ctx.cur?.[0] === nodes) {
-    i = ctx.cur[1]  // continue iterating same array
-  } else {
-    ctx.cur = [nodes, i = 0]  // new array
-  }
-  
+  // continue same array or start new
+  let i = ctx.cur?.[0] === nodes ? ctx.cur[1] : (ctx.cur = [nodes, 0], 0)
   if (i >= nodes.length) return []
 
   let out = [], op = nodes[i++], immed, code
 
   // consume group
   if (Array.isArray(op)) {
-    ctx.cur[1] = i  // save position before recursing
+    ctx.cur[1] = i
     immed = instr(op, ctx)
-    // after child returns, ctx.cur points to op - continue there
     while (ctx.cur[1] < ctx.cur[0].length) out.push(...instr(ctx.cur[0], ctx))
-    // restore parent context
-    ctx.cur = [nodes, i]
+    ctx.cur[0] = nodes; ctx.cur[1] = i  // restore
     out.push(...immed)
     return out
   }
@@ -763,12 +753,12 @@ const instr = (nodes, ctx) => {
     immed = [0xfd, ...uleb(code)]
     // (v128.load offset? align?)
     if (code <= 0x0b) {
-      ctx.cur[1] = i; const [a, o] = memarg(ctx); i = ctx.cur[1]
+      let a, o; [a, o, i] = memarg(nodes, i)
       immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
     }
     // (v128.load_lane offset? align? idx)
     else if (code >= 0x54 && code <= 0x5d) {
-      ctx.cur[1] = i; const [a, o] = memarg(ctx); i = ctx.cur[1]
+      let a, o; [a, o, i] = memarg(nodes, i)
       immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
       // (v128.load_lane_zero)
       if (code <= 0x5b) immed.push(...uleb(nodes[i++]))
@@ -902,7 +892,7 @@ const instr = (nodes, ctx) => {
 
   // i32.store align=n offset=m
   else if (code >= 0x28 && code <= 0x3e) {
-    ctx.cur[1] = i; let [a, o] = memarg(ctx); i = ctx.cur[1]
+    let a, o; [a, o, i] = memarg(nodes, i)
     immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
   }
 
@@ -941,16 +931,13 @@ const blockid = (nm, block, i) => (
   isNaN(i) || i > block.length ? err(`Bad label ${nm}`) : i
 )
 
-// consume align/offset params from ctx.cur
-const memarg = (ctx) => {
-  let [nodes, i] = ctx.cur, align, offset, k, v
+// consume align/offset params, return [align, offset, newIndex]
+const memarg = (nodes, i, align, offset, k, v) => {
   while (nodes[i]?.includes?.('=')) [k, v] = nodes[i++].split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
-  ctx.cur[1] = i
-
   if (offset < 0 || offset > 0xffffffff) err(`Bad offset ${offset}`)
   if (align <= 0 || align > 0xffffffff) err(`Bad align ${align}`)
   if (align) ((align = Math.log2(align)) % 1) && err(`Bad align ${align}`)
-  return [align, offset]
+  return [align, offset, i]
 }
 
 // const ALIGN = {
