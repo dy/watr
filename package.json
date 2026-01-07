@@ -5,26 +5,16 @@
   "main": "watr.js",
   "types": "types/watr.d.ts",
   "exports": {
-    ".": {
-      "types": "./types/watr.d.ts",
-      "default": "./watr.js"
-    },
-    "./parse": {
-      "types": "./types/src/parse.d.ts",
-      "default": "./src/parse.js"
-    },
-    "./print": {
-      "types": "./types/src/print.d.ts",
-      "default": "./src/print.js"
-    },
-    "./compile": {
-      "types": "./types/src/compile.d.ts",
-      "default": "./src/compile.js"
-    }
+    ".": "./watr.js",
+    "./parse": "./src/parse.js",
+    "./print": "./src/print.js",
+    "./compile": "./src/compile.js"
   },
   "type": "module",
+
   "scripts": {
     "test": "node --experimental-wasm-memory64 test",
+    "types": "npx tsc src/*.js watr.js --allowJs --declaration --emitDeclarationOnly --declarationMap --outDir types",
     "postinstall": "git submodule update --init --recursive"
   },
   "repository": {

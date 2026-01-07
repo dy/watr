@@ -1,5 +1,6 @@
 export default compile;
-import compile from './src/compile.d.ts';
-import parse from './src/parse.d.ts';
-import print from './src/print.d.ts';
+import compile from './src/compile.js';
+import parse from './src/parse.js';
+import print from './src/print.js';
 export { compile, parse, print };
+//# sourceMappingURL=watr.d.ts.map
