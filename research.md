@@ -201,3 +201,71 @@
 - Current code seems to be more compact
 + Better order separation
   ? can we separate separately?
+
+## [x] No wabt for testing? -> let's get rid of
+
+- it is not reliable baseline
+  - some tests not fail as expected
+  - some things it cannot compile
+  - it hangs with binaries
+  - it has unnecessary full spec tests
+- wasm/spec is what we're aiming for
+- we needed it until we had repl, now we can compare against spec right away
+
+
+## [ ] Str encoding, special characters
+
+* $"\41B" == $"AB" == $"A\42" == $"\41\42" == $"\u{41}\u{42}"
+* $"\t" == $"\09" == $"\u{09}"
+* $"" == $"\ef\98\9a\ef\92\a9" == $"\u{f61a}\u{f4a9}"
+* Strings generally have to handle unicodes properly, but same way maintain binary data https://webassembly.github.io/annotations/core/text/values.html#strings
+* Names must be strings of valid unicode characters
+
+* Standard suggests converting $xxx -> $"xxx"
+  + that saves print function + produces valid token
+  + that suggests names must be valid unicode byte sequences
+  + we can safely use text encoder
+  * only datastring may have raw bytes sequence
+
+* Difference of parser vs compiler is that parser applies generic syntax structure normalization, whereas compiler (normalizer part of it) normalizes depending on node kind
+  * It's not actually normalizer, normally it's called parser, and what now is called parser normally is called lexer.
+
+1. Normalize strings in parse.js
+  - brings aspect of semantics rather than plain tokens parsing into parser
+  - it screws up errors look, since user sees normalized tokens instead of raw
+    ~ html also sort-of does that
+  - parser doesn't have to know about meaning of tokens, like `data` vs `import` vs `$`
+  + string token normalization in general sense is still parsing
+  + there's way too many places where id is used, take expr within data, elem, table; (inline) type idx, params, instr
+    - an exception: it will know about data token to handle string a bit differently (Latin-1 maybe)
+  - it's not very nice parser normalizes $abc to $"abc" - it is deabbr stage
+
+2. Split strings by normal unicode and binary chunks, eg. "abc\defgh" becomes "abc" "\de" "fgh"
+
+  - we don't need it: if there's raw non-unicode byte, whole string is raw.
+  - messy, code is repetitive and heavy
+
+3. If string contains raw non-unicode bytes (non-encodable to unicode) - keep it ~~raw~~ bytes array.
+
+  + happens on moment of string insertion only, no repetitiveness
+  ? How do we detect non-unicode string?
+
+## Immutable Branch Analysis (Jan 2026)
+
+**Important Discovery**: The immutable branch is OLDER than main, predating many features like memory64, tags/exceptions, code metadata, and custom sections.
+
+### Applied Optimizations:
+
+**✅ br_table simplification** - Integrated successfully
+- Before: `args.unshift(...uleb(args.length - 1)); immed.push(...args)`
+- After: `immed.push(...uleb(args.length - 1), ...args)`
+- Cleaner code, avoids array mutation, all tests pass
+
+### Rejected Changes:
+
+- **fieldseq simplification**: Removes validation for named results (breaks spec)
+- **parseUint/limits/uleb simplifications**: Missing memory64/BigInt support
+- **Parser byte arrays**: 3-6x slower parsing performance
+
+### Verdict:
+Only 1 of 13 attempted optimizations was actually beneficial. Most "simplifications" were missing features, not optimizations.

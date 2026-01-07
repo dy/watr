@@ -931,8 +931,7 @@ const instr = (nodes, ctx) => {
     while (nodes[0] && (!isNaN(nodes[0]) || nodes[0][0] === '$')) {
       args.push(...uleb(blockid(nodes.shift(), ctx.block)))
     }
-    args.unshift(...uleb(args.length - 1))
-    immed.push(...args)
+    immed.push(...uleb(args.length - 1), ...args)
   }
 
   // select (result t+)
