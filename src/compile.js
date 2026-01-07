@@ -997,7 +997,7 @@ const blockid = (nm, block, i) => (
 const memarg = (args) => {
   let align, offset, k, v
   while (args[0]?.includes('=')) {
-    [k, v] = args.shift().split('='), v = v.replaceAll('_', '')
+    [k, v] = args.shift().split('='), v = v?.replaceAll('_', '') ?? ''
     k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
   }
   if ((offset < 0 || offset > 0xffffffff)) err(`Bad offset ${offset}`)

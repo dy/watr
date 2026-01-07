@@ -1,3 +1,4 @@
+(module
 (import "" "rand" (func $random (result f32)))
 
 ;; 4 pages * 64KiB per page
@@ -181,3 +182,4 @@
     (i32.ne
       (local.tee $y (i32.add (local.get $y) (i32.const 1)))
       (i32.const 200)))))
+)

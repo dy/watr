@@ -1,3 +1,4 @@
+(module
 (import "Math" "random" (func $random (result f32)))
 (import "Math" "sin" (func $sin (param f32) (result f32)))
 
@@ -486,4 +487,5 @@
       (i32.ne
         (local.tee $i (i32.add (local.get $i) (i32.const 1)))
         (i32.const 76800))))
+)
 )

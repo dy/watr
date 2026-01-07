@@ -21,7 +21,7 @@ export default function print(tree, options = {}) {
   function printNode(node, level = 0) {
     if (!Array.isArray(node)) return node
 
-    let content = node[0]
+    let content = node[0] ?? ''
 
     // flat node (no deep subnodes), eg. (i32.const 1), (module (export "") 1)
     let flat = !!newline && node.length < 4
