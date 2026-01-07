@@ -689,17 +689,16 @@ const instr = (nodes, ctx) => {
   else if (code === 0xfd) {
     [, code] = immed
     immed = [0xfd, ...uleb(code)]
+    
     // (v128.load offset? align?)
     if (code <= 0x0b) {
-      const [a, o] = memarg(nodes)
-      immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
+      immed.push(...memargEnc(nodes, op))
     }
     // (v128.load_lane offset? align? idx)
     else if (code >= 0x54 && code <= 0x5d) {
-      const [a, o] = memarg(nodes)
-      immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
-      // (v128.load_lane_zero)
-      if (code <= 0x5b) immed.push(...uleb(nodes.shift()))
+      immed.push(...memargEnc(nodes, op))
+      // (v128.load_lane_zero) - optional laneidx for 0x54-0x5b
+      if (code <= 0x5b) immed.push(...uleb(parseUint(nodes.shift())))
     }
     // (i8x16.shuffle 0 1 ... 15 a b)
     else if (code === 0x0d) {
@@ -796,8 +795,7 @@ const instr = (nodes, ctx) => {
 
   // memarg: loads/stores
   else if (code >= 0x28 && code <= 0x3e) {
-    let [a, o] = memarg(nodes)
-    immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
+    immed.push(...memargEnc(nodes, op))
   }
 
   // memory.grow|size memidx - multi-memory proposal (optional arg)
@@ -859,6 +857,12 @@ const memarg = (args) => {
   if (align <= 0 || align > 0xffffffff) err(`Bad align ${align}`)
   if (align) ((align = Math.log2(align)) % 1) && err(`Bad align ${align}`)
   return [align, offset]
+}
+
+// Encode memarg (align + offset) with default values based on instruction
+const memargEnc = (nodes, op) => {
+  const [a, o] = memarg(nodes)
+  return [...uleb((a ?? align(op))), ...uleb(o ?? 0)]
 }
 
 // const ALIGN = {
