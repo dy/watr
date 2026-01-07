@@ -581,21 +581,21 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 
 
 
-// Pre-defined instruction handlers (with @ prefix for direct lookup))
+// Pre-defined instruction handlers
 const HANDLE = {
-  '@null': (_n, _c) => { },
-  '@reversed': (n, c, i) => { let t = n.shift(), e = n.shift(); i.push(...uleb(id(e, c.elem)), ...uleb(id(t, c.table))) },
-  '@block': (n, c, i) => (c.block.push(i[0]), n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
-  '@end': (_n, c) => c.block.pop(),
-  '@call_indirect': (n, c, i) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
-  '@br_table': (n, c, i) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || n[0][0] === '$')) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
-  '@select': (n, c, i) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
-  '@ref_null': (n, c, i) => (t => i.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
-  '@memarg': (n, c, i, op) => i.push(...memargEnc(n, op)),
-  '@opt_memory': (n, c, i) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
-  '@reftype': (n, c, i) => (ht => (ht[0] !== REFTYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
-  '@reftype2': (n, c, i) => (([b, h1, h2]) => i.push(((h2[0] !== REFTYPE.ref) << 1) | (h1[0] !== REFTYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
-  '@v128const': (n, _c, i) => {
+  null: () => { },
+  reversed: (n, i, c) => { let t = n.shift(), e = n.shift(); i.push(...uleb(id(e, c.elem)), ...uleb(id(t, c.table))) },
+  block: (n, i, c) => (c.block.push(i[0]), n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
+  end: (_n, _i, c) => c.block.pop(),
+  call_indirect: (n, i, c) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
+  br_table: (n, i, c) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || n[0][0] === '$')) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
+  select: (n, i, c) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
+  ref_null: (n, i, c) => (t => i.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
+  memarg: (n, i, _c, op) => i.push(...memargEnc(n, op)),
+  opt_memory: (n, i, c) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
+  reftype: (n, i, c) => (ht => (ht[0] !== REFTYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
+  reftype2: (n, i, c) => (([b, h1, h2]) => i.push(((h2[0] !== REFTYPE.ref) << 1) | (h1[0] !== REFTYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
+  v128const: (n, i) => {
     let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3; num = +num
     if (t[0] === 'i') {
       let arr = num === 16 ? new Uint8Array(16) : num === 8 ? new Uint16Array(8) : num === 4 ? new Uint32Array(4) : new BigUint64Array(2)
@@ -607,31 +607,31 @@ const HANDLE = {
       i.push(...arr)
     }
   },
-  '@shuffle': (n, _c, i) => { for (let j = 0; j < 16; j++) i.push(parseUint(n.shift(), 32)) },
-  '@memlane': (n, _c, i, op) => (i.push(...memargEnc(n, op)), i.push(...uleb(parseUint(n.shift())))),
-  // Special markers (no @ prefix needed in INSTR definitions)
-  '*': (n, _c, i) => i.push(...uleb(n.shift())),
-  field: (n, c, i) => i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1]))),
+  shuffle: (n, i) => { for (let j = 0; j < 16; j++) i.push(parseUint(n.shift(), 32)) },
+  memlane: (n, i, _c, op) => (i.push(...memargEnc(n, op)), i.push(...uleb(parseUint(n.shift())))),
+  // Special markers
+  '*': (n, i) => i.push(...uleb(n.shift())),
+  field: (n, i, c) => i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1]))),
 
   // Field encoders - all *idx types
-  labelidx: (n, c, i) => i.push(...uleb(blockid(n.shift(), c.block))),
-  laneidx: (n, c, i) => i.push(parseUint(n.shift(), 0xff)),
-  funcidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.func))),
-  typeidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.type))),
-  tableidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.table))),
-  memoryidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.memory))),
-  globalidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.global))),
-  localidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.local))),
-  dataidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.data))),
-  elemidx: (n, c, i) => i.push(...uleb(id(n.shift(), c.elem))),
-  '?memoryidx': (n, c, i) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
+  labelidx: (n, i, c) => i.push(...uleb(blockid(n.shift(), c.block))),
+  laneidx: (n, i) => i.push(parseUint(n.shift(), 0xff)),
+  funcidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.func))),
+  typeidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.type))),
+  tableidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.table))),
+  memoryidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.memory))),
+  globalidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.global))),
+  localidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.local))),
+  dataidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.data))),
+  elemidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.elem))),
+  '?memoryidx': (n, i, c) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
 
   // Value type encoders
-  i32: (n, c, i) => i.push(...encode.i32(n.shift())),
-  i64: (n, c, i) => i.push(...encode.i64(n.shift())),
-  f32: (n, c, i) => i.push(...encode.f32(n.shift())),
-  f64: (n, c, i) => i.push(...encode.f64(n.shift())),
-  v128: (n, c, i) => i.push(...encode.v128(n.shift()))
+  i32: (n, i) => i.push(...encode.i32(n.shift())),
+  i64: (n, i) => i.push(...encode.i64(n.shift())),
+  f32: (n, i) => i.push(...encode.f32(n.shift())),
+  f64: (n, i) => i.push(...encode.f64(n.shift())),
+  v128: (n, i) => i.push(...encode.v128(n.shift()))
 };
 
 
@@ -651,7 +651,7 @@ const HANDLE = {
       if (!HANDLE[name] && rest.length) {
         if (rest.length > 1) {
           const encoders = rest.map(s => HANDLE[s])
-          HANDLE[name] = (n, c, i) => { for (let k = 0; k < encoders.length; k++) encoders[k](n, c, i) }
+          HANDLE[name] = (n, i, c) => { for (let k = 0; k < encoders.length; k++) encoders[k](n, i, c) }
         }
         else HANDLE[name] = HANDLE[rest[0]]
       }
@@ -678,27 +678,8 @@ const instr = (nodes, ctx) => {
   // Multi-byte opcodes: ULEB-encode the secondary opcode
   if (immed.length > 1) immed = [immed[0], ...uleb(immed[1])]
 
-  // Dispatch: function handler, array of immediates, or single immediate
-  if (handle = HANDLE[op]) {
-    if (typeof handle === 'function') handle(nodes, ctx, immed, op)
-    else {
-      // Encode immediate field (optional '?', heuristic: *idx→ctx lookup, else→encode)
-      const enc = spec => {
-        const opt = spec[0] === '?'
-        const name = opt ? spec.slice(1) : spec
-        const val = opt && !isIdx(nodes[0]) ? 0 : nodes.shift()
-        name.endsWith('idx')
-          ? name === 'labelidx' ? immed.push(...uleb(blockid(val, ctx.block)))
-            : name === 'laneidx' ? immed.push(parseUint(val, 0xff))
-              : immed.push(...uleb(id(val, ctx[name.slice(0, -3)])))
-          : immed.push(...encode[name](val))
-      }
-
-      Array.isArray(handle)
-        ? handle.forEach(s => s === '*' ? immed.push(...uleb(nodes.shift())) : s === 'field' ? immed.push(...uleb(id(nodes.shift(), ctx.type[immed[immed.length - 1]][1]))) : enc(s))
-        : enc(handle)
-    }
-  }
+  // Dispatch: direct handler call (all handlers are pre-computed functions)
+  if (handle = HANDLE[op]) handle(nodes, immed, ctx, op)
 
   return out.push(...immed), out
 }

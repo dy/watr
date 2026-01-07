@@ -1,23 +1,23 @@
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
-// Format: 'name', 'name imm', 'name @handler' or 'name *'
+// Format: 'name', 'name imm', 'name handler' or 'name *'
 // Immediate types: blocktype, labelidx, funcidx, typeidx, tableidx, memoryidx, globalidx, localidx, dataidx, elemidx
 // Value types: i32, i64, f32, f64, v128
 export const INSTR = [
   // 0x00-0x1a: control
-  'unreachable', 'nop', 'block @block', 'loop @block', 'if @block', 'else @null', 'then @null', , , , ,
-  'end @end', 'br labelidx', 'br_if labelidx', 'br_table @br_table', 'return', 'call funcidx', 'call_indirect @call_indirect', 'return_call funcidx', 'return_call_indirect @call_indirect', 'call_ref typeidx', 'return_call_ref typeidx', , , , ,
+  'unreachable', 'nop', 'block block', 'loop block', 'if block', 'else null', 'then null', , , , ,
+  'end end', 'br labelidx', 'br_if labelidx', 'br_table br_table', 'return', 'call funcidx', 'call_indirect call_indirect', 'return_call funcidx', 'return_call_indirect call_indirect', 'call_ref typeidx', 'return_call_ref typeidx', , , , ,
   // 0x1a-0x1f: parametric
-  'drop', 'select @select', '', , , ,
+  'drop', 'select select', '', , , ,
   // 0x20-0x27: variable
   'local.get localidx', 'local.set localidx', 'local.tee localidx', 'global.get globalidx', 'global.set globalidx', 'table.get tableidx', 'table.set tableidx', ,
   // 0x28-0x3e: memory
-  'i32.load @memarg', 'i64.load @memarg', 'f32.load @memarg', 'f64.load @memarg',
-  'i32.load8_s @memarg', 'i32.load8_u @memarg', 'i32.load16_s @memarg', 'i32.load16_u @memarg',
-  'i64.load8_s @memarg', 'i64.load8_u @memarg', 'i64.load16_s @memarg', 'i64.load16_u @memarg', 'i64.load32_s @memarg', 'i64.load32_u @memarg',
-  'i32.store @memarg', 'i64.store @memarg', 'f32.store @memarg', 'f64.store @memarg',
-  'i32.store8 @memarg', 'i32.store16 @memarg', 'i64.store8 @memarg', 'i64.store16 @memarg', 'i64.store32 @memarg',
+  'i32.load memarg', 'i64.load memarg', 'f32.load memarg', 'f64.load memarg',
+  'i32.load8_s memarg', 'i32.load8_u memarg', 'i32.load16_s memarg', 'i32.load16_u memarg',
+  'i64.load8_s memarg', 'i64.load8_u memarg', 'i64.load16_s memarg', 'i64.load16_u memarg', 'i64.load32_s memarg', 'i64.load32_u memarg',
+  'i32.store memarg', 'i64.store memarg', 'f32.store memarg', 'f64.store memarg',
+  'i32.store8 memarg', 'i32.store16 memarg', 'i64.store8 memarg', 'i64.store16 memarg', 'i64.store32 memarg',
   // 0x3f-0x40: memory size/grow
-  'memory.size @opt_memory', 'memory.grow @opt_memory',
+  'memory.size opt_memory', 'memory.grow opt_memory',
   // 0x41-0x44: const
   'i32.const i32', 'i64.const i64', 'f32.const f32', 'f64.const f64',
   // 0x45-0x4f: i32 comparison
@@ -46,7 +46,7 @@ export const INSTR = [
   // 0xc0-0xc4: sign extension
   'i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s', , , , , , , , , , , ,
   // 0xd0-0xd6: reference
-  'ref.null @ref_null', 'ref.is_null', 'ref.func funcidx', 'ref.eq', 'ref.as_non_null', 'br_on_null labelidx', 'br_on_non_null labelidx',
+  'ref.null ref_null', 'ref.is_null', 'ref.func funcidx', 'ref.eq', 'ref.as_non_null', 'br_on_null labelidx', 'br_on_non_null labelidx',
   // 0xd7-0xfa: padding to 0xfb (36 empty slots)
   , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
   // 0xfb: GC instructions (nested array for multi-byte opcodes)
@@ -54,7 +54,7 @@ export const INSTR = [
     'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx field', 'struct.get_s typeidx field', 'struct.get_u typeidx field', 'struct.set typeidx field',
     'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx *', 'array.new_data typeidx dataidx', 'array.new_elem typeidx elemidx',
     'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx typeidx',
-    'array.init_data typeidx dataidx', 'array.init_elem typeidx elemidx', 'ref.test @reftype', '', 'ref.cast @reftype', '', 'br_on_cast @reftype2', 'br_on_cast_fail @reftype2',
+    'array.init_data typeidx dataidx', 'array.init_elem typeidx elemidx', 'ref.test reftype', '', 'ref.cast reftype', '', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
     'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u'
   ],
 
@@ -63,15 +63,15 @@ export const INSTR = [
     'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
     'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
     'memory.init dataidx memoryidx', 'data.drop dataidx', 'memory.copy memoryidx memoryidx', 'memory.fill ?memoryidx',
-    'table.init @reversed', 'elem.drop elemidx', 'table.copy tableidx tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
+    'table.init reversed', 'elem.drop elemidx', 'table.copy tableidx tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
     'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u'
   ],
 
   // 0xfd: SIMD instructions (nested array)
   [
-    'v128.load @memarg', 'v128.load8x8_s @memarg', 'v128.load8x8_u @memarg', 'v128.load16x4_s @memarg', 'v128.load16x4_u @memarg',
-    'v128.load32x2_s @memarg', 'v128.load32x2_u @memarg', 'v128.load8_splat @memarg', 'v128.load16_splat @memarg', 'v128.load32_splat @memarg',
-    'v128.load64_splat @memarg', 'v128.store @memarg', 'v128.const @v128const', 'i8x16.shuffle @shuffle',
+    'v128.load memarg', 'v128.load8x8_s memarg', 'v128.load8x8_u memarg', 'v128.load16x4_s memarg', 'v128.load16x4_u memarg',
+    'v128.load32x2_s memarg', 'v128.load32x2_u memarg', 'v128.load8_splat memarg', 'v128.load16_splat memarg', 'v128.load32_splat memarg',
+    'v128.load64_splat memarg', 'v128.store memarg', 'v128.const v128const', 'i8x16.shuffle shuffle',
     'i8x16.swizzle', 'i8x16.splat', 'i16x8.splat', 'i32x4.splat', 'i64x2.splat', 'f32x4.splat', 'f64x2.splat',
     'i8x16.extract_lane_s laneidx', 'i8x16.extract_lane_u laneidx', 'i8x16.replace_lane laneidx',
     'i16x8.extract_lane_s laneidx', 'i16x8.extract_lane_u laneidx', 'i16x8.replace_lane laneidx',
@@ -82,9 +82,9 @@ export const INSTR = [
     'i32x4.eq', 'i32x4.ne', 'i32x4.lt_s', 'i32x4.lt_u', 'i32x4.gt_s', 'i32x4.gt_u', 'i32x4.le_s', 'i32x4.le_u', 'i32x4.ge_s', 'i32x4.ge_u',
     'f32x4.eq', 'f32x4.ne', 'f32x4.lt', 'f32x4.gt', 'f32x4.le', 'f32x4.ge', 'f64x2.eq', 'f64x2.ne', 'f64x2.lt', 'f64x2.gt', 'f64x2.le', 'f64x2.ge',
     'v128.not', 'v128.and', 'v128.andnot', 'v128.or', 'v128.xor', 'v128.bitselect', 'v128.any_true',
-    'v128.load8_lane @memlane', 'v128.load16_lane @memlane', 'v128.load32_lane @memlane', 'v128.load64_lane @memlane',
-    'v128.store8_lane @memlane', 'v128.store16_lane @memlane', 'v128.store32_lane @memlane', 'v128.store64_lane @memlane',
-    'v128.load32_zero @memarg', 'v128.load64_zero @memarg', 'f32x4.demote_f64x2_zero', 'f64x2.promote_low_f32x4',
+    'v128.load8_lane memlane', 'v128.load16_lane memlane', 'v128.load32_lane memlane', 'v128.load64_lane memlane',
+    'v128.store8_lane memlane', 'v128.store16_lane memlane', 'v128.store32_lane memlane', 'v128.store64_lane memlane',
+    'v128.load32_zero memarg', 'v128.load64_zero memarg', 'f32x4.demote_f64x2_zero', 'f64x2.promote_low_f32x4',
     'i8x16.abs', 'i8x16.neg', 'i8x16.popcnt', 'i8x16.all_true', 'i8x16.bitmask', 'i8x16.narrow_i16x8_s', 'i8x16.narrow_i16x8_u',
     'f32x4.ceil', 'f32x4.floor', 'f32x4.trunc', 'f32x4.nearest', 'i8x16.shl', 'i8x16.shr_s', 'i8x16.shr_u',
     'i8x16.add', 'i8x16.add_sat_s', 'i8x16.add_sat_u', 'i8x16.sub', 'i8x16.sub_sat_s', 'i8x16.sub_sat_u',
