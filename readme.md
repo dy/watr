@@ -109,4 +109,4 @@ watr | 7.5 kb | 6.0 op/s
 * [WASM binary encoding](https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md)
 -->
 
-<p align=center><a href="https://github.com/krsnzd/license/">🕉</a></p>
+<p align=center><a href="https://github.com/krsnzd/license/">ॐ</a></p>

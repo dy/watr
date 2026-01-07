@@ -88,7 +88,8 @@
 * [x] annotations
   * [x] named sections
   * [x] branch hints
-* [ ] multiple memories
+* [x] multiple memories
+* [ ] try immutable approach (from branch)
 * [ ] Try removing all quotes
 * [ ] Exceptions, memory64, code_metadata, js_strings
 * [ ] Features
@@ -99,7 +100,8 @@
 * [x] Print: make it as nice as AI
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
-* [ ] All tests
+* [ ] Finish all official tests
+  * [ ] All skipped features
 
 ## REPL
 
