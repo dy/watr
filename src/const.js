@@ -97,3 +97,12 @@ export const INSTR = [
   KIND = { func: 0, table: 1, memory: 2, global: 3, tag: 4 },
   // WAT escape codes: https://webassembly.github.io/spec/core/text/values.html#strings
   ESCAPE = { n: 10, r: 13, t: 9, v: 11, '"': 34, "'": 39, '\\': 92 }
+
+// Build instruction index: INSTR['i32.const'] = [0x41], INSTR.imm['i32.const'] = 'i32'
+INSTR.imm = {}
+INSTR.forEach((entry, i) => {
+  if (!entry) return
+  let [op, imm] = entry.split(' ')
+  INSTR[op] = i >= 0x133 ? [0xfd, i - 0x133] : i >= 0x11b ? [0xfc, i - 0x11b] : i >= 0xfb ? [0xfb, i - 0xfb] : [i]
+  if (imm) INSTR.imm[op] = imm
+})
