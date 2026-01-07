@@ -279,6 +279,8 @@ const blocktype = (nodes, ctx) => {
 // https://webassembly.github.io/spec/core/text/instructions.html#folded-instructions
 const plain = (nodes, ctx) => {
   let out = [], stack = [], label
+  // helper: check if node is immediate (not array operand)
+  const isImm = n => typeof n === 'string' || typeof n === 'number'
 
   while (nodes.length) {
     let node = nodes.shift()
@@ -317,6 +319,21 @@ const plain = (nodes, ctx) => {
       // mark datacount section as required
       else if (node === 'memory.init' || node === 'data.drop' || node === 'array.new_data' || node === 'array.init_data') {
         ctx.datacount[0] = true
+      }
+
+      // memory.* memidx? - multi-memory proposal
+      else if (node === 'memory.size' || node === 'memory.grow' || node === 'memory.fill') {
+        out.push(isImm(nodes[0]) ? nodes.shift() : 0)
+      }
+
+      // memory.init memidx? dataidx
+      else if (node === 'memory.init') {
+        out.push(isImm(nodes[1]) ? nodes.shift() : 0, nodes.shift())
+      }
+
+      // memory.copy dstmem? srcmem?
+      else if (node === 'memory.copy') {
+        out.push(isImm(nodes[0]) ? nodes.shift() : 0, isImm(nodes[0]) ? nodes.shift() : 0)
       }
 
       // table.init tableidx? elemidx -> table.init tableidx elemidx
@@ -646,6 +663,8 @@ const instr = (nodes, ctx) => {
   if (!nodes?.length) return []
 
   let out = [], op = nodes.shift(), immed, code
+  // helper: check if node is immediate (not array operand)
+  const isImm = n => typeof n === 'string' || typeof n === 'number'
 
   // consume group
   if (Array.isArray(op)) {
@@ -673,7 +692,9 @@ const instr = (nodes, ctx) => {
       // array.new_fixed $t n
       else if (code === 8) immed.push(...uleb(nodes.shift()))
       // array.new_data|init_data $t $d
-      else if (code === 9 || code === 18) immed.push(...uleb(id(nodes.shift(), ctx.data)))
+      else if (code === 9 || code === 18) {
+        immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.data)))
+      }
       // array.new_elem|init_elem $t $e
       else if (code === 10 || code === 19) immed.push(...uleb(id(nodes.shift(), ctx.elem)))
       // array.copy $t $t
@@ -702,14 +723,23 @@ const instr = (nodes, ctx) => {
   else if (code == 0xfc) {
     [, code] = immed
 
-    // memory.init idx, data.drop idx,
-    if (code === 0x08 || code === 0x09) {
+    // memory.init memidx dataidx (binary: dataidx memidx)
+    if (code === 0x08) {
+      let [m, d] = [isImm(nodes[0]) ? nodes.shift() : 0, isImm(nodes[0]) ? nodes.shift() : 0]
+      immed.push(...uleb(id(d, ctx.data)), ...uleb(id(m, ctx.memory)))
+    }
+    // data.drop idx
+    else if (code === 0x09) {
       immed.push(...uleb(id(nodes.shift(), ctx.data)))
     }
-
-    // memory placeholders
-    if (code == 0x08 || code == 0x0b) immed.push(0)
-    else if (code === 0x0a) immed.push(0, 0)
+    // memory.copy dstmem srcmem
+    else if (code === 0x0a) {
+      immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)), ...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
+    }
+    // memory.fill memidx
+    else if (code === 0x0b) {
+      immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
+    }
 
     // elem.drop elemidx
     if (code === 0x0d) {
@@ -889,10 +919,10 @@ const instr = (nodes, ctx) => {
     immed.push(...encode[op.split('.')[0]](nodes.shift()))
   }
 
-  // memory.grow|size $idx - mandatory 0x00
+  // memory.grow|size memidx
   // https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions
   else if (code == 0x3f || code == 0x40) {
-    immed.push(0)
+    immed.push(...uleb(id(isImm(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
   }
 
   // table.get|set $id

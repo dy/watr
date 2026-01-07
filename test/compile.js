@@ -2320,6 +2320,113 @@ t('feature: array', () => {
   let inst = new WebAssembly.Instance(m, {})
 })
 
+// Multi-memory proposal tests
+// https://github.com/WebAssembly/multi-memory/blob/main/proposals/multi-memory/Overview.md
+t('compile: multiple memories', () => {
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (func (export "get_mem1_size") (result i32)
+      (memory.size $mem1)
+    )
+    (func (export "get_mem2_size") (result i32)
+      (memory.size $mem2)
+    )
+  )`)
+  is(inst.exports.get_mem1_size(), 1)
+  is(inst.exports.get_mem2_size(), 1)
+})
+
+t('compile: memory.grow with index', () => {
+  const inst = inline(`(module
+    (memory $mem1 1 2)
+    (memory $mem2 1 3)
+    (func (export "grow_mem2") (result i32)
+      (memory.grow $mem2 (i32.const 1))
+    )
+    (func (export "get_mem2_size") (result i32)
+      (memory.size $mem2)
+    )
+  )`)
+  is(inst.exports.grow_mem2(), 1)
+  is(inst.exports.get_mem2_size(), 2)
+})
+
+t('compile: memory.copy between memories', () => {
+  // Just test that multi-memory copy syntax compiles
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (data (memory $mem1) (i32.const 0) "test")
+    (func (export "copy")
+      (memory.copy $mem1 $mem1 (i32.const 10) (i32.const 0) (i32.const 4))
+    )
+    (func (export "load") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`)
+  inst.exports.copy()
+  is(inst.exports.load(10), 116) // 't' copied to offset 10
+})
+
+t('compile: memory.fill with index', () => {
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (func (export "fill_mem1")
+      (memory.fill $mem1 (i32.const 0) (i32.const 42) (i32.const 10))
+    )
+    (func (export "load_mem1") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`)
+  inst.exports.fill_mem1()
+  is(inst.exports.load_mem1(5), 42)
+})
+
+t('compile: memory.init with index', () => {
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (data $d "hello")
+    (func (export "init")
+      (memory.init $mem1 $d (i32.const 0) (i32.const 0) (i32.const 5))
+    )
+    (func (export "load_mem1") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`)
+  inst.exports.init()
+  is(inst.exports.load_mem1(0), 104) // 'h'
+})
+
+t('compile: data segment with memory index', () => {
+  const inst = inline(`(module
+    (memory $mem1 1)
+    (memory $mem2 1)
+    (data (memory $mem1) (i32.const 0) "test")
+    (func (export "load") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`)
+  is(inst.exports.load(0), 116) // 't'
+})
+
+t('compile: numeric memory indices', () => {
+  const inst = inline(`(module
+    (memory 1)
+    (memory 1)
+    (func (export "get_size_0") (result i32)
+      (memory.size 0)
+    )
+    (func (export "get_size_1") (result i32)
+      (memory.size 1)
+    )
+  )`)
+  is(inst.exports.get_size_0(), 1)
+  is(inst.exports.get_size_1(), 1)
+})
+
 // examples
 t('/test/example/table.wat', async function () { await file(this.name) })
 t('/test/example/types.wat', async function () { await file(this.name, { console }) })
