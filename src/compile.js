@@ -13,6 +13,23 @@ INSTR.forEach((entry, i) => {
   if (imm) INSTR.imm[op] = imm
 })
 
+// immediate type dispatchers - simple index lookups
+const immFn = {
+  localidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.local)),
+  globalidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.global)),
+  funcidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.func)),
+  typeidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.type)),
+  tableidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.table)),
+  labelidx: (nodes, ctx) => uleb(blockid(nodes.shift(), ctx.block)),
+  dataidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.data)),
+  elemidx: (nodes, ctx) => uleb(id(nodes.shift(), ctx.elem)),
+  laneidx: (nodes) => uleb(parseUint(nodes.shift())),
+  i32: (nodes) => encode.i32(nodes.shift()),
+  i64: (nodes) => encode.i64(nodes.shift()),
+  f32: (nodes) => encode.f32(nodes.shift()),
+  f64: (nodes) => encode.f64(nodes.shift()),
+}
+
 // iterating context
 let cur, idx
 
@@ -826,22 +843,6 @@ const instr = (nodes, ctx) => {
   // then
   else if (code === 6) immed = [] // ignore
 
-  // local.get $id, local.tee $id x
-  else if (code == 0x20 || code == 0x21 || code == 0x22) {
-    immed.push(...uleb(id(nodes.shift(), ctx.local)))
-  }
-
-  // global.get $id, global.set $id
-  else if (code == 0x23 || code == 0x24) {
-    immed.push(...uleb(id(nodes.shift(), ctx.global)))
-  }
-
-  // call $func ...nodes
-  // return_call $func
-  else if (code == 0x10 || code == 0x12) {
-    immed.push(...uleb(id(nodes.shift(), ctx.func)))
-  }
-
   // call_indirect $table (type $typeName) ...nodes
   // return_call_indirect $table (type $typeName) ... nodes
   else if (code == 0x11 || code == 0x13) {
@@ -852,21 +853,8 @@ const instr = (nodes, ctx) => {
     nodes.shift()
   }
 
-  // call_ref $type
-  // return_call_ref $type
-  else if (code == 0x14 || code == 0x15) {
-    immed.push(...uleb(id(nodes.shift(), ctx.type)))
-  }
-
   // end
   else if (code == 0x0b) ctx.block.pop()
-
-  // br $label result?
-  // br_if $label cond result?
-  // br_on_null $l, br_on_non_null $l
-  else if (code == 0x0c || code == 0x0d || code == 0xd5 || code == 0xd6) {
-    immed.push(...uleb(blockid(nodes.shift(), ctx.block)))
-  }
 
   // br_table 1 2 3 4  0  selector result?
   else if (code == 0x0e) {
@@ -884,42 +872,27 @@ const instr = (nodes, ctx) => {
     if (result.length) immed.push(immed.pop() + 1, ...vec(result.map(t => reftype(t, ctx))))
   }
 
-  // ref.func $id
-  else if (code == 0xd2) {
-    immed.push(...uleb(id(nodes.shift(), ctx.func)))
-  }
-
-  // ref.null func
+  // ref.null heaptype
   else if (code == 0xd0) {
     let t = nodes.shift()
     immed.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, ctx.type)))) // func->funcref, extern->externref
   }
 
-  // binary/unary (i32.add a b) - no immed
-  else if (code >= 0x45) { }
-
-  // i32.store align=n offset=m
+  // memarg: loads/stores
   else if (code >= 0x28 && code <= 0x3e) {
     let [a, o] = memarg(nodes)
     immed.push(...uleb((a ?? align(op))), ...uleb(o ?? 0))
   }
 
-  // i32.const 123, f32.const 123.45
-  else if (code >= 0x41 && code <= 0x44) {
-    immed.push(...encode[op.split('.')[0]](nodes.shift()))
-  }
-
-  // memory.grow|size memidx - multi-memory proposal
-  // https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions
+  // memory.grow|size memidx - multi-memory proposal (optional arg)
   else if (code == 0x3f || code == 0x40) {
-    // Only consume next node as memory index if it's a number or $name, not an instruction
     const isMemIdx = n => (typeof n === 'string' && (n[0] === '$' || !isNaN(n))) || typeof n === 'number'
     immed.push(...uleb(id(isMemIdx(nodes[0]) ? nodes.shift() : 0, ctx.memory)))
   }
 
-  // table.get|set $id
-  else if (code == 0x25 || code == 0x26) {
-    immed.push(...uleb(id(nodes.shift(), ctx.table)))
+  // dispatch simple immediate types: localidx, globalidx, funcidx, typeidx, tableidx, labelidx, laneidx, i32, i64, f32, f64
+  else if (immFn[INSTR.imm[op]]) {
+    immed.push(...immFn[INSTR.imm[op]](nodes, ctx))
   }
 
   out.push(...immed)
