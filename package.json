@@ -3,11 +3,24 @@
   "version": "3.3.0",
   "description": "Ligth & fast WAT compiler",
   "main": "watr.js",
+  "types": "types/watr.d.ts",
   "exports": {
-    ".": "./watr.js",
-    "./parse": "./src/parse.js",
-    "./print": "./src/print.js",
-    "./compile": "./src/compile.js"
+    ".": {
+      "types": "./types/watr.d.ts",
+      "default": "./watr.js"
+    },
+    "./parse": {
+      "types": "./types/src/parse.d.ts",
+      "default": "./src/parse.js"
+    },
+    "./print": {
+      "types": "./types/src/print.d.ts",
+      "default": "./src/print.js"
+    },
+    "./compile": {
+      "types": "./types/src/compile.d.ts",
+      "default": "./src/compile.js"
+    }
   },
   "type": "module",
   "scripts": {
@@ -20,8 +33,8 @@
   },
   "files": [
     "src",
-    "watr.js",
-    "watr.d.ts"
+    "types",
+    "watr.js"
   ],
   "keywords": [
     "wat",
