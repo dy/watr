@@ -21,8 +21,9 @@ export default (s, o = { comments: false, annotations: false }) => {
 
   // push buffer onto level, reset buffer
   const commit = () => (
-    // we try to store strings as raw bytes and ids as strings
-    $ ? level.push(`$"${tdec.decode(Uint8Array.from(str(buf)))}"`) :
+    // ids stored in quoted form $"name" for roundtrip safety (handles escapes, special chars)
+    // strings stored as byte arrays with .raw for display
+    $ ? level.push('$"' + (q ? tdec.decode(Uint8Array.from(str(buf))) : buf) + '"') :
     q ? level.push(str(buf)) :
     buf && (!comment || o.comments) && level.push(buf),
     buf = '', $ = q = null

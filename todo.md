@@ -90,10 +90,10 @@
   * [x] branch hints
 * [x] multiple memories
 * [x] code_metadata
-* [ ] import immutable approach (from branch)
-  * [ ] replace wabt with direct compile instead
-  * [ ] Remove unnecessary checks: end label, param names
-  * [ ] Type declarations with map file
+* [x] import immutable approach (from branch)
+  * [x] replace wabt with direct compile instead
+  * [x] Remove unnecessary checks: end label, param names
+  * [x] Type declarations with map file
   * [ ] Prettify printer: keep comments
   * [ ] Ignore particular test cases instead of excluding full test (like const)
   * [ ] Better `str`, `id` test, `name`: there's suboptimal code atm. We need better name parsing
