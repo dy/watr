@@ -435,7 +435,9 @@ const build = [
 
     // deabbr els sequence, detect expr usage
     parts = parts.map(el => {
-      if (el[0] === 'item') [, ...el] = el
+      // (item ref.func $f) or (item (ref.func $f)) → $f
+      if (el[0] === 'item') el = el.length === 3 && el[1] === 'ref.func' ? el[2] : el[1]
+      // (ref.func $f) → $f
       if (el[0] === 'ref.func') [, el] = el
       // (ref.null func) and other expressions turn expr els mode
       if (typeof el !== 'string') elexpr = 1
@@ -508,9 +510,7 @@ const build = [
       ctx.local.push(...types)
     }
 
-    const bytes = []
-    while (body.length) bytes.push(...instr(body, ctx))
-    bytes.push(0x0b)
+    const bytes = [...instr(body, ctx), 0x0b]
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     // we skip locals provided by params
@@ -651,7 +651,7 @@ const HANDLE = {
   for (let op = 0, item, nm, imm; op < items.length; op++) if (item = items[op]) {
     // Nested array (0xfb, 0xfc, 0xfd opcodes)
     if (Array.isArray(item)) populate(item, op)
-    else [nm, imm] = item.split(' '), INSTR[nm] = pre ? [pre, op] : [op], imm && (HANDLE[nm] = HANDLE[imm])
+    else[nm, imm] = item.split(' '), INSTR[nm] = pre ? [pre, op] : [op], imm && (HANDLE[nm] = HANDLE[imm])
   }
 })(INSTR);
 
@@ -660,27 +660,25 @@ const HANDLE = {
 const instr = (nodes, ctx) => {
   if (!nodes?.length) return []
 
-  let out = [], op = nodes.shift(), immed
+  let out = []
 
-  // nested group
-  if (Array.isArray(op)) {
-    immed = instr(op, ctx)
-    while (op.length) out.push(...instr(op, ctx))
+  while (nodes.length) {
+    let op = nodes.shift(), immed
+
+    ;[...immed] = INSTR[op] || err(`Unknown instruction ${op}`)
+
+    if (immed.length > 1) immed = [immed[0], ...uleb(immed[1])] // multibyte opcode
+
+    HANDLE[op]?.(nodes, immed, ctx, op)
+
     out.push(...immed)
-    return out
   }
 
-  ;[...immed] = INSTR[op] || err(`Unknown instruction ${op}`)
-
-  if (immed.length > 1) immed = [immed[0], ...uleb(immed[1])] // multibyte opcode
-
-  HANDLE[op]?.(nodes, immed, ctx, op)
-
-  return out.push(...immed), out
+  return out
 }
 
-// instantiation time value initializer (consuming) - we redirect to instr
-const expr = (node, ctx) => [...instr([node], ctx), 0x0b]
+// instantiation time value initializer (consuming) - normalize then encode + add end byte
+const expr = (node, ctx) => [...instr(normalize([node], ctx), ctx), 0x0b]
 
 // deref id node to numeric idx
 const id = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
