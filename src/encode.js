@@ -155,14 +155,20 @@ f64.parse = (input, max=Number.MAX_VALUE) => {
     let [int, fract=''] = sig.split('.'); // integer and fractional parts
     let flen = fract.length ?? 0;
 
-    // FIXME: this is not accurate, it must be byte-perfect
-    sig = parseInt(int + fract); // 0x is included in int
-    isNaN(sig) && err()
+    // Parse integer part
+    let intVal = parseInt(int); // 0x is included in int
+    isNaN(intVal) && err()
 
+    // Parse fractional part: fract / 16^flen
+    // For better precision, parse as (int + fract) / 16^flen then multiply by 16^flen for int part
+    // Equivalent to: intVal + parseInt('0x' + fract) / 16^flen
+    let fractVal = fract ? parseInt('0x' + fract) / (16 ** flen) : 0;
+    
     exp = parseInt(exp, 10);
 
     // 0x10a.fbc = 0x10afbc * 16⁻³ = 266.9833984375
-    let value = sign * sig * (2 ** (exp - 4 * flen));
+    // Combine: (int + fract) * 2^exp
+    let value = sign * (intVal + fractVal) * (2 ** exp);
 
     // make sure it is not Infinity
     value = Math.max(-max, Math.min(max, value))
