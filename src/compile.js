@@ -28,7 +28,7 @@ export default function compile(nodes) {
   cur = nodes, idx = 0
 
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
-  if (nodes[0] === 'module') idx++, cur[idx]?.[0] === '$' && idx++
+  if (nodes[0] === 'module') idx++, isId(cur[idx]) && idx++
   // single node, not module
   else if (typeof nodes[0] === 'string') cur = [nodes]
 
@@ -189,6 +189,8 @@ export default function compile(nodes) {
 
 // if node is a valid index reference
 const isIdx = n => n?.[0] === '$' || !isNaN(n)
+// if node is an identifier (starts with $)
+const isId = n => n?.[0] === '$'
 
 // normalize & flatten function body, collect types info, rectify structure
 function normalize(nodes, ctx) {
@@ -199,11 +201,11 @@ function normalize(nodes, ctx) {
     if (typeof node === 'string') {
       out.push(node)
       if (node === 'block' || node === 'if' || node === 'loop') {
-        if (nodes[0]?.[0] === '$') out.push(nodes.shift())
+        if (isId(nodes[0])) out.push(nodes.shift())
         out.push(blocktype(nodes, ctx))
       }
       else if (node === 'else' || node === 'end') {
-        if (nodes[0]?.[0] === '$') nodes.shift()
+        if (isId(nodes[0])) nodes.shift()
       }
       else if (node === 'select') out.push(paramres(nodes)[1])
       else if (node.endsWith('call_indirect')) {
@@ -239,7 +241,7 @@ function normalize(nodes, ctx) {
       const parts = node.slice(1)
       if (op === 'block' || op === 'loop') {
         out.push(op)
-        if (parts[0]?.[0] === '$') out.push(parts.shift())
+        if (isId(parts[0])) out.push(parts.shift())
         out.push(blocktype(parts, ctx), ...normalize(parts, ctx), 'end')
       }
       else if (op === 'if') {
@@ -247,7 +249,7 @@ function normalize(nodes, ctx) {
         if (parts.at(-1)?.[0] === 'else') els = normalize(parts.pop().slice(1), ctx)
         if (parts.at(-1)?.[0] === 'then') then = normalize(parts.pop().slice(1), ctx)
         let immed = [op]
-        if (parts[0]?.[0] === '$') immed.push(parts.shift())
+        if (isId(parts[0])) immed.push(parts.shift())
         immed.push(blocktype(parts, ctx))
         out.push(...normalize(parts, ctx), ...immed, ...then)
         els.length && out.push('else', ...els)
@@ -272,7 +274,7 @@ const regtype = (param, result, ctx, idx = '$' + param + '>' + result) => (ctx.t
 const fieldseq = (nodes, field) => {
   let seq = []
   while (nodes[0]?.[0] === field) {
-    let [, ...args] = nodes.shift(), nm = args[0]?.[0] === '$' && args.shift()
+    let [, ...args] = nodes.shift(), nm = isId(args[0]) && args.shift()
     if (nm) nm in seq ? (() => { throw Error(`Duplicate ${field} ${nm}`) })() : seq[nm] = seq.length
     seq.push(...args)
   }
@@ -308,7 +310,7 @@ const blocktype = (nodes, ctx) => {
 
 // consume section name eg. $t ...
 const name = (node, list) => {
-  let nm = (node[0]?.[0] === '$') && node.shift();
+  let nm = isId(node[0]) && node.shift();
   if (nm) nm in list ? err(`Duplicate ${list.name} ${nm}`) : list[nm] = list.length; // save alias
   return nm
 }
@@ -534,7 +536,7 @@ const build = [
     // collect locals
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
-      if (types[0]?.[0] === '$') {
+      if (isId(types[0])) {
         let nm = types.shift()
         if (nm in ctx.local) err(`Duplicate local ${nm}`)
         else ctx.local[nm] = ctx.local.length
@@ -622,10 +624,10 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 const HANDLE = {
   null: () => { },
   reversed: (n, i, c) => { let t = n.shift(), e = n.shift(); i.push(...uleb(id(e, c.elem)), ...uleb(id(t, c.table))) },
-  block: (n, i, c) => (c.block.push(i[0]), n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
+  block: (n, i, c) => (c.block.push(i[0]), isId(n[0]) && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
   try_table: (n, i, c) => {
     c.block.push(i[0])
-    n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length)
+    isId(n[0]) && (c.block[n.shift()] = c.block.length)
     let blocktype = n.shift()
     !blocktype ? i.push(TYPE.void) : blocktype[0] === 'result' ? i.push(...reftype(blocktype[1], c)) : i.push(...uleb(id(blocktype[1], c.type)))
     // Collect catch clauses: (catch $tag $label) (catch_ref $tag $label) (catch_all $label) (catch_all_ref $label)
@@ -644,7 +646,7 @@ const HANDLE = {
   },
   end: (_n, _i, c) => c.block.pop(),
   call_indirect: (n, i, c) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
-  br_table: (n, i, c) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || n[0][0] === '$')) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
+  br_table: (n, i, c) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || isId(n[0]))) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
   select: (n, i, c) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
   ref_null: (n, i, c) => (t => i.push(...(TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
   memarg: (n, i, _c, op) => i.push(...memargEnc(n, op)),
@@ -745,12 +747,12 @@ const instr = (nodes, ctx) => {
 const expr = (node, ctx) => instr(normalize([node], ctx), ctx)
 
 // deref id node to numeric idx
-const id = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
+const id = (nm, list, n) => (n = isId(nm) ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
 
 // block id - same as id but for block
 // index indicates how many block items to pop
 const blockid = (nm, block, i) => (
-  i = nm?.[0] === '$' ? block.length - block[nm] : +nm,
+  i = isId(nm) ? block.length - block[nm] : +nm,
   isNaN(i) || i > block.length ? err(`Bad label ${nm}`) : i
 )
 

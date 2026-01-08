@@ -100,7 +100,7 @@
   * [x] plain() should also do flat ~~or nested~~, to simplify tree for instr
 * [x] Prettify printer: keep comments
 * [ ] Ignore particular test cases instead of excluding full test (like const)
-* [ ] Better `str`, `id` tests, `name`: there's suboptimal code atm. We need better name parsing
+* [x] Better `str`, `id` tests, `name`: streamlined with `isId()` helper to replace repetitive checks
 * [ ] `id` test skips important malformed cases
 * [ ] move string / name logic to compiler/prepare stage, it's not parser duty
 * [ ] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
