@@ -10,7 +10,7 @@
 import { err, tenc, tdec } from "./util.js"
 
 
-export default (s, o = { comments: false, annotations: false }) => {
+export default (s, o = { comments: false, annotations: true }) => {
   let i = 0, // pointer
     c, // current char
     q, // is string

@@ -96,6 +96,17 @@ t('parse: comments', () => {
   is(tokens, ['an', '(; inline ;)', 'comment', ';; line comment\n', '1'])
 })
 
+t('parser: annotation simple', () => {
+  const tree = parse('(@a)')
+  is(tree, ['@a'])
+})
+
+t('parser: annotations full case', () => {
+  const tree = parse(`(@a , ; ] [ }} }x{ ({) ,{{};}] ;)`)
+  is(tree, ['@a', ',', ';', ']', '[', '}}', '}x{', ['{'], ',{{};}]', ';'])
+})
+
+
 t('parse: nul', () => {
   const tokens = parse(' \n\t')
   is(tokens, [])

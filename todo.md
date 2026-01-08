@@ -100,19 +100,18 @@
   * [x] plain() should also do flat ~~or nested~~, to simplify tree for instr
 * [ ] Prettify printer: keep comments
 * [ ] Ignore particular test cases instead of excluding full test (like const)
-* [ ] Better `str`, `id` test, `name`: there's suboptimal code atm. We need better name parsing
+* [ ] Better `str`, `id` tests, `name`: there's suboptimal code atm. We need better name parsing
 * [ ] `id` test skips important malformed cases
 * [ ] move string / name logic to compiler/prepare stage, it's not parser duty
 * [ ] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
 * [ ] VSCode formatter plugin
-* [ ] Features
+* [ ] All Phase 5 & Phase 4 proposals
   * [ ] js_strings
   * [ ] Exceptions
   * [x] memory64
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [x] All main ones (readme)
-  * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md
-  * [ ] Wasm3
+  * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md=
 * [x] Print: make it as nice as AI
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests

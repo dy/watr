@@ -3,11 +3,12 @@
 // Immediate types: blocktype, labelidx, funcidx, typeidx, tableidx, memoryidx, globalidx, localidx, dataidx, elemidx
 // Value types: i32, i64, f32, f64, v128
 export const INSTR = [
-  // 0x00-0x1a: control
-  'unreachable', 'nop', 'block block', 'loop block', 'if block', 'else null', 'then null', , , , ,
+  // 0x00-0x0a: control
+  'unreachable', 'nop', 'block block', 'loop block', 'if block', 'else null', 'then null', , 'throw tagidx', , 'throw_ref',
+  // 0x0b-0x19: control
   'end end', 'br labelidx', 'br_if labelidx', 'br_table br_table', 'return', 'call funcidx', 'call_indirect call_indirect', 'return_call funcidx', 'return_call_indirect call_indirect', 'call_ref typeidx', 'return_call_ref typeidx', , , , ,
   // 0x1a-0x1f: parametric
-  'drop', 'select select', '', , , ,
+  'drop', 'select select', '', , , 'try_table try_table',
   // 0x20-0x27: variable
   'local.get localidx', 'local.set localidx', 'local.tee localidx', 'global.get globalidx', 'global.set globalidx', 'table.get tableidx', 'table.set tableidx', ,
   // 0x28-0x3e: memory

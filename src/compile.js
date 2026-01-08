@@ -2,9 +2,12 @@ import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, DEFTYPE } from './const.js'
 import parse from './parse.js'
-import { err, tdec } from './util.js'
+import { err, tdec, tenc } from './util.js'
 
 
+// recursively strip all annotation nodes from AST, except @custom and @metadata.code.*
+// clones nodes by the way
+const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@meta') ? null : node.map(unannot).filter(n => n != null)) : node
 
 // iterating context
 let cur, idx
@@ -16,12 +19,11 @@ let cur, idx
  * @returns {Uint8Array} The compiled WASM binary data.
  */
 export default function compile(nodes) {
-  // deep clone array to avoid mutating input
-  const clone = a => a.map(i => Array.isArray(i) ? clone(i) : i)
-
   // normalize to (module ...) form
   if (typeof nodes === 'string') nodes = parse(nodes) || []
-  else nodes = clone(nodes)
+
+  // strip annotations (text-format only), except @custom and @metadata.code.* which become binary sections
+  nodes = unannot(nodes) || []
 
   cur = nodes, idx = 0
 
@@ -39,6 +41,7 @@ export default function compile(nodes) {
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
+  ctx.metadata = {} // code metadata storage: { type: [[funcIdx, [[pos, data]...]]] }
 
   // initialize types
   cur.slice(idx).filter(([kind, ...node]) => {
@@ -147,6 +150,20 @@ export default function compile(nodes) {
     return !items.length ? [] : [kind, ...vec(count ? vec(items) : items)]
   }
 
+  // Generate metadata custom sections
+  const binMeta = () => {
+    const sections = []
+    for (const type in ctx.metadata) {
+      const name = vec([...tenc.encode(`metadata.code.${type}`)])
+      const content = vec(ctx.metadata[type].map(([funcIdx, instances]) =>
+        [...uleb(funcIdx), ...vec(instances.map(([pos, data]) => [...uleb(pos), ...vec(data)]))]
+      ))
+      sections.push(0, ...vec([...name, ...content]))
+    }
+    return sections
+  }
+
+
   // build final binary
   return Uint8Array.from([
     0x00, 0x61, 0x73, 0x6d, // magic
@@ -164,6 +181,7 @@ export default function compile(nodes) {
     ...bin(SECTION.elem),
     ...bin(SECTION.datacount, false),
     ...bin(SECTION.code),
+    ...binMeta(),
     ...bin(SECTION.data)
   ])
 }
@@ -207,6 +225,15 @@ function normalize(nodes, ctx) {
     }
     else if (Array.isArray(node)) {
       const op = node[0]
+
+      // code metadata annotations - pass through as marker with metadata type and data
+      // (@metadata.code.<type> data:str)
+      if (op?.startsWith?.('@metadata.code.')) {
+        let type = op.slice(15) // remove '@metadata.code.' prefix
+        out.push(['@metadata', type, node[1]])
+        continue
+      }
+
       // Check if node is a valid instruction (string with opcode in INSTR)
       if (typeof op !== 'string' || !Array.isArray(INSTR[op])) { out.push(node); continue }
       const parts = node.slice(1)
@@ -318,7 +345,8 @@ const build = [
       data = rest.slice(1)
     }
     // Custom section format: name (vec string) + raw content bytes
-    return [...vec(name.flat()), ...data.flat()]
+    // parse already returns strings as byte arrays, so just vec them
+    return [...vec(name), ...data.flat()]
   },
   // type kinds
   // (func params result)
@@ -499,6 +527,10 @@ const build = [
     ctx.local.name = 'local'
     ctx.block.name = 'block'
 
+    // Track current code index for code metadata
+    if (ctx._codeIdx === undefined) ctx._codeIdx = 0
+    let codeIdx = ctx._codeIdx++
+
     // collect locals
     while (body[0]?.[0] === 'local') {
       let [, ...types] = body.shift()
@@ -510,14 +542,20 @@ const build = [
       ctx.local.push(...types)
     }
 
+    // Setup metadata tracking for this function
+    ctx.meta = {}
     const bytes = instr(body, ctx)
+
+    // Store collected metadata for this function
+    const funcIdx = ctx.import.filter(imp => imp[2][0] === 'func').length + codeIdx
+    for (const type in ctx.meta) ((ctx.metadata ??= {})[type] ??= []).push([funcIdx, ctx.meta[type]])
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     // we skip locals provided by params
     let loctypes = ctx.local.slice(param.length).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
 
     // cleanup tmp state
-    ctx.local = ctx.block = null
+    ctx.local = ctx.block = ctx.meta = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
     return vec([...vec(loctypes.map(([n, t]) => [...uleb(n), ...reftype(t, ctx)])), ...bytes])
@@ -558,12 +596,9 @@ const build = [
   // datacount
   (nodes, ctx) => uleb(ctx.data.length),
 
-  // tag - placeholder (actual tag data built via import or handled separately)
-  (nodes, ctx) => []
+  // (tag $name? (type idx))
+  ([[, typeidx]], ctx) => [0x00, ...uleb(id(typeidx, ctx.type))]
 ]
-
-// (tag $id? (param i32)*) - tags for exception handling
-build[SECTION.tag] = ([[, typeidx]], ctx) => [0x00, ...uleb(id(typeidx, ctx.type))]
 
 // Build reference type encoding (ref/refnull forms, not related to regtype which handles func types)
 // https://webassembly.github.io/gc/core/binary/types.html#reference-types
@@ -588,6 +623,25 @@ const HANDLE = {
   null: () => { },
   reversed: (n, i, c) => { let t = n.shift(), e = n.shift(); i.push(...uleb(id(e, c.elem)), ...uleb(id(t, c.table))) },
   block: (n, i, c) => (c.block.push(i[0]), n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
+  try_table: (n, i, c) => {
+    c.block.push(i[0])
+    n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length)
+    let blocktype = n.shift()
+    !blocktype ? i.push(TYPE.void) : blocktype[0] === 'result' ? i.push(...reftype(blocktype[1], c)) : i.push(...uleb(id(blocktype[1], c.type)))
+    // Collect catch clauses: (catch $tag $label) (catch_ref $tag $label) (catch_all $label) (catch_all_ref $label)
+    let catches = []
+    while (n[0]?.[0] === 'catch' || n[0]?.[0] === 'catch_ref' || n[0]?.[0] === 'catch_all' || n[0]?.[0] === 'catch_all_ref') {
+      let clause = n.shift()
+      let kind = clause[0] === 'catch' ? 0x00 : clause[0] === 'catch_ref' ? 0x01 : clause[0] === 'catch_all' ? 0x02 : 0x03
+      if (kind <= 0x01) { // catch/catch_ref have tag
+        let tag = clause[1], label = clause[2]
+        catches.push(kind, ...uleb(id(tag, c.tag)), ...uleb(blockid(label, c.block)))
+      } else { // catch_all/catch_all_ref only have label
+        catches.push(kind, ...uleb(blockid(clause[1], c.block)))
+      }
+    }
+    i.push(...uleb(catches.length / 3), ...catches) // approx count, actual depends on clause types
+  },
   end: (_n, _i, c) => c.block.pop(),
   call_indirect: (n, i, c) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
   br_table: (n, i, c) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || n[0][0] === '$')) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
@@ -625,6 +679,7 @@ const HANDLE = {
   localidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.local))),
   dataidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.data))),
   elemidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.elem))),
+  tagidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.tag))),
   'memoryidx?': (n, i, c) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
 
   // Value type
@@ -658,15 +713,27 @@ const HANDLE = {
 
 // instruction encoder
 const instr = (nodes, ctx) => {
-  let out = []
+  let out = [], meta = []
 
   while (nodes?.length) {
-    let op = nodes.shift(), immed = INSTR[op] || err(`Unknown instruction ${op}`)
+    let op = nodes.shift()
+
+    // Handle code metadata marker - store for next instruction
+    // ['@metadata', type, data]
+    if (op?.[0] === '@metadata') {
+      meta.push(op.slice(1))
+      continue
+    }
+
+    let immed = INSTR[op] || err(`Unknown instruction ${op}`)
 
     // multibyte opcode
     immed = immed.length > 1 ? [immed[0], ...uleb(immed[1])] : [...immed]
 
     HANDLE[op]?.(nodes, immed, ctx, op)
+
+    // Record metadata at current byte position
+    for (const [type, data] of meta) ((ctx.meta[type] ??= []).push([out.length, data]))
 
     out.push(...immed)
   }
