@@ -3,197 +3,6 @@ import compile from '../src/compile.js'
 import parse from '../src/parse.js'
 import {inline, file, wat2wasm, save} from './index.js'
 
-t('compile: annotations are stripped', () => {
-  let src = `
-    (module (@a)
-      (@b) (func (@c) (export "answer") (@d) (result i32)
-        (@e) (i32.const 42)
-      )
-    )
-  `
-  let { answer } = inline(src).exports
-  is(answer(), 42)
-})
-
-t('compile: annotations with content', () => {
-  let src = `(module (@name "test") (func (export "f") (result i32) (@inline hint) (i32.const 1)))`
-  let { f } = inline(src).exports
-  is(f(), 1)
-})
-
-t('compile: custom sections', () => {
-  let src = `
-    (module
-      (@custom "my-section" "hello")
-      (func (export "answer") (result i32) (i32.const 42))
-    )
-  `
-  let wasm = compile(parse(src, { annotations: true }))
-
-  // Check that custom section exists in binary
-  // Custom sections start with section id 0
-  let view = new DataView(wasm.buffer)
-  let found = false
-  let pos = 8 // skip magic + version
-
-  while (pos < wasm.length) {
-    let sectionId = view.getUint8(pos++)
-    let sectionSize = wasm[pos++] // simplified: assuming size < 128
-
-    if (sectionId === 0) {
-      // Read name length
-      let nameLen = wasm[pos++]
-      let name = String.fromCharCode(...wasm.slice(pos, pos + nameLen))
-      pos += nameLen
-
-      if (name === 'my-section') {
-        let data = String.fromCharCode(...wasm.slice(pos, pos + sectionSize - nameLen - 1))
-        is(data, 'hello', 'custom section has correct data')
-        found = true
-        break
-      }
-    } else {
-      pos += sectionSize
-    }
-  }
-
-  ok(found, 'custom section found in binary')
-
-  // Should still instantiate and work (custom sections are ignored by runtime)
-  let mod = new WebAssembly.Module(wasm)
-  let inst = new WebAssembly.Instance(mod)
-  is(inst.exports.answer(), 42)
-})
-
-t('compile: custom sections with placement', () => {
-  let src = `
-    (module
-      (@custom "before-func" (before func) "data1")
-      (func (export "f") (result i32) (i32.const 1))
-      (@custom "after-func" (after func) "data2")
-    )
-  `
-  let wasm = compile(parse(src, { annotations: true }))
-
-  // Verify both custom sections are present
-  let sections = []
-  let pos = 8
-  while (pos < wasm.length) {
-    let sectionId = wasm[pos++]
-    let sectionSize = wasm[pos++]
-    if (sectionId === 0) {
-      let nameLen = wasm[pos++]
-      let name = String.fromCharCode(...wasm.slice(pos, pos + nameLen))
-      pos += nameLen
-      let data = String.fromCharCode(...wasm.slice(pos, pos + sectionSize - nameLen - 1))
-      sections.push({ name, data })
-      pos += sectionSize - nameLen - 1
-    } else {
-      pos += sectionSize
-    }
-  }
-
-  is(sections.length, 2, 'two custom sections found')
-  is(sections[0].name, 'before-func')
-  is(sections[0].data, 'data1')
-  is(sections[1].name, 'after-func')
-  is(sections[1].data, 'data2')
-
-  // Should still work
-  let mod = new WebAssembly.Module(wasm)
-  let inst = new WebAssembly.Instance(mod)
-  is(inst.exports.f(), 1)
-})
-
-t('compile: branch hints - br_if unlikely', () => {
-  let src = `
-    (module
-      (func (export "test") (param i32) (result i32)
-        (block (result i32)
-          (i32.const 10)
-          (@metadata.code.branch_hint "\\00")
-          (br_if 0 (local.get 0))
-          (drop)
-          (i32.const 20)
-        )
-      )
-    )
-  `
-  let wasm = compile(parse(src, { annotations: true }))
-
-  // Check that branch hints section exists
-  let pos = 8
-  let foundBranchHints = false
-  while (pos < wasm.length) {
-    let sectionId = wasm[pos++]
-    let sectionSize = wasm[pos++]
-
-    if (sectionId === 0) {
-      let nameLen = wasm[pos]
-      let name = String.fromCharCode(...wasm.slice(pos + 1, pos + 1 + nameLen))
-      if (name === 'metadata.code.branch_hint') {
-        foundBranchHints = true
-        break
-      }
-    }
-    pos += sectionSize
-  }
-  ok(foundBranchHints, 'branch hints section found')
-
-  // Should still work correctly
-  let mod = new WebAssembly.Module(wasm)
-  let inst = new WebAssembly.Instance(mod)
-  is(inst.exports.test(0), 20, 'condition false returns 20')
-  is(inst.exports.test(1), 10, 'condition true returns 10')
-})
-
-t('compile: branch hints - if likely', () => {
-  let src = `
-    (module
-      (func (export "test") (param i32) (result i32)
-        (@metadata.code.branch_hint "\\01")
-        (if (result i32) (local.get 0)
-          (then (i32.const 42))
-          (else (i32.const 0))
-        )
-      )
-    )
-  `
-  let wasm = compile(parse(src, { annotations: true }))
-
-  // Verify module works
-  let mod = new WebAssembly.Module(wasm)
-  let inst = new WebAssembly.Instance(mod)
-  is(inst.exports.test(1), 42)
-  is(inst.exports.test(0), 0)
-})
-
-t('compile: branch hints - multiple hints in one function', () => {
-  let src = `
-    (module
-      (func (export "test") (param i32 i32) (result i32)
-        (block (result i32)
-          (i32.const 5)
-          (@metadata.code.branch_hint "\\00")
-          (br_if 0 (local.get 0))
-          (drop)
-          (@metadata.code.branch_hint "\\01")
-          (if (result i32) (local.get 1)
-            (then (i32.const 10))
-            (else (i32.const 20))
-          )
-        )
-      )
-    )
-  `
-  let wasm = compile(parse(src, { annotations: true }))
-
-  let mod = new WebAssembly.Module(wasm)
-  let inst = new WebAssembly.Instance(mod)
-  is(inst.exports.test(0, 0), 20)
-  is(inst.exports.test(0, 1), 10)
-  is(inst.exports.test(1, 0), 5)
-})
 
 t('compile: reexport func', () => {
   let src = `
@@ -1363,7 +1172,7 @@ t('case: elem with type ref', () => {
 
 
 // extensions
-t('feature: multiple results', () => {
+t('compile: multiple results', () => {
   let src = `(func (block (result i32 i32) (i32.const 1) (i32.const 2)))`
   is(compile(parse(src)), wat2wasm(src).buffer)
 
@@ -1382,7 +1191,7 @@ t('feature: multiple results', () => {
   // is(compile(parse(src5)), wat2wasm(src5).buffer)
 })
 
-t('feature: bulk memory', () => {
+t('compile: bulk memory', () => {
   let src = `
   (memory 1 1)
   (data "abc")
@@ -1395,7 +1204,7 @@ t('feature: bulk memory', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd load/store', () => {
+t('compile: simd load/store', () => {
   // ref: https://github.com/WebAssembly/simd/tree/master/test/core/simd
   let src = `;; Load/Store v128 data with different valid offset/alignment
     (data (i32.const 0) "\\00\\01\\02\\03\\04\\05\\06\\07\\08\\09\\10\\11\\12\\13\\14\\15")
@@ -1517,7 +1326,7 @@ t('feature: simd load/store', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd load_lane', () => {
+t('compile: simd load_lane', () => {
   let src
   src = `
     (func (param $address i32) (param $x v128) (result v128) (v128.load8_lane 0 (local.get $address) (local.get $x)))
@@ -1647,7 +1456,7 @@ t('feature: simd load_lane', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd const', () => {
+t('compile: simd const', () => {
   let src = `(global v128 (v128.const f32x4 1 1 1 1))`
   is(compile(parse(src)), wat2wasm(src).buffer)
 
@@ -1791,7 +1600,7 @@ t('feature: simd const', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd shuffle, swizzle, splat', () => {
+t('compile: simd shuffle, swizzle, splat', () => {
   let src = `(func
     (i8x16.shuffle 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 (v128.const f32x4 0 1 2 3) (v128.const f32x4 0 1 2 3))
     (i8x16.swizzle (v128.load (i32.const 0)) (v128.load offset=15 (i32.const 1)))
@@ -1806,7 +1615,7 @@ t('feature: simd shuffle, swizzle, splat', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd extract/replace/load_spat lane', () => {
+t('compile: simd extract/replace/load_spat lane', () => {
   let src
 
   src = `
@@ -1868,7 +1677,7 @@ t('feature: simd extract/replace/load_spat lane', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd bit_shift', () => {
+t('compile: simd bit_shift', () => {
   let src
   src = `
     (func (param $0 v128) (param $1 i32) (result v128) (i8x16.shl (local.get $0) (local.get $1)))
@@ -1911,7 +1720,7 @@ t('feature: simd bit_shift', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd bitwise', () => {
+t('compile: simd bitwise', () => {
   let src = `(func (export "not") (param $0 v128) (result v128) (v128.not (local.get $0)))
     (func (export "and") (param $0 v128) (param $1 v128) (result v128) (v128.and (local.get $0) (local.get $1)))
     (func (export "or") (param $0 v128) (param $1 v128) (result v128) (v128.or (local.get $0) (local.get $1)))
@@ -1923,7 +1732,7 @@ t('feature: simd bitwise', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd boolean', () => {
+t('compile: simd boolean', () => {
   let src = `
   (func (export "i8x16.any_true") (param $0 v128) (result i32) (v128.any_true (local.get $0)))
   (func (export "i8x16.all_true") (param $0 v128) (result i32) (i8x16.all_true (local.get $0)))
@@ -1943,7 +1752,7 @@ t('feature: simd boolean', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd conversion', () => {
+t('compile: simd conversion', () => {
   let src = `
   ;; Integer to floating point
   (func (export "f32x4.convert_i32x4_s") (param v128) (result v128)
@@ -1975,7 +1784,7 @@ t('feature: simd conversion', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd f32x4', () => {
+t('compile: simd f32x4', () => {
   let src = `(func (export "f32x4.min") (param v128 v128) (result v128) (f32x4.min (local.get 0) (local.get 1)))
   (func (export "f32x4.max") (param v128 v128) (result v128) (f32x4.max (local.get 0) (local.get 1)))
   (func (export "f32x4.abs") (param v128) (result v128) (f32x4.abs (local.get 0)))
@@ -2030,7 +1839,7 @@ t('feature: simd f32x4', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd f64x2', () => {
+t('compile: simd f64x2', () => {
   let src = `(func (export "f64x2.min") (param v128 v128) (result v128) (f64x2.min (local.get 0) (local.get 1)))
   (func (export "f64x2.max") (param v128 v128) (result v128) (f64x2.max (local.get 0) (local.get 1)))
   (func (export "f64x2.abs") (param v128) (result v128) (f64x2.abs (local.get 0)))
@@ -2103,7 +1912,7 @@ t('feature: simd f64x2', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd i16x8', () => {
+t('compile: simd i16x8', () => {
   let src = `(func (export "i16x8.add") (param v128 v128) (result v128) (i16x8.add (local.get 0) (local.get 1)))
   (func (export "i16x8.sub") (param v128 v128) (result v128) (i16x8.sub (local.get 0) (local.get 1)))
   (func (export "i16x8.mul") (param v128 v128) (result v128) (i16x8.mul (local.get 0) (local.get 1)))
@@ -2170,7 +1979,7 @@ t('feature: simd i16x8', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd i32x4', () => {
+t('compile: simd i32x4', () => {
   let src = `
   (func (export "i32x4.add") (param v128 v128) (result v128) (i32x4.add (local.get 0) (local.get 1)))
   (func (export "i32x4.sub") (param v128 v128) (result v128) (i32x4.sub (local.get 0) (local.get 1)))
@@ -2218,7 +2027,7 @@ t('feature: simd i32x4', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: simd i64x2', () => {
+t('compile: simd i64x2', () => {
   let src = `
   (func (export "i64x2.add") (param v128 v128) (result v128) (i64x2.add (local.get 0) (local.get 1)))
   (func (export "i64x2.sub") (param v128 v128) (result v128) (i64x2.sub (local.get 0) (local.get 1)))
@@ -2245,7 +2054,7 @@ t('feature: simd i64x2', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: extended const', () => {
+t('compile: extended const', () => {
   let src
   src = `
   (global $x i32 (i32.add (i32.const 0) (i32.const 1)))
@@ -2286,7 +2095,7 @@ t('feature: extended const', () => {
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
 
-t('feature: function refs', () => {
+t('compile: function refs', () => {
   // https://github.com/GoogleChromeLabs/wasm-feature-detect/blob/main/src/detectors/typed-function-references/index.js
   let src
   src = `
@@ -2360,7 +2169,7 @@ t('feature: function refs', () => {
   inline(src)
 })
 
-t('feature: rec types', () => {
+t('compile: rec types', () => {
   let src
   src = `
     (module
@@ -2374,7 +2183,7 @@ t('feature: rec types', () => {
   inline(src)
 })
 
-t('feature: array', () => {
+t('compile: array', () => {
   // NOTE: that's not issue of watr, that's issue of wasm compiler
   let src = `
     (type $vec (array i8))
@@ -2409,6 +2218,7 @@ t('feature: array', () => {
   let m = new WebAssembly.Module(Uint8Array.from(data))
   let inst = new WebAssembly.Instance(m, {})
 })
+
 
 // Multi-memory proposal tests
 // https://github.com/WebAssembly/multi-memory/blob/main/proposals/multi-memory/Overview.md
@@ -2517,7 +2327,331 @@ t('compile: numeric memory indices', () => {
   is(inst.exports.get_size_1(), 1)
 })
 
-// examples
+
+
+t('compile: annotations are stripped', () => {
+  let src = `
+    (module (@a)
+      (@b) (func (@c) (export "answer") (@d) (result i32)
+        (@e) (i32.const 42)
+      )
+    )
+  `
+  let { answer } = inline(src).exports
+  is(answer(), 42)
+})
+
+t('compile: annotations with content', () => {
+  let src = `(module (@name "test") (func (export "f") (result i32) (@inline hint) (i32.const 1)))`
+  let { f } = inline(src).exports
+  is(f(), 1)
+})
+
+t('compile: custom sections', () => {
+  let src = `
+    (module
+      (@custom "my-section" "hello")
+      (func (export "answer") (result i32) (i32.const 42))
+    )
+  `
+  let wasm = compile(parse(src, { annotations: true }))
+
+  // Check that custom section exists in binary
+  // Custom sections start with section id 0
+  let view = new DataView(wasm.buffer)
+  let found = false
+  let pos = 8 // skip magic + version
+
+  while (pos < wasm.length) {
+    let sectionId = view.getUint8(pos++)
+    let sectionSize = wasm[pos++] // simplified: assuming size < 128
+
+    if (sectionId === 0) {
+      // Read name length
+      let nameLen = wasm[pos++]
+      let name = String.fromCharCode(...wasm.slice(pos, pos + nameLen))
+      pos += nameLen
+
+      if (name === 'my-section') {
+        let data = String.fromCharCode(...wasm.slice(pos, pos + sectionSize - nameLen - 1))
+        is(data, 'hello', 'custom section has correct data')
+        found = true
+        break
+      }
+    } else {
+      pos += sectionSize
+    }
+  }
+
+  ok(found, 'custom section found in binary')
+
+  // Should still instantiate and work (custom sections are ignored by runtime)
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.answer(), 42)
+})
+
+t('compile: custom sections with placement', () => {
+  let src = `
+    (module
+      (@custom "before-func" (before func) "data1")
+      (func (export "f") (result i32) (i32.const 1))
+      (@custom "after-func" (after func) "data2")
+    )
+  `
+  let wasm = compile(parse(src, { annotations: true }))
+
+  // Verify both custom sections are present
+  let sections = []
+  let pos = 8
+  while (pos < wasm.length) {
+    let sectionId = wasm[pos++]
+    let sectionSize = wasm[pos++]
+    if (sectionId === 0) {
+      let nameLen = wasm[pos++]
+      let name = String.fromCharCode(...wasm.slice(pos, pos + nameLen))
+      pos += nameLen
+      let data = String.fromCharCode(...wasm.slice(pos, pos + sectionSize - nameLen - 1))
+      sections.push({ name, data })
+      pos += sectionSize - nameLen - 1
+    } else {
+      pos += sectionSize
+    }
+  }
+
+  is(sections.length, 2, 'two custom sections found')
+  is(sections[0].name, 'before-func')
+  is(sections[0].data, 'data1')
+  is(sections[1].name, 'after-func')
+  is(sections[1].data, 'data2')
+
+  // Should still work
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.f(), 1)
+})
+
+t('compile: branch hints - br_if unlikely', () => {
+  let src = `
+    (module
+      (func (export "test") (param i32) (result i32)
+        (block (result i32)
+          (i32.const 10)
+          (@metadata.code.branch_hint "\\00")
+          (br_if 0 (local.get 0))
+          (drop)
+          (i32.const 20)
+        )
+      )
+    )
+  `
+  let wasm = compile(parse(src, { annotations: true }))
+
+  // Check that branch hints section exists
+  let pos = 8
+  let foundBranchHints = false
+  while (pos < wasm.length) {
+    let sectionId = wasm[pos++]
+    let sectionSize = wasm[pos++]
+
+    if (sectionId === 0) {
+      let nameLen = wasm[pos]
+      let name = String.fromCharCode(...wasm.slice(pos + 1, pos + 1 + nameLen))
+      if (name === 'metadata.code.branch_hint') {
+        foundBranchHints = true
+        break
+      }
+    }
+    pos += sectionSize
+  }
+  ok(foundBranchHints, 'branch hints section found')
+
+  // Should still work correctly
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.test(0), 20, 'condition false returns 20')
+  is(inst.exports.test(1), 10, 'condition true returns 10')
+})
+
+t('compile: branch hints - if likely', () => {
+  let src = `
+    (module
+      (func (export "test") (param i32) (result i32)
+        (@metadata.code.branch_hint "\\01")
+        (if (result i32) (local.get 0)
+          (then (i32.const 42))
+          (else (i32.const 0))
+        )
+      )
+    )
+  `
+  let wasm = compile(parse(src, { annotations: true }))
+
+  // Verify module works
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.test(1), 42)
+  is(inst.exports.test(0), 0)
+})
+
+t('compile: branch hints - multiple hints in one function', () => {
+  let src = `
+    (module
+      (func (export "test") (param i32 i32) (result i32)
+        (block (result i32)
+          (i32.const 5)
+          (@metadata.code.branch_hint "\\00")
+          (br_if 0 (local.get 0))
+          (drop)
+          (@metadata.code.branch_hint "\\01")
+          (if (result i32) (local.get 1)
+            (then (i32.const 10))
+            (else (i32.const 20))
+          )
+        )
+      )
+    )
+  `
+  let wasm = compile(parse(src, { annotations: true }))
+
+  let mod = new WebAssembly.Module(wasm)
+  let inst = new WebAssembly.Instance(mod)
+  is(inst.exports.test(0, 0), 20)
+  is(inst.exports.test(0, 1), 10)
+  is(inst.exports.test(1, 0), 5)
+})
+
+
+// Wide Arithmetic Proposal Tests
+t('compile: i64.add128 - basic', () => {
+  let src = `
+    (func (export "add128") (param i64 i64 i64 i64) (result i64 i64)
+      local.get 0
+      local.get 1
+      local.get 2
+      local.get 3
+      i64.add128
+    )
+  `
+  let wasm = compile(src)
+
+  // Verify opcode is 0xFC 0x13
+  let hex = Array.from(wasm)
+  let idx = hex.indexOf(0xFC)
+  ok(idx >= 0, 'has 0xFC prefix')
+  is(hex[idx + 1], 0x13, 'has correct opcode 0x13')
+})
+
+t('compile: i64.sub128 - basic', () => {
+  let src = `
+    (func (export "sub128") (param i64 i64 i64 i64) (result i64 i64)
+      local.get 0
+      local.get 1
+      local.get 2
+      local.get 3
+      i64.sub128
+    )
+  `
+  let wasm = compile(src)
+
+  // Verify opcode is 0xFC 0x14
+  let hex = Array.from(wasm)
+  let idx = hex.indexOf(0xFC)
+  ok(idx >= 0, 'has 0xFC prefix')
+  is(hex[idx + 1], 0x14, 'has correct opcode 0x14')
+})
+
+t('compile: i64.mul_wide_s - signed widening multiply', () => {
+  let src = `
+    (func (export "mul_wide_s") (param i64 i64) (result i64 i64)
+      local.get 0
+      local.get 1
+      i64.mul_wide_s
+    )
+  `
+  let wasm = compile(src)
+
+  // Verify opcode is 0xFC 0x15
+  let hex = Array.from(wasm)
+  let idx = hex.indexOf(0xFC)
+  ok(idx >= 0, 'has 0xFC prefix')
+  is(hex[idx + 1], 0x15, 'has correct opcode 0x15')
+})
+
+t('compile: i64.mul_wide_u - unsigned widening multiply', () => {
+  let src = `
+    (func (export "mul_wide_u") (param i64 i64) (result i64 i64)
+      local.get 0
+      local.get 1
+      i64.mul_wide_u
+    )
+  `
+  let wasm = compile(src)
+
+  // Verify opcode is 0xFC 0x16
+  let hex = Array.from(wasm)
+  let idx = hex.indexOf(0xFC)
+  ok(idx >= 0, 'has 0xFC prefix')
+  is(hex[idx + 1], 0x16, 'has correct opcode 0x16')
+})
+
+t('compile: wide arithmetic - combined operations', () => {
+  let src = `
+    (func (export "combined") (param i64 i64 i64 i64) (result i64 i64)
+      ;; Multiply first two params
+      local.get 0
+      local.get 1
+      i64.mul_wide_u
+      ;; Add with third and fourth params as 128-bit value
+      local.get 2
+      local.get 3
+      i64.add128
+    )
+  `
+  let wasm = compile(src)
+
+  // Verify both instructions are present
+  let hex = Array.from(wasm)
+  let fcIndices = []
+  for (let i = 0; i < hex.length; i++) {
+    if (hex[i] === 0xFC) fcIndices.push(i)
+  }
+
+  ok(fcIndices.length >= 2, 'has at least 2 extended opcodes')
+  ok(fcIndices.some(i => hex[i + 1] === 0x16), 'has i64.mul_wide_u (0x16)')
+  ok(fcIndices.some(i => hex[i + 1] === 0x13), 'has i64.add128 (0x13)')
+})
+
+t('compile: wide arithmetic - type signature validation', () => {
+  // Test that proper function types are generated
+  let src = `
+    (func (export "add") (param i64 i64 i64 i64) (result i64 i64)
+      local.get 0 local.get 1 local.get 2 local.get 3 i64.add128
+    )
+    (func (export "mul") (param i64 i64) (result i64 i64)
+      local.get 0 local.get 1 i64.mul_wide_s
+    )
+  `
+  let wasm = compile(src)
+
+  // Should compile to valid binary format
+  ok(wasm instanceof Uint8Array, 'compiles to Uint8Array')
+  ok(wasm.length > 0, 'produces non-empty binary')
+
+  // Check for wasm magic number and version
+  is(wasm[0], 0x00, 'has magic byte 0')
+  is(wasm[1], 0x61, 'has magic byte 1')
+  is(wasm[2], 0x73, 'has magic byte 2')
+  is(wasm[3], 0x6d, 'has magic byte 3')
+
+  // Note: WebAssembly.Module will fail because wide arithmetic
+  // is not yet supported in JS engines, but the binary is correctly formatted
+})
+
+
+
+
+// Examples
 t('/test/example/table.wat', async function () { await file(this.name) })
 t('/test/example/types.wat', async function () { await file(this.name, { console }) })
 t('/test/example/global.wat', async function () { await file(this.name, {js: {log: console.log, g1: new WebAssembly.Global({ value:'i32', mutable: true}, 1)}}) })

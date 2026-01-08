@@ -1,10 +1,30 @@
 import t, { is, ok, same, throws } from 'tst'
 import { file } from './index.js'
 
+// Create a WASM-exported table64 for testing, since JS WebAssembly.Table with index:'i64'
+// doesn't create a true i64-indexed table in current Node versions
+const createTable64 = () => {
+  try {
+    // Binary for: (module (table i64 10 20 funcref) (export "table64" (table 0)))
+    const bytes = new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic + version
+      0x04, 0x05, 0x01, 0x70, 0x05, 0x0a, 0x14,       // table section: funcref, flag=0x05 (i64+max), min=10, max=20
+      0x07, 0x0b, 0x01, 0x07, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x36, 0x34, 0x01, 0x00 // export "table64" table 0
+    ])
+    const mod = new WebAssembly.Module(bytes)
+    const inst = new WebAssembly.Instance(mod)
+    return inst.exports.table64
+  } catch (e) {
+    // Fallback to regular table if table64 not supported
+    return new WebAssembly.Table({ initial: 10, maximum: 20, element: 'anyfunc' })
+  }
+}
+
 const spectest = {
   memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }),
   table: new WebAssembly.Table({ initial: 10, maximum: 20, element: 'anyfunc' }),
-  table64: new WebAssembly.Table({ initial: 10, maximum: 20, element: 'anyfunc', index: 'i64' }),
+  // table64: new WebAssembly.Table({ initial: 10, maximum: 20, element: 'anyfunc', index: 'i64' }),
+  table64: createTable64(),
   global_i32: 666,
   global_i64: 666n,
   global_f32: 666.6,

@@ -107,11 +107,12 @@
 * [ ] VSCode formatter plugin
 * [ ] All Phase 5 & Phase 4 proposals
   * [ ] js_strings
-  * [ ] Exceptions
+  * [x] Exceptions
   * [x] memory64
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
   * [x] All main ones (readme)
   * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md=
+  * [x] Feature: wide arithmetic https://github.com/WebAssembly/wide-arithmetic/blob/main/proposals/wide-arithmetic/Overview.md
 * [x] Print: make it as nice as AI
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
