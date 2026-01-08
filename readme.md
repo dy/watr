@@ -8,7 +8,7 @@ Supports all [phase 5 features](https://github.com/WebAssembly/proposals/blob/ma
 
 ## Usage
 
-Compile WAT to binary:
+**Compile** WAT to binary:
 
 ```js
 import { compile } from 'watr'
@@ -21,7 +21,7 @@ const { double } = new WebAssembly.Instance(new WebAssembly.Module(wasm)).export
 double(108) // 216
 ```
 
-Format (pretty-print or minify):
+**Print** (pretty-print or minify):
 
 ```js
 import { print } from 'watr'
@@ -33,7 +33,7 @@ print(src) // pretty-print (default)
 print(src, { indent: false, newline: false }) // minify
 ```
 
-Parse WAT to syntax tree:
+**Parse** WAT to syntax tree:
 
 ```js
 import { parse } from 'watr'
@@ -52,6 +52,6 @@ See [docs](./docs/index.md) for complete API and examples.
 [wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,279 op/s
 [wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB | 517 op/s
 
-<small>Benchmarked on [brownian.wat](./test/example/brownian.wat) (N=500)</small>
+<!-- <small>Benchmarked on [brownian.wat](./test/example/brownian.wat) (N=500)</small> -->
 
 <p align=center><a href="https://github.com/krsnzd/license/">ॐ</a></p>
