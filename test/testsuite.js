@@ -22,6 +22,7 @@ const createTable64 = () => {
 
 const spectest = {
   memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }),
+  shared_memory: new WebAssembly.Memory({ initial: 1, maximum: 2, shared: true }),
   table: new WebAssembly.Table({ initial: 10, maximum: 20, element: 'anyfunc' }),
   // table64: new WebAssembly.Table({ initial: 10, maximum: 20, element: 'anyfunc', index: 'i64' }),
   table64: createTable64(),
@@ -119,7 +120,7 @@ t.mute('/test/official/imports0.wast', async function () { await file(this.name,
 t.mute('/test/official/imports1.wast', async function () { await file(this.name, { spectest: { ...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }) } }) })
 t.mute('/test/official/imports2.wast', async function () { await file(this.name, { spectest: { ...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }) } }) })
 t.mute('/test/official/imports3.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/imports4.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/imports4.wast', async function () { await file(this.name, { spectest: { ...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }) } }) })
 t.todo('/test/official/inline-module.wast', async function () { await file(this.name, { spectest }) })
 t.todo('/test/official/instance.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/int_exprs.wast', async function () { await file(this.name, { spectest }) })
@@ -304,10 +305,10 @@ t.todo('/test/official/proposals/custom-page-sizes/memory_max.wast', async funct
 t.todo('/test/official/proposals/custom-page-sizes/memory_max_i64.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - threads
-t('/test/official/proposals/threads/atomic.wast', async function () { await file(this.name, { spectest }) })
-t('/test/official/proposals/threads/exports.wast', async function () { await file(this.name, { spectest }) })
-t.only('/test/official/proposals/threads/imports.wast', async function () { await file(this.name, { spectest }) })
-t('/test/official/proposals/threads/memory.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/threads/atomic.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/threads/exports.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/threads/imports.wast', async function () { await file(this.name, { spectest: { ...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }) } }) })
+t.mute('/test/official/proposals/threads/memory.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - wide-arithmetic
 t.todo('/test/official/proposals/wide-arithmetic/wide-arithmetic.wast', async function () { await file(this.name, { spectest }) })
