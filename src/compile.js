@@ -1,6 +1,6 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, HEAPTYPE, DEFTYPE, RECTYPE, REFTYPE } from './const.js'
+import { SECTION, TYPE, KIND, INSTR, DEFTYPE } from './const.js'
 import parse from './parse.js'
 import { err, tdec } from './util.js'
 
@@ -427,11 +427,11 @@ const build = [
     else if (!declare) passive = 1
 
     // funcref|externref|(ref ...)
-    if (REFTYPE[parts[0]] || parts[0]?.[0] === 'ref') rt = reftype(parts.shift(), ctx)
+    if (TYPE[parts[0]] || parts[0]?.[0] === 'ref') rt = reftype(parts.shift(), ctx)
     // func ... abbr https://webassembly.github.io/function-references/core/text/modules.html#id7
-    else if (parts[0] === 'func') rt = [HEAPTYPE[parts.shift()]]
+    else if (parts[0] === 'func') rt = [TYPE[parts.shift()]]
     // or anything else
-    else rt = [HEAPTYPE.func]
+    else rt = [TYPE.func]
 
     // deabbr els sequence, detect expr usage
     parts = parts.map(el => {
@@ -446,7 +446,7 @@ const build = [
 
     // reftype other than (ref null? func) forces table index via nofunc flag
     // also it forces elexpr
-    if (rt[0] !== REFTYPE.funcref) nofunc = 1, elexpr = 1
+    if (rt[0] !== TYPE.funcref) nofunc = 1, elexpr = 1
 
     // mode:
     // bit 0 indicates a passive or declarative segment
@@ -570,8 +570,8 @@ build[SECTION.tag] = ([[, typeidx]], ctx) => [0x00, ...uleb(id(typeidx, ctx.type
 const reftype = (t, ctx) => (
   t[0] === 'ref' ?
     t[1] == 'null' ?
-      HEAPTYPE[t[2]] ? [HEAPTYPE[t[2]]] : [REFTYPE.refnull, ...uleb(id(t[t.length - 1], ctx.type))] :
-      [TYPE.ref, ...uleb(HEAPTYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))] :
+      TYPE[t[2]] ? [TYPE[t[2]]] : [TYPE.refnull, ...uleb(id(t[t.length - 1], ctx.type))] :
+      [TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))] :
     // abbrs
     [TYPE[t] ?? err(`Unknown type ${t}`)]
 );
@@ -592,11 +592,11 @@ const HANDLE = {
   call_indirect: (n, i, c) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
   br_table: (n, i, c) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || n[0][0] === '$')) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
   select: (n, i, c) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
-  ref_null: (n, i, c) => (t => i.push(...(HEAPTYPE[t] ? [HEAPTYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
+  ref_null: (n, i, c) => (t => i.push(...(TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
   memarg: (n, i, _c, op) => i.push(...memargEnc(n, op)),
   opt_memory: (n, i, c) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
-  reftype: (n, i, c) => (ht => (ht[0] !== REFTYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
-  reftype2: (n, i, c) => (([b, h1, h2]) => i.push(((h2[0] !== REFTYPE.ref) << 1) | (h1[0] !== REFTYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
+  reftype: (n, i, c) => (ht => (ht[0] !== TYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
+  reftype2: (n, i, c) => (([b, h1, h2]) => i.push(((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
   v128const: (n, i) => {
     let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3; num = +num
     if (t[0] === 'i') {
