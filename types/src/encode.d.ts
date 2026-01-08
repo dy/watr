@@ -1,3 +1,4 @@
+export function uleb5(value: any): number[];
 export function i32(n: any, buffer?: any[]): any[];
 export namespace i32 {
     function parse(n: any): number;

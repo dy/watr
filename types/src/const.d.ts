@@ -1,4 +1,4 @@
-export const INSTR: string[];
+export const INSTR: (string | string[])[];
 export namespace SECTION {
     export let custom: number;
     export let type: number;
@@ -7,8 +7,8 @@ export namespace SECTION {
     export let func: number;
     export let table: number;
     export let memory: number;
-    export let global: number;
     export let tag: number;
+    export let global: number;
     let _export: number;
     export { _export as export };
     export let start: number;
@@ -16,62 +16,6 @@ export namespace SECTION {
     export let datacount: number;
     export let code: number;
     export let data: number;
-}
-export namespace RECTYPE {
-    let sub: number;
-    let subfinal: number;
-    let rec: number;
-}
-export namespace DEFTYPE {
-    let func_1: number;
-    export { func_1 as func };
-    export let struct: number;
-    export let array: number;
-}
-export namespace HEAPTYPE {
-    export let nofunc: number;
-    export let noextern: number;
-    export let noexn: number;
-    export let none: number;
-    let func_2: number;
-    export { func_2 as func };
-    export let extern: number;
-    export let exn: number;
-    export let any: number;
-    export let eq: number;
-    export let i31: number;
-    let struct_1: number;
-    export { struct_1 as struct };
-    let array_1: number;
-    export { array_1 as array };
-}
-export namespace REFTYPE {
-    import nullfuncref = HEAPTYPE.nofunc;
-    export { nullfuncref };
-    import nullexternref = HEAPTYPE.noextern;
-    export { nullexternref };
-    import nullexnref = HEAPTYPE.noexn;
-    export { nullexnref };
-    import nullref = HEAPTYPE.none;
-    export { nullref };
-    import funcref = HEAPTYPE.func;
-    export { funcref };
-    import externref = HEAPTYPE.extern;
-    export { externref };
-    import exnref = HEAPTYPE.exn;
-    export { exnref };
-    import anyref = HEAPTYPE.any;
-    export { anyref };
-    import eqref = HEAPTYPE.eq;
-    export { eqref };
-    import i31ref = HEAPTYPE.i31;
-    export { i31ref };
-    import structref = HEAPTYPE.struct;
-    export { structref };
-    import arrayref = HEAPTYPE.array;
-    export { arrayref };
-    export let ref: number;
-    export let refnull: number;
 }
 export namespace TYPE {
     export let i8: number;
@@ -83,6 +27,50 @@ export namespace TYPE {
     let _void: number;
     export { _void as void };
     export let v128: number;
+    export let exn: number;
+    export let noexn: number;
+    export let nofunc: number;
+    export let noextern: number;
+    export let none: number;
+    let func_1: number;
+    export { func_1 as func };
+    export let extern: number;
+    export let any: number;
+    export let eq: number;
+    export let i31: number;
+    export let struct: number;
+    export let array: number;
+    export let nullfuncref: number;
+    export let nullexternref: number;
+    export let nullexnref: number;
+    export let nullref: number;
+    export let funcref: number;
+    export let externref: number;
+    export let exnref: number;
+    export let anyref: number;
+    export let eqref: number;
+    export let i31ref: number;
+    export let structref: number;
+    export let arrayref: number;
+    export let ref: number;
+    export let refnull: number;
+    export let sub: number;
+    export let subfinal: number;
+    export let rec: number;
+}
+export namespace DEFTYPE {
+    let func_2: number;
+    export { func_2 as func };
+    let struct_1: number;
+    export { struct_1 as struct };
+    let array_1: number;
+    export { array_1 as array };
+    let sub_1: number;
+    export { sub_1 as sub };
+    let subfinal_1: number;
+    export { subfinal_1 as subfinal };
+    let rec_1: number;
+    export { rec_1 as rec };
 }
 export namespace KIND {
     let func_3: number;
