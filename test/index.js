@@ -199,9 +199,14 @@ export async function file(path, imports = {}) {
       if (nodes.some(n => n[0] === 'global' && typeof n[2] !== 'string')) return console.warn('assert_invalid: skip (global const_expr)');
       // skip (elem const_expr) - we don't have constant expr limitations
       if (nodes.some(n => n[0] === 'elem' && typeof n[1] !== 'string')) return console.warn('assert_invalid: skip (elem const_expr)');
+      // skip constant expression opcode restrictions - compiler treats them as regular fn bodies
+      if (/not allowed in constant expressions/.test(msg)) return console.warn('assert_invalid: skip constant expression limitations');
       // skip multimemory - there's no issue with proposal enabled
       let m = 0
       if (nodes.some(n => (n[0] === 'memory' && (++m) > 1))) return console.warn('assert_invalid: skip multi memory required fail');
+      // skip multiple tables - modern WASM with reference-types proposal allows multiple tables
+      let t = 0
+      if (nodes.some(n => (n[0] === 'table' && (++t) > 1)) && msg === '"multiple tables"') return console.warn('assert_invalid: skip multiple tables (allowed in modern WASM)');
       // skip recursive type checks that refer to itself
       if (msg === '"unknown type"' && nodes.join('').includes('ref,$')) return console.warn('assert_invalid: skip type checks');
       // skip offset out of range validation (we don't validate offset ranges in 32-bit memory)

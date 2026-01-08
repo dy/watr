@@ -455,9 +455,14 @@ const build = [
     if (parts[0] === 'declare') parts.shift(), declare = 1
 
     // table?
-    if (parts[0][0] === 'table') {
+    if (parts[0]?.[0] === 'table') {
       [, tabidx] = parts.shift()
       tabidx = id(tabidx, ctx.table)
+    }
+    // Handle abbreviated form: (elem tableidx (offset ...) ...) where tableidx is directly a number/identifier
+    else if ((typeof parts[0] === 'string' || typeof parts[0] === 'number') &&
+             (parts[1]?.[0] === 'offset' || (Array.isArray(parts[1]) && parts[1][0] !== 'item' && !parts[1][0]?.startsWith('ref')))) {
+      tabidx = id(parts.shift(), ctx.table)
     }
 
     // (offset expr)|expr
@@ -587,9 +592,14 @@ const build = [
       [, memidx] = inits.shift()
       memidx = id(memidx, ctx.memory)
     }
+    // Handle abbreviated form: (data memidx (offset ...) ...) where memidx is directly a number/identifier
+    else if ((typeof inits[0] === 'string' || typeof inits[0] === 'number') &&
+             (inits[1]?.[0] === 'offset' || (Array.isArray(inits[1]) && typeof inits[1][0] === 'string'))) {
+      memidx = id(inits.shift(), ctx.memory)
+    }
 
     // (offset (i32.const 0)) or (i32.const 0)
-    if (typeof inits[0]?.[0] === 'string') {
+    if (Array.isArray(inits[0]) && typeof inits[0]?.[0] === 'string') {
       offset = inits.shift()
       if (offset[0] === 'offset') [, offset] = offset
       offset ?? err('Bad offset', offset)
