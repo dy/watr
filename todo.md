@@ -98,7 +98,7 @@
 * [x] Split strings into unicode / binary parts
 * [x] mnemonic algo
   * [x] plain() should also do flat ~~or nested~~, to simplify tree for instr
-* [ ] Prettify printer: keep comments
+* [x] Prettify printer: keep comments
 * [ ] Ignore particular test cases instead of excluding full test (like const)
 * [ ] Better `str`, `id` tests, `name`: there's suboptimal code atm. We need better name parsing
 * [ ] `id` test skips important malformed cases

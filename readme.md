@@ -26,20 +26,6 @@ const {double} = instance.exports
 double(108) // 216
 ```
 
-### Parse
-
-Parse input wasm text into syntax tree.
-
-```js
-import { parse } from 'watr'
-
-parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))`)
-// [
-//   'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
-//   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
-// ]
-```
-
 ### Print
 
 Format input wasm text or syntax tree into minified or pretty form.
@@ -56,6 +42,7 @@ const src = `(func (export "double")
 print(src, {
   indent: '  ',
   newline: '\n',
+  comment: true
 })
 // (func
 //   (export "double")
@@ -67,11 +54,25 @@ print(src, {
 // minify
 print(src, {
   indent: false,
-  newline: false
+  newline: false,
+  comments: false
 })
 // (func(export "double")(param f64)(result f64)(f64.mul(local.get 0)(f64.const 2)))
 ```
 
+### Parse
+
+Parse input wasm text into syntax tree.
+
+```js
+import { parse } from 'watr'
+
+parse(`(func (export "double") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))`)
+// [
+//   'func', ['export', '"double"'], ['param', 'f64'], ['result', 'f64'],
+//   ['f64.mul', ['local.get', 0], ['f64.const', 2]]
+// ]
+```
 
 ## Status
 
