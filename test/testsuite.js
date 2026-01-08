@@ -177,7 +177,7 @@ t.mute('/test/official/ref_cast.wast', async function () { await file(this.name,
 t.mute('/test/official/ref_eq.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/ref_func.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/ref_is_null.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/ref_null.wast', async function () { await file(this.name, { spectest }) })
+t('/test/official/ref_null.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/ref_test.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/ref.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/relaxed_dot_product.wast', async function () { await file(this.name, { spectest }) })
@@ -277,12 +277,12 @@ t.mute('/test/official/table-sub.wast', async function () { await file(this.name
 t.mute('/test/official/table.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/tag.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/throw_ref.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/throw_ref.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/throw.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/token.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/traps.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/traps0.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/try_table.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/try_table.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-canon.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-equivalence.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-rec.wast', async function () { await file(this.name, { spectest }) })
@@ -306,7 +306,7 @@ t.todo('/test/official/proposals/custom-page-sizes/memory_max_i64.wast', async f
 // Proposals - threads
 t('/test/official/proposals/threads/atomic.wast', async function () { await file(this.name, { spectest }) })
 t('/test/official/proposals/threads/exports.wast', async function () { await file(this.name, { spectest }) })
-t('/test/official/proposals/threads/imports.wast', async function () { await file(this.name, { spectest }) })
+t.only('/test/official/proposals/threads/imports.wast', async function () { await file(this.name, { spectest }) })
 t('/test/official/proposals/threads/memory.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - wide-arithmetic

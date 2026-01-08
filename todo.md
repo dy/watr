@@ -44,7 +44,7 @@
     * [x] consumeType -> typeuse (better storage)
     * [x] vec
     * [x] common parts pre-parse
-* [ ] Optimizations
+* [x] Optimizations
   * [x] split generic precompile into section builders as was in v1
   * [x] ~~introduce more complete ref/deref use~~ -> we can't really solve full hoisting issue (types, code refs)
   * [x] make IR: types indexing, code deferring
@@ -128,8 +128,8 @@
   * [x] Memory64 https://github.com/WebAssembly/memory64
   * [x] Wide arithmetic https://github.com/WebAssembly/wide-arithmetic
   * [x] Threads https://github.com/webassembly/threads
-  * [ ] JS Promise Integration https://github.com/WebAssembly/js-promise-integration
-  * [ ] Web Content Security Policy https://github.com/WebAssembly/content-security-policy
+  * [x] ~~JS Promise Integration https://github.com/WebAssembly/js-promise-integration~~
+  * [x] ~~Web Content Security Policy https://github.com/WebAssembly/content-security-policy~~
 * [x] Print: make it as nice as AI
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests

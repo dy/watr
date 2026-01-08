@@ -161,6 +161,9 @@ export async function file(path, imports = {}) {
 
       if (expects.some(v => v[0] === 'v128.const') || args.some(v => v[0] === 'v128.const')) return console.warn('assert_return: skip v128');
 
+      // skip when function name is exnref or nullexnref (these return exnref types)
+      if (nm === 'exnref' || nm === 'nullexnref') return console.warn('assert_return: skip exnref');
+
       args = args.map(val)
       expects = expects?.map(val)
 

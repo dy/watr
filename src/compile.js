@@ -100,7 +100,7 @@ export default function compile(nodes) {
         if (node[idx + 1]?.[0] === 'elem') {
           let [reftype, [, ...els]] = [node[idx], node[idx + 1]]
           node = is64 ? ['i64', els.length, els.length, reftype] : [els.length, els.length, reftype]
-          ctx.elem.push([['table', items.length], [is64 ? 'i64.const' : 'i32.const', is64 ? 0n : 0], reftype, ...els])
+          ctx.elem.push([['table', items.length], ['offset', [is64 ? 'i64.const' : 'i32.const', is64 ? 0n : 0]], reftype, ...els])
         }
       }
 
