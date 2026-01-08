@@ -2,19 +2,7 @@ import t, { is } from 'tst'
 import watr from '../src/compile.js'
 import watCompiler from './lib/wat-compiler.js'
 import { wat2wasm } from './index.js'
-
-// Load wast.cjs - works in both Node.js and browser
-let WebAssemblyText
-if (typeof process !== 'undefined' && process.versions?.node) {
-  // Node.js - use CommonJS require
-  const { createRequire } = await import('module')
-  const req = createRequire(import.meta.url)
-  WebAssemblyText = req('./lib/wast.cjs').WebAssemblyText
-} else {
-  // Browser - dynamic import sets globalThis.WebAssemblyText
-  await import('./lib/wast.cjs')
-  WebAssemblyText = globalThis.WebAssemblyText
-}
+import WebAssemblyText from './lib/wast.js'
 
 // bench
 t.only('bench: brownian', async () => {
