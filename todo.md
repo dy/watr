@@ -95,14 +95,15 @@
   * [x] Remove unnecessary checks: end label, param names
   * [x] Type declarations with map file
 * [x] ~~Full immutability via idx~~ no benefit: theoretical purity over self-documented simplicity; no perf gain
+* [x] Split strings into unicode / binary parts
+* [x] mnemonic algo
+  * [x] plain() should also do flat ~~or nested~~, to simplify tree for instr
 * [ ] Prettify printer: keep comments
 * [ ] Ignore particular test cases instead of excluding full test (like const)
 * [ ] Better `str`, `id` test, `name`: there's suboptimal code atm. We need better name parsing
 * [ ] `id` test skips important malformed cases
 * [ ] move string / name logic to compiler/prepare stage, it's not parser duty
 * [ ] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
-* [ ] Split strings into unicode / binary parts
-* [ ] consider index-based iteration for plain() hot path only
 * [ ] VSCode formatter plugin
 * [ ] Features
   * [ ] js_strings
