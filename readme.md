@@ -43,9 +43,7 @@ parse('(i32.const 42)') // ['i32.const', 42]
 
 See [docs](./docs/index.md) for complete API and examples.
 
-## Benchmarks
-
-Benchmarked on [brownian.wat](./test/example/brownian.wat) (N=500):
+## Metrics
 
 &nbsp; | Size | Speed
 ---|---|---
@@ -53,5 +51,7 @@ Benchmarked on [brownian.wat](./test/example/brownian.wat) (N=500):
 [spec/wast.js](https://github.com/WebAssembly/spec) | 216 KB | 2,196 op/s
 [wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,279 op/s
 [wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB | 517 op/s
+
+<small>Benchmarked on [brownian.wat](./test/example/brownian.wat) (N=500)</small>
 
 <p align=center><a href="https://github.com/krsnzd/license/">ॐ</a></p>
