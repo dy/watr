@@ -100,7 +100,7 @@ export default function compile(nodes) {
         if (node[idx + 1]?.[0] === 'elem') {
           let [reftype, [, ...els]] = [node[idx], node[idx + 1]]
           node = is64 ? ['i64', els.length, els.length, reftype] : [els.length, els.length, reftype]
-          ctx.elem.push([['table', items.length], [is64 ? 'i64.const' : 'i32.const', 0], reftype, ...els])
+          ctx.elem.push([['table', items.length], [is64 ? 'i64.const' : 'i32.const', is64 ? 0n : 0], reftype, ...els])
         }
       }
 
@@ -109,7 +109,7 @@ export default function compile(nodes) {
         const is64 = node[0] === 'i64', idx = is64 ? 1 : 0
         if (node[idx]?.[0] === 'data') {
           let [, ...data] = node.splice(idx, 1)[0], m = '' + Math.ceil(data.flat().length / 65536) // FIXME: figure out actual data size
-          ctx.data.push([['memory', items.length], [is64 ? 'i64.const' : 'i32.const', 0], ...data])
+          ctx.data.push([['memory', items.length], [is64 ? 'i64.const' : 'i32.const', is64 ? 0n : 0], ...data])
           node = is64 ? ['i64', m, m] : [m, m]
         }
       }
