@@ -106,7 +106,7 @@
 * [ ] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
 * [ ] VSCode formatter plugin
 * [ ] All Phase 5 & Phase 4 proposals
-  * [ ] js_strings
+  * [x] js_strings
   * [x] Exceptions
   * [x] memory64
   * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
