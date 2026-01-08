@@ -191,6 +191,8 @@ export default function compile(nodes) {
 const isIdx = n => n?.[0] === '$' || !isNaN(n)
 // if node is an identifier (starts with $)
 const isId = n => n?.[0] === '$'
+// if node is align/offset parameter (starts with 'a' or 'o')
+const isMemParam = n => n?.[0] === 'a' || n?.[0] === 'o'
 
 // normalize & flatten function body, collect types info, rectify structure
 function normalize(nodes, ctx) {
@@ -223,7 +225,8 @@ function normalize(nodes, ctx) {
         node === 'data.drop' && out.push(nodes.shift())
         ctx.datacount && (ctx.datacount[0] = true)
       }
-      else if (node.startsWith('memory.') && isIdx(nodes[0])) out.push(nodes.shift())
+      // memory.* instructions and load/store with optional memory index
+      else if ((node.startsWith('memory.') || node.endsWith('load') || node.endsWith('store')) && isIdx(nodes[0])) out.push(nodes.shift())
     }
     else if (Array.isArray(node)) {
       const op = node[0]
@@ -649,7 +652,7 @@ const HANDLE = {
   br_table: (n, i, c) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || isId(n[0]))) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
   select: (n, i, c) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
   ref_null: (n, i, c) => (t => i.push(...(TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
-  memarg: (n, i, _c, op) => i.push(...memargEnc(n, op)),
+  memarg: (n, i, c, op) => i.push(...memargEnc(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0)),
   opt_memory: (n, i, c) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
   reftype: (n, i, c) => (ht => (ht[0] !== TYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
   reftype2: (n, i, c) => (([b, h1, h2]) => i.push(((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
@@ -666,7 +669,11 @@ const HANDLE = {
     }
   },
   shuffle: (n, i) => { for (let j = 0; j < 16; j++) i.push(parseUint(n.shift(), 32)) },
-  memlane: (n, i, _c, op) => (i.push(...memargEnc(n, op)), i.push(...uleb(parseUint(n.shift())))),
+  memlane: (n, i, c, op) => {
+    // SIMD lane: [memidx?] [offset/align]* laneidx - memidx present if isId OR (isIdx AND (next is memParam OR isIdx))
+    const memIdx = isId(n[0]) || (isIdx(n[0]) && (isMemParam(n[1]) || isIdx(n[1]))) ? id(n.shift(), c.memory) : 0
+    i.push(...memargEnc(n, op, memIdx), ...uleb(parseUint(n.shift())))
+  },
   field: (n, i, c) => i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1]))),
   '*': (n, i) => i.push(...uleb(n.shift())),
 
@@ -759,7 +766,7 @@ const blockid = (nm, block, i) => (
 // consume align/offset params
 const memarg = (args) => {
   let align, offset, k, v
-  while (args[0]?.includes('=')) [k, v] = args.shift().split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
+  while (isMemParam(args[0])) [k, v] = args.shift().split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
 
   if (offset < 0 || offset > 0xffffffff) err(`Bad offset ${offset}`)
   if (align <= 0 || align > 0xffffffff) err(`Bad align ${align}`)
@@ -768,9 +775,10 @@ const memarg = (args) => {
 }
 
 // Encode memarg (align + offset) with default values based on instruction
-const memargEnc = (nodes, op) => {
-  const [a, o] = memarg(nodes)
-  return [...uleb((a ?? align(op))), ...uleb(o ?? 0)]
+// If memIdx is non-zero, set bit 6 in alignment flags and insert memIdx after align
+const memargEnc = (nodes, op, memIdx = 0) => {
+  const [a, o] = memarg(nodes), alignVal = (a ?? align(op)) | (memIdx && 0x40)
+  return memIdx ? [...uleb(alignVal), ...uleb(memIdx), ...uleb(o ?? 0)] : [...uleb(alignVal), ...uleb(o ?? 0)]
 }
 
 // const ALIGN = {

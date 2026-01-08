@@ -118,6 +118,15 @@ export async function file(path, imports = {}) {
       // skip "module definition" (validation-only modules)
       if (node[1] === 'definition') return
 
+      // Handle (module quote "...") by parsing the quoted string
+      if (node[1] === 'quote') {
+        let code = node.slice(2).map(arr =>
+          typeof arr === 'string' ? arr.slice(1, -1) :
+          Array.isArray(arr) ? String.fromCharCode(...arr) : arr
+        ).join('\n')
+        node = parse(code)
+      }
+
       buf = compile(print(node))
 
       let m = new WebAssembly.Module(buf)
