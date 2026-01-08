@@ -127,8 +127,7 @@
   * [x] JS string builtins https://github.com/WebAssembly/js-string-builtins
   * [x] Memory64 https://github.com/WebAssembly/memory64
   * [x] Wide arithmetic https://github.com/WebAssembly/wide-arithmetic
-* [ ] Current Phase 4 proposals:
-  * [ ] Threads https://github.com/webassembly/threads
+  * [x] Threads https://github.com/webassembly/threads
   * [ ] JS Promise Integration https://github.com/WebAssembly/js-promise-integration
   * [ ] Web Content Security Policy https://github.com/WebAssembly/content-security-policy
 * [x] Print: make it as nice as AI
@@ -137,11 +136,9 @@
 * [ ] Finish all official tests
   * [ ] All skipped features
 * [x] Types
-* [ ] Cleanup tests harness
-* [ ] Make sure all existing proposals are up to date
+* [x] Cleanup tests harness
 * [ ] Sourcemaps
 * [ ] Source position to error messages
-* [ ] Split compile
 
 ## REPL
 

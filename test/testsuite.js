@@ -304,10 +304,10 @@ t.todo('/test/official/proposals/custom-page-sizes/memory_max.wast', async funct
 t.todo('/test/official/proposals/custom-page-sizes/memory_max_i64.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - threads
-t.todo('/test/official/proposals/threads/atomic.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/threads/exports.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/threads/imports.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/threads/memory.wast', async function () { await file(this.name, { spectest }) })
+t('/test/official/proposals/threads/atomic.wast', async function () { await file(this.name, { spectest }) })
+t('/test/official/proposals/threads/exports.wast', async function () { await file(this.name, { spectest }) })
+t('/test/official/proposals/threads/imports.wast', async function () { await file(this.name, { spectest }) })
+t('/test/official/proposals/threads/memory.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - wide-arithmetic
 t.todo('/test/official/proposals/wide-arithmetic/wide-arithmetic.wast', async function () { await file(this.name, { spectest }) })

@@ -813,10 +813,16 @@ const memargEnc = (nodes, op, memIdx = 0) => {
 //   'v128.load': 16, 'v128.load8_lane': 1, 'v128.load16_lane': 2, 'v128.load32_lane': 4, 'v128.load64_lane': 8, 'v128.store8_lane': 1, 'v128.store16_lane': 2, 'v128.store32_lane': 4, 'v128.store64_lane': 8, 'v128.load32_zero': 4, 'v128.load64_zero': 8
 // }
 const align = (op) => {
-  let [group, opname] = op.split('.'); // v128.load8x8_u -> group = v128, opname = load8x8_u
-  let [lsize] = (opname[0] === 'l' ? opname.slice(4) : opname.slice(5)).split('_') // load8x8_u -> lsize = 8x8
-  let [size, x] = lsize ? lsize.split('x') : [group.slice(1)] // 8x8 -> size = 8
-  return Math.log2(x ? 8 : +size / 8)
+  let i = op.indexOf('.', 3) + 1, group = op.slice(1, op[0] === 'v' ? 4 : 3) // type: i32->32, v128->128
+  if (op[i] === 'a') i = op.indexOf('.', i) + 1 // skip 'atomic.'
+  if (op[0] === 'm') return op.includes('64') ? 3 : 2 // memory.*.wait64 vs wait32/notify
+  if (op[i] === 'r') { // rmw: extract size from rmw##
+    let m = op.slice(i, i + 6).match(/\d+/)
+    return m ? Math.log2(m[0] / 8) : Math.log2(+group / 8)
+  }
+  // load/store: extract size after operation name
+  let k = op[i] === 'l' ? i + 4 : i + 5, m = op.slice(k).match(/(\d+)(x|_|$)/)
+  return Math.log2(m ? (m[2] === 'x' ? 8 : m[1] / 8) : +group / 8)
 }
 
 // build limits sequence (consuming)

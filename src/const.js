@@ -113,6 +113,27 @@ export const INSTR = [
     'i8x16.relaxed_laneselect', 'i16x8.relaxed_laneselect', 'i32x4.relaxed_laneselect', 'i64x2.relaxed_laneselect',
     'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max',
     'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s'
+  ],
+  // 0xfe: atomic/thread instructions
+  [
+    'memory.atomic.notify memarg', 'memory.atomic.wait32 memarg', 'memory.atomic.wait64 memarg', 'atomic.fence opt_memory',
+    ,,,,,,,,,,,,
+    'i32.atomic.load memarg', 'i64.atomic.load memarg', 'i32.atomic.load8_u memarg', 'i32.atomic.load16_u memarg',
+    'i64.atomic.load8_u memarg', 'i64.atomic.load16_u memarg', 'i64.atomic.load32_u memarg', 'i32.atomic.store memarg',
+    'i64.atomic.store memarg', 'i32.atomic.store8 memarg', 'i32.atomic.store16 memarg', 'i64.atomic.store8 memarg',
+    'i64.atomic.store16 memarg', 'i64.atomic.store32 memarg', 'i32.atomic.rmw.add memarg', 'i64.atomic.rmw.add memarg',
+    'i32.atomic.rmw8.add_u memarg', 'i32.atomic.rmw16.add_u memarg', 'i64.atomic.rmw8.add_u memarg', 'i64.atomic.rmw16.add_u memarg',
+    'i64.atomic.rmw32.add_u memarg', 'i32.atomic.rmw.sub memarg', 'i64.atomic.rmw.sub memarg', 'i32.atomic.rmw8.sub_u memarg',
+    'i32.atomic.rmw16.sub_u memarg', 'i64.atomic.rmw8.sub_u memarg', 'i64.atomic.rmw16.sub_u memarg', 'i64.atomic.rmw32.sub_u memarg',
+    'i32.atomic.rmw.and memarg', 'i64.atomic.rmw.and memarg', 'i32.atomic.rmw8.and_u memarg', 'i32.atomic.rmw16.and_u memarg',
+    'i64.atomic.rmw8.and_u memarg', 'i64.atomic.rmw16.and_u memarg', 'i64.atomic.rmw32.and_u memarg', 'i32.atomic.rmw.or memarg',
+    'i64.atomic.rmw.or memarg', 'i32.atomic.rmw8.or_u memarg', 'i32.atomic.rmw16.or_u memarg', 'i64.atomic.rmw8.or_u memarg',
+    'i64.atomic.rmw16.or_u memarg', 'i64.atomic.rmw32.or_u memarg', 'i32.atomic.rmw.xor memarg', 'i64.atomic.rmw.xor memarg',
+    'i32.atomic.rmw8.xor_u memarg', 'i32.atomic.rmw16.xor_u memarg', 'i64.atomic.rmw8.xor_u memarg', 'i64.atomic.rmw16.xor_u memarg',
+    'i64.atomic.rmw32.xor_u memarg', 'i32.atomic.rmw.xchg memarg', 'i64.atomic.rmw.xchg memarg', 'i32.atomic.rmw8.xchg_u memarg',
+    'i32.atomic.rmw16.xchg_u memarg', 'i64.atomic.rmw8.xchg_u memarg', 'i64.atomic.rmw16.xchg_u memarg', 'i64.atomic.rmw32.xchg_u memarg',
+    'i32.atomic.rmw.cmpxchg memarg', 'i64.atomic.rmw.cmpxchg memarg', 'i32.atomic.rmw8.cmpxchg_u memarg', 'i32.atomic.rmw16.cmpxchg_u memarg',
+    'i64.atomic.rmw8.cmpxchg_u memarg', 'i64.atomic.rmw16.cmpxchg_u memarg', 'i64.atomic.rmw32.cmpxchg_u memarg'
   ]
 ]
 
