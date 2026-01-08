@@ -1,3 +1,10 @@
+## [ ] Offering Qualifications
+
+* minimal & clever validator - basic checks via generic funcs
+* streamline, clear, light, sensible algorithm - easy to remember & understand
+* meaningful base of tests covered - not verbosities
+* clear, lightweight repl
+
 ## [x] IR -> we collect nodes into context with scopes, but it's still valid nodes
 
 * collect section names / indexes

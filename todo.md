@@ -99,12 +99,9 @@
 * [x] mnemonic algo
   * [x] plain() should also do flat ~~or nested~~, to simplify tree for instr
 * [x] Prettify printer: keep comments
-* [ ] Ignore particular test cases instead of excluding full test (like const)
+* [x] Ignore particular test cases instead of excluding full test (like const)
 * [x] Better `str`, `id` tests, `name`: streamlined with `isId()` helper to replace repetitive checks
-* [ ] `id` test skips important malformed cases
-* [ ] move string / name logic to compiler/prepare stage, it's not parser duty
-* [ ] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
-* [ ] VSCode formatter plugin
+* [x] `id` test skips important malformed cases
 * [x] All WebAssembly proposals
   * [x] MVP https://github.com/WebAssembly/design/blob/main/MVP.md
   * [x] Mutable globals https://github.com/WebAssembly/mutable-global
@@ -131,17 +128,16 @@
   * [x] ~~JS Promise Integration https://github.com/WebAssembly/js-promise-integration~~
   * [x] ~~Web Content Security Policy https://github.com/WebAssembly/content-security-policy~~
 * [x] Print: make it as nice as AI
-* [ ] Bench binaryen
-* [ ] replace wabt with spec/wasm for tests
-* [ ] Finish all official tests
-  * [ ] All skipped features
+* [x] Bench binaryen
+* [x] ~~replace wabt with spec/wasm for tests~~ -> no meaningful way to normalize ulebs
 * [x] Types
 * [x] Cleanup tests harness
-* [ ] Sourcemaps
 * [ ] Source position to error messages
+* [ ] Sourcemaps
 
 ## REPL
 
+* [ ] VSCode formatter plugin
 * [x] compiler selector
 * [ ] examples (when no code - prompt for suggest?)
 * [x] perf stats: time took to compile
@@ -177,10 +173,3 @@
 * [ ] wat-based wat-compiler
 * [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
   * [ ] It can also compile module right away 'let {a,b} = watr`(export a)`'
-
-## Offering Qualifications
-
-* minimal & clever validator - basic checks via generic funcs
-* streamline, clear, light, sensible algorithm - easy to remember & understand
-* meaningful base of tests covered - not verbosities
-* clear, lightweight repl

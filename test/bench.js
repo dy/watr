@@ -1,11 +1,14 @@
 import t, { is } from 'tst'
 import watr from '../src/compile.js'
 import watCompiler from './lib/wat-compiler.js'
-import { wat2wasm } from './index.js'
+import { wat2wasm } from './util.js'
 import WebAssemblyText from './lib/wast.js'
 
 // bench
-t.only('bench: brownian', async () => {
+t('bench: brownian', async () => {
+  // we need to wait for binaryen
+  const binaryen = (await import('./lib/binaryen.js')).default
+
   // example.ts
   let res = await fetch('/test/example/brownian.wat')
   let src = await res.text()
@@ -48,6 +51,16 @@ t.only('bench: brownian', async () => {
   elapsed = performance.now() - start
   opsPerSec = Math.round((N / elapsed) * 1000)
   console.log(`wabt: ${opsPerSec.toLocaleString()} op/s`)
+
+  start = performance.now()
+  for (let i = 0; i < N; i++) {
+    const module = binaryen.parseText(src)
+    module.emitBinary()
+    module.dispose()
+  }
+  elapsed = performance.now() - start
+  opsPerSec = Math.round((N / elapsed) * 1000)
+  console.log(`binaryen: ${opsPerSec.toLocaleString()} op/s`)
 
   // console.time('wassemble')
   // for (let i = 0; i < N; i++) wassemble(src)
