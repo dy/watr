@@ -510,7 +510,7 @@ const build = [
       ctx.local.push(...types)
     }
 
-    const bytes = [...instr(body, ctx), 0x0b]
+    const bytes = instr(body, ctx)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     // we skip locals provided by params
@@ -658,27 +658,24 @@ const HANDLE = {
 
 // instruction encoder
 const instr = (nodes, ctx) => {
-  if (!nodes?.length) return []
-
   let out = []
 
-  while (nodes.length) {
-    let op = nodes.shift(), immed
+  while (nodes?.length) {
+    let op = nodes.shift(), immed = INSTR[op] || err(`Unknown instruction ${op}`)
 
-    ;[...immed] = INSTR[op] || err(`Unknown instruction ${op}`)
-
-    if (immed.length > 1) immed = [immed[0], ...uleb(immed[1])] // multibyte opcode
+    // multibyte opcode
+    immed = immed.length > 1 ? [immed[0], ...uleb(immed[1])] : [...immed]
 
     HANDLE[op]?.(nodes, immed, ctx, op)
 
     out.push(...immed)
   }
 
-  return out
+  return out.push(0x0b), out
 }
 
 // instantiation time value initializer (consuming) - normalize then encode + add end byte
-const expr = (node, ctx) => [...instr(normalize([node], ctx), ctx), 0x0b]
+const expr = (node, ctx) => instr(normalize([node], ctx), ctx)
 
 // deref id node to numeric idx
 const id = (nm, list, n) => (n = nm[0] === '$' ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
