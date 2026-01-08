@@ -258,6 +258,16 @@ function normalize(nodes, ctx) {
         els.length && out.push('else', ...els)
         out.push('end')
       }
+      else if (op === 'try_table') {
+        out.push(op)
+        if (parts[0]?.[0] === '$') out.push(parts.shift())
+        out.push(blocktype(parts, ctx))
+        // Collect catch clauses
+        while (parts[0]?.[0] === 'catch' || parts[0]?.[0] === 'catch_ref' || parts[0]?.[0] === 'catch_all' || parts[0]?.[0] === 'catch_all_ref') {
+          out.push(parts.shift())
+        }
+        out.push(...normalize(parts, ctx), 'end')
+      }
       else {
         const imm = []
         // Collect immediate operands (non-arrays or special forms like type/param/result/ref)
@@ -629,12 +639,11 @@ const HANDLE = {
   reversed: (n, i, c) => { let t = n.shift(), e = n.shift(); i.push(...uleb(id(e, c.elem)), ...uleb(id(t, c.table))) },
   block: (n, i, c) => (c.block.push(i[0]), isId(n[0]) && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
   try_table: (n, i, c) => {
-    c.block.push(i[0])
-    isId(n[0]) && (c.block[n.shift()] = c.block.length)
+    n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length + 1)  // Register label before pushing
     let blocktype = n.shift()
     !blocktype ? i.push(TYPE.void) : blocktype[0] === 'result' ? i.push(...reftype(blocktype[1], c)) : i.push(...uleb(id(blocktype[1], c.type)))
-    // Collect catch clauses: (catch $tag $label) (catch_ref $tag $label) (catch_all $label) (catch_all_ref $label)
-    let catches = []
+    // Collect catch clauses BEFORE pushing try_table to block stack (catch labels are relative to outer blocks)
+    let catches = [], count = 0
     while (n[0]?.[0] === 'catch' || n[0]?.[0] === 'catch_ref' || n[0]?.[0] === 'catch_all' || n[0]?.[0] === 'catch_all_ref') {
       let clause = n.shift()
       let kind = clause[0] === 'catch' ? 0x00 : clause[0] === 'catch_ref' ? 0x01 : clause[0] === 'catch_all' ? 0x02 : 0x03
@@ -644,8 +653,10 @@ const HANDLE = {
       } else { // catch_all/catch_all_ref only have label
         catches.push(kind, ...uleb(blockid(clause[1], c.block)))
       }
+      count++
     }
-    i.push(...uleb(catches.length / 3), ...catches) // approx count, actual depends on clause types
+    i.push(...uleb(count), ...catches)
+    c.block.push(i[0])  // NOW push try_table to block stack after processing catches
   },
   end: (_n, _i, c) => c.block.pop(),
   call_indirect: (n, i, c) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
@@ -803,7 +814,12 @@ const limits = (node) => {
   const shared = node[node.length - 1] === 'shared' && node.pop()
   const hasMax = !isNaN(parseInt(node[1]))
   const flag = (is64 ? 4 : 0) | (shared ? 2 : 0) | (hasMax ? 1 : 0)
-  const parse = is64 ? v => typeof v === 'string' ? i64.parse(v) : v : parseUint
+  // For i64, parse as unsigned BigInt (limits are always unsigned)
+  const parse = is64 ? v => {
+    if (typeof v === 'bigint') return v
+    const str = typeof v === 'string' ? v.replaceAll('_', '') : String(v)
+    return BigInt(str)
+  } : parseUint
 
   return hasMax
     ? [flag, ...uleb(parse(node.shift())), ...uleb(parse(node.shift()))]

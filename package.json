@@ -32,7 +32,7 @@
   "type": "module",
 
   "scripts": {
-    "test": "node --experimental-wasm-memory64 test",
+    "test": "node --experimental-wasm-memory64 --experimental-wasm-exnref test",
     "types": "npx tsc src/*.js watr.js --allowJs --declaration --emitDeclarationOnly --declarationMap --outDir types",
     "postinstall": "git submodule update --init --recursive"
   },

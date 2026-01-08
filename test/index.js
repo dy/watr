@@ -114,9 +114,12 @@ export async function file(path, imports = {}) {
   const ex = {
     // (module $name) - creates module instance, collects exports
     module(node) {
-      if (node?.length < 2) return
-      // skip "module definition" (validation-only modules)
-      if (node[1] === 'definition') return
+      if (node?.length < 2) return console.warn('skip empty module')
+      if (node[1] === 'definition') return console.warn('skip module definition')
+      if (node[1][0] === 'memory' && node[1][3]?.startsWith?.('0x1_0000_0000_0000')) return console.warn('skip huge memory')
+      if (node[1][0] === 'table' && node[1][3]?.startsWith?.('0x1_0000_0000')) return console.warn('skip huge table')
+      if (node.some(n => Array.isArray(n) && (n[0] === 'table' || n[0] === 'memory') && n[1] === 'i64' && n[3]?.startsWith('0xffff_ffff_ffff'))) return console.warn('skip i64 table/memory beyond v8 limit')
+
 
       // Handle (module quote "...") by parsing the quoted string
       if (node[1] === 'quote') {
