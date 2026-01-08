@@ -1,7 +1,7 @@
 import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
-import {inline, file, wat2wasm, save} from './index.js'
+import {inline, file, wat2wasm, save} from './util.js'
 
 
 t('compile: reexport func', () => {

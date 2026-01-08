@@ -1,5 +1,5 @@
 import t, { is, ok, same, throws } from 'tst'
-import { file } from './index.js'
+import { file } from './util.js'
 
 // Create a WASM-exported table64 for testing, since JS WebAssembly.Table with index:'i64'
 // doesn't create a true i64-indexed table in current Node versions
