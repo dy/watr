@@ -105,14 +105,32 @@
 * [ ] move string / name logic to compiler/prepare stage, it's not parser duty
 * [ ] Resolve names during parsing: get rid of id() call in binary; post-call `plain`, rename to normalize
 * [ ] VSCode formatter plugin
-* [ ] All Phase 5 & Phase 4 proposals
-  * [x] js_strings
-  * [x] Exceptions
-  * [x] memory64
-  * [x] Feature: extended-const (polyfill?) https://github.com/WebAssembly/extended-const
-  * [x] All main ones (readme)
-  * [x] Feature: numeric values in data https://github.com/WebAssembly/wat-numeric-values/blob/main/proposals/wat-numeric-values/Overview.md=
-  * [x] Feature: wide arithmetic https://github.com/WebAssembly/wide-arithmetic/blob/main/proposals/wide-arithmetic/Overview.md
+* [x] All WebAssembly proposals
+  * [x] MVP https://github.com/WebAssembly/design/blob/main/MVP.md
+  * [x] Mutable globals https://github.com/WebAssembly/mutable-global
+  * [x] Non-trapping float-to-int https://github.com/WebAssembly/nontrapping-float-to-int-conversions
+  * [x] Sign extension https://github.com/WebAssembly/sign-extension-ops
+  * [x] Multi-value https://github.com/WebAssembly/multi-value
+  * [x] BigInt/i64 integration https://github.com/WebAssembly/JS-BigInt-integration
+  * [x] Reference types https://github.com/WebAssembly/reference-types
+  * [x] Bulk memory https://github.com/WebAssembly/bulk-memory-operations
+  * [x] Fixed-width SIMD https://github.com/webassembly/simd
+  * [x] Tail call https://github.com/WebAssembly/tail-call
+  * [x] Extended const https://github.com/WebAssembly/extended-const
+  * [x] Typed function references https://github.com/WebAssembly/function-references
+  * [x] GC https://github.com/WebAssembly/gc
+  * [x] Multiple memories https://github.com/WebAssembly/multi-memory
+  * [x] Relaxed SIMD https://github.com/WebAssembly/relaxed-simd
+  * [x] Annotations https://github.com/WebAssembly/annotations
+  * [x] Branch hinting https://github.com/WebAssembly/branch-hinting
+  * [x] Exception handling https://github.com/WebAssembly/exception-handling
+  * [x] JS string builtins https://github.com/WebAssembly/js-string-builtins
+  * [x] Memory64 https://github.com/WebAssembly/memory64
+  * [x] Wide arithmetic https://github.com/WebAssembly/wide-arithmetic
+* [ ] Current Phase 4 proposals:
+  * [ ] Threads https://github.com/webassembly/threads
+  * [ ] JS Promise Integration https://github.com/WebAssembly/js-promise-integration
+  * [ ] Web Content Security Policy https://github.com/WebAssembly/content-security-policy
 * [x] Print: make it as nice as AI
 * [ ] Bench binaryen
 * [ ] replace wabt with spec/wasm for tests
