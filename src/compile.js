@@ -634,99 +634,105 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 
 
 // Pre-defined instruction handlers
-const HANDLE = {
-  null: () => { },
-  reversed: (n, i, c) => { let t = n.shift(), e = n.shift(); i.push(...uleb(id(e, c.elem)), ...uleb(id(t, c.table))) },
-  block: (n, i, c) => (c.block.push(i[0]), isId(n[0]) && (c.block[n.shift()] = c.block.length), (t => !t ? i.push(TYPE.void) : t[0] === 'result' ? i.push(...reftype(t[1], c)) : i.push(...uleb(id(t[1], c.type))))(n.shift())),
-  try_table: (n, i, c) => {
-    n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length + 1)  // Register label before pushing
+const IMM = {
+  null: () => [],
+  reversed: (n, c) => { let t = n.shift(), e = n.shift(); return [...uleb(id(e, c.elem)), ...uleb(id(t, c.table))] },
+  block: (n, c) => {
+    c.block.push(1)
+    isId(n[0]) && (c.block[n.shift()] = c.block.length)
+    let t = n.shift()
+    return !t ? [TYPE.void] : t[0] === 'result' ? reftype(t[1], c) : uleb(id(t[1], c.type))
+  },
+  try_table: (n, c) => {
+    n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length + 1)
     let blocktype = n.shift()
-    !blocktype ? i.push(TYPE.void) : blocktype[0] === 'result' ? i.push(...reftype(blocktype[1], c)) : i.push(...uleb(id(blocktype[1], c.type)))
+    let result = !blocktype ? [TYPE.void] : blocktype[0] === 'result' ? reftype(blocktype[1], c) : uleb(id(blocktype[1], c.type))
     // Collect catch clauses BEFORE pushing try_table to block stack (catch labels are relative to outer blocks)
     let catches = [], count = 0
     while (n[0]?.[0] === 'catch' || n[0]?.[0] === 'catch_ref' || n[0]?.[0] === 'catch_all' || n[0]?.[0] === 'catch_all_ref') {
       let clause = n.shift()
       let kind = clause[0] === 'catch' ? 0x00 : clause[0] === 'catch_ref' ? 0x01 : clause[0] === 'catch_all' ? 0x02 : 0x03
-      if (kind <= 0x01) { // catch/catch_ref have tag
-        let tag = clause[1], label = clause[2]
-        catches.push(kind, ...uleb(id(tag, c.tag)), ...uleb(blockid(label, c.block)))
-      } else { // catch_all/catch_all_ref only have label
-        catches.push(kind, ...uleb(blockid(clause[1], c.block)))
-      }
+      if (kind <= 0x01) catches.push(kind, ...uleb(id(clause[1], c.tag)), ...uleb(blockid(clause[2], c.block)))
+      else catches.push(kind, ...uleb(blockid(clause[1], c.block)))
       count++
     }
-    i.push(...uleb(count), ...catches)
-    c.block.push(i[0])  // NOW push try_table to block stack after processing catches
+    c.block.push(1)  // NOW push try_table to block stack after processing catches
+    return [...result, ...uleb(count), ...catches]
   },
-  end: (_n, _i, c) => c.block.pop(),
-  call_indirect: (n, i, c) => ((t, [, idx]) => i.push(...uleb(id(idx, c.type)), ...uleb(id(t, c.table))))(n.shift(), n.shift()),
-  br_table: (n, i, c) => (a => (i.push(...uleb(a.length - 1), ...a)))((() => { let a = []; while (n[0] && (!isNaN(n[0]) || isId(n[0]))) a.push(...uleb(blockid(n.shift(), c.block))); return a })()),
-  select: (n, i, c) => (r => r.length && i.push(i.pop() + 1, ...vec(r.map(t => reftype(t, c)))))(n.shift() || []),
-  ref_null: (n, i, c) => (t => i.push(...(TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)))))(n.shift()),
-  memarg: (n, i, c, op) => i.push(...memargEnc(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0)),
-  opt_memory: (n, i, c) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
-  reftype: (n, i, c) => (ht => (ht[0] !== TYPE.ref && (i[i.length - 1] += 1), ht.length > 1 && ht.shift(), i.push(...ht)))(reftype(n.shift(), c)),
-  reftype2: (n, i, c) => (([b, h1, h2]) => i.push(((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), h1.pop(), h2.pop()))([blockid(n.shift(), c.block), reftype(n.shift(), c), reftype(n.shift(), c)]),
-  v128const: (n, i) => {
+  end: (_n, c) => (c.block.pop(), []),
+  call_indirect: (n, c) => { let t = n.shift(), [, idx] = n.shift(); return [...uleb(id(idx, c.type)), ...uleb(id(t, c.table))] },
+  br_table: (n, c) => {
+    let labels = [], count = 0
+    while (n[0] && (!isNaN(n[0]) || isId(n[0]))) (labels.push(...uleb(blockid(n.shift(), c.block))), count++)
+    return [...uleb(count - 1), ...labels]
+  },
+  select: (n, c) => { let r = n.shift() || []; return r.length ? vec(r.map(t => reftype(t, c))) : [] },
+  ref_null: (n, c) => { let t = n.shift(); return TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)) },
+  memarg: (n, c, op) => memargEnc(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0),
+  opt_memory: (n, c) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
+  reftype: (n, c) => { let ht = reftype(n.shift(), c); return ht.length > 1 ? ht.slice(1) : ht },
+  reftype2: (n, c) => { let b = blockid(n.shift(), c.block), h1 = reftype(n.shift(), c), h2 = reftype(n.shift(), c); return [((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), h1.pop(), h2.pop()] },
+  v128const: (n) => {
     let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3; num = +num
     if (t[0] === 'i') {
       let arr = num === 16 ? new Uint8Array(16) : num === 8 ? new Uint16Array(8) : num === 4 ? new Uint32Array(4) : new BigUint64Array(2)
       for (let j = 0; j < num; j++) arr[j] = encode[t].parse(n.shift())
-      i.push(...new Uint8Array(arr.buffer))
-    } else {
-      let arr = new Uint8Array(16)
-      for (let j = 0; j < num; j++) arr.set(encode[t](n.shift()), j * stride)
-      i.push(...arr)
+      return [...new Uint8Array(arr.buffer)]
     }
+    let arr = new Uint8Array(16)
+    for (let j = 0; j < num; j++) arr.set(encode[t](n.shift()), j * stride)
+    return [...arr]
   },
-  shuffle: (n, i) => { for (let j = 0; j < 16; j++) i.push(parseUint(n.shift(), 32)) },
-  memlane: (n, i, c, op) => {
+  shuffle: (n) => { let result = []; for (let j = 0; j < 16; j++) result.push(parseUint(n.shift(), 32)); return result },
+  memlane: (n, c, op) => {
     // SIMD lane: [memidx?] [offset/align]* laneidx - memidx present if isId OR (isIdx AND (next is memParam OR isIdx))
     const memIdx = isId(n[0]) || (isIdx(n[0]) && (isMemParam(n[1]) || isIdx(n[1]))) ? id(n.shift(), c.memory) : 0
-    i.push(...memargEnc(n, op, memIdx), ...uleb(parseUint(n.shift())))
+    return [...memargEnc(n, op, memIdx), ...uleb(parseUint(n.shift()))]
   },
-  field: (n, i, c) => i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1]))),
-  '*': (n, i) => i.push(...uleb(n.shift())),
+  '*': (n) => uleb(n.shift()),
 
   // *idx types
-  labelidx: (n, i, c) => i.push(...uleb(blockid(n.shift(), c.block))),
-  laneidx: (n, i) => i.push(parseUint(n.shift(), 0xff)),
-  funcidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.func))),
-  typeidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.type))),
-  tableidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.table))),
-  memoryidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.memory))),
-  globalidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.global))),
-  localidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.local))),
-  dataidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.data))),
-  elemidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.elem))),
-  tagidx: (n, i, c) => i.push(...uleb(id(n.shift(), c.tag))),
-  'memoryidx?': (n, i, c) => i.push(...uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory))),
+  labelidx: (n, c) => uleb(blockid(n.shift(), c.block)),
+  laneidx: (n) => [parseUint(n.shift(), 0xff)],
+  funcidx: (n, c) => uleb(id(n.shift(), c.func)),
+  typeidx: (n, c) => uleb(id(n.shift(), c.type)),
+  tableidx: (n, c) => uleb(id(n.shift(), c.table)),
+  memoryidx: (n, c) => uleb(id(n.shift(), c.memory)),
+  globalidx: (n, c) => uleb(id(n.shift(), c.global)),
+  localidx: (n, c) => uleb(id(n.shift(), c.local)),
+  dataidx: (n, c) => uleb(id(n.shift(), c.data)),
+  elemidx: (n, c) => uleb(id(n.shift(), c.elem)),
+  tagidx: (n, c) => uleb(id(n.shift(), c.tag)),
+  'memoryidx?': (n, c) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
 
   // Value type
-  i32: (n, i) => i.push(...encode.i32(n.shift())),
-  i64: (n, i) => i.push(...encode.i64(n.shift())),
-  f32: (n, i) => i.push(...encode.f32(n.shift())),
-  f64: (n, i) => i.push(...encode.f64(n.shift())),
-  v128: (n, i) => i.push(...encode.v128(n.shift())),
+  i32: (n) => encode.i32(n.shift()),
+  i64: (n) => encode.i64(n.shift()),
+  f32: (n) => encode.f32(n.shift()),
+  f64: (n) => encode.f64(n.shift()),
+  v128: (n) => encode.v128(n.shift()),
 
   // Combinations
-  'typeidx:field': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(id(n.shift(), c.type[i[i.length - 1]][1]))) },
-  'typeidx:*': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(n.shift())) },
-  'typeidx:dataidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(id(n.shift(), c.data))) },
-  'typeidx:elemidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(id(n.shift(), c.elem))) },
-  'typeidx:typeidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.type))); i.push(...uleb(id(n.shift(), c.type))) },
-  'dataidx:memoryidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.data))); i.push(...uleb(id(n.shift(), c.memory))) },
-  'memoryidx:memoryidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.memory))); i.push(...uleb(id(n.shift(), c.memory))) },
-  'tableidx:tableidx': (n, i, c) => { i.push(...uleb(id(n.shift(), c.table))); i.push(...uleb(id(n.shift(), c.table))) }
+  typeidx_field: (n, c) => { let typeId = id(n.shift(), c.type); return [...uleb(typeId), ...uleb(id(n.shift(), c.type[typeId][1]))] },
+  typeidx_multi: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(n.shift())],
+  typeidx_dataidx: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.data))],
+  typeidx_elemidx: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.elem))],
+  typeidx_typeidx: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.type))],
+  dataidx_memoryidx: (n, c) => [...uleb(id(n.shift(), c.data)), ...uleb(id(n.shift(), c.memory))],
+  memoryidx_memoryidx: (n, c) => [...uleb(id(n.shift(), c.memory)), ...uleb(id(n.shift(), c.memory))],
+  tableidx_tableidx: (n, c) => [...uleb(id(n.shift(), c.table)), ...uleb(id(n.shift(), c.table))]
 };
 
+// per-op imm handlers
+const HANDLER = {};
 
-// Populate INSTR and HANDLE from INSTR array
+
+// Populate INSTR and IMM
 (function populate(items, pre) {
   for (let op = 0, item, nm, imm; op < items.length; op++) if (item = items[op]) {
     // Nested array (0xfb, 0xfc, 0xfd opcodes)
     if (Array.isArray(item)) populate(item, op)
-    else[nm, imm] = item.split(' '), INSTR[nm] = pre ? [pre, op] : [op], imm && (HANDLE[nm] = HANDLE[imm])
+    else [nm, imm] = item.split(' '), INSTR[nm] = pre ? [pre, ...uleb(op)] : [op], imm && (HANDLER[nm] = IMM[imm])
   }
 })(INSTR);
 
@@ -745,17 +751,23 @@ const instr = (nodes, ctx) => {
       continue
     }
 
-    let immed = INSTR[op] || err(`Unknown instruction ${op}`)
+    let [...bytes] = INSTR[op] || err(`Unknown instruction ${op}`)
 
-    // multibyte opcode
-    immed = immed.length > 1 ? [immed[0], ...uleb(immed[1])] : [...immed]
-
-    HANDLE[op]?.(nodes, immed, ctx, op)
+    // special op handlers
+    if (HANDLER[op]) {
+      // select: becomes typed select (opcode+1) if next node is an array with result types
+      if (op === 'select' && nodes[0]?.length) bytes[0]++
+      // ref.type|cast: opcode+1 if type is nullable: (ref null $t) or (funcref, anyref, etc.)
+      else if (HANDLER[op] === IMM.reftype && (nodes[0][1] === 'null' || nodes[0][0] !== 'ref')) {
+        bytes[bytes.length - 1]++
+      }
+      bytes.push(...HANDLER[op](nodes, ctx, op))
+    }
 
     // Record metadata at current byte position
     for (const [type, data] of meta) ((ctx.meta[type] ??= []).push([out.length, data]))
 
-    out.push(...immed)
+    out.push(...bytes)
   }
 
   return out.push(0x0b), out

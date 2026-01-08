@@ -1,6 +1,6 @@
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
-// Format: 'name', 'name imm', 'name handler' or 'name *'
-// Immediate types: blocktype, labelidx, funcidx, typeidx, tableidx, memoryidx, globalidx, localidx, dataidx, elemidx
+// Format: 'name' or 'name handler'
+// Immediate types: blocktype, labelidx, funcidx, typeidx, tableidx, memoryidx, globalidx, localidx, dataidx, elemidx, multi
 // Value types: i32, i64, f32, f64, v128
 export const INSTR = [
   // 0x00-0x0a: control
@@ -52,10 +52,10 @@ export const INSTR = [
   , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
   // 0xfb: GC instructions (nested array for multi-byte opcodes)
   [
-    'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx:field', 'struct.get_s typeidx:field', 'struct.get_u typeidx:field', 'struct.set typeidx:field',
-    'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx:*', 'array.new_data typeidx:dataidx', 'array.new_elem typeidx:elemidx',
-    'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx:typeidx',
-    'array.init_data typeidx:dataidx', 'array.init_elem typeidx:elemidx', 'ref.test reftype', '', 'ref.cast reftype', '', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
+    'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx_field', 'struct.get_s typeidx_field', 'struct.get_u typeidx_field', 'struct.set typeidx_field',
+    'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx_multi', 'array.new_data typeidx_dataidx', 'array.new_elem typeidx_elemidx',
+    'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx_typeidx',
+    'array.init_data typeidx_dataidx', 'array.init_elem typeidx_elemidx', 'ref.test reftype', '', 'ref.cast reftype', '', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
     'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u'
   ],
 
@@ -63,8 +63,8 @@ export const INSTR = [
   [
     'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
     'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
-    'memory.init dataidx:memoryidx', 'data.drop dataidx', 'memory.copy memoryidx:memoryidx', 'memory.fill memoryidx?',
-    'table.init reversed', 'elem.drop elemidx', 'table.copy tableidx:tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
+    'memory.init dataidx_memoryidx', 'data.drop dataidx', 'memory.copy memoryidx_memoryidx', 'memory.fill memoryidx?',
+    'table.init reversed', 'elem.drop elemidx', 'table.copy tableidx_tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
     'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u'
   ],
 
@@ -129,7 +129,8 @@ export const TYPE = {
   nullfuncref: 0x73, nullexternref: 0x72, nullexnref: 0x74, nullref: 0x71,
   funcref: 0x70, externref: 0x6F, exnref: 0x75, anyref: 0x6E, eqref: 0x6D, i31ref: 0x6C, structref: 0x6B, arrayref: 0x6A,
   // ref, refnull
-  ref: 0x64 /* -0x1c */, refnull: 0x63 /* -0x1d */,
+  ref: 0x64, // -0x1c
+  refnull: 0x63, // -0x1d
   // Recursion group / type definition opcodes
   sub: 0x50, subfinal: 0x4F, rec: 0x4E
 }
