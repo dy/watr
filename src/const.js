@@ -118,7 +118,7 @@ export const INSTR = [
 // Binary section type codes
 export const SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, tag: 13, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 }
 
-// All type codes consolidated
+// Type codes
 export const TYPE = {
   // Value types
   i8: 0x78, i16: 0x77, i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B,
