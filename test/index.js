@@ -212,6 +212,11 @@ export async function file(path, imports = {}) {
       // console.groupEnd()
     },
 
+    assert_exception([, nodes, msg]) {
+      // assert_exception is like assert_trap but specifically for exception handling
+      throws(() => ex[nodes[0]](nodes), `assert_exception: ${msg || 'exception expected'}`)
+    },
+
     assert_malformed([, nodes, msg]) {
       lastComment = ``
 
