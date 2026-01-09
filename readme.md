@@ -3,10 +3,11 @@
 Light & fast WAT compiler.<br/>
 Useful for language backends, dynamic (in-browser) compilation, or inline WASM.
 
-✔ [Phase 5](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md) + [phase 4](https://github.com/WebAssembly/proposals) features<br/>
-✔ Full [spec syntax](https://webassembly.github.io/spec/core/text/index.html), [official tests](https://github.com/WebAssembly/testsuite)
+🧩 [phase 5](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md) + [phase 4](https://github.com/WebAssembly/proposals) features<br/>
+✅ [spec syntax](https://webassembly.github.io/spec/core/text/index.html), [official tests](https://github.com/WebAssembly/testsuite)<br/>
+⚡ 7.5 KB, 4× faster than [wabt](https://github.com/AnthumChris/wabt-online)
 
-**[DOCS](./docs.md)** • **[REPL](https://dy.github.io/watr/repl/)**
+**[Docs](./docs.md)** • **[Repl](https://dy.github.io/watr/repl/)**
 
 ## Usage
 
