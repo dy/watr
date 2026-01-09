@@ -1,8 +1,8 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr)
 
 Light & fast WAT compiler.<br/>
-For language backends, dynamic compilation, or inline WASM.
-[Spec](https://webassembly.github.io/spec/core/text/index.html)-complete.
+For language backends, dynamic compilation, or inline WASM.<br>
+[Phase 5 features](https://webassembly.org/features/, [spec](https://webassembly.github.io/spec/core/text/index.html)-complete.
 
 **[Docs](./docs.md)** · **[Repl](https://dy.github.io/watr/repl/)**
 
