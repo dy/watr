@@ -10,7 +10,7 @@ import { err, tdec, tenc } from './util.js'
 const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@meta') ? null : node.map(unannot).filter(n => n != null)) : node
 
 // iterating context
-let cur, idx
+// let cur, idx
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
@@ -25,18 +25,18 @@ export default function compile(nodes) {
   // strip annotations (text-format only), except @custom and @metadata.code.* which become binary sections
   nodes = unannot(nodes) || []
 
-  cur = nodes, idx = 0
+  let idx = 0
 
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
-  if (nodes[0] === 'module') idx++, isId(cur[idx]) && idx++
+  if (nodes[0] === 'module') idx++, isId(nodes[idx]) && idx++
   // single node, not module
-  else if (typeof nodes[0] === 'string') cur = [nodes]
+  else if (typeof nodes[0] === 'string') nodes = [nodes]
 
   // binary abbr "\00" "\0x61" ...
-  if (cur[idx] === 'binary') return Uint8Array.from(cur.slice(++idx).flat())
+  if (nodes[idx] === 'binary') return Uint8Array.from(nodes.slice(++idx).flat())
 
   // quote "a" "b"
-  if (cur[idx] === 'quote') return compile(cur.slice(++idx).map(v => v.valueOf().slice(1, -1)).flat().join(''))
+  if (nodes[idx] === 'quote') return compile(nodes.slice(++idx).map(v => v.valueOf().slice(1, -1)).flat().join(''))
 
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
@@ -44,7 +44,7 @@ export default function compile(nodes) {
   ctx.metadata = {} // code metadata storage: { type: [[funcIdx, [[pos, data]...]]] }
 
   // initialize types
-  cur.slice(idx).filter(([kind, ...node]) => {
+  nodes.slice(idx).filter(([kind, ...node]) => {
     // (@custom "name" placement? data) - custom section support
     if (kind === '@custom') {
       ctx.custom.push(node)
