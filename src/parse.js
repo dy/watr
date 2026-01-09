@@ -60,7 +60,7 @@ export default (s, o = { comments: false, annotations: true }) => {
         else {
           i++, level = [] // parent is saved on entry
           parseLevel()
-          if (s[i++] !== ')') err(`Unbalanced syntax`)
+          if (s[i++] !== ')') err(`Unclosed parenthesis`)
           if (level[0]?.[0] === '@' && !o.annotations); else parent.push(level) // (@...)
           level = parent
         }
@@ -75,7 +75,7 @@ export default (s, o = { comments: false, annotations: true }) => {
 
   parseLevel()
 
-  if (i < s.length) err() // likely unbalanced syntax
+  if (i < s.length) err(`Unexpected closing parenthesis`) // likely unbalanced syntax
 
   return level.length > 1 ? level : level[0] || []
 }
@@ -111,10 +111,6 @@ const str = s => {
   }
   commit()
 
-  bytes.s = s
-  bytes.valueOf = strValueOf
+  bytes.valueOf = () => `"${s}"`
   return bytes
 }
-
-// shared valueOf for all string byte arrays
-const strValueOf = function() { return `"${this.s}"` }

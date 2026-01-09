@@ -9,8 +9,6 @@ import { err, tdec, tenc } from './util.js'
 // clones nodes by the way
 const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@meta') ? null : node.map(unannot).filter(n => n != null)) : node
 
-// iterating context
-// let cur, idx
 
 /**
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
