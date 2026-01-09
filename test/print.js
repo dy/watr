@@ -61,9 +61,9 @@ t('print: comments - line comments', () => {
   // with comments flag - line comments always need newline (even minified)
   is(print(src, { indent: '', newline: '', comments: true }), '(an comment ;; line comment\n1)')
 
-  // with pretty printing - line comments need newline after
+  // with pretty printing - line comments go on their own indented line
   const pretty = print(src, { indent: '  ', newline: '\n', comments: true })
-  is(pretty, `(an comment ;; line comment\n1\n)`)
+  is(pretty, `(an comment\n  ;; line comment 1\n)`)
 })
 
 t('print: comments - mixed comments', () => {
