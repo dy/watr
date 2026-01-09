@@ -16,9 +16,9 @@ const instrType = op => {
   if (!op || typeof op !== 'string') return null
   // i32.add → i32, f64.const → f64, v128.load → v128
   const prefix = op.split('.')[0]
-  if (prefix === 'i32' || prefix === 'i64' || prefix === 'f32' || prefix === 'f64' || prefix === 'v128') return prefix
-  // comparisons return i32
-  if (op.includes('.eq') || op.includes('.ne') || op.includes('.lt') || op.includes('.gt') || op.includes('.le') || op.includes('.ge') || op.endsWith('.eqz')) return 'i32'
+  if (/^[if](32|64)|v128/.test(prefix)) return prefix
+  // comparisons return i32: .eq .ne .lt .gt .le .ge .eqz
+  if (/\.(eq|ne|[lg][te]|eqz)/.test(op)) return 'i32'
   // memory.size/grow return i32
   if (op === 'memory.size' || op === 'memory.grow') return 'i32'
   return null
@@ -47,18 +47,11 @@ const exprType = (node, ctx = {}) => {
 function walk(node, fn) {
   node = fn(node)
   if (Array.isArray(node)) {
-    let result = []
     for (let i = 0; i < node.length; i++) {
       let child = walk(node[i], fn)
-      // If child is marked for splicing (parsed code with multiple exprs), flatten it
-      if (child && child._splice) {
-        result.push(...child)
-      } else {
-        result.push(child)
-      }
+      if (child?._splice) node.splice(i, 1, ...child), i += child.length - 1
+      else node[i] = child
     }
-    node.length = 0
-    node.push(...result)
   }
   return node
 }
