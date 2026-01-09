@@ -4,36 +4,34 @@ Light & fast WAT compiler.<br/>
 Useful for high-level languages or dynamic (in-browser) compilation.<br/>
 Supports all [phase 5 features](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md), full [spec text syntax](https://webassembly.github.io/spec/core/text/index.html), practical subset of [official testsuite](https://github.com/WebAssembly/testsuite).
 
-**[docs](./docs.md)** • **[repl](https://dy.github.io/watr/repl/)**
-
 ## Usage
 
 ```js
 import watr, { compile, parse, print } from 'watr'
 
-// Instant WebAssembly function
+// instant wasm function
 const { add } = watr`(func (export "add") (param i32 i32) (result i32)
   (i32.add (local.get 0) (local.get 1))
 )`
 add(2, 3) // 5
 
-// Interpolate values (extracting precise floats)
+// interpolate values (eg. precise floats)
 const { pi } = watr`(global (export "pi") f64 (f64.const ${Math.PI}))`
 
-// Compile to binary
+// compile to binary
 const binary = compile(`(func (export "double") (param f64) (result f64)
   (f64.mul (local.get 0) (f64.const 2))
 )`)
 
-// Parse to syntax tree
+// parse to syntax tree
 parse('(i32.const 42)') // ['i32.const', 42]
 
-// Pretty-print or minify
+// pretty-print or minify
 print(src)
-print(src, { indent: false, newline: false })
+print(src, { indent: false, newline: false, comments: false })
 ```
 
-See [docs](./docs.md) for complete API.
+See **[docs](./docs.md)** or **[repl](https://dy.github.io/watr/repl/)**
 
 ## Metrics
 
