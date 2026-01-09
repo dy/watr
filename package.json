@@ -24,15 +24,21 @@
   },
   "typesVersions": {
     "*": {
-      "parse": ["./types/src/parse.d.ts"],
-      "print": ["./types/src/print.d.ts"],
-      "compile": ["./types/src/compile.d.ts"]
+      "parse": [
+        "./types/src/parse.d.ts"
+      ],
+      "print": [
+        "./types/src/print.d.ts"
+      ],
+      "compile": [
+        "./types/src/compile.d.ts"
+      ]
     }
   },
   "type": "module",
-
   "scripts": {
     "test": "node --experimental-wasm-exnref test",
+    "test:repl": "npx playwright test",
     "types": "npx tsc src/*.js watr.js --allowJs --declaration --emitDeclarationOnly --declarationMap --outDir types",
     "prepublishOnly": "npm run types",
     "postinstall": "git submodule update --init --recursive"
@@ -65,6 +71,7 @@
   },
   "homepage": "https://github.com/dy/watr#readme",
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "tst": "^8.0.2"
   }
 }

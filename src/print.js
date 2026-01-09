@@ -14,7 +14,7 @@ import parse from './parse.js';
 export default function print(tree, options = {}) {
   if (typeof tree === 'string') tree = parse(tree);
 
-  let { indent='  ', newline='\n', comments=false } = options;
+  let { indent='  ', newline='\n', comments=true } = options;
   indent ||= '', newline ||= ''; // false -> str
 
   // If tree[0] is a string but NOT starting with `;` (comment), it's a keyword like `module` - print as single node

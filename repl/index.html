@@ -45,6 +45,10 @@
   <link rel="canonical" href="https://dy.github.io/watr/docs/repl">
 
   <link rel="stylesheet" href="./lib/reset.css" />
+
+  <!-- Prevent FOUC for sprae directives -->
+  <style>[\:each],[\:if],[\:else] {visibility: hidden}</style>
+
   <style>
     html,
     body {
@@ -125,7 +129,7 @@
   </style>
 </head>
 
-<body>
+<body id="app">
   <header style="padding: 1rem 1rem 0.5rem; display: flex; gap: 1rem;">
     <h1 title="WebAssembly text REPL">WAT REPL</h1>
     <nav style="margin-left: auto; gap: 1rem; display: flex;">
@@ -135,18 +139,16 @@
 
   <nav style="display: flex; align-items: center; margin: 0 1rem; gap: 1rem;">
     <label for="compiler" style="margin-right: -.25rem;">Compiler:</label>
-    <select name="compiler" id="compiler">
+    <select name="compiler" :value="compiler" :onchange="e => { compiler = e.target.value; recompile() }">
       <option value="watr" selected>watr (latest)</option>
       <option value="wast">wast (spec)</option>
       <option value="wabt">wat2wasm (wabt)</option>
       <option value="watc">wat-compiler</option>
     </select>
 
-    <button id="minify" title="Minify WAT source" aria-label="Minify WAT code" icon="🗜️"> minify</button>
+    <button :onclick="toggleFormat()" :title="prettified ? 'Minify WAT source' : 'Prettify WAT source'" :aria-label="prettified ? 'Minify WAT code' : 'Prettify WAT code'" :icon="prettified ? '🗜️' : '🪷'"><span :text="prettified ? ' minify' : ' prettify'"></span></button>
 
-    <button id="prettify" title="Prettify WAT source" aria-label="Prettify WAT code" icon="🪷"> prettify</button>
-
-    <button id="download" title="Download WASM binary" aria-label="Download WASM binary" icon="📥"> save</button>
+    <button :onclick="download()" title="Download WASM binary" aria-label="Download WASM binary" icon="📥"> save</button>
   </nav>
 
   <div id="container">
@@ -164,7 +166,7 @@
       }
     </style>
 
-    <code id="source" title="WebAssembly Text Format (WAT) code" aria-label="WebAssembly Text Format (WAT) code" lang="plaintext"></code>
+    <code id="source" :ref="initEditor" title="WebAssembly Text Format (WAT) code" aria-label="WebAssembly Text Format (WAT) code" lang="plaintext"></code>
     <style>
       /* theme */
       #source {
@@ -204,39 +206,8 @@
         }
       }
     </style>
-    <script type="module">
-      import Codejar from './lib/codejar.js'
 
-      let source = document.getElementById('source')
-
-      // Minimal WAT syntax rules (56 lines)
-      const highlight = (editor) => {
-        const text = editor.textContent;
-        editor.innerHTML = text
-          .replace(/\(([\w$.]+)/g, '(<span class="kw">$1</span>')
-          .replace(/(\$[^\s(){}[\];,"]+)/g, '<span class="var">$1</span>')
-          .replace(/(;;.*)$/gm, '<span class="comment">$1</span>')
-          .replace(/(\(;.*;\))$/gm, '<span class="comment">$1</span>')
-          .replace(/(@\w+)/g, '<span class="annot">$1</span>')
-          .replace(/(\\[\da-z][\da-z])/ig, '<span class="data">$1</span>')
-          .replace(/(?<!\\)(\b(?:0x)?\d[\d_a-z]*\b)/ig, '<span class="num">$1</span>')
-      };
-
-      let codejar = Codejar(source, highlight, {
-        tab: '  ',
-        indentOn: /{/,
-        spellcheck: false,
-        catchTabs: true,
-        history: true,
-      })
-      const response = await fetch('../test/example/quine.wat');
-      const watCode = await response.text();
-      codejar.updateCode(watCode);
-
-      source.codejar = codejar
-    </script>
-
-    <output id="binary" title="WebAssembly WASM binary" aria-label="WebAssembly WASM binary" lang="plaintext"></output>
+    <output id="binary" :ref="binaryEl" :fx="binaryEl.innerHTML = binaryHtml" title="WebAssembly WASM binary" aria-label="WebAssembly WASM binary" lang="plaintext"></output>
     <style>
       #binary {
         position: relative;
@@ -303,7 +274,7 @@
   </div>
 
 
-  <output id="log"></output>
+  <output id="log" :ref="logEl" :fx="logEl.innerHTML = logHtml" :style="{ color: error ? 'var(--error)' : 'var(--success)' }"></output>
   <style>
     #log {
       padding: 2rem 1rem 1rem;
@@ -317,30 +288,22 @@
   </style>
 
   <script type="module">
+    import sprae from 'https://unpkg.com/sprae?module'
+    import Codejar from './lib/codejar.js'
     import { compile as watrCompile, print } from '../watr.js'
 
-    let start, end, // performance timer
-      timeout, // debounce timer
-      buf // compiled buffer
-
-    let source = document.getElementById('source'),
-      log = document.getElementById('log'),
-      select = document.getElementById('compiler'),
-      binary = document.getElementById('binary'),
-      download = document.getElementById('download'),
-      prettify = document.getElementById('prettify'),
-      minify = document.getElementById('minify')
+    const SECTION = 'custom type import func table memory global export start elem code data datacount'.split(' ')
 
     // available compilers
-    const lib = {
+    const compilers = {
       async watr(code) { return watrCompile(code) },
 
       async wabt(code) {
-        if (!lib.wabt.compile) { let { default: Wabt } = await import('../test/lib/wabt.js'); lib.wabt.compile = await new Wabt() }
-
-        start = performance.now(); // reset timer
-        const wabt = lib.wabt.compile
-
+        if (!compilers.wabt.compile) {
+          let { default: Wabt } = await import('../test/lib/wabt.js')
+          compilers.wabt.compile = await new Wabt()
+        }
+        const wabt = compilers.wabt.compile
         const module = wabt.parseWat('inline', code, {
           "exceptions": true,
           "mutable_globals": true,
@@ -361,9 +324,6 @@
           "extended_const": true,
           "relaxed_simd": true
         })
-
-        // module.resolveNames();
-        // module.validate();
         return module.toBinary({
           log: false,
           canonicalize_lebs: true,
@@ -374,128 +334,183 @@
 
       async wast(code) {
         if (!globalThis.WebAssemblyText) await import('../test/lib/wast.js')
-        start = performance.now(); // reset timer
         return WebAssemblyText.encode(code, { metrics: false })
       },
 
       async watc(code) {
-        if (!lib.watc.compile) lib.watc.compile = (await import('../test/lib/wat-compiler.js')).default
-        start = performance.now(); // reset timer
-        return lib.watc.compile(code, { metrics: false }).buffer
+        if (!compilers.watc.compile) compilers.watc.compile = (await import('../test/lib/wat-compiler.js')).default
+        return compilers.watc.compile(code, { metrics: false }).buffer
       }
     }
 
-
-    // debounce recompile each time input changes
-    // source.addEventListener('input', recompile);
-    const observer = new MutationObserver(recompile);
-    observer.observe(source, { childList: true, subtree: true, characterData: true });
-    select.addEventListener('change', recompile);
-    recompile();
-
-    function recompile() {
-      clearTimeout(timeout);
-      log.textContent = ''
-      if (!source.textContent) binary.textContent = ''
-      timeout = setTimeout(() => compile(source.textContent), 300);
+    // Minimal WAT syntax highlighter
+    const highlight = (editor) => {
+      const text = editor.textContent
+      editor.innerHTML = text
+        .replace(/\(([\w$.]+)/g, '(<span class="kw">$1</span>')
+        .replace(/(\$[^\s(){}[\];,"]+)/g, '<span class="var">$1</span>')
+        .replace(/(;;.*)$/gm, '<span class="comment">$1</span>')
+        .replace(/(\(;.*;\))$/gm, '<span class="comment">$1</span>')
+        .replace(/(@\w+)/g, '<span class="annot">$1</span>')
+        .replace(/(\\[\da-z][\da-z])/ig, '<span class="data">$1</span>')
+        .replace(/(?<!\\)(\b(?:0x)?\d[\d_a-z]*\b)/ig, '<span class="num">$1</span>')
     }
 
-    // compile code in editor
-    async function compile(code) {
-      binary.textContent = ''
-      log.textContent = ''
-      if (!code.trim()) return
-      try {
-        start = performance.now();
-        buf = await lib[compiler.value](code)
-        end = performance.now();
-        binary.innerHTML = hihex(buf)
-        const mod = new WebAssembly.Module(buf)
-        try {
-          const instance = new WebAssembly.Instance(mod, {})
-          console.log(instance)
-        } catch (e) {
-          console.warn(e)
-        }
-        log.innerHTML = `<span style="color: var(--success);">Compiled in ${(end - start).toFixed(2)} ms</span>`
-      }
-      catch (e) {
-        console.error(e)
-        log.innerHTML = `<span style="color: var(--error);">${e}</span>`
-      }
+    // parse unsigned LEB128
+    function uleb(bytes, offset = 0) {
+      let result = 0, shift = 0, byte
+      do {
+        byte = bytes[offset++]
+        result |= (byte & 0x7F) << shift
+        shift += 7
+      } while (byte & 0x80)
+      return [result, offset]
     }
 
-    const SECTION = 'custom type import func table memory global export start elem code data datacount'.split(' ')
+    function hex(arr) {
+      return Array.from(arr).map(c => c.toString(16).padStart(2, 0)).join(' ')
+    }
 
-    // format buffer into higglighted hex string
+    // format buffer into highlighted hex string
     function hihex(buf) {
-      let bytes = new Uint8Array(buf);
+      let bytes = new Uint8Array(buf)
+      let result = ''
+      let offset = 8
 
-      let result = '';
-
-      // parse wasm sections
-      const sections = Array(12);
-      let offset = 8; // Skip preamble
       result += `<p class="section preamble" title="preamble">${hex(bytes.slice(0, 8))}</p>`
 
       while (offset < bytes.length) {
-        const id = bytes[offset++];
-        if (!SECTION[id]) err(`Bad section ${id}`)
+        const id = bytes[offset++]
+        if (!SECTION[id]) throw new Error(`Bad section ${id}`)
 
         result += `<p title="${SECTION[id]}" class="section ${SECTION[id]}">`
-
         result += ` <b title="${SECTION[id]} id: ${id}">${hex([id])}</b>`
-        const [size, newOffset] = uleb(bytes, offset);
+        const [size, newOffset] = uleb(bytes, offset)
         result += ` <i title="${SECTION[id]} size: ${size}">${hex(bytes.slice(offset, newOffset))}</i> `
-
         result += `<br/>`
         result += hex(bytes.slice(newOffset, offset = newOffset + size))
         result += `</p>`
       }
-
-      return result;
-    }
-    // parse unsigned LEB128
-    function uleb(bytes, offset = 0) {
-      let result = 0;
-      let shift = 0;
-      let byte;
-
-      do {
-        byte = bytes[offset++];
-        result |= (byte & 0x7F) << shift;
-        shift += 7;
-      } while (byte & 0x80);
-
-      return [result, offset];
-    }
-    function hex(arr) {
-      return Array.from(arr).map((c, i) => c.toString(16).padStart(2, 0)).join(' ')
+      return result
     }
 
-    // download compiled buffer
-    download.onclick = () => {
-      const blob = new Blob([buf], { type: 'application/wasm' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'module.wasm';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }
+    // Reactive state - sprae returns the reactive proxy
+    let codejar = null
+    let buf = null
+    let timeout = null
 
-    // prettify/minify source
-    prettify.onclick = () => {
-      source.codejar.updateCode(source.textContent = print(source.textContent))
-    }
-    minify.onclick = () => {
-      source.codejar.updateCode(source.textContent = print(source.textContent, {
-        indent: false,
-        newline: false
-      }))
-    }
+    const state = sprae(document.getElementById('app'), {
+      compiler: 'watr',
+      sourceCode: '',
+      binaryHtml: '',
+      logHtml: '',
+      error: false,
+      prettified: false,
+      binaryEl: null,
+      logEl: null,
+
+      // Initialize codejar editor
+      initEditor(el) {
+        codejar = Codejar(el, highlight, {
+          tab: '  ',
+          indentOn: /{/,
+          spellcheck: false,
+          catchTabs: true,
+          history: true,
+        })
+
+        // Watch for changes
+        const observer = new MutationObserver(() => {
+          state.sourceCode = el.textContent
+          state.recompile()
+        })
+        observer.observe(el, { childList: true, subtree: true, characterData: true })
+
+        // Load initial example
+        fetch('../test/example/quine.wat')
+          .then(r => r.text())
+          .then(code => {
+            codejar.updateCode(code)
+            state.sourceCode = code
+            state.recompile()
+          })
+
+        return () => observer.disconnect()
+      },
+
+      // Debounced recompile
+      recompile() {
+        clearTimeout(timeout)
+        state.logHtml = ''
+        if (!state.sourceCode) state.binaryHtml = ''
+        timeout = setTimeout(() => state.compile(), 300)
+      },
+
+      // Compile source code
+      async compile() {
+        state.binaryHtml = ''
+        state.logHtml = ''
+        state.error = false
+
+        if (!state.sourceCode.trim()) return
+
+        try {
+          const start = performance.now()
+          buf = await compilers[state.compiler](state.sourceCode)
+          const end = performance.now()
+
+          state.binaryHtml = hihex(buf)
+          state.logHtml = `Compiled in ${(end - start).toFixed(2)} ms`
+          state.error = false
+
+          // Try to instantiate
+          const mod = new WebAssembly.Module(buf)
+          try {
+            const instance = new WebAssembly.Instance(mod, {})
+            console.log(instance)
+          } catch (e) {
+            console.warn(e)
+          }
+        } catch (e) {
+          console.error(e)
+          state.logHtml = String(e)
+          state.error = true
+        }
+      },
+
+      // Download WASM binary
+      download() {
+        if (!buf) return
+        const blob = new Blob([buf], { type: 'application/wasm' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'module.wasm'
+        a.type = 'application/wasm'
+        a.click()
+        URL.revokeObjectURL(url)
+      },
+
+      // Toggle between prettify/minify
+      toggleFormat() {
+        if (state.prettified) {
+          // Already prettified, now minify (warning: loses comments)
+          const code = print(state.sourceCode, { indent: false, newline: false })
+          codejar.updateCode(code)
+          state.sourceCode = code
+          state.prettified = false
+        } else {
+          // Prettify first (keeps comments)
+          const code = print(state.sourceCode)
+          codejar.updateCode(code)
+          state.sourceCode = code
+          state.prettified = true
+        }
+      }
+    })
+
+    // Expose for debugging/testing
+    window.state = state
   </script>
 
   <footer style="position: absolute; bottom: 1rem; right: 1rem; z-index: 2;">

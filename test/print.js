@@ -42,7 +42,7 @@ t('print: comments - inline block comments', () => {
   const src = '(an (; inline ;) comment 1)'
 
   // without comments flag - should strip comments
-  is(print(src, { indent: '', newline: '' }), '(an comment 1)')
+  is(print(src, { indent: '', newline: '', comments: false }), '(an comment 1)')
 
   // with comments flag - should preserve comments
   is(print(src, { indent: '', newline: '', comments: true }), '(an (; inline ;) comment 1)')

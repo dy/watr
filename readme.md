@@ -1,7 +1,7 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr)
 
 Light & fast WAT compiler.<br/>
-For language backends, dynamic compilation, or inline WASM.<br>
+Useful for high-level language backends, dynamic (in-browser) compilation, or inline WASM.<br>
 [Feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete.
 
 **[Docs](./docs.md)** · **[Repl](https://dy.github.io/watr/repl/)**
@@ -26,10 +26,12 @@ const { pi } = watr`(global (export "pi") f64 (f64.const ${Math.PI}))`
 
 // compile to binary
 const binary = compile(`(func (export "f") (result f64) (f64.const 1))`)
+const module = new WebAssembly.Module(binary)
+const { f } = new WebAssembly.Instance(module).exports
 
 // parse / print
 parse('(i32.const 42)') // ['i32.const', 42]
-print(ast, { indent: '  ', newline: '\n' })
+print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)\n    ...
 ```
 
 ## Metrics
