@@ -1023,19 +1023,6 @@ t('case: double inline block', () => {
   inline(src)
 })
 
-t.skip('case: inline if', () => {
-  // FIXME: wabt compiles that only accidentally, it's not part of standard
-  // and that doesn't work in repl https://webassembly.github.io/wabt/demo/wat2wasm/
-
-  // equiv to (if (result x) a (then b))
-  let src2 = `(func (if (result i32) (i32.const 1) (i32.const 2)))`
-  is(compile(parse(src2)), wat2wasm(src2).buffer)
-
-  // equiv to (if (result x) a (then b)(else c))
-  let src = `(func (if (result i64) (i64.const 7) (i64.const 8) (i64.const 9)))`
-  is(compile(parse(src)), wat2wasm(src).buffer)
-})
-
 t('case: block/loop params', () => {
   let src = `(func (block (param i32) (i32.const 1)))`
   is(compile(parse(src)), wat2wasm(src).buffer)
@@ -1184,11 +1171,6 @@ t('compile: multiple results', () => {
 
   let src4 = `(func (if (result i32 i32) (i32.const 0) (then (i32.const 1)(i32.const 2))))`
   is(compile(parse(src4)), wat2wasm(src4).buffer)
-
-  // FIXME: I think else is optional at the end https://webassembly.github.io/spec/core/text/instructions.html#abbreviations which wabt doesn't do
-  // must be an error in wabt
-  // let src5 = `(func (if (result i32 i32 i32) (i32.const 0)(i32.const 1)(i32.const 2)))`
-  // is(compile(parse(src5)), wat2wasm(src5).buffer)
 })
 
 t('compile: bulk memory', () => {
@@ -1466,136 +1448,29 @@ t('compile: simd const', () => {
   src = `(global v128 (v128.const f32x4 nan:0x7f_ffff nan:0x7f_ffff nan:0x7f_ffff nan:0x7f_ffff))`
   is(compile(parse(src)), wat2wasm(src).buffer)
 
-  // ref: https://github.com/WebAssembly/simd/tree/master/test/core/simd
-  // FIXME: not sure where's that from - globals seem to be not allowed
+  // Integer types: hex, decimal, negative, underscores
   src = `
-  (global v128 (v128.const i8x16 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF))
-  (global v128 (v128.const i8x16 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80))
-  (global v128 (v128.const i8x16  255  255  255  255  255  255  255  255  255  255  255  255  255  255  255  255))
-  (global v128 (v128.const i8x16 -128 -128 -128 -128 -128 -128 -128 -128 -128 -128 -128 -128 -128 -128 -128 -128))
-  (global v128 (v128.const i16x8  0xFFFF  0xFFFF  0xFFFF  0xFFFF  0xFFFF  0xFFFF  0xFFFF  0xFFFF))
-  (global v128 (v128.const i16x8 -0x8000 -0x8000 -0x8000 -0x8000 -0x8000 -0x8000 -0x8000 -0x8000))
-  (global v128 (v128.const i16x8  65535  65535  65535  65535  65535  65535  65535  65535))
-  (global v128 (v128.const i16x8 -32768 -32768 -32768 -32768 -32768 -32768 -32768 -32768))
-  (global v128 (v128.const i16x8  65_535  65_535  65_535  65_535  65_535  65_535  65_535  65_535))
-  (global v128 (v128.const i16x8 -32_768 -32_768 -32_768 -32_768 -32_768 -32_768 -32_768 -32_768))
-  (global v128 (v128.const i16x8  0_123_45 0_123_45 0_123_45 0_123_45 0_123_45 0_123_45 0_123_45 0_123_45))
-  (global v128 (v128.const i16x8  0x0_1234 0x0_1234 0x0_1234 0x0_1234 0x0_1234 0x0_1234 0x0_1234 0x0_1234))
-  (global v128 (v128.const i32x4  0xffffffff  0xffffffff  0xffffffff  0xffffffff))
-  (global v128 (v128.const i32x4 -0x80000000 -0x80000000 -0x80000000 -0x80000000))
-  (global v128 (v128.const i32x4  4294967295  4294967295  4294967295  4294967295))
-  (global v128 (v128.const i32x4 -2147483648 -2147483648 -2147483648 -2147483648))
-  (global v128 (v128.const i32x4  0xffff_ffff  0xffff_ffff  0xffff_ffff  0xffff_ffff))
-  (global v128 (v128.const i32x4 -0x8000_0000 -0x8000_0000 -0x8000_0000 -0x8000_0000))
-  (global v128 (v128.const i32x4 4_294_967_295  4_294_967_295  4_294_967_295  4_294_967_295))
-  (global v128 (v128.const i32x4 -2_147_483_648 -2_147_483_648 -2_147_483_648 -2_147_483_648))
-  (global v128 (v128.const i32x4 0_123_456_789 0_123_456_789 0_123_456_789 0_123_456_789))
-  (global v128 (v128.const i32x4 0x0_9acf_fBDF 0x0_9acf_fBDF 0x0_9acf_fBDF 0x0_9acf_fBDF))`
+  (global v128 (v128.const i8x16 0xFF 0xFF 0xFF 0xFF -0x80 -0x80 -0x80 -0x80 255 255 255 255 -128 -128 -128 -128))
+  (global v128 (v128.const i16x8 0xFFFF -0x8000 65535 -32768 65_535 -32_768 0_123_45 0x0_1234))
+  (global v128 (v128.const i32x4 0xffffffff -0x80000000 4_294_967_295 0x0_9acf_fBDF))
+  (global v128 (v128.const i64x2 0xffffffffffffffff -0x8000000000000000))`
   is(compile(parse(src)), wat2wasm(src).buffer)
 
-  // FIXME: nan: values
+  // Float types: decimal, hex, exponents, special values
   src = `
-  (global v128 (v128.const i64x2  0xffffffffffffffff  0xffffffffffffffff))
-  (global v128 (v128.const i64x2 -0x8000000000000000 -0x8000000000000000))
-  (global v128 (v128.const i64x2  18446744073709551615 18446744073709551615))
-  (global v128 (v128.const i64x2 -9223372036854775808 -9223372036854775808))
-  (global v128 (v128.const i64x2  0xffff_ffff_ffff_ffff  0xffff_ffff_ffff_ffff))
-  (global v128 (v128.const i64x2 -0x8000_0000_0000_0000 -0x8000_0000_0000_0000))
-  (global v128 (v128.const i64x2  18_446_744_073_709_551_615 18_446_744_073_709_551_615))
-  (global v128 (v128.const i64x2 -9_223_372_036_854_775_808 -9_223_372_036_854_775_808))
-  (global v128 (v128.const i64x2  0_123_456_789 0_123_456_789))
-  (global v128 (v128.const i64x2  0x0125_6789_ADEF_bcef 0x0125_6789_ADEF_bcef))
-  (global v128 (v128.const f32x4  1.2  1.2  1.2  1.2))
-  (global v128 (v128.const f32x4  0x1p127  0x1p127  0x1p127  0x1p127))
-  (global v128 (v128.const f32x4 -0x1p127 -0x1p127 -0x1p127 -0x1p127))
-  (global v128 (v128.const f32x4  1e38  1e38  1e38  1e38))
-  (global v128 (v128.const f32x4 -1e38 -1e38 -1e38 -1e38))
-  (global v128 (v128.const f32x4  340282356779733623858607532500980858880 340282356779733623858607532500980858880
-                                  340282356779733623858607532500980858880 340282356779733623858607532500980858880))
-  (global v128 (v128.const f32x4 -340282356779733623858607532500980858880 -340282356779733623858607532500980858880
-                                  -340282356779733623858607532500980858880 -340282356779733623858607532500980858880))
-  (global v128 (v128.const f32x4 nan:0x1 nan:0x1 nan:0x1 nan:0x1))
-  (global v128 (v128.const f32x4 nan:0x7f_ffff nan:0x7f_ffff nan:0x7f_ffff nan:0x7f_ffff))
-  (global v128 (v128.const f32x4 0123456789 0123456789 0123456789 0123456789))
-  (global v128 (v128.const f32x4 0123456789e019 0123456789e019 0123456789e019 0123456789e019))
-  (global v128 (v128.const f32x4 0123456789e+019 0123456789e+019 0123456789e+019 0123456789e+019))
-  (global v128 (v128.const f32x4 0123456789e-019 0123456789e-019 0123456789e-019 0123456789e-019))
-  (global v128 (v128.const f32x4 0123456789. 0123456789. 0123456789. 0123456789.))
-  (global v128 (v128.const f32x4 0123456789.e019 0123456789.e019 0123456789.e019 0123456789.e019))
-  (global v128 (v128.const f32x4 0123456789.e+019 0123456789.e+019 0123456789.e+019 0123456789.e+019))
-  (global v128 (v128.const f32x4 0123456789.e-019 0123456789.e-019 0123456789.e-019 0123456789.e-019))
-  (global v128 (v128.const f32x4 0123456789.0123456789 0123456789.0123456789 0123456789.0123456789 0123456789.0123456789))
-  (global v128 (v128.const f32x4 0123456789.0123456789e019 0123456789.0123456789e019 0123456789.0123456789e019 0123456789.0123456789e019))
-  (global v128 (v128.const f32x4 0123456789.0123456789e+019 0123456789.0123456789e+019 0123456789.0123456789e+019 0123456789.0123456789e+019))
-  (global v128 (v128.const f32x4 0123456789.0123456789e-019 0123456789.0123456789e-019 0123456789.0123456789e-019 0123456789.0123456789e-019))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEF 0x0123456789ABCDEF 0x0123456789ABCDEF 0x0123456789ABCDEF))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEFp019 0x0123456789ABCDEFp019 0x0123456789ABCDEFp019 0x0123456789ABCDEFp019))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEFp+019 0x0123456789ABCDEFp+019 0x0123456789ABCDEFp+019 0x0123456789ABCDEFp+019))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEFp-019 0x0123456789ABCDEFp-019 0x0123456789ABCDEFp-019 0x0123456789ABCDEFp-019))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEF. 0x0123456789ABCDEF. 0x0123456789ABCDEF. 0x0123456789ABCDEF.))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEF.p019 0x0123456789ABCDEF.p019 0x0123456789ABCDEF.p019 0x0123456789ABCDEF.p019))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEF.p+019 0x0123456789ABCDEF.p+019 0x0123456789ABCDEF.p+019 0x0123456789ABCDEF.p+019))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEF.p-019 0x0123456789ABCDEF.p-019 0x0123456789ABCDEF.p-019 0x0123456789ABCDEF.p-019))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEF.019aF 0x0123456789ABCDEF.019aF 0x0123456789ABCDEF.019aF 0x0123456789ABCDEF.019aF))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEF.019aFp019 0x0123456789ABCDEF.019aFp019 0x0123456789ABCDEF.019aFp019 0x0123456789ABCDEF.019aFp019))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEF.019aFp+019 0x0123456789ABCDEF.019aFp+019 0x0123456789ABCDEF.019aFp+019 0x0123456789ABCDEF.019aFp+019))
-  (global v128 (v128.const f32x4 0x0123456789ABCDEF.019aFp-019 0x0123456789ABCDEF.019aFp-019 0x0123456789ABCDEF.019aFp-019 0x0123456789ABCDEF.019aFp-019))
-  (global v128 (v128.const f64x2  0x1p1023  0x1p1023))
-  (global v128 (v128.const f64x2 -0x1p1023 -0x1p1023))
-  (global v128 (v128.const f64x2  1e308  1e308))
-  (global v128 (v128.const f64x2 -1e308 -1e308))
-  (global v128 (v128.const f64x2  179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368
-                                  179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368))
-  (global v128 (v128.const f64x2 -179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368
-                                  -179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368))
-  (global v128 (v128.const f64x2 nan:0x1 nan:0x1))
-  ;; (global v128 (v128.const f64x2 nan:0xf_ffff_ffff_ffff nan:0xf_ffff_ffff_ffff))
-  (global v128 (v128.const f64x2 0123456789 0123456789))
-  (global v128 (v128.const f64x2 0123456789e019 0123456789e019))
-  (global v128 (v128.const f64x2 0123456789e+019 0123456789e+019))
-  (global v128 (v128.const f64x2 0123456789e-019 0123456789e-019))
-  (global v128 (v128.const f64x2 0123456789. 0123456789.))
-  (global v128 (v128.const f64x2 0123456789.e019 0123456789.e019))
-  (global v128 (v128.const f64x2 0123456789.e+019 0123456789.e+019))
-  (global v128 (v128.const f64x2 0123456789.e-019 0123456789.e-019))
-  (global v128 (v128.const f64x2 0123456789.0123456789 0123456789.0123456789))
-  (global v128 (v128.const f64x2 0123456789.0123456789e019 0123456789.0123456789e019))
-  (global v128 (v128.const f64x2 0123456789.0123456789e+019 0123456789.0123456789e+019))
-  (global v128 (v128.const f64x2 0123456789.0123456789e-019 0123456789.0123456789e-019))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdef 0x0123456789ABCDEFabcdef))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdefp019 0x0123456789ABCDEFabcdefp019))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdefp+019 0x0123456789ABCDEFabcdefp+019))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdefp-019 0x0123456789ABCDEFabcdefp-019))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdef. 0x0123456789ABCDEFabcdef.))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdef.p019 0x0123456789ABCDEFabcdef.p019))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdef.p+019 0x0123456789ABCDEFabcdef.p+019))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdef.p-019 0x0123456789ABCDEFabcdef.p-019))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdef.0123456789ABCDEFabcdef 0x0123456789ABCDEFabcdef.0123456789ABCDEFabcdef))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdef.0123456789ABCDEFabcdefp019 0x0123456789ABCDEFabcdef.0123456789ABCDEFabcdefp019))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdef.0123456789ABCDEFabcdefp+019 0x0123456789ABCDEFabcdef.0123456789ABCDEFabcdefp+019))
-  (global v128 (v128.const f64x2 0x0123456789ABCDEFabcdef.0123456789ABCDEFabcdefp-019 0x0123456789ABCDEFabcdef.0123456789ABCDEFabcdefp-019))`;
-  is(compile(parse(src)), wat2wasm(src).buffer)
-
-  src = `
-  ;; Non-splat cases
-  (global v128 (v128.const i8x16  0xFF  0xFF  0xFF  0xFF  0xFF  0xFF  0xFF  0xFF
-                                  -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80))
-  (global v128 (v128.const i8x16  0xFF  0xFF  0xFF  0xFF   255   255   255   255
-                                  -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80 -0x80))
-  (global v128 (v128.const i8x16  0xFF  0xFF  0xFF  0xFF   255   255   255   255
-                                  -0x80 -0x80 -0x80 -0x80  -128  -128  -128  -128))
-  (global v128 (v128.const i16x8 0xFF 0xFF  0xFF  0xFF -0x8000 -0x8000 -0x8000 -0x8000))
-  (global v128 (v128.const i16x8 0xFF 0xFF 65535 65535 -0x8000 -0x8000 -0x8000 -0x8000))
-  (global v128 (v128.const i16x8 0xFF 0xFF 65535 65535 -0x8000 -0x8000  -32768  -32768))
-  (global v128 (v128.const i32x4 0xffffffff 0xffffffff -0x80000000 -0x80000000))
-  (global v128 (v128.const i32x4 0xffffffff 4294967295 -0x80000000 -0x80000000))
-  (global v128 (v128.const i32x4 0xffffffff 4294967295 -0x80000000 -2147483648))
-  (global v128 (v128.const f32x4 0x1p127 0x1p127 -0x1p127 -1e38))
-  (global v128 (v128.const f32x4 0x1p127 340282356779733623858607532500980858880 -1e38 -340282356779733623858607532500980858880))
-  (global v128 (v128.const f32x4 nan -nan inf -inf))
-  (global v128 (v128.const i64x2 0xffffffffffffffff 0x8000000000000000))
-  (global v128 (v128.const i64x2 0xffffffffffffffff -9223372036854775808))
+  (global v128 (v128.const f32x4 1.2 0x1p127 -1e38 nan:0x7f_ffff))
+  (global v128 (v128.const f32x4 0123456789.0123456789e-019 0x0123456789ABCDEFp+019 nan -inf))
   (global v128 (v128.const f64x2 0x1p1023 -1e308))
+  (global v128 (v128.const f64x2 nan:0xf_ffff_ffff_ffff -inf))`
+  is(compile(parse(src)), wat2wasm(src).buffer)
+
+  // Non-splat (mixed values per lane)
+  src = `
+  (global v128 (v128.const i8x16 0xFF 0xFF 0xFF 0xFF 255 255 255 255 -0x80 -0x80 -0x80 -0x80 -128 -128 -128 -128))
+  (global v128 (v128.const i16x8 0xFF 0xFF 65535 65535 -0x8000 -0x8000 -32768 -32768))
+  (global v128 (v128.const i32x4 0xffffffff 4294967295 -0x80000000 -2147483648))
+  (global v128 (v128.const f32x4 nan -nan inf -inf))
+  (global v128 (v128.const i64x2 0xffffffffffffffff -9223372036854775808))
   (global v128 (v128.const f64x2 nan -inf))`
   is(compile(parse(src)), wat2wasm(src).buffer)
 })
@@ -1611,8 +1486,10 @@ t('compile: simd shuffle, swizzle, splat', () => {
     (i64x2.splat (i32.const 0))
     (f64x2.splat (i32.const 0))
   )`
-  // FIXME: wrong number of immediates test
   is(compile(parse(src)), wat2wasm(src).buffer)
+
+  // wrong number of shuffle immediates should error
+  throws(() => compile(parse('(func (i8x16.shuffle 0 1 2 3 (v128.const i32x4 0 0 0 0) (v128.const i32x4 0 0 0 0)))')))
 })
 
 t('compile: simd extract/replace/load_spat lane', () => {

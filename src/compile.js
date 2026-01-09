@@ -116,7 +116,7 @@ export default function compile(nodes) {
       else if (kind === 'memory') {
         const is64 = node[0] === 'i64', idx = is64 ? 1 : 0
         if (node[idx]?.[0] === 'data') {
-          let [, ...data] = node.splice(idx, 1)[0], m = '' + Math.ceil(data.flat().length / 65536) // FIXME: figure out actual data size
+          let [, ...data] = node.splice(idx, 1)[0], m = '' + Math.ceil(data.reduce((s, d) => s + d.length, 0) / 65536)
           ctx.data.push([['memory', items.length], [is64 ? 'i64.const' : 'i32.const', is64 ? 0n : 0], ...data])
           node = is64 ? ['i64', m, m] : [m, m]
         }

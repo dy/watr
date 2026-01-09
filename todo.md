@@ -132,8 +132,12 @@
 * [x] ~~replace wabt with spec/wasm for tests~~ -> no meaningful way to normalize ulebs
 * [x] Types
 * [x] Cleanup tests harness
-* [ ] Source position to error messages
-* [ ] Sourcemaps
+* [x] ~~Source position to error messages~~ -> until we need it badly: it's a hassle for JS
+* [x] ~~Sourcemaps~~
+* [x] Maintain ids better: no need to convert everything to `""` - you can unquote generally, keep quotes only for strings with escapes in printer, that's it
+* [ ] All FIXME/TODO
+* [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
+  * [ ] It can also instantiate module immediately 'let {a,b} = watr`(export a)`'
 
 ## REPL
 
@@ -171,5 +175,3 @@
 * [ ] twgl with collection of wasm-rendered webgl tweets
 * [ ] jz-based watr
 * [ ] wat-based wat-compiler
-* [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
-  * [ ] It can also compile module right away 'let {a,b} = watr`(export a)`'
