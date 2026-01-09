@@ -92,7 +92,7 @@ export async function file(path, imports = {}) {
   let src = await res.text()
 
   // parse
-  let nodes = parse(src, { comments: true, annotations: true })
+  let nodes = parse(src)
 
   // skip ((@) module) or ;;
   nodes.forEach(node => {

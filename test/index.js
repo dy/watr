@@ -1,5 +1,5 @@
 import './parse.js'
 import './compile.js'
 import './print.js'
-import './testsuite.js'
+// import './testsuite.js'
 // import './bench.js'

@@ -6,7 +6,7 @@ import compile from '../src/compile.js'
 t('print: basics', () => {
   const tree = [
     'func', ['export', '"double"'], ['param', 'f64', 'f32'], ['param', '$"x"', 'i32'], ['result', 'f64'],
-    ['f64.mul', ['local.get', 0], ['f64.const', 2]]
+    ['f64.mul', ['local.get', '0'], ['f64.const', '2']]
   ]
 
   // minify
@@ -26,7 +26,7 @@ t('print: basics', () => {
 
   is(
     print(`(import "Math" "random" (func $random (result f32)))`, { newline: '', indent: '' }),
-    `(import \"Math\" \"random\"(func $"random"(result f32)))`
+    `(import "Math" "random"(func $random(result f32)))`
   )
 })
 
@@ -113,11 +113,11 @@ t('print: comments - roundtrip with comments', () => {
   const src = '(func (; example ;) (param i32) ;; takes int\n(result i32) ;; returns int\n(local.get 0))'
 
   // Parse with comments, print with comments
-  const tree = parse(src, { comments: true })
+  const tree = parse(src)
   const output = print(tree, { indent: '  ', newline: '\n', comments: true })
 
   // Parse the output again with comments
-  const tree2 = parse(output, { comments: true })
+  const tree2 = parse(output)
   const output2 = print(tree2, { indent: '  ', newline: '\n', comments: true })
 
   // Should be stable

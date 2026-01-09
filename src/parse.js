@@ -1,116 +1,56 @@
+import { err } from "./util.js"
 
 /**
- * Parses (lexes) a WASM text string into tree of tokens without semantics yet.
+ * Parses a wasm text string and constructs a nested array structure (AST).
  *
- * @param {string} s - The input string with WAT code to parse.
- * @param {object} options - Parse options, like comments, annotations, etc.
+ * @param {string} str - The input string with WAT code to parse.
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
+export default (str) => {
+  let i = 0, level = [], buf = '', q = 0
 
-import { err, tenc, tdec } from "./util.js"
+  const commit = () => buf && (level.push(buf), buf = '')
 
+  const parseLevel = () => {
+    for (let c, root; i < str.length;) {
+      c = str.charCodeAt(i)
 
-export default (s, o = { comments: false, annotations: true }) => {
-  let i = 0, // pointer
-    c, // current char
-    q, // is string
-    level = [], // current level
-    buf = '', // current collected string
-    comment = 0, // is comment
-    $ // is id
-
-  // push buffer onto level, reset buffer
-  const commit = () => (
-    // ids stored in quoted form $"name" for roundtrip safety (handles escapes, special chars)
-    // strings stored as byte arrays with .raw for display
-    $ ? level.push('$"' + (q ? tdec.decode(Uint8Array.from(str(buf))) : buf) + '"') :
-    q ? level.push(str(buf)) :
-    buf && (!comment || o.comments) && level.push(buf),
-    buf = '', $ = q = null
-  )
-  const next = () => buf += s[i++]
-
-  const parseLevel = (parent = level) => {
-    while (i < s.length) {
-      c = s[i]
-      // "...", $"..."
-      if (q) {
-        if (c === '\\') next(), next()
-        else if (c === '"') i++, commit()
-        else next()
-      }
-      // (;;)
-      else if (comment > 0) {
-        next()
-        if (c === '(' && s[i] === ';') next(), comment++ // (;(;;);)
-        else if (c === ';' && s[i] === ')') next(), comment == 1 && (commit(), comment--)
-      }
-      // ;;
-      else if (comment < 0) {
-        next()
-        if (c === '\n' || c === '\r') commit(), comment = 0
-      }
-      // https://webassembly.github.io/annotations/core/text/lexical.html#white-space
-      else if (c <= ' ') commit(), i++
-      else if (c === '$' && !$ && !buf) $ = 1, i++
-      else if (c === '"') !$ && commit(), q = 1, i++
-      else if (c === '(') {
-        commit()
-        if (s[i + 1] === ';') next(), next(), comment = 1 // (; ... ;)
-        else {
-          i++, level = [] // parent is saved on entry
-          parseLevel()
-          if (s[i++] !== ')') err(`Unclosed parenthesis`)
-          if (level[0]?.[0] === '@' && !o.annotations); else parent.push(level) // (@...)
-          level = parent
-        }
-      }
-      else if (c === ')') return commit()
-      else if (c === ';' && s[i + 1] === ';') commit(), next(), next(), comment = -1  // ;; ...
-      else next()
+      // inside "..." or $"..."
+      if (q === 34) (buf += str[i++], c === 92 ? buf += str[i++] : c === 34 && (commit(), q = 0))
+      // inside (; ... ;) with nesting support (q=60 means depth 1, q=61 means depth 2, etc)
+      else if (q > 59) (
+        c === 40 && str.charCodeAt(i + 1) === 59 ? (q++, buf += str[i++] + str[i++]) : // nested (;
+        c === 59 && str.charCodeAt(i + 1) === 41 ? (buf += str[i++] + str[i++], --q === 59 && (commit(), q = 0)) : // ;)
+        buf += str[i++]
+      )
+      // inside ;; ...\n
+      else if (q < 0) (c === 10 || c === 13 ? (buf += str[i++], commit(), q = 0) : buf += str[i++])
+      // start "
+      else if (c === 34) (buf !== '$' && commit(), q = 34, buf += str[i++])
+      // start (;
+      else if (c === 40 && str.charCodeAt(i + 1) === 59) (commit(), q = 60, buf = str[i++] + str[i++])
+      // start ;;
+      else if (c === 59 && str.charCodeAt(i + 1) === 59) (commit(), q = -1, buf = str[i++] + str[i++])
+      // start (@
+      else if (c === 40 && str.charCodeAt(i + 1) === 64) (commit(), i += 2, buf = '@', (root = level).push(level = []), parseLevel(), level = root)
+      // start (
+      else if (c === 40) (commit(), i++, (root = level).push(level = []), parseLevel(), level = root)
+      // end )
+      else if (c === 41) return commit(), i++
+      // whitespace
+      else if (c <= 32) (commit(), i++)
+      // other
+      else buf += str[i++]
     }
 
+    q < 0 && commit() // trailing line comment
     commit()
   }
 
   parseLevel()
 
-  if (i < s.length) err(`Unexpected closing parenthesis`) // likely unbalanced syntax
+  if (q === 34) err(`Unclosed quote`)
+  if (i < str.length) err(`Unexpected closing parenthesis`)
 
   return level.length > 1 ? level : level[0] || []
-}
-
-
-
-const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
-
-// convert string to bytes sequence
-const str = s => {
-  let bytes = [], i = 0, code, c, buf = ''
-
-  const commit = () => (buf && bytes.push(...tenc.encode(buf)), buf = '')
-
-  while (i < s.length) {
-    c = s[i++], code = null
-
-    if (c === '\\') {
-      // \u{abcd}
-      if (s[i] === 'u') {
-        i++, i++ // 'u{'
-        c = String.fromCodePoint(parseInt(s.slice(i, i = s.indexOf('}', i)), 16))
-        i++ // '}'
-      }
-      // \n, \t, \r
-      else if (escape[s[i]]) code = escape[s[i++]]
-      // \00 - raw bytes
-      else if (!isNaN(code = parseInt(s[i] + s[i + 1], 16))) i++, i++
-      // \*
-      else c += s[i]
-    }
-    code != null ? (commit(), bytes.push(code)) : buf += c
-  }
-  commit()
-
-  bytes.valueOf = () => `"${s}"`
-  return bytes
 }

@@ -2,12 +2,23 @@ import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, DEFTYPE } from './const.js'
 import parse from './parse.js'
-import { err, tdec, tenc } from './util.js'
+import { err, tdec, tenc, unescape, str } from './util.js'
 
 
-// recursively strip all annotation nodes from AST, except @custom and @metadata.code.*
-// clones nodes by the way
-const unannot = (node) => Array.isArray(node) ? (node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@meta') ? null : node.map(unannot).filter(n => n != null)) : node
+// cleanup tree: remove comments, remove annotations (except @custom/@metadata.code.*), normalize quoted ids, convert strings to bytes
+const cleanup = (node) => Array.isArray(node) ?
+  // remove annotations like (@name ...) except @custom and @metadata.code.*
+  node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@metadata.code.') ? null :
+  node.map(cleanup).filter(n => n != null) :
+  typeof node === 'string' ? (
+    // skip comments: ;; ... or (; ... ;)
+    node[0] === ';' || node[1] === ';' ? null :
+    // normalize quoted ids: $"name" -> $name (if no escapes), else $unescaped
+    node[0] === '$' && node[1] === '"' ? (node.includes('\\') ? '$' + unescape(node.slice(1)) : '$' + node.slice(2, -1)) :
+    // convert string literals to byte arrays with valueOf
+    node[0] === '"' ? str(node) :
+    node
+  ) : node
 
 
 /**
@@ -20,8 +31,7 @@ export default function compile(nodes) {
   // normalize to (module ...) form
   if (typeof nodes === 'string') nodes = parse(nodes) || []
 
-  // strip annotations (text-format only), except @custom and @metadata.code.* which become binary sections
-  nodes = unannot(nodes) || []
+  nodes = cleanup(nodes) || []
 
   let idx = 0
 
@@ -152,6 +162,7 @@ export default function compile(nodes) {
   const binMeta = () => {
     const sections = []
     for (const type in ctx.metadata) {
+      // FIXME: use str here
       const name = vec([...tenc.encode(`metadata.code.${type}`)])
       const content = vec(ctx.metadata[type].map(([funcIdx, instances]) =>
         [...uleb(funcIdx), ...vec(instances.map(([pos, data]) => [...uleb(pos), ...vec(data)]))]

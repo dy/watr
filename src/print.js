@@ -12,7 +12,7 @@ import parse from './parse.js';
  * @returns {string} The formatted WAT string.
  */
 export default function print(tree, options = {}) {
-  if (typeof tree === 'string') tree = parse(tree, { comments: options.comments });
+  if (typeof tree === 'string') tree = parse(tree);
 
   let { indent='  ', newline='\n', comments=false } = options;
   indent ||= '', newline ||= ''; // false -> str
@@ -46,8 +46,9 @@ export default function print(tree, options = {}) {
     for (let i = 1; i < node.length; i++) {
       const sub = node[i].valueOf() // "\00abc\ff" strings are stored as arrays but have ._ with original value
 
-      // comments - just add with space
-      if (comments && typeof sub === 'string' && sub[1] === ';') {
+      // comments - skip if not enabled, otherwise add with space
+      if (typeof sub === 'string' && sub[1] === ';') {
+        if (!comments) continue
         const last = content[content.length - 1]
         if (last && last !== ' ' && last !== '(') content += ' '
         content += sub.trimEnd()
