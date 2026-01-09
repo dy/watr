@@ -47,11 +47,11 @@ See [docs](./docs/index.md) for complete API and examples.
 
 &nbsp; | Size | Speed | Features
 ---|---|---|---
-**watr** | **7.5 KB** | **3,894 op/s** | **MVP + GC + SIMD + Threads**
-[spec/wast.js](https://github.com/WebAssembly/spec) | 216 KB | 2,170 op/s | MVP + GC + SIMD + Threads
-[wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,268 op/s | MVP + GC + SIMD + Threads
-[binaryen](https://github.com/WebAssembly/binaryen) | 1,100 KB | 718 op/s | MVP + GC + SIMD + Threads
-[wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB | 537 op/s | MVP only
+**watr** | **7.5 KB** | **4,426 op/s** | **MVP + GC + SIMD + Threads**
+[spec/wast.js](https://github.com/WebAssembly/spec) | 216 KB | 1,232 op/s | MVP + GC + SIMD + Threads
+[wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,255 op/s | MVP + GC + SIMD + Threads
+[binaryen](https://github.com/WebAssembly/binaryen) | 1,100 KB | 716 op/s | MVP + GC + SIMD + Threads
+[wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB | 555 op/s | MVP only
 
 <!-- <small>Benchmarked on [brownian.wat](./test/example/brownian.wat) (N=500)</small> -->
 

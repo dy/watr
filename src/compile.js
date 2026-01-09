@@ -6,19 +6,20 @@ import { err, unescape, str } from './util.js'
 
 
 // cleanup tree: remove comments, remove annotations (except @custom/@metadata.code.*), normalize quoted ids, convert strings to bytes
-const cleanup = (node) => Array.isArray(node) ?
+const cleanup = (node, result) => !Array.isArray(node) ? (
+  typeof node !== 'string' ? node :
+  // skip comments: ;; ... or (; ... ;)
+  node[0] === ';' || node[1] === ';' ? null :
+  // normalize quoted ids: $"name" -> $name (if no escapes), else $unescaped
+  node[0] === '$' && node[1] === '"' ? (node.includes('\\') ? '$' + unescape(node.slice(1)) : '$' + node.slice(2, -1)) :
+  // convert string literals to byte arrays with valueOf
+  node[0] === '"' ? str(node) :
+  node
+) :
   // remove annotations like (@name ...) except @custom and @metadata.code.*
   node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@metadata.code.') ? null :
-  node.map(cleanup).filter(n => n != null) :
-  typeof node === 'string' ? (
-    // skip comments: ;; ... or (; ... ;)
-    node[0] === ';' || node[1] === ';' ? null :
-    // normalize quoted ids: $"name" -> $name (if no escapes), else $unescaped
-    node[0] === '$' && node[1] === '"' ? (node.includes('\\') ? '$' + unescape(node.slice(1)) : '$' + node.slice(2, -1)) :
-    // convert string literals to byte arrays with valueOf
-    node[0] === '"' ? str(node) :
-    node
-  ) : node
+  // unwrap single-element array containing module (after removing comments)
+  (result = node.map(cleanup).filter(n => n != null), result.length === 1 && result[0]?.[0] === 'module' ? result[0] : result)
 
 
 /**
