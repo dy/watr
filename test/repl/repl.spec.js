@@ -112,21 +112,4 @@ test.describe('REPL', () => {
     expect(binaryText).toContain('00 61 73 6d'); // wasm magic in DOM
     expect(logText).toContain('Compiled in');
   });
-
-  test('example selector loads different examples', async ({ page }) => {
-    // Verify default example is "hello"
-    let state = await getState(page);
-    expect(state.sourceCode).toContain('add'); // hello.wat has add function
-
-    // Switch to memory example (simpler, no imports)
-    await page.evaluate(async () => {
-      await window.state.loadExample('memory');
-    });
-    await page.waitForTimeout(1000);
-
-    state = await getState(page);
-    expect(state.sourceCode).toContain('memory'); // memory.wat has memory definition
-    expect(state.binaryHtml).toContain('00 61 73 6d'); // Should compile
-    expect(state.error).toBe(false);
-  });
 });

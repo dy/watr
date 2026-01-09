@@ -62,14 +62,13 @@ export default function print(tree, options = {}) {
       // comments - skip if not enabled
       if (typeof sub === 'string' && sub[1] === ';') {
         if (!comments) continue
-        // line comments (;;)
+        // line comments (;;) - MUST end with newline to avoid consuming following elements
         if (sub[0] === ';') {
-          // prettified: put on own line before next element
           if (newline) {
-            content += newline + curIndent + sub.trimEnd()
-          }
-          // minified: keep inline but must have newline after (WAT syntax requires it)
-          else {
+            // prettified: own line with indent, newline after
+            content += newline + curIndent + sub.trimEnd() + newline
+          } else {
+            // minified: keep inline but must have newline after
             const last = content[content.length - 1]
             if (last && last !== ' ' && last !== '(') content += ' '
             content += sub.trimEnd() + '\n'
@@ -96,8 +95,8 @@ export default function print(tree, options = {}) {
       // inline nodes
       else {
         const last = content[content.length - 1]
-        // after newline from minified line comment, no extra space needed
-        if (last === '\n') content += ''
+        // after newline from line comment, add indent in prettified mode
+        if (last === '\n') content += newline ? curIndent : ''
         else if (last && last !== ')' && last !== ' ') content += ' '
         else if (newline || last === ')') content += ' '
         content += sub

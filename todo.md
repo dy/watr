@@ -142,10 +142,10 @@
 ## REPL
 
 * [x] compiler selector
-* [x] examples (when no code - prompt for suggest?)
+* [ ] examples (when no code - prompt for suggest?)
 * [x] perf stats: time took to compile
 * [x] prettify / minify
-* [x] ~~PWA~~
+* [ ] PWA
 * [ ] drop wasm binary?
 * [x] ~~normalize code button (when normalizer step is ready)~~
 * [ ] compile button? better for SEO and UI - can have a shortcut

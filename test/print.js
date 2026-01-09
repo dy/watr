@@ -63,7 +63,7 @@ t('print: comments - line comments', () => {
 
   // with pretty printing - line comments go on their own indented line
   const pretty = print(src, { indent: '  ', newline: '\n', comments: true })
-  is(pretty, `(an comment\n  ;; line comment 1\n)`)
+  is(pretty, `(an comment\n  ;; line comment\n  1\n)`)
 })
 
 t('print: comments - mixed comments', () => {

@@ -5,18 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <title>WAT REPL - Run or compile WebAssembly text code online</title>
-  <meta name="description" content="Online WebAssembly REPL for compiling and formattig WebAssembly text WAT code into binary directly in your browser. Fast, simple, and efficient. Multiple compiler choices.">
-  <meta name="keywords" content="WebAssembly, WAT, WAST, WASM, online REPL, WebAssembly editor, WASM REPL, wabt, wat2wasm, wat compiler">
+  <meta name="description"
+        content="Online WebAssembly REPL for compiling and formattig WebAssembly text WAT code into binary directly in your browser. Fast, simple, and efficient. Multiple compiler choices.">
+  <meta name="keywords"
+        content="WebAssembly, WAT, WAST, WASM, online REPL, WebAssembly editor, WASM REPL, wabt, wat2wasm, wat compiler">
 
   <meta property="og:title" content="WebAssembly Text REPL">
-  <meta property="og:description" content="Run and test WebAssembly WAT code online.">
+  <meta property="og:description"
+        content="Run and test WebAssembly WAT code online.">
   <meta property="og:url" content="https://dy.github.io/watr/docs/repl">
   <meta property="og:type" content="website">
   <!-- <meta property="og:image" content="https://dy.github.io/watr/docs/og-image.png"> -->
 
   <!-- <meta name="twitter:card" content="summary_large_image"> -->
   <meta name="twitter:title" content="WebAssembly Text REPL">
-  <meta name="twitter:description" content="Fast, simple WebAssembly REPL for WAT code.">
+  <meta name="twitter:description"
+        content="Fast, simple WebAssembly REPL for WAT code.">
   <!-- <meta name="twitter:image" content="https://dy.github.io/watr/docs/twitter-image.png"> -->
 
   <meta name="google" content="notranslate">
@@ -43,13 +47,7 @@
   <link rel="stylesheet" href="./lib/reset.css" />
 
   <!-- Prevent FOUC for sprae directives -->
-  <style>
-    [\:each],
-    [\:if],
-    [\:else] {
-      visibility: hidden
-    }
-  </style>
+  <style>[\:each],[\:if],[\:else] {visibility: hidden}</style>
 
   <style>
     html,
@@ -140,33 +138,15 @@
   </header>
 
   <nav style="display: flex; align-items: center; margin: 0 1rem; gap: 1rem;">
-    <label for="example" title="Example">
-      <select name="example" :value="example" :onchange="e => e.target.value === '_load' ? loadBinaryInput.click() : loadExample(e.target.value)">
-        <option value="">Custom</option>
-        <option value="hello">Hello World</option>
-        <option value="loops">Loops</option>
-        <option value="memory">Memory</option>
-        <option value="table">Tables</option>
-        <option value="fire">🔥 Fire</option>
-        <option value="maze">🎮 Maze</option>
-        <option value="quine">Quine</option>
-        <option disabled>──────────</option>
-        <option value="_load">📂 Load file...</option>
-      </select>
-      <input type="file" accept=".wasm,.wat,.wast" :ref="loadBinaryInput" :onchange="loadFile" hidden>
-    </label>
+    <label for="compiler" style="margin-right: -.25rem;">Compiler:</label>
+    <select name="compiler" :value="compiler" :onchange="e => { compiler = e.target.value; recompile() }">
+      <option value="watr" selected>watr (latest)</option>
+      <option value="wast">wast (spec)</option>
+      <option value="wabt">wat2wasm (wabt)</option>
+      <option value="watc">wat-compiler</option>
+    </select>
 
-    <label for="compiler" title="Compiler">
-      <select name="compiler" :value="compiler" :onchange="e => { compiler = e.target.value; recompile() }">
-        <option value="watr" selected>watr (latest)</option>
-        <option value="wast">wast (spec)</option>
-        <option value="wabt">wat2wasm (wabt)</option>
-        <option value="watc">wat-compiler</option>
-      </select>
-    </label>
-
-    <button :onclick="toggleFormat()" :title="prettified ? 'Minify WAT source' : 'Prettify WAT source'" :aria-label="prettified ? 'Minify WAT code' : 'Prettify WAT code'" :icon="prettified ? '🗜️' : '🪷'"><span
-        :text="prettified ? ' minify' : ' prettify'"></span></button>
+    <button :onclick="toggleFormat()" :title="prettified ? 'Minify WAT source' : 'Prettify WAT source'" :aria-label="prettified ? 'Minify WAT code' : 'Prettify WAT code'" :icon="prettified ? '🗜️' : '🪷'"><span :text="prettified ? ' minify' : ' prettify'"></span></button>
 
     <button :onclick="download()" title="Download WASM binary" aria-label="Download WASM binary" icon="📥"> save</button>
   </nav>
@@ -192,8 +172,7 @@
       #source {
         min-height: 2rem;
         position: relative;
-        flex: 1;
-        min-width: 0;
+        max-width: 108ch;
 
         &:empty::before {
           content: "Type your code here...";
@@ -232,14 +211,12 @@
     <style>
       #binary {
         position: relative;
-        width: 48ch;
-        flex-shrink: 0;
-        margin: 0;
+        max-width: 48ch;
+        margin: 0 auto;
       }
 
       @media (max-width: 960px) {
         #binary {
-          width: auto;
           margin: 0;
         }
       }
@@ -421,26 +398,9 @@
     let codejar = null
     let buf = null
     let timeout = null
-    let state = null
-    let loadingExample = false // Flag to prevent MutationObserver from resetting example
 
-    // Load example by name
-    async function loadExample(name) {
-      state.example = name
-      if (!name) return // Custom - keep current code
-      loadingExample = true
-      const code = await fetch(`../test/example/${name}.wat`).then(r => r.text())
-      codejar.updateCode(code)
-      state.sourceCode = code
-      state.prettified = false
-      // Delay resetting flag until after MutationObserver callbacks have fired
-      setTimeout(() => { loadingExample = false }, 0)
-      state.recompile()
-    }
-
-    state = sprae(document.getElementById('app'), {
+    const state = sprae(document.getElementById('app'), {
       compiler: 'watr',
-      example: 'hello',
       sourceCode: '',
       binaryHtml: '',
       logHtml: '',
@@ -448,48 +408,6 @@
       prettified: false,
       binaryEl: null,
       logEl: null,
-      loadBinaryInput: null,
-
-      loadExample, // expose to template
-
-      // Load WASM binary and convert to WAT using wabt
-      async loadFile(e) {
-        const file = e.target.files[0]
-        if (!file) return
-        try {
-          let code
-          const ext = file.name.split('.').pop().toLowerCase()
-
-          if (ext === 'wasm') {
-            // Binary: convert to WAT using wabt
-            const buffer = await file.arrayBuffer()
-            if (!compilers.wabt.compile) {
-              let { default: Wabt } = await import('../test/lib/wabt.js')
-              compilers.wabt.compile = await new Wabt()
-            }
-            const wabt = compilers.wabt.compile
-            const module = wabt.readWasm(new Uint8Array(buffer), { readDebugNames: true })
-            code = module.toText({ foldExprs: false, inlineExport: true })
-            module.destroy()
-          } else {
-            // Text: read as-is (.wat, .wast)
-            code = await file.text()
-          }
-
-          loadingExample = true
-          codejar.updateCode(code)
-          state.sourceCode = code
-          state.example = '' // Custom
-          state.prettified = false
-          setTimeout(() => { loadingExample = false }, 0)
-          state.recompile()
-          state.logHtml = `Loaded ${file.name}`
-        } catch (err) {
-          state.logHtml = `Error loading file: ${err.message}`
-          state.error = true
-        }
-        e.target.value = '' // Reset input for re-selecting same file
-      },
 
       // Initialize codejar editor
       initEditor(el) {
@@ -504,13 +422,18 @@
         // Watch for changes
         const observer = new MutationObserver(() => {
           state.sourceCode = el.textContent
-          if (!loadingExample) state.example = '' // Switch to Custom when user edits
           state.recompile()
         })
         observer.observe(el, { childList: true, subtree: true, characterData: true })
 
-        // Load initial example (deferred to allow state assignment to complete)
-        queueMicrotask(() => loadExample('hello'))
+        // Load initial example
+        fetch('../test/example/quine.wat')
+          .then(r => r.text())
+          .then(code => {
+            codejar.updateCode(code)
+            state.sourceCode = code
+            state.recompile()
+          })
 
         return () => observer.disconnect()
       },
@@ -572,7 +495,7 @@
       toggleFormat() {
         if (state.prettified) {
           // Already prettified, now minify (warning: loses comments)
-          const code = print(state.sourceCode, { indent: false, newline: false, comments: false })
+          const code = print(state.sourceCode, { indent: false, newline: false })
           codejar.updateCode(code)
           state.sourceCode = code
           state.prettified = false
@@ -591,6 +514,7 @@
   </script>
 
   <footer style="position: absolute; bottom: 1rem; right: 1rem; z-index: 2;">
-    <a href="https://github.com/krishnized/license" title="License (MIT, Krishnized)">ॐ</a>
+    <a href="https://github.com/krishnized/license"
+       title="License (MIT, Krishnized)">ॐ</a>
   </footer>
 </body>
