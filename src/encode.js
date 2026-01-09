@@ -102,7 +102,7 @@ const byteView = new DataView(new Float64Array(1).buffer)
 
 const F32_SIGN = 0x80000000, F32_NAN = 0x7f800000
 export function f32(input, value, idx) {
-  if (~(idx = input.indexOf('nan:'))) {
+  if (typeof input === 'string' && ~(idx = input.indexOf('nan:'))) {
     value = i32.parse(input.slice(idx + 4))
     value |= F32_NAN
     if (input[0] === '-') value |= F32_SIGN
@@ -123,7 +123,7 @@ export function f32(input, value, idx) {
 
 const F64_SIGN = 0x8000000000000000n, F64_NAN = 0x7ff0000000000000n
 export function f64(input, value, idx) {
-  if (~(idx = input.indexOf('nan:'))) {
+  if (typeof input === 'string' && ~(idx = input.indexOf('nan:'))) {
     value = i64.parse(input.slice(idx + 4))
     value |= F64_NAN
     if (input[0] === '-') value |= F64_SIGN
