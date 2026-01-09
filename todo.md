@@ -136,12 +136,11 @@
 * [x] ~~Sourcemaps~~
 * [x] Maintain ids better: no need to convert everything to `""` - you can unquote generally, keep quotes only for strings with escapes in printer, that's it
 * [x] All FIXME/TODO
-* [ ] Make template string for precise float values watr`(f32.const ${1.2345})`
-  * [ ] It can also instantiate module immediately 'let {a,b} = watr`(export a)`'
+* [x] Make template string for precise float values watr`(f32.const ${1.2345})`
+  * [x] It can also instantiate module immediately 'let {a,b} = watr`(export a)`'
 
 ## REPL
 
-* [ ] VSCode formatter plugin
 * [x] compiler selector
 * [ ] examples (when no code - prompt for suggest?)
 * [x] perf stats: time took to compile
@@ -172,6 +171,7 @@
 
 ## Backlog
 
+* [ ] VSCode formatter plugin
 * [ ] twgl with collection of wasm-rendered webgl tweets
 * [ ] jz-based watr
 * [ ] wat-based wat-compiler

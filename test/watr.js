@@ -9,6 +9,11 @@ t('watr: basic export', () => {
   is(add(2, 3), 5)
 })
 
+t('watr: string argument', () => {
+  const { add } = watr('(func (export "add") (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))')
+  is(add(2, 3), 5)
+})
+
 t('watr: multiple exports', () => {
   const { add, sub } = watr`
     (func (export "add") (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))

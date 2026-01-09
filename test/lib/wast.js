@@ -7,10 +7,10 @@ if (typeof process !== 'undefined' && process.versions?.node) {
   const req = createRequire(import.meta.url)
   WebAssemblyText = req('./_wast.cjs').WebAssemblyText
 } else {
-  // Browser - the CJS file should have already set globalThis.WebAssemblyText
-  // via a <script> tag or synchronous loading mechanism
+  // Browser - fetch and eval the CJS script
   if (typeof globalThis.WebAssemblyText === 'undefined') {
-    throw new Error('WebAssemblyText not loaded. Please load _wast.cjs before importing this module.')
+    const code = await (await fetch(new URL('./_wast.cjs', import.meta.url))).text()
+    new Function(code)()
   }
   WebAssemblyText = globalThis.WebAssemblyText
 }

@@ -191,14 +191,18 @@ function compile(source, ...values) {
 /**
  * Compile and instantiate WAT, returning exports.
  *
- * @param {TemplateStringsArray} strings - Template strings
- * @param {...any} values - Interpolation values
+ * @param {string|TemplateStringsArray} strings - WAT source string or template strings
+ * @param {...any} values - Interpolation values (for template literal)
  * @returns {WebAssembly.Exports} Module exports
  *
  * @example
+ * // Template literal
  * const { add } = watr`(func (export "add") (param i32 i32) (result i32)
  *   (i32.add (local.get 0) (local.get 1))
  * )`
+ *
+ * // Plain string
+ * const { add } = watr('(func (export "add") (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))')
  */
 function watr(strings, ...values) {
   const binary = compile(strings, ...values)

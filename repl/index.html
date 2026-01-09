@@ -317,7 +317,7 @@
   </style>
 
   <script type="module">
-    import watr, { print } from '../watr.js'
+    import { compile as watrCompile, print } from '../watr.js'
 
     let start, end, // performance timer
       timeout, // debounce timer
@@ -333,7 +333,7 @@
 
     // available compilers
     const lib = {
-      async watr(code) { return watr(code).buffer },
+      async watr(code) { return watrCompile(code) },
 
       async wabt(code) {
         if (!lib.wabt.compile) { let { default: Wabt } = await import('../test/lib/wabt.js'); lib.wabt.compile = await new Wabt() }
