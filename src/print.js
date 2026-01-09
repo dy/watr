@@ -42,20 +42,35 @@ export default function print(tree, options = {}) {
     }
 
     // flat node (no deep subnodes), eg. (i32.const 1), (module (export "") 1)
-    let flat = !!newline && node.length < 4
+    // not flat if contains line comments (they need their own line)
+    let flat = !!newline && node.length < 4 && !node.some(n => typeof n === 'string' && n[0] === ';' && n[1] === ';')
     let curIndent = indent.repeat(level + 1)
 
     for (let i = 1; i < node.length; i++) {
       const sub = node[i].valueOf() // "\00abc\ff" strings are stored as arrays but have ._ with original value
 
-      // comments - skip if not enabled, otherwise add with space
+      // comments - skip if not enabled
       if (typeof sub === 'string' && sub[1] === ';') {
         if (!comments) continue
-        const last = content[content.length - 1]
-        if (last && last !== ' ' && last !== '(') content += ' '
-        content += sub.trimEnd()
-        // line comments MUST have newline after (even when minified)
-        if (sub[0] === ';') content += '\n'
+        // line comments (;;)
+        if (sub[0] === ';') {
+          // prettified: put on own line before next element
+          if (newline) {
+            content += newline + curIndent + sub.trimEnd()
+          }
+          // minified: keep inline but must have newline after (WAT syntax requires it)
+          else {
+            const last = content[content.length - 1]
+            if (last && last !== ' ' && last !== '(') content += ' '
+            content += sub.trimEnd() + '\n'
+          }
+        }
+        // block comments ((;...;)) can stay inline
+        else {
+          const last = content[content.length - 1]
+          if (last && last !== ' ' && last !== '(') content += ' '
+          content += sub.trimEnd()
+        }
       }
       // (<keyword> ...)
       else if (Array.isArray(sub)) {
@@ -71,7 +86,7 @@ export default function print(tree, options = {}) {
       // inline nodes
       else {
         const last = content[content.length - 1]
-        // after newline from line comment, no extra space needed
+        // after newline from minified line comment, no extra space needed
         if (last === '\n') content += ''
         else if (last && last !== ')' && last !== ' ') content += ' '
         else if (newline || last === ')') content += ' '
