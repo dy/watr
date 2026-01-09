@@ -2,8 +2,7 @@
 
 Light & fast WAT compiler.<br/>
 For language backends, dynamic compilation, or inline WASM.
-
-[Spec](https://webassembly.github.io/spec/core/text/index.html)-complete · [All proposals](https://github.com/WebAssembly/proposals) · 4× wabt
+[Spec](https://webassembly.github.io/spec/core/text/index.html)-complete.
 
 **[Docs](./docs.md)** · **[Repl](https://dy.github.io/watr/repl/)**
 
