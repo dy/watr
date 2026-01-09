@@ -4,44 +4,36 @@ Light & fast WAT compiler.<br/>
 Useful for high-level languages or dynamic (in-browser) compilation.<br/>
 Supports all [phase 5 features](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md), full [spec text syntax](https://webassembly.github.io/spec/core/text/index.html), practical subset of [official testsuite](https://github.com/WebAssembly/testsuite).
 
-**[docs](./docs/index.md)** • **[repl](https://dy.github.io/watr/repl/)**
+**[docs](./docs.md)** • **[repl](https://dy.github.io/watr/repl/)**
 
 ## Usage
 
-**Compile** WAT to binary:
-
 ```js
-import { compile } from 'watr'
+import watr, { compile, parse, print } from 'watr'
 
-const wasm = compile(`(func (export "double") (param f64) (result f64)
+// Instant WebAssembly function
+const { add } = watr`(func (export "add") (param i32 i32) (result i32)
+  (i32.add (local.get 0) (local.get 1))
+)`
+add(2, 3) // 5
+
+// Interpolate values (extracting precise floats)
+const { pi } = watr`(global (export "pi") f64 (f64.const ${Math.PI}))`
+
+// Compile to binary
+const binary = compile(`(func (export "double") (param f64) (result f64)
   (f64.mul (local.get 0) (f64.const 2))
 )`)
 
-const { double } = new WebAssembly.Instance(new WebAssembly.Module(wasm)).exports
-double(108) // 216
-```
-
-**Print** (pretty-print or minify):
-
-```js
-import { print } from 'watr'
-
-const src = `(func (export "double") (param f64) (result f64)
-  (f64.mul (local.get 0) (f64.const 2)))`
-
-print(src) // pretty-print (default)
-print(src, { indent: false, newline: false }) // minify
-```
-
-**Parse** WAT to syntax tree:
-
-```js
-import { parse } from 'watr'
-
+// Parse to syntax tree
 parse('(i32.const 42)') // ['i32.const', 42]
+
+// Pretty-print or minify
+print(src)
+print(src, { indent: false, newline: false })
 ```
 
-See [docs](./docs/index.md) for complete API and examples.
+See [docs](./docs.md) for complete API.
 
 ## Metrics
 
