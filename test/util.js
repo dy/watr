@@ -4,6 +4,7 @@ import { f32, f64, i64, i32, uleb } from '../src/encode.js'
 import parse from '../src/parse.js'
 import compile from '../src/compile.js'
 import { throws, ok, is } from 'tst'
+import { unescape } from '../src/util.js'
 
 import Wabt from './lib/wabt.js'
 
@@ -129,7 +130,7 @@ export async function file(path, imports = {}) {
       // Handle (module quote "...") by parsing the quoted string
       if (node[1] === 'quote') {
         let code = node.slice(2).map(arr =>
-          typeof arr === 'string' ? arr.slice(1, -1) :
+          typeof arr === 'string' ? unescape(arr) :
           Array.isArray(arr) ? String.fromCharCode(...arr) : arr
         ).join('\n')
         node = parse(code)
@@ -154,7 +155,8 @@ export async function file(path, imports = {}) {
 
     assert_return([, [kind, ...args], ...expects]) {
       let m = args[0]?.[0] === '$' ? mod[args.shift()?.valueOf()] : lastExports,
-        nm = new TextDecoder('utf-8', {ignoreBOM: true}).decode(Uint8Array.from(args.shift()));
+        nmArg = args.shift(),
+        nm = typeof nmArg === 'string' ? unescape(nmArg) : new TextDecoder('utf-8', {ignoreBOM: true}).decode(Uint8Array.from(nmArg));
 
       // console.log('assert_return', kind, nm, 'args:', ...args, 'expects:', ...expects)
 
@@ -196,7 +198,8 @@ export async function file(path, imports = {}) {
 
     invoke([, ...args]) {
       let m = args[0]?.[0] === '$' ? mod[args.shift()] : lastExports,
-        nm = args.shift().slice(1, -1);
+        nmArg = args.shift(),
+        nm = typeof nmArg === 'string' ? unescape(nmArg) : new TextDecoder('utf-8', {ignoreBOM: true}).decode(Uint8Array.from(nmArg));
       args = args.map(val)
       // console.log('(invoke)', nm, ...args)
       m[nm](...args)

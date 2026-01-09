@@ -6,12 +6,10 @@ export const sepRE = /^_|_$|[^\da-f]_|_[^\da-f]/i
 
 export const intRE = /^[+-]?(?:0x[\da-f]+|\d+)$/i
 
-export const tenc = new TextEncoder();
-export const tdec = new TextDecoder('utf-8', { fatal: true });
-
-
-
+const tenc = new TextEncoder();
+const tdec = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
+
 
 // convert string literal (with quotes) to bytes sequence, attach valueOf returning original string
 export const str = s => {
@@ -43,7 +41,6 @@ export const str = s => {
   bytes.valueOf = () => s
   return bytes
 }
-
 
 
 /**

@@ -2,7 +2,7 @@ import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, INSTR, DEFTYPE } from './const.js'
 import parse from './parse.js'
-import { err, tdec, tenc, unescape, str } from './util.js'
+import { err, unescape, str } from './util.js'
 
 
 // cleanup tree: remove comments, remove annotations (except @custom/@metadata.code.*), normalize quoted ids, convert strings to bytes
@@ -162,8 +162,7 @@ export default function compile(nodes) {
   const binMeta = () => {
     const sections = []
     for (const type in ctx.metadata) {
-      // FIXME: use str here
-      const name = vec([...tenc.encode(`metadata.code.${type}`)])
+      const name = vec(str(`"metadata.code.${type}"`))
       const content = vec(ctx.metadata[type].map(([funcIdx, instances]) =>
         [...uleb(funcIdx), ...vec(instances.map(([pos, data]) => [...uleb(pos), ...vec(data)]))]
       ))
