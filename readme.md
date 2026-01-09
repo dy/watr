@@ -1,13 +1,11 @@
 # watr [![test](https://github.com/audio-lab/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/audio-lab/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr)
 
 Light & fast WAT compiler.<br/>
-Useful for language backends, dynamic (in-browser) compilation, or inline WASM.
+For language backends, dynamic compilation, or inline WASM.
 
-🧩 [phase 5](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md) + [phase 4](https://github.com/WebAssembly/proposals) features<br/>
-✅ [spec syntax](https://webassembly.github.io/spec/core/text/index.html), [official tests](https://github.com/WebAssembly/testsuite)<br/>
-⚡ 7.5 KB, 4× faster than [wabt](https://github.com/AnthumChris/wabt-online)
+[Spec](https://webassembly.github.io/spec/core/text/index.html)-complete · [All proposals](https://github.com/WebAssembly/proposals) · 4× wabt
 
-**[Docs](./docs.md)** • **[Repl](https://dy.github.io/watr/repl/)**
+**[Docs](./docs.md)** · **[Repl](https://dy.github.io/watr/repl/)**
 
 ## Usage
 
@@ -33,14 +31,12 @@ print(ast, { indent: '  ', newline: '\n' })
 
 ## Metrics
 
-&nbsp; | Size | Speed
----|---|---
-**watr** | **7.5 KB** | **4,426 op/s**
-[spec/wast.js](https://github.com/WebAssembly/spec) | 216 KB | 1,232 op/s
-[wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,255 op/s
-[binaryen](https://github.com/WebAssembly/binaryen) | 1,100 KB | 716 op/s
-[wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB | 555 op/s
-
-<!-- <small>Benchmarked on [brownian.wat](./test/example/brownian.wat) (N=500)</small> -->
+&nbsp; | Size | Speed | &nbsp;
+---|---|---|---
+**watr** | **10 KB** | **4,460 op/s** |
+[spec/wast.js](https://github.com/WebAssembly/spec) | 216 KB | 2,185 op/s |
+[wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,273 op/s |
+[binaryen](https://github.com/WebAssembly/binaryen) | 1,100 KB | 718 op/s |
+[wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB | 539 op/s | MVP only
 
 <p align=center><a href="https://github.com/krsnzd/license/">ॐ</a></p>
