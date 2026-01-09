@@ -1,6 +1,7 @@
-# watr Documentation
+# watr
 
-Fast WebAssembly Text Format (WAT) compiler for JavaScript/Node.js. Supports the full [official spec](https://webassembly.github.io/spec/core/text/index.html) and passes the [WebAssembly test suite](https://github.com/WebAssembly/testsuite).
+Fast WebAssembly Text Format (WAT) compiler for JavaScript/Node.js.<br/>
+Supports [phase 5](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md) + [phase 4](https://github.com/WebAssembly/proposals) features, full [spec syntax](https://webassembly.github.io/spec/core/text/index.html), [official tests](https://github.com/WebAssembly/testsuite).
 
 **Jump to:** [Quick Start](#quick-start) • [API](#api) • [Features](#language-features) • [Examples](#common-patterns) • [Performance](#performance)
 
@@ -22,7 +23,7 @@ add(2, 3) // 5
 
 ## API
 
-### watr\`...\`
+### `watr`\`...\`
 
 Tagged template for inline WebAssembly with interpolation and instant instantiation.
 
@@ -49,7 +50,7 @@ const lanes = [0,1,2,3].map(i => `i32.const ${i}`).join(' ')
 watr`(func (export "v") (result v128) (v128.const ${lanes}))`
 ```
 
-### compile(source)
+### `compile(source)`
 
 Compiles WAT source into binary.
 
@@ -65,7 +66,7 @@ const binary = compile(`(func (export "add") (param i32 i32) (result i32)
 const { add } = new WebAssembly.Instance(new WebAssembly.Module(binary)).exports
 ```
 
-### parse(source, options?)
+### `parse(source, options?)`
 
 Parses WAT text into syntax tree.
 
@@ -83,7 +84,7 @@ parse('(func ;; comment\n)', { comments: true })
 // ['func', [';', ' comment']]
 ```
 
-### print(source, options?)
+### `print(source, options?)`
 
 Formats WAT source.
 
