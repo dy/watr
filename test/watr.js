@@ -105,6 +105,15 @@ t('watr: interpolate function index', () => {
   is(call(), 42)
 })
 
+t('watr: interpolate function id', () => {
+  const id = '$helper'
+  const { call } = watr`
+    (func ${id} (result i32) (i32.const 99))
+    (func (export "call") (result i32) (call ${id}))
+  `
+  is(call(), 99)
+})
+
 // Uint8Array interpolation for data segments
 t('watr: interpolate Uint8Array as data', () => {
   const data = new Uint8Array([1, 2, 3, 4])
@@ -117,6 +126,20 @@ t('watr: interpolate Uint8Array as data', () => {
   is(view[1], 2)
   is(view[2], 3)
   is(view[3], 4)
+})
+
+// Direct array interpolation for data segments
+t('watr: interpolate array as data', () => {
+  const data = [5, 6, 7, 8]
+  const { mem } = watr`
+    (memory (export "mem") 1)
+    (data (i32.const 0) ${data})
+  `
+  const view = new Uint8Array(mem.buffer)
+  is(view[0], 5)
+  is(view[1], 6)
+  is(view[2], 7)
+  is(view[3], 8)
 })
 
 // Uint8Array inline in memory abbreviation (as documented in docs.md)
@@ -182,4 +205,49 @@ t('watr: interpolate memory pages', () => {
   const pages = 2
   const { mem } = watr`(memory (export "mem") ${pages})`
   is(mem.buffer.byteLength, pages * 65536)
+})
+
+// Auto-import functions
+t('watr: auto-import function', () => {
+  let called = false
+  const log = (x) => { called = x }
+  const { test } = watr`
+    (func (export "test")
+      (call ${log} (i32.const 42)))
+  `
+  test()
+  is(called, 42)
+})
+
+t('watr: auto-import multiple params', () => {
+  let result = 0
+  const add = (a, b) => { result = a + b }
+  const { test } = watr`
+    (func (export "test")
+      (call ${add} (i32.const 10) (i32.const 20)))
+  `
+  test()
+  is(result, 30)
+})
+
+t('watr: auto-import f64 param', () => {
+  let result = 0
+  const setFloat = (x) => { result = x }
+  const { test } = watr`
+    (func (export "test")
+      (call ${setFloat} (f64.const 3.14159)))
+  `
+  test()
+  is(result, 3.14159)
+})
+
+t('watr: auto-import mixed types', () => {
+  let sum = 0
+  const mixed = (a, b) => { sum = a + b }
+  const { test } = watr`
+    (func (export "test")
+      (call ${mixed} (i32.const 100) (f64.const 0.5)))
+  `
+  test()
+  is(sum, 100.5)
 })

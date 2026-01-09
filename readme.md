@@ -17,6 +17,10 @@ const { add } = watr`(func (export "add") (param i32 i32) (result i32)
 )`
 add(2, 3) // 5
 
+// auto-import functions
+const { test } = watr`(func (export "test") (call ${console.log} (i32.const 42)))`
+test() // logs 42
+
 // interpolate values
 const { pi } = watr`(global (export "pi") f64 (f64.const ${Math.PI}))`
 

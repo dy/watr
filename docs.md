@@ -37,10 +37,15 @@ const { add } = watr`(func (export "add") (param i32 i32) (result i32)
   (i32.add (local.get 0) (local.get 1))
 )`
 
+// Auto-import functions (types inferred from arguments)
+const log = (x) => console.log(x)
+const { test } = watr`(func (export "test") (call ${log} (i32.const 42)))`
+test() // logs 42
+
 // Interpolate values
-const { pi } = watr`(global (export "pi") f64 (f64.const ${Math.PI}))`  // precise
-const { mem } = watr`(memory (export "mem") ${pages})`                  // dynamic
-const { fn } = watr`(func (export "fn") (call ${idx}))`                 // indices
+const { pi } = watr`(global (export "pi") f64 (f64.const ${Math.PI}))`  // precise floats
+const { mem } = watr`(memory (export "mem") ${2})`                      // dynamic config
+const { fn } = watr`(func (export "fn") (call ${0}))`                   // indices
 
 // Embed binary data
 const { mem } = watr`(memory (export "mem") (data ${new Uint8Array([1,2,3])}))`
