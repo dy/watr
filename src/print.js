@@ -17,7 +17,9 @@ export default function print(tree, options = {}) {
   let { indent='  ', newline='\n', comments=false } = options;
   indent ||= '', newline ||= ''; // false -> str
 
-  return typeof tree[0] === 'string' ? printNode(tree) : tree.map(node => printNode(node)).join(newline)
+  // If tree[0] is a string but NOT starting with `;` (comment), it's a keyword like `module` - print as single node
+  // Otherwise it's multiple nodes (comments + module) - print each separately
+  return typeof tree[0] === 'string' && tree[0][0] !== ';' ? printNode(tree) : tree.map(node => printNode(node)).join(newline)
 
   function printNode(node, level = 0) {
     if (!Array.isArray(node)) return node

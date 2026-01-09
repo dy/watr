@@ -701,7 +701,12 @@ const IMM = {
     for (let j = 0; j < num; j++) arr.set(encode[t](n.shift()), j * stride)
     return [...arr]
   },
-  shuffle: (n) => { let result = []; for (let j = 0; j < 16; j++) result.push(parseUint(n.shift(), 32)); return result },
+  shuffle: (n) => {
+    let result = []
+    for (let j = 0; j < 16; j++) result.push(parseUint(n.shift(), 32))
+    if (typeof n[0] === 'string' && !isNaN(n[0])) err(`invalid lane length`)
+    return result
+  },
   memlane: (n, c, op) => {
     // SIMD lane: [memidx?] [offset/align]* laneidx - memidx present if isId OR (isIdx AND (next is memParam OR isIdx))
     const memIdx = isId(n[0]) || (isIdx(n[0]) && (isMemParam(n[1]) || isIdx(n[1]))) ? id(n.shift(), c.memory) : 0

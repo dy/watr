@@ -7,7 +7,7 @@ import { err } from "./util.js"
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
 export default (str) => {
-  let i = 0, level = [], buf = '', q = 0
+  let i = 0, level = [], buf = '', q = 0, depth = 0
 
   const commit = () => buf && (level.push(buf), buf = '')
 
@@ -32,11 +32,11 @@ export default (str) => {
       // start ;;
       else if (c === 59 && str.charCodeAt(i + 1) === 59) (commit(), q = -1, buf = str[i++] + str[i++])
       // start (@
-      else if (c === 40 && str.charCodeAt(i + 1) === 64) (commit(), i += 2, buf = '@', (root = level).push(level = []), parseLevel(), level = root)
+      else if (c === 40 && str.charCodeAt(i + 1) === 64) (commit(), i += 2, buf = '@', depth++, (root = level).push(level = []), parseLevel(), level = root)
       // start (
-      else if (c === 40) (commit(), i++, (root = level).push(level = []), parseLevel(), level = root)
+      else if (c === 40) (commit(), i++, depth++, (root = level).push(level = []), parseLevel(), level = root)
       // end )
-      else if (c === 41) return commit(), i++
+      else if (c === 41) return commit(), i++, depth--
       // whitespace
       else if (c <= 32) (commit(), i++)
       // other
@@ -50,6 +50,8 @@ export default (str) => {
   parseLevel()
 
   if (q === 34) err(`Unclosed quote`)
+  if (q > 59) err(`Unclosed block comment`)
+  if (depth > 0) err(`Unclosed parenthesis`)
   if (i < str.length) err(`Unexpected closing parenthesis`)
 
   return level.length > 1 ? level : level[0] || []

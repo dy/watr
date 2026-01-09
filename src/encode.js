@@ -69,7 +69,11 @@ const cleanInt = (v) => (!sepRE.test(v) && intRE.test(v=v.replaceAll('_',''))) ?
 // alias
 export const i8 = i32, i16 = i32
 
-i32.parse = n => parseInt(cleanInt(n))
+i32.parse = n => {
+  n = parseInt(cleanInt(n))
+  if (n < -0x80000000 || n > 0xffffffff) err(`i32 constant out of range`)
+  return n
+}
 
 // bigleb
 export function i64(n, buffer = []) {
@@ -89,6 +93,7 @@ export function i64(n, buffer = []) {
 i64.parse = n => {
   n = cleanInt(n)
   n = n[0] === '-' ? -BigInt(n.slice(1)) : BigInt(n) // can be -0x123
+  if (n < -0x8000000000000000n || n > 0xffffffffffffffffn) err(`i64 constant out of range`)
   byteView.setBigInt64(0, n)
   return byteView.getBigInt64(0)
 }
