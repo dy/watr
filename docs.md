@@ -1,83 +1,65 @@
 # watr
 
-Fast WebAssembly Text Format (WAT) compiler for JavaScript/Node.js.<br/>
-Supports [phase 5](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md) + [phase 4](https://github.com/WebAssembly/proposals) features, full [spec syntax](https://webassembly.github.io/spec/core/text/index.html), [official tests](https://github.com/WebAssembly/testsuite).
+Fast WebAssembly Text Format compiler.<br/>
+Supports [finished](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md) + [phase 4](https://github.com/WebAssembly/proposals) proposals, full [spec syntax](https://webassembly.github.io/spec/core/text/index.html).
 
-**Jump to:** [Quick Start](#quick-start) • [API](#api) • [Features](#language-features) • [Examples](#common-patterns) • [Performance](#performance)
-
-## Quick Start
+## Install
 
 ```bash
 npm install watr
 ```
 
-```js
-import watr from 'watr'
-
-const { add } = watr`(func (export "add") (param i32 i32) (result i32)
-  (i32.add (local.get 0) (local.get 1))
-)`
-
-add(2, 3) // 5
-```
-
 ## API
 
-### `watr`\`...\`
+### `` watr`...` ``
 
-Tagged template for inline WebAssembly with interpolation and instant instantiation.
-
-**Returns:** WebAssembly.Exports
+Compile and instantiate, return exports.
 
 ```js
 import watr from 'watr'
 
-// Instant exports
-const { add } = watr`(func (export "add") (param i32 i32) (result i32)
-  (i32.add (local.get 0) (local.get 1))
-)`
+// basic
+const { add } = watr`(func (export "add") (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))`
+add(2, 3) // 5
 
-// Auto-import functions (types inferred from arguments)
-const log = (x) => console.log(x)
-const { test } = watr`(func (export "test") (call ${log} (i32.const 42)))`
-test() // logs 42
+// auto-import JS functions
+const { test } = watr`(func (export "test") (call \${console.log} (i32.const 42)))`
+test() // 42
 
-// Interpolate values
-const { pi } = watr`(global (export "pi") f64 (f64.const ${Math.PI}))`  // precise floats
-const { mem } = watr`(memory (export "mem") ${2})`                      // dynamic config
-const { fn } = watr`(func (export "fn") (call ${0}))`                   // indices
+// interpolate numbers
+watr`(global (export "pi") f64 (f64.const \${Math.PI}))`       // f64
+watr`(func (export "f") (result i64) (i64.const \${123n}))`    // i64 BigInt
 
-// Embed binary data
-const { mem } = watr`(memory (export "mem") (data ${new Uint8Array([1,2,3])}))`
+// interpolate config
+watr`(memory (export "mem") \${pages})`                        // memory size
+watr`(func (export "f") (call \${0}))`                         // indices
+watr`(func \${id} ...)`                                        // identifiers
 
-// Generate code
-const lanes = [0,1,2,3].map(i => `i32.const ${i}`).join(' ')
-watr`(func (export "v") (result v128) (v128.const ${lanes}))`
+// interpolate binary data
+watr`(memory (export "mem") (data \${new Uint8Array([1,2,3])}))`
+watr`(data (i32.const 0) \${[1, 2, 3, 4]})`
+
+// interpolate code strings
+const ops = '(i32.add (i32.const 1) (i32.const 2))'
+watr`(func (export "f") (result i32) \${ops})`
 ```
 
 ### `compile(source)`
 
-Compiles WAT source into binary.
-
-**Input:** `string` (WAT text) or `Array` (syntax tree)
-**Returns:** `Uint8Array`
+Compile to binary. Accepts string, AST, or template literal.
 
 ```js
 import { compile } from 'watr'
 
-const binary = compile(`(func (export "add") (param i32 i32) (result i32)
-  (i32.add (local.get 0) (local.get 1))
-)`)
-const { add } = new WebAssembly.Instance(new WebAssembly.Module(binary)).exports
+compile(`(func (export "f"))`)                       // string
+compile(['func', ['export', '"f"']])                 // AST
+compile`(func (export "f") (f64.const \${Math.PI}))` // template
+// Uint8Array
 ```
 
 ### `parse(source, options?)`
 
-Parses WAT text into syntax tree.
-
-**Options:**
-- `comments` - Preserve comments (default: `false`)
-- `annotations` - Preserve annotations (default: `false`)
+Parse to AST.
 
 ```js
 import { parse } from 'watr'
@@ -85,221 +67,195 @@ import { parse } from 'watr'
 parse('(i32.add (i32.const 1) (i32.const 2))')
 // ['i32.add', ['i32.const', 1], ['i32.const', 2]]
 
-parse('(func ;; comment\n)', { comments: true })
-// ['func', [';', ' comment']]
+// options: comments, annotations
+parse('(func ;; note\n)', { comments: true })
+// ['func', [';', ' note']]
 ```
 
-### `print(source, options?)`
+### `print(tree, options?)`
 
-Formats WAT source.
-
-**Options:**
-- `indent` - Indentation (default: `'  '`, `false` to disable)
-- `newline` - Line separator (default: `'\n'`, `false` to disable)
+Print AST to string.
 
 ```js
 import { print } from 'watr'
 
-print('(func(param i32)(i32.const 42))')
+print(['func', ['param', 'i32'], ['i32.const', 42]])
 // (func
 //   (param i32)
-//   (i32.const 42)
-// )
+//   (i32.const 42))
 
-print(src, { indent: false, newline: false })  // minify
-```
-
-## Language Features
-
-### Core (MVP)
-All base WebAssembly 1.0 features including:
-- Control flow: `block`, `loop`, `if/else`, `br`, `br_if`, `br_table`
-- Functions: `call`, `call_indirect`, locals, parameters
-- Memory: load/store operations, `memory.size`, `memory.grow`
-- Tables: indirect function calls
-- Globals: mutable and immutable
-
-### Numbers & Types
-- **Multi-value** - Multiple function results `(result i32 i32)`
-- **BigInt/i64** - JavaScript BigInt ↔ i64 integration
-- **Sign extension** - `i32.extend8_s`, `i64.extend16_s`, etc.
-- **Non-trapping conversions** - `i32.trunc_sat_f32_s`, etc.
-
-### Memory
-- **Bulk operations** - `memory.copy`, `memory.fill`, `memory.init`, `data.drop`
-- **Multiple memories** - Multiple memory instances with indices
-- **Memory64** - 64-bit memory addressing (4GB+ memories)
-
-### SIMD
-- **Fixed-width SIMD** - 128-bit vector operations (`v128`, `i8x16`, `f32x4`, etc.)
-- **Relaxed SIMD** - Performance-oriented relaxed semantics for SIMD
-
-### Functions & Control Flow
-- **Tail calls** - `return_call`, `return_call_indirect`
-- **Extended const** - More operations in constant expressions
-
-### References & GC
-- **Reference types** - `externref`, `funcref`
-- **Typed function references** - `(ref $type)`, `call_ref`, `ref.func`
-- **Garbage collection** - Structs, arrays, recursive types
-  ```wat
-  (type $point (struct (field f64) (field f64)))
-  (type $array (array (mut i32)))
-  ```
-
-### Strings & Exceptions
-- **Exception handling** - `try`, `catch`, `throw`, `try_table`
-- **JS String Builtins** - Efficient JavaScript string operations via `wasm:js-string`
-  ```wat
-  (import "wasm:js-string" "concat" (func $concat (param externref externref) (result (ref extern))))
-  ```
-
-### Text Format
-- **Annotations** - Custom metadata `(@custom "name" data)`
-- **Branch hints** - Performance hints `(@metadata.code.branch_hint)`
-
-### Numeric Extensions
-- **Wide arithmetic** - 128-bit operations: `i64.add128`, `i64.mul_wide_s`
-
-## Common Patterns
-
-### One-liners
-```js
-// Quick math
-const { clamp } = watr`(func (export "clamp") (param f64 f64 f64) (result f64)
-  (f64.max (local.get 1) (f64.min (local.get 2) (local.get 0)))
-)`
-
-// Bit operations
-const { popcount } = watr`(func (export "popcount") (param i32) (result i32)
-  (i32.popcnt (local.get 0))
-)`
-```
-
-### Memory
-```js
-const { mem, read, write } = watr`
-  (memory (export "mem") 1)
-  (func (export "read") (param i32) (result i32) (i32.load (local.get 0)))
-  (func (export "write") (param i32 i32) (i32.store (local.get 0) (local.get 1)))
-`
-write(0, 42)
-new Uint32Array(mem.buffer)[0]  // 42
-```
-
-### Code Generation
-```js
-// SIMD shuffle from array
-const pattern = [3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12]
-watr`(func (export "rev") (param v128) (result v128)
-  (i8x16.shuffle ${pattern.join(' ')} (local.get 0) (local.get 0))
-)`
-
-// Unrolled stores
-const stores = Array(4).fill().map((_, i) =>
-  `(f32.store offset=${i*4} (local.get 0) (f32.const ${i}))`
-).join(' ')
-watr`(memory 1) (func (export "init") (param i32) ${stores})`
-```
-
-### Imports
-```js
-const wasm = compile(`
-  (import "env" "log" (func $log (param i32)))
-  (func (export "test") (param i32) (call $log (local.get 0)))
-`)
-
-new WebAssembly.Instance(new WebAssembly.Module(wasm), {
-  env: { log: x => console.log(x) }
-})
-```
-
-### Tables
-```js
-const { apply } = watr`
-  (type $fn (func (param i32) (result i32)))
-  (table 2 funcref)
-  (elem (i32.const 0) $dbl $sqr)
-  (func $dbl (param i32) (result i32) (i32.mul (local.get 0) (i32.const 2)))
-  (func $sqr (param i32) (result i32) (i32.mul (local.get 0) (local.get 0)))
-  (func (export "apply") (param i32 i32) (result i32)
-    (call_indirect (type $fn) (local.get 1) (local.get 0)))
-`
-apply(0, 5)  // 10 (double)
-apply(1, 5)  // 25 (square)
-```
-
-### GC Types
-```js
-const { make, getX } = watr`
-  (type $vec (struct (field $x f64) (field $y f64)))
-  (func (export "make") (param f64 f64) (result (ref $vec))
-    (struct.new $vec (local.get 0) (local.get 1)))
-  (func (export "getX") (param (ref $vec)) (result f64)
-    (struct.get $vec $x (local.get 0)))
-`
-getX(make(3.0, 4.0))  // 3.0
+// options: indent (default '  '), newline (default '\n')
+print(tree, { indent: false, newline: false })  // minify
 ```
 
 ## Syntax
 
-Folded, flat, or mixed:
 ```wat
-(i32.add (i32.const 1) (i32.const 2))  ;; folded
+;; folded
+(i32.add (i32.const 1) (i32.const 2))
 
-i32.const 1                            ;; flat
+;; flat
+i32.const 1
 i32.const 2
 i32.add
 
-(func (result i32)                     ;; mixed
-  i32.const 1
-  i32.const 2
-  i32.add)
+;; abbreviations
+(func (export "f") ...)           ;; inline export
+(func (import "m" "n") ...)       ;; inline import
+(memory 1 (data "hello"))         ;; inline data
+
+;; numbers
+42  0x2a  0b101010                ;; integers
+3.14  6.02e23  0x1.8p+1           ;; floats
+inf  -inf  nan  nan:0x123         ;; special
+1_000_000                         ;; underscores
+
+;; comments
+(; block ;)
 ```
 
-## Numbers
+## Features
+
+<table>
+<tr><th>Feature</th><th>Example</th></tr>
+<tr><td><a href="https://github.com/WebAssembly/JS-BigInt-integration">BigInt / i64</a></td><td>
+
+```js
+watr`(func (export "f") (result i64) (i64.const ${9007199254740993n}))`
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/multi-value">Multi-value</a></td><td>
 
 ```wat
-42            ;; decimal
-0x2a          ;; hex
--1000         ;; negative
-0xffff_ffff   ;; underscores
-
-3.14          ;; float
-6.022e23      ;; scientific
-0x1.8p+1      ;; hex float
-nan inf -inf  ;; special
-nan:0x123     ;; NaN payload
+(func (result i32 i32) (i32.const 1) (i32.const 2))
 ```
-
-## Comments
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/sign-extension-ops">Sign extension</a></td><td>
 
 ```wat
-;; line comment
-(; block comment ;)
-(func (; inline ;) (param i32))
+(i32.extend8_s (i32.const 0xff))
+(i64.extend32_s (i64.const 0xffffffff))
 ```
-
-## Abbreviations
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/nontrapping-float-to-int-conversions">Non-trapping conversions</a></td><td>
 
 ```wat
-(func (export "add") ...)              ;; inline export
-(func $log (import "env" "log") ...)   ;; inline import
-(memory 1 (data "Hello"))              ;; memory with data
+(i32.trunc_sat_f32_s (f32.const 1e30))
 ```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/bulk-memory-operations">Bulk memory</a></td><td>
 
-## Performance
+```wat
+(memory.copy (i32.const 0) (i32.const 100) (i32.const 10))
+(memory.fill (i32.const 0) (i32.const 0xff) (i32.const 64))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/multi-memory">Multiple memories</a></td><td>
 
-| Compiler | Size | Speed |
-|----------|------|-------|
-| **watr** | **7.5 KB** | **4,426 op/s** |
-| [spec/wast.js](https://github.com/WebAssembly/spec) | 216 KB | 1,232 op/s |
-| [wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,255 op/s |
-| [binaryen](https://github.com/WebAssembly/binaryen) | 1,100 KB | 716 op/s |
+```wat
+(memory $a 1)
+(memory $b 2)
+(i32.store $b (i32.const 0) (i32.const 42))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/memory64">Memory64</a></td><td>
 
-## Resources
+```wat
+(memory i64 1)
+(i64.load (i64.const 0))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/simd">SIMD</a></td><td>
 
-- [REPL](https://dy.github.io/watr/repl/) - Try in browser
-- [WebAssembly Spec](https://webassembly.github.io/spec/)
-- [Examples](./test/example/)
-- [GitHub](https://github.com/dy/watr)
+```wat
+(v128.const i32x4 1 2 3 4)
+(i32x4.add (local.get 0) (local.get 1))
+(i8x16.shuffle 0 1 2 3 ... (local.get 0) (local.get 1))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/relaxed-simd">Relaxed SIMD</a></td><td>
+
+```wat
+(i32x4.relaxed_trunc_f32x4_s (local.get 0))
+(f32x4.relaxed_madd (local.get 0) (local.get 1) (local.get 2))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/tail-call">Tail calls</a></td><td>
+
+```wat
+(return_call $factorial (i32.sub (local.get 0) (i32.const 1)))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/extended-const">Extended const</a></td><td>
+
+```wat
+(global i32 (i32.add (i32.const 1) (i32.const 2)))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/reference-types">Reference types</a></td><td>
+
+```wat
+(table 10 funcref)
+(table.set (i32.const 0) (ref.func $f))
+(global externref (ref.null extern))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/function-references">Typed function refs</a></td><td>
+
+```wat
+(type $fn (func (param i32) (result i32)))
+(call_ref $fn (i32.const 42) (local.get 0))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/gc">GC</a></td><td>
+
+```wat
+(type $point (struct (field $x f64) (field $y f64)))
+(struct.new $point (f64.const 1.0) (f64.const 2.0))
+(array.new $arr (i32.const 0) (i32.const 10))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/exception-handling">Exceptions</a></td><td>
+
+```wat
+(tag $e (param i32))
+(try_table (catch $e 0) (throw $e (i32.const 42)))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/js-string-builtins">JS string builtins</a></td><td>
+
+```wat
+(import "wasm:js-string" "length"
+  (func $len (param externref) (result i32)))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/threads">Threads</a></td><td>
+
+```wat
+(memory 1 1 shared)
+(i32.atomic.load (i32.const 0))
+(memory.atomic.wait32 (i32.const 0) (i32.const 0) (i64.const -1))
+(memory.atomic.notify (i32.const 0) (i32.const 1))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/wide-arithmetic">Wide arithmetic</a></td><td>
+
+```wat
+(i64.add128 (local.get 0) (local.get 1) (local.get 2) (local.get 3))
+(i64.mul_wide_s (local.get 0) (local.get 1))
+```
+</td></tr>
+<tr><td><a href="https://github.com/WebAssembly/annotations">Annotations</a></td><td>
+
+```wat
+(@custom "name" "content")
+(@metadata.code.branch_hint "\00")
+```
+</td></tr>
+</table>
+
+## See Also
+
+* [Examples](./test/example/)
+* [REPL](https://dy.github.io/watr/repl/)
+* [WebAssembly Spec](https://webassembly.github.io/spec/)
