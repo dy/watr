@@ -258,7 +258,7 @@ function normalize(nodes, ctx) {
       }
       else if (op === 'try_table') {
         out.push(op)
-        if (parts[0]?.[0] === '$') out.push(parts.shift())
+        if (isId(parts[0])) out.push(parts.shift())
         out.push(blocktype(parts, ctx))
         // Collect catch clauses
         while (parts[0]?.[0] === 'catch' || parts[0]?.[0] === 'catch_ref' || parts[0]?.[0] === 'catch_all' || parts[0]?.[0] === 'catch_all_ref') {
@@ -652,7 +652,7 @@ const IMM = {
     return !t ? [TYPE.void] : t[0] === 'result' ? reftype(t[1], c) : uleb(id(t[1], c.type))
   },
   try_table: (n, c) => {
-    n[0]?.[0] === '$' && (c.block[n.shift()] = c.block.length + 1)
+    isId(n[0]) && (c.block[n.shift()] = c.block.length + 1)
     let blocktype = n.shift()
     let result = !blocktype ? [TYPE.void] : blocktype[0] === 'result' ? reftype(blocktype[1], c) : uleb(id(blocktype[1], c.type))
     // Collect catch clauses BEFORE pushing try_table to block stack (catch labels are relative to outer blocks)
