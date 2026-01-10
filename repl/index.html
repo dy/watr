@@ -173,17 +173,18 @@
 
     <label for="compiler" title="Compiler">
       <select name="compiler" :value="compiler" :onchange="e => { compiler = e.target.value; recompile() }">
-        <option value="watr" selected>watr (latest)</option>
+        <option value="watr" selected>watr</option>
         <option value="wast">wast (spec)</option>
         <option value="wabt">wat2wasm (wabt)</option>
         <option value="watc">wat-compiler</option>
+        <option value="binaryen">binaryen</option>
       </select>
     </label>
 
     <button :onclick="toggleFormat()" :title="prettified ? 'Minify WAT source' : 'Prettify WAT source'" :aria-label="prettified ? 'Minify WAT code' : 'Prettify WAT code'" :icon="prettified ? '🗜️' : '🪷'"><span
         :text="prettified ? ' minify' : ' prettify'"></span></button>
 
-    <button :onclick="download()" title="Download WASM binary" aria-label="Download WASM binary" icon="📥"> save</button>
+    <button :onclick="download()" title="Download WASM binary" aria-label="Download WASM binary" icon="📥"> .wasm</button>
   </nav>
 
   <div id="container">
@@ -361,6 +362,57 @@
 
     const SECTION = 'custom type import func table memory global export start elem code data datacount'.split(' ')
 
+    // Gzip compression utilities
+    async function gzipEncode(text) {
+      const encoder = new TextEncoder()
+      const data = encoder.encode(text)
+      const cs = new CompressionStream('gzip')
+      const writer = cs.writable.getWriter()
+      writer.write(data)
+      writer.close()
+
+      const buf = []
+      const reader = cs.readable.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf.push(...value)
+        }
+      } finally {
+        reader.releaseLock()
+      }
+
+      return btoa(String.fromCharCode(...buf))
+    }
+
+    async function gzipDecode(encoded) {
+      const binaryStr = atob(encoded)
+      const bytes = new Uint8Array(binaryStr.length)
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i)
+      }
+
+      const ds = new DecompressionStream('gzip')
+      const writer = ds.writable.getWriter()
+      writer.write(bytes)
+      writer.close()
+
+      const buf = []
+      const reader = ds.readable.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf.push(...value)
+        }
+      } finally {
+        reader.releaseLock()
+      }
+
+      return new TextDecoder().decode(new Uint8Array(buf))
+    }
+
     // available compilers
     const compilers = {
       async watr(code) { return watrCompile(code) },
@@ -407,6 +459,17 @@
       async watc(code) {
         if (!compilers.watc.compile) compilers.watc.compile = (await import('../test/lib/wat-compiler.js')).default
         return compilers.watc.compile(code, { metrics: false }).buffer
+      },
+
+      async binaryen(code) {
+        if (!compilers.binaryen.instance) {
+          compilers.binaryen.instance = (await import('../test/lib/binaryen.js')).default
+        }
+        const binaryen = compilers.binaryen.instance
+        const module = binaryen.parseText(code)
+        const result = module.emitBinary()
+        module.dispose()
+        return result
       }
     }
 
@@ -477,6 +540,8 @@
       codejar.updateCode(code)
       state.sourceCode = code
       state.prettified = false
+      // Update URL to short example format
+      history.replaceState(null, '', `#${name}`)
       // Delay resetting flag until after MutationObserver callbacks have fired
       setTimeout(() => { loadingExample = false }, 0)
       state.recompile()
@@ -531,6 +596,7 @@
       logEl: null,
       loadBinaryInput: null,
       lineNumbersEl: null,
+      urlHashTimeout: null,
 
       loadExample, // expose to template
 
@@ -584,6 +650,8 @@
 
         codejar.updateCode(newText)
         state.sourceCode = newText
+        state.example = '' // Custom
+        state.updateUrlHash() // Update URL when editing
 
         // Restore selection
         const newStart = Math.max(lineStart, selStart + deltaStart)
@@ -678,6 +746,8 @@
 
         codejar.updateCode(newText)
         state.sourceCode = newText
+        state.example = '' // Custom
+        state.updateUrlHash() // Update URL when editing
 
         // Restore selection
         const newStart = Math.max(lineStart, selStart + deltaStart)
@@ -733,6 +803,37 @@
         document.body.classList.remove('dragover')
       },
 
+      // Get shareable URL with gzip-compressed code
+      async getShareUrl() {
+        if (!state.sourceCode) return window.location.href
+        try {
+          const encoded = await gzipEncode(state.sourceCode)
+          return `${window.location.origin}${window.location.pathname}#code=${encoded}`
+        } catch (e) {
+          console.error('Failed to generate share URL:', e)
+          return window.location.href
+        }
+      },
+
+      // Update URL hash with current code (debounced)
+      async updateUrlHash() {
+        clearTimeout(state.urlHashTimeout)
+        state.urlHashTimeout = setTimeout(async () => {
+          if (state.example) {
+            // If it's a known example, use short URL
+            history.replaceState(null, '', `#${state.example}`)
+          } else if (state.sourceCode) {
+            // Otherwise, compress and serialize code
+            try {
+              const encoded = await gzipEncode(state.sourceCode)
+              history.replaceState(null, '', `#code=${encoded}`)
+            } catch (e) {
+              console.error('Failed to update URL hash:', e)
+            }
+          }
+        }, 500)
+      },
+
       // Initialize codejar editor
       initEditor(el) {
         codejar = Codejar(el, highlight, {
@@ -747,7 +848,10 @@
         codejar.onUpdate(code => {
           state.sourceCode = code
           state.updateLineNumbers()
-          if (!loadingExample) state.example = '' // Switch to Custom when user edits
+          if (!loadingExample) {
+            state.example = '' // Switch to Custom when user edits
+            state.updateUrlHash() // Update URL as user types
+          }
           state.recompile()
         })
 
@@ -756,8 +860,46 @@
           if (state.lineNumbersEl) state.lineNumbersEl.scrollTop = el.scrollTop
         })
 
-        // Load initial example (deferred to allow state assignment to complete)
-        queueMicrotask(() => loadExample('hello'))
+        // Load initial example or code from URL hash
+        queueMicrotask(async () => {
+          const hash = location.hash.slice(1)
+
+          // Check for #example=name format (short URLs)
+          if (hash && !hash.startsWith('code=')) {
+            try {
+              loadingExample = true
+              await loadExample(hash)
+              state.example = hash
+            } catch (e) {
+              console.error('Failed to load example:', e)
+              loadExample('hello')
+            } finally {
+              loadingExample = false
+            }
+          }
+          // Check for #code=... format (gzipped code)
+          else if (hash.startsWith('code=')) {
+            try {
+              loadingExample = true
+              const code = await gzipDecode(hash.slice(5))
+              codejar.updateCode(code)
+              state.sourceCode = code
+              state.example = '' // Custom
+              state.prettified = false
+              state.updateLineNumbers()
+              state.recompile()
+            } catch (e) {
+              console.error('Failed to load code from URL:', e)
+              loadExample('hello')
+            } finally {
+              loadingExample = false
+            }
+          }
+          // Otherwise load default
+          else {
+            loadExample('hello')
+          }
+        })
       },
 
       // Debounced recompile
@@ -829,6 +971,7 @@
           state.sourceCode = code
           state.prettified = true
         }
+        state.updateUrlHash()
       }
     })
 
