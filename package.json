@@ -43,7 +43,7 @@
   "type": "module",
   "scripts": {
     "build": "esbuild watr.js --bundle --format=esm --outfile=dist/watr.js && esbuild watr.js --bundle --format=esm --minify --outfile=dist/watr.min.js",
-    "test": "node --experimental-wasm-exnref test",
+    "test": "node test",
     "test:repl": "npx playwright test",
     "types": "npx tsc src/*.js watr.js --allowJs --declaration --emitDeclarationOnly --declarationMap --outDir types",
     "prepublishOnly": "npm run build && npm run types",

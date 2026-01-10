@@ -31,6 +31,5 @@ jobs:
     - run: npm ci
     - run: npm run build --if-present
     - name: Test
-      run: node --experimental-wasm-exnref test
-      # experimental-wasm-exnref needed for Node < 25
+      run: node test
       # Tests auto-skip unsupported features via detection
