@@ -1,6 +1,64 @@
-import t from 'tst'
+import t, { is, ok } from 'tst'
 import { compile } from '../watr.js'
 
+// Position tracking tests
+t('error: position tracking - unknown instruction', () => {
+  try {
+    compile(`(func
+  (i32.unknown 42))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown instruction'), e.message)
+    ok(e.message.includes('at 2:'), `should have line 2, got: ${e.message}`)
+  }
+})
+
+t('error: position tracking - unknown local', () => {
+  try {
+    compile(`(module
+  (func (param i32)
+    (local.get $missing)))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown local'), e.message)
+    ok(e.message.includes('at 3:'), `should have line 3, got: ${e.message}`)
+  }
+})
+
+t('error: position tracking - duplicate func name', () => {
+  try {
+    compile(`(func $a)
+(func $a)`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Duplicate'), e.message)
+    ok(e.message.includes('at 2:'), `should have line 2, got: ${e.message}`)
+  }
+})
+
+t('error: position tracking - bad label', () => {
+  try {
+    compile(`(func
+  (block $outer
+    (br $inner)))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('label'), e.message)
+    ok(e.message.includes('at 3:'), `should have line 3, got: ${e.message}`)
+  }
+})
+
+t('error: position tracking - parse error unclosed', () => {
+  try {
+    compile(`(func
+  (i32.const 42`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('parenthesis') || e.message.includes('Unclosed'), e.message)
+  }
+})
+
+// Demo tests (visual inspection)
 t.demo('Unknown instruction', () => {
   compile(`(module
   (func (result i32)

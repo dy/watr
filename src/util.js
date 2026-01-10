@@ -1,9 +1,23 @@
 /**
- * Throws an error with the given message.
+ * Throws an error with optional source position.
+ * Uses err.src for source and err.i for default position.
+ * If pos provided or err.i set, appends "at line:col".
+ *
  * @param {string} text - Error message
+ * @param {number} [pos] - Byte offset in source (defaults to err.i)
  * @throws {Error}
  */
-export const err = text => { throw Error(text) }
+export const err = (text, pos=err.i) => {
+  if (pos != null && err.src) {
+    let line = 1, col = 1
+    for (let i = 0; i < pos && i < err.src.length; i++) {
+      if (err.src[i] === '\n') line++, col = 1
+      else col++
+    }
+    text += ` at ${line}:${col}`
+  }
+  throw Error(text)
+}
 
 /**
  * Deep clone an array tree structure.

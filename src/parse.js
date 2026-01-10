@@ -2,6 +2,7 @@ import { err } from "./util.js"
 
 /**
  * Parses a wasm text string and constructs a nested array structure (AST).
+ * Each array node has `.i` property with source offset for error reporting.
  *
  * @param {string} str - The input string with WAT code to parse.
  * @returns {Array} An array representing the nested syntax tree (AST).
@@ -11,8 +12,9 @@ export default (str) => {
 
   const commit = () => buf && (level.push(buf), buf = '')
 
-  const parseLevel = () => {
-    for (let c, root; i < str.length;) {
+  const parseLevel = (pos) => {
+    level.i = pos // store start position for error reporting
+    for (let c, root, p; i < str.length;) {
       c = str.charCodeAt(i)
 
       // inside "..." or $"..."
@@ -32,9 +34,9 @@ export default (str) => {
       // start ;;
       else if (c === 59 && str.charCodeAt(i + 1) === 59) (commit(), q = -1, buf = str[i++] + str[i++])
       // start (@
-      else if (c === 40 && str.charCodeAt(i + 1) === 64) (commit(), i += 2, buf = '@', depth++, (root = level).push(level = []), parseLevel(), level = root)
+      else if (c === 40 && str.charCodeAt(i + 1) === 64) (commit(), p = i, i += 2, buf = '@', depth++, (root = level).push(level = []), parseLevel(p), level = root)
       // start (
-      else if (c === 40) (commit(), i++, depth++, (root = level).push(level = []), parseLevel(), level = root)
+      else if (c === 40) (commit(), p = i++, depth++, (root = level).push(level = []), parseLevel(p), level = root)
       // end )
       else if (c === 41) return commit(), i++, depth--
       // whitespace
@@ -47,12 +49,12 @@ export default (str) => {
     commit()
   }
 
-  parseLevel()
+  parseLevel(0)
 
-  if (q === 34) err(`Unclosed quote`)
-  if (q > 59) err(`Unclosed block comment`)
-  if (depth > 0) err(`Unclosed parenthesis`)
-  if (i < str.length) err(`Unexpected closing parenthesis`)
+  if (q === 34) err(`Unclosed quote`, i)
+  if (q > 59) err(`Unclosed block comment`, i)
+  if (depth > 0) err(`Unclosed parenthesis`, i)
+  if (i < str.length) err(`Unexpected closing parenthesis`, i)
 
   return level.length > 1 ? level : level[0] || []
 }
