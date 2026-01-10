@@ -1,6 +1,6 @@
 {
   "name": "watr",
-  "version": "3.3.0",
+  "version": "4.0.0",
   "description": "Light & fast WAT compiler – WebAssembly Text to binary, parse, print, transform",
   "main": "watr.js",
   "bin": {
