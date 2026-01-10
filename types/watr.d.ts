@@ -28,20 +28,26 @@ declare function compile(
   ...values: (number | bigint | string | Uint8Array | number[])[]
 ): Uint8Array;
 
+/** WAT AST node: instruction/section name or nested expression */
+type WATNode = string | number | bigint | WATNode[];
+
 /**
  * Parse WAT text into syntax tree.
+ * Returns array of nodes where each node is either a primitive (string, number, bigint)
+ * or a nested array representing an S-expression like ['func', ['param', 'i32'], ...].
  */
 declare function parse(source: string, options?: {
   comments?: boolean;
   annotations?: boolean;
-}): any[];
+}): WATNode[];
 
 /**
  * Format WAT text or syntax tree.
  */
-declare function print(source: string | any[], options?: {
+declare function print(source: string | WATNode[], options?: {
   indent?: string | false;
   newline?: string | false;
+  comments?: boolean;
 }): string;
 
 export default watr;

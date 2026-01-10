@@ -44,7 +44,7 @@
     "test:repl": "npx playwright test",
     "types": "npx tsc src/*.js watr.js --allowJs --declaration --emitDeclarationOnly --declarationMap --outDir types",
     "prepublishOnly": "npm run build && npm run types",
-    "postinstall": "git submodule update --init --recursive"
+    "prepare": "git submodule update --init --recursive 2>/dev/null || true"
   },
   "repository": {
     "type": "git",
