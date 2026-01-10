@@ -159,15 +159,15 @@
 * [x] make Brahman at absolute level
 * [x] navigation to comparison?, github
 * [x] highlight fails: (elem (i32.const 0) (;;)(ref func) (ref.func 0))
-* [ ] shareable permalinks #code=(module(func (result i32) i32.const 42))
-* [ ] tree view for binary
-* [ ] dark theme
+* [x] shareable permalinks #code=(module(func (result i32) i32.const 42))
+* [x] ~~tree view for binary~~ no need
+* [x] ~~dark theme~~
 * [ ] inline docs about all commands / instructions
   * [ ] at least tooltips for syntax
 * [x] ~~resizable divider between panels~~
 * [ ] offline use
 * [ ] random code generator? (AI)?
-* [ ] copy as binary
+* [x] ~~copy as binary~~ why?
 * [x] ~~make a component? going to need it for jz, piezo~~ -> build from scratch
 
 ## Backlog
