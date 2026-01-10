@@ -1,6 +1,20 @@
 import t, { is, ok, same, throws } from 'tst'
 import { file } from './util.js'
 
+// Feature detection for experimental WASM features
+const hasExceptionHandling = typeof WebAssembly.Tag === 'function'
+const hasWideArithmetic = (() => {
+  try {
+    // i64.add128 requires wide arithmetic support
+    new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,1,9,1,96,4,126,126,126,126,2,126,126,3,2,1,0,10,9,1,7,0,32,0,32,1,32,2,32,3,252,19,11]))
+    return true
+  } catch { return false }
+})()
+
+// Conditional test runner: use todo() if feature missing, mute() if supported
+const ifExn = hasExceptionHandling ? t.mute : t.todo
+const ifWide = hasWideArithmetic ? t.mute : t.todo
+
 // Create a WASM-exported table64 for testing, since JS WebAssembly.Table with index:'i64'
 // doesn't create a true i64-indexed table in current Node versions
 const createTable64 = () => {
@@ -277,13 +291,13 @@ t.mute('/test/official/table_size64.wast', async function () { await file(this.n
 t.mute('/test/official/table-sub.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table64.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/tag.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/throw_ref.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/throw.wast', async function () { await file(this.name, { spectest }) })
+ifExn('/test/official/tag.wast', async function () { await file(this.name, { spectest }) })
+ifExn('/test/official/throw_ref.wast', async function () { await file(this.name, { spectest }) })
+ifExn('/test/official/throw.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/token.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/traps.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/traps0.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/try_table.wast', async function () { await file(this.name, { spectest }) })
+ifExn('/test/official/try_table.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-canon.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-equivalence.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-rec.wast', async function () { await file(this.name, { spectest }) })
@@ -311,4 +325,4 @@ t.mute('/test/official/proposals/threads/imports.wast', async function () { awai
 t.mute('/test/official/proposals/threads/memory.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - wide-arithmetic
-t.todo('/test/official/proposals/wide-arithmetic/wide-arithmetic.wast', async function () { await file(this.name, { spectest }) })
+ifWide('/test/official/proposals/wide-arithmetic/wide-arithmetic.wast', async function () { await file(this.name, { spectest }) })
