@@ -26,6 +26,19 @@ const hasWideArithmetic = (() => {
 const ifExn = hasExceptionHandling ? t.mute : t.todo
 const ifWide = hasWideArithmetic ? t.mute : t.todo
 
+// Table64 feature detection
+const hasTable64 = (() => {
+  try {
+    // Binary for: (module (table i64 10 20 funcref))
+    new WebAssembly.Module(new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+      0x04, 0x05, 0x01, 0x70, 0x05, 0x0a, 0x14
+    ]))
+    return true
+  } catch { return false }
+})()
+const ifTable64 = hasTable64 ? t.mute : t.todo
+
 // Create a WASM-exported table64 for testing, since JS WebAssembly.Table with index:'i64'
 // doesn't create a true i64-indexed table in current Node versions
 const createTable64 = () => {
@@ -96,7 +109,7 @@ t.mute('/test/official/br.wast', async function () { await file(this.name, { spe
 t.mute('/test/official/bulk.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/bulk64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/call_indirect.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/call_indirect64.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/call_indirect64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/call_ref.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/call.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/comments.wast', async function () { await file(this.name, { spectest }) })
@@ -193,7 +206,7 @@ t.mute('/test/official/memory_trap1.wast', async function () { await file(this.n
 t.mute('/test/official/memory_trap64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/memory-multi.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/memory.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/memory64-imports.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/memory64-imports.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/memory64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/names.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/nop.wast', async function () { await file(this.name, { spectest }) })
@@ -284,24 +297,24 @@ t.mute('/test/official/store1.wast', async function () { await file(this.name, {
 t.mute('/test/official/store2.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/struct.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/switch.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/table_copy_mixed.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/table_copy_mixed.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table_copy.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/table_copy64.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/table_copy64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table_fill.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/table_fill64.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/table_fill64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table_get.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/table_get64.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/table_get64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table_grow.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/table_grow64.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/table_grow64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table_init.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/table_init64.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/table_init64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table_set.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/table_set64.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/table_set64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table_size.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/table_size64.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/table_size64.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table-sub.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/table.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/table64.wast', async function () { await file(this.name, { spectest }) })
+ifTable64('/test/official/table64.wast', async function () { await file(this.name, { spectest }) })
 ifExn('/test/official/tag.wast', async function () { await file(this.name, { spectest }) })
 ifExn('/test/official/throw_ref.wast', async function () { await file(this.name, { spectest }) })
 ifExn('/test/official/throw.wast', async function () { await file(this.name, { spectest }) })
