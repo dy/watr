@@ -5,11 +5,10 @@ import { file } from './util.js'
 // Must actually compile WASM to detect runtime support (not just API existence)
 const hasExceptionHandling = (() => {
   try {
-    // Simple module with exnref type: (module (type (func)) (tag (type 0)))
+    // Module using exnref type (0x69): (module (global exnref (ref.null exn)))
     new WebAssembly.Module(new Uint8Array([
       0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic + version
-      0x01, 0x04, 0x01, 0x60, 0x00, 0x00,             // type section: (func)
-      0x0d, 0x03, 0x01, 0x00, 0x00                    // tag section: tag using type 0
+      0x06, 0x06, 0x01, 0x69, 0x00, 0xd0, 0x69, 0x0b  // global section: exnref, ref.null exn
     ]))
     return true
   } catch { return false }
@@ -216,7 +215,7 @@ t.mute('/test/official/ref_cast.wast', async function () { await file(this.name,
 t.mute('/test/official/ref_eq.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/ref_func.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/ref_is_null.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/ref_null.wast', async function () { await file(this.name, { spectest }) })
+ifExn('/test/official/ref_null.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/ref_test.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/ref.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/relaxed_dot_product.wast', async function () { await file(this.name, { spectest }) })
