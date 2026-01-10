@@ -1,14 +1,12 @@
 # watr [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=brightgreen&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![ॐ](https://img.shields.io/badge/MIT-%E0%A5%90-white)](https://krishnized.github.io/license)
 
-Light & fast WAT compiler.
+Light & fast WAT compiler: **[docs](./docs.md)**, **[repl](https://dy.github.io/watr/repl/)**
 
 * [feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
 * parse · compile · print · minify
 * instant wasm, JS interop, clear errors
 
 Useful for backends, JIT compilers, DSLs, code generators, dev tools.
-
-**[Docs](./docs.md)** · **[Repl](https://dy.github.io/watr/repl/)**
 
 
 ## Usage
