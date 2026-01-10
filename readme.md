@@ -2,10 +2,10 @@
 
 Light & fast WAT compiler.
 
-* [Feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
-* Inline WASM, auto-import, JS interpolation
-* Parse, print, transform
-* Backends, JIT, metaprogramming, DSLs, tooling
+* [feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
+* compile, parse, pretty-print, minify
+* inline wasm, auto-import, js interpolation
+* useful for backends, jit, metaprogramming, custom dsl, tooling
 
 **[Docs](./docs.md)** · **[Repl](https://dy.github.io/watr/repl/)**
 
