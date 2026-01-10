@@ -18,7 +18,15 @@ __export(encode_exports, {
 });
 
 // src/util.js
-var err = (text) => {
+var err = (text, pos = err.i) => {
+  if (pos != null && err.src) {
+    let line = 1, col = 1;
+    for (let i = 0; i < pos && i < err.src.length; i++) {
+      if (err.src[i] === "\n") line++, col = 1;
+      else col++;
+    }
+    text += ` at ${line}:${col}`;
+  }
   throw Error(text);
 };
 var sepRE = /^_|_$|[^\da-f]_|_[^\da-f]/i;
@@ -939,8 +947,9 @@ var KIND = { func: 0, table: 1, memory: 2, global: 3, tag: 4 };
 var parse_default = (str2) => {
   let i = 0, level = [], buf = "", q = 0, depth = 0;
   const commit = () => buf && (level.push(buf), buf = "");
-  const parseLevel = () => {
-    for (let c, root; i < str2.length; ) {
+  const parseLevel = (pos) => {
+    level.i = pos;
+    for (let c, root, p; i < str2.length; ) {
       c = str2.charCodeAt(i);
       if (q === 34) buf += str2[i++], c === 92 ? buf += str2[i++] : c === 34 && (commit(), q = 0);
       else if (q > 59) c === 40 && str2.charCodeAt(i + 1) === 59 ? (q++, buf += str2[i++] + str2[i++]) : (
@@ -954,8 +963,8 @@ var parse_default = (str2) => {
       else if (c === 34) buf !== "$" && commit(), q = 34, buf += str2[i++];
       else if (c === 40 && str2.charCodeAt(i + 1) === 59) commit(), q = 60, buf = str2[i++] + str2[i++];
       else if (c === 59 && str2.charCodeAt(i + 1) === 59) commit(), q = -1, buf = str2[i++] + str2[i++];
-      else if (c === 40 && str2.charCodeAt(i + 1) === 64) commit(), i += 2, buf = "@", depth++, (root = level).push(level = []), parseLevel(), level = root;
-      else if (c === 40) commit(), i++, depth++, (root = level).push(level = []), parseLevel(), level = root;
+      else if (c === 40 && str2.charCodeAt(i + 1) === 64) commit(), p = i, i += 2, buf = "@", depth++, (root = level).push(level = []), parseLevel(p), level = root;
+      else if (c === 40) commit(), p = i++, depth++, (root = level).push(level = []), parseLevel(p), level = root;
       else if (c === 41) return commit(), i++, depth--;
       else if (c <= 32) commit(), i++;
       else buf += str2[i++];
@@ -963,11 +972,11 @@ var parse_default = (str2) => {
     q < 0 && commit();
     commit();
   };
-  parseLevel();
-  if (q === 34) err(`Unclosed quote`);
-  if (q > 59) err(`Unclosed block comment`);
-  if (depth > 0) err(`Unclosed parenthesis`);
-  if (i < str2.length) err(`Unexpected closing parenthesis`);
+  parseLevel(0);
+  if (q === 34) err(`Unclosed quote`, i);
+  if (q > 59) err(`Unclosed block comment`, i);
+  if (depth > 0) err(`Unclosed parenthesis`, i);
+  if (i < str2.length) err(`Unexpected closing parenthesis`, i);
   return level.length > 1 ? level : level[0] || [];
 };
 
@@ -984,12 +993,14 @@ var cleanup = (node, result) => !Array.isArray(node) ? typeof node !== "string" 
 ) : (
   // remove annotations like (@name ...) except @custom and @metadata.code.*
   node[0]?.[0] === "@" && node[0] !== "@custom" && !node[0]?.startsWith?.("@metadata.code.") ? null : (
-    // unwrap single-element array containing module (after removing comments)
-    (result = node.map(cleanup).filter((n) => n != null), result.length === 1 && result[0]?.[0] === "module" ? result[0] : result)
+    // unwrap single-element array containing module (after removing comments), preserve .i
+    (result = node.map(cleanup).filter((n) => n != null), result.i = node.i, result.length === 1 && result[0]?.[0] === "module" ? result[0] : result)
   )
 );
 function compile(nodes) {
-  if (typeof nodes === "string") nodes = parse_default(nodes) || [];
+  if (typeof nodes === "string") err.src = nodes, nodes = parse_default(nodes) || [];
+  else err.src = "";
+  err.i = 0;
   nodes = cleanup(nodes) || [];
   let idx = 0;
   if (nodes[0] === "module") idx++, isId(nodes[idx]) && idx++;
@@ -999,7 +1010,14 @@ function compile(nodes) {
   const ctx = [];
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind;
   ctx.metadata = {};
-  nodes.slice(idx).filter(([kind, ...node]) => {
+  nodes.slice(idx).filter((n) => {
+    if (!Array.isArray(n)) {
+      let pos = err.src?.indexOf(n, err.i);
+      if (pos >= 0) err.i = pos;
+      err(`Unexpected token ${n}`);
+    }
+    let [kind, ...node] = n;
+    err.i = n.i;
     if (kind === "@custom") {
       ctx.custom.push(node);
     } else if (kind === "rec") {
@@ -1014,12 +1032,15 @@ function compile(nodes) {
       ctx.type.push(typedef(node, ctx));
     } else if (kind === "start" || kind === "export") ctx[kind].push(node);
     else return true;
-  }).forEach(([kind, ...node]) => {
+  }).forEach((n) => {
+    let [kind, ...node] = n;
+    err.i = n.i;
     let imported;
     if (kind === "import") [kind, ...node] = (imported = node).pop();
     let items = ctx[kind];
+    if (!items) err(`Unknown section ${kind}`);
     name(node, items);
-    while (node[0]?.[0] === "export") ctx.export.push([node.shift()[1], [kind, items.length]]);
+    while (node[0]?.[0] === "export") ctx.export.push([node.shift()[1], [kind, items?.length]]);
     if (node[0]?.[0] === "import") [, ...imported] = node.shift();
     if (kind === "table") {
       const is64 = node[0] === "i64", idx2 = is64 ? 1 : 0;
@@ -1123,6 +1144,7 @@ function normalize(nodes, ctx) {
       } else if ((node.startsWith("memory.") || node.endsWith("load") || node.endsWith("store")) && isIdx(nodes[0])) out.push(nodes.shift());
     } else if (Array.isArray(node)) {
       const op = node[0];
+      node.i != null && (err.i = node.i);
       if (op?.startsWith?.("@metadata.code.")) {
         let type = op.slice(15);
         out.push(["@metadata", type, node[1]]);
@@ -1534,6 +1556,10 @@ var instr = (nodes, ctx) => {
     if (op?.[0] === "@metadata") {
       meta.push(op.slice(1));
       continue;
+    }
+    if (Array.isArray(op)) {
+      op.i != null && (err.i = op.i);
+      err(`Unknown instruction ${op[0]}`);
     }
     let [...bytes] = INSTR[op] || err(`Unknown instruction ${op}`);
     if (HANDLER[op]) {
