@@ -361,7 +361,7 @@
   </div>
 
 
-  <output id="log" :ref="logEl" :fx="logEl.innerHTML = logHtml" :onclick="scrollToError" :style="{ color: error ? 'var(--error)' : 'var(--success)' }"></output>
+  <output id="log" :ref="logEl" :fx="logEl.innerHTML = logHtml" :onclick="handleLogClick" :style="{ color: error ? 'var(--error)' : 'var(--success)' }"></output>
   <style>
     #log {
       padding: 2rem 1rem 1rem;
@@ -372,13 +372,13 @@
       text-align: left;
       background: linear-gradient(to top, white 50%, rgba(255, 255, 255, 0) 100%);
     }
-    .err-loc {
+    .err-loc, .log-info {
       cursor: pointer;
       text-decoration: underline;
       text-decoration-color: color-mix(in srgb, currentColor 27%, transparent);
       text-underline-offset: 3px;
     }
-    .err-loc:hover {
+    .err-loc:hover, .log-info:hover {
       text-decoration-color: currentColor;
     }
   </style>
@@ -527,6 +527,18 @@
 
     function hex(arr) {
       return Array.from(arr).map(c => c.toString(16).padStart(2, 0)).join(' ')
+    }
+
+    // gzip compress and return size
+    async function gzipSize(buf) {
+      const stream = new Blob([buf]).stream().pipeThrough(new CompressionStream('gzip'))
+      const blob = await new Response(stream).blob()
+      return blob.size
+    }
+
+    // format bytes as human-readable
+    function fmtSize(bytes) {
+      return bytes < 1024 ? bytes + 'b' : (bytes / 1024).toFixed(1) + 'kb'
     }
 
     // format buffer into highlighted hex string
@@ -978,8 +990,12 @@
         // Re-highlight without error marks (codejar will handle this on next update)
       },
 
-      // Scroll to error line when clicking on error log
-      scrollToError() {
+      // Handle log clicks - scroll to error or recompile
+      handleLogClick(e) {
+        if (e.target.classList.contains('log-time')) {
+          state.recompile()
+          return
+        }
         if (!state.error || !state.errorLine) return
         const el = document.getElementById('source')
         const wrapper = document.getElementById('editor-wrapper')
@@ -1015,7 +1031,9 @@
           const end = performance.now()
 
           state.binaryHtml = hihex(buf)
-          state.logHtml = `Compiled in ${(end - start).toFixed(2)} ms`
+          const gzipped = await gzipSize(buf)
+          const gzTitle = gzipped < buf.byteLength ? `gzip: ${fmtSize(gzipped)}` : ''
+          state.logHtml = `Compiled to <span class="log-info" title="${gzTitle}">${fmtSize(buf.byteLength)}</span> in <span class="log-info log-time" title="Recompile (Ctrl+Enter)">${(end - start).toFixed(1)}ms</span>`
           state.error = false
 
           // Flash animation on update
