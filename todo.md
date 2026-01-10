@@ -162,11 +162,10 @@
 * [x] shareable permalinks #code=(module(func (result i32) i32.const 42))
 * [x] ~~tree view for binary~~ no need
 * [x] ~~dark theme~~
-* [ ] inline docs about all commands / instructions
-  * [ ] at least tooltips for syntax
+* [x] ~~inline docs about all commands / instructions~~ -> low value, already docs
 * [x] ~~resizable divider between panels~~
-* [ ] offline use
-* [ ] random code generator? (AI)?
+* [x] ~~offline use~~ no gain
+* [x] ~~random code generator? (AI)?~~ -> novely, not utility. no one needs random wat.
 * [x] ~~copy as binary~~ why?
 * [x] ~~make a component? going to need it for jz, piezo~~ -> build from scratch
 

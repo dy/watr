@@ -1,4 +1,4 @@
-## [ ] Offering Qualifications
+## [x] Offering Qualifications
 
 * minimal & clever validator - basic checks via generic funcs
 * streamline, clear, light, sensible algorithm - easy to remember & understand
