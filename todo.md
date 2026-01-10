@@ -169,7 +169,7 @@
 * [x] ~~copy as binary~~ why?
 * [x] ~~make a component? going to need it for jz, piezo~~ -> build from scratch
 
-## Backlog
+## Future
 
 * [ ] VSCode formatter plugin
 * [ ] twgl with collection of wasm-rendered webgl tweets

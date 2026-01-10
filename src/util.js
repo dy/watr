@@ -1,9 +1,21 @@
+/**
+ * Throws an error with the given message.
+ * @param {string} text - Error message
+ * @throws {Error}
+ */
 export const err = text => { throw Error(text) }
 
+/**
+ * Deep clone an array tree structure.
+ * @param {Array} items - Array to clone
+ * @returns {Array} Cloned array
+ */
 export const clone = items => items.map(item => Array.isArray(item) ? clone(item) : item)
 
+/** Regex to detect invalid underscore placement in numbers */
 export const sepRE = /^_|_$|[^\da-f]_|_[^\da-f]/i
 
+/** Regex to match valid integer literals (decimal or hex) */
 export const intRE = /^[+-]?(?:0x[\da-f]+|\d+)$/i
 
 const tenc = new TextEncoder();
@@ -11,7 +23,14 @@ const tdec = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
 
 
-// convert string literal (with quotes) to bytes sequence, attach valueOf returning original string
+/**
+ * Convert WAT string literal (with quotes) to byte array.
+ * Handles escape sequences: \n, \t, \r, \xx (hex), \u{xxxx} (unicode).
+ * Attaches valueOf() returning original string for roundtrip.
+ *
+ * @param {string} s - String literal including quotes, e.g. '"hello\n"'
+ * @returns {number[]} Byte array with valueOf() method
+ */
 export const str = s => {
   let bytes = [], i = 1, code, c, buf = '' // i=1 to skip opening quote
 

@@ -1,7 +1,7 @@
 {
   "name": "watr",
   "version": "3.3.0",
-  "description": "Ligth & fast WAT compiler",
+  "description": "Light & fast WAT compiler",
   "main": "watr.js",
   "types": "types/watr.d.ts",
   "exports": {

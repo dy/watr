@@ -1,8 +1,18 @@
+/**
+ * Binary encoding utilities for WebAssembly.
+ * @module encode
+ * @see https://webassembly.github.io/spec/core/binary/values.html
+ */
+
 import { err, intRE, sepRE } from './util.js'
 
-// encoding ref: https://github.com/j-s-n/WebBS/blob/master/compiler/byteCode.js
-
-// uleb - handles both 32-bit and 64-bit values
+/**
+ * Encode unsigned LEB128. Handles both 32-bit numbers and 64-bit BigInts.
+ *
+ * @param {number|bigint|string|null} n - Value to encode
+ * @param {number[]} [buffer=[]] - Output buffer
+ * @returns {number[]} Encoded bytes
+ */
 export const uleb = (n, buffer = []) => {
   if (n == null) return buffer
   if (typeof n === 'string') n = /[_x]/i.test(n) ? BigInt(n.replaceAll('_', '')) : i32.parse(n)
@@ -33,7 +43,13 @@ export const uleb = (n, buffer = []) => {
   return uleb(n, buffer)
 }
 
-// fixed-width uleb (5-byte canonical form used by some tools)
+/**
+ * Encode as fixed-width 5-byte ULEB128 (canonical form).
+ * Used by some tools for predictable binary layout.
+ *
+ * @param {number} value - 32-bit unsigned value
+ * @returns {number[]} 5-byte array
+ */
 export function uleb5(value) {
   const result = [];
   for (let i = 0; i < 5; i++) {
@@ -47,7 +63,13 @@ export function uleb5(value) {
   return result;
 }
 
-// leb
+/**
+ * Encode signed LEB128 for i32 values.
+ *
+ * @param {number|string} n - Signed 32-bit value
+ * @param {number[]} [buffer=[]] - Output buffer
+ * @returns {number[]} Encoded bytes
+ */
 export function i32(n, buffer = []) {
   if (typeof n === 'string') n = i32.parse(n)
 
@@ -75,7 +97,13 @@ i32.parse = n => {
   return n
 }
 
-// bigleb
+/**
+ * Encode signed LEB128 for i64 values (BigInt).
+ *
+ * @param {bigint|string} n - Signed 64-bit value
+ * @param {number[]} [buffer=[]] - Output buffer
+ * @returns {number[]} Encoded bytes
+ */
 export function i64(n, buffer = []) {
   if (typeof n === 'string') n = i64.parse(n)
 

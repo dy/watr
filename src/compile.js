@@ -5,7 +5,14 @@ import parse from './parse.js'
 import { err, unescape, str } from './util.js'
 
 
-// cleanup tree: remove comments, remove annotations (except @custom/@metadata.code.*), normalize quoted ids, convert strings to bytes
+/**
+ * Clean up AST: remove comments, normalize quoted ids, convert strings to bytes.
+ * Preserves @custom and @metadata.code.* annotations.
+ *
+ * @param {any} node - AST node
+ * @param {Array} [result] - Internal accumulator
+ * @returns {any} Cleaned node
+ */
 const cleanup = (node, result) => !Array.isArray(node) ? (
   typeof node !== 'string' ? node :
   // skip comments: ;; ... or (; ... ;)
@@ -196,14 +203,22 @@ export default function compile(nodes) {
 }
 
 
-// if node is a valid index reference
+/** Check if node is a valid index reference ($name or number) */
 const isIdx = n => n?.[0] === '$' || !isNaN(n)
-// if node is an identifier (starts with $)
+/** Check if node is an identifier (starts with $) */
 const isId = n => n?.[0] === '$'
-// if node is align/offset parameter (starts with 'a' or 'o')
+/** Check if node is align/offset memory parameter */
 const isMemParam = n => n?.[0] === 'a' || n?.[0] === 'o'
 
-// normalize & flatten function body, collect types info, rectify structure
+/**
+ * Normalize and flatten function body to stack form.
+ * Converts folded S-expressions to linear instruction sequence.
+ * Handles blocks, if/then/else, try_table, and metadata annotations.
+ *
+ * @param {Array} nodes - Function body nodes
+ * @param {Object} ctx - Compilation context with type info
+ * @returns {Array} Flattened instruction sequence
+ */
 function normalize(nodes, ctx) {
   const out = []
   nodes = [...nodes]
@@ -289,10 +304,26 @@ function normalize(nodes, ctx) {
   return out
 }
 
-// Register implicit function type definition, return type index (not related to reftype)
+/**
+ * Register implicit function type, return type index.
+ * Creates canonical name like '$i32,i32>i32' for deduplication.
+ *
+ * @param {string[]} param - Parameter types
+ * @param {string[]} result - Result types
+ * @param {Object} ctx - Compilation context
+ * @param {string} [idx] - Type identifier
+ * @returns {string} Type index/identifier
+ */
 const regtype = (param, result, ctx, idx = '$' + param + '>' + result) => (ctx.type[idx] ??= ctx.type.push(['func', [param, result]]) - 1, idx)
 
-// Collect field sequence: (field a) (field b c) -> [a, b, c]
+/**
+ * Collect field sequence: (field a) (field b c) → [a, b, c].
+ * Tracks named fields for index lookup.
+ *
+ * @param {Array} nodes - Nodes to consume from
+ * @param {string} field - Field keyword ('param', 'result', 'field')
+ * @returns {Array} Collected values with named indices
+ */
 const fieldseq = (nodes, field) => {
   let seq = []
   while (nodes[0]?.[0] === field) {
@@ -303,14 +334,26 @@ const fieldseq = (nodes, field) => {
   return seq
 }
 
-// Consume (param ...)* (result ...)*
+/**
+ * Consume (param ...)* (result ...)* from nodes.
+ *
+ * @param {Array} nodes - Nodes to consume from
+ * @returns {[string[], string[]]} [params, results]
+ */
 const paramres = (nodes) => {
   let param = fieldseq(nodes, 'param'), result = fieldseq(nodes, 'result')
   if (nodes[0]?.[0] === 'param') throw Error('Unexpected param')
   return [param, result]
 }
 
-// Consume typeuse: (type idx)? (param ...)* (result ...)*
+/**
+ * Consume typeuse: (type idx)? (param ...)* (result ...)*.
+ * Resolves type reference or returns inline signature.
+ *
+ * @param {Array} nodes - Nodes to consume from
+ * @param {Object} ctx - Compilation context with type table
+ * @returns {[string|undefined, string[], string[]]} [typeIdx, params, results]
+ */
 const typeuse = (nodes, ctx) => {
   if (nodes[0]?.[0] !== 'type') return [, ...paramres(nodes)]
   let [, idx] = nodes.shift(), [param, result] = paramres(nodes)
@@ -320,7 +363,14 @@ const typeuse = (nodes, ctx) => {
   return [idx, ...entry[1]]
 }
 
-// Resolve blocktype: void | (result t) | (type idx)
+/**
+ * Resolve blocktype: void | (result t) | (type idx).
+ * Returns abbreviated form when possible.
+ *
+ * @param {Array} nodes - Nodes to consume from
+ * @param {Object} ctx - Compilation context
+ * @returns {Array|undefined} Blocktype node or undefined for void
+ */
 const blocktype = (nodes, ctx) => {
   let [idx, param, result] = typeuse(nodes, ctx)
   if (!param.length && !result.length) return
@@ -330,17 +380,28 @@ const blocktype = (nodes, ctx) => {
 
 
 
-// consume section name eg. $t ...
+/**
+ * Consume and register section item name (e.g., $foo).
+ * Stores alias in list for later index resolution.
+ *
+ * @param {Array} node - Node array (mutated)
+ * @param {Array} list - Section list with name property
+ * @returns {string|false} Name if found, false otherwise
+ */
 const name = (node, list) => {
   let nm = isId(node[0]) && node.shift();
   if (nm) nm in list ? err(`Duplicate ${list.name} ${nm}`) : list[nm] = list.length; // save alias
   return nm
 }
 
-// (type $id? (func param* result*))
-// (type $id? (array (mut i8)))
-// (type $id? (struct (field a)*)
-// (type $id? (sub final? $nm* (struct|array|func ...)))
+/**
+ * Parse type definition: func, array, struct, or sub(type).
+ * Handles recursive types and subtyping.
+ *
+ * @param {Array} node - [definition] where definition is func/array/struct/sub
+ * @param {Object} ctx - Compilation context
+ * @returns {[string, any, string, string[]]} [kind, fields, subkind, supertypes]
+ */
 const typedef = ([dfn], ctx) => {
   let subkind = 'subfinal', supertypes = [], compkind
   if (dfn[0] === 'sub') {

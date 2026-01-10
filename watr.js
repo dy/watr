@@ -8,10 +8,16 @@ import _compile from './src/compile.js'
 import parse from './src/parse.js'
 import print from './src/print.js'
 
-// Private Use Area character as placeholder
+/** Private Use Area character as placeholder for interpolation */
 const PUA = '\uE000'
 
-// Infer result type from instruction name
+/**
+ * Infer result type from instruction name.
+ * E.g., 'i32.add' → 'i32', 'f64.const' → 'f64'
+ *
+ * @param {string} op - Instruction name
+ * @returns {string|null} Type string or null if unknown
+ */
 const instrType = op => {
   if (!op || typeof op !== 'string') return null
   // i32.add → i32, f64.const → f64, v128.load → v128
@@ -24,7 +30,14 @@ const instrType = op => {
   return null
 }
 
-// Infer type of an expression node
+/**
+ * Infer type of an expression AST node.
+ * Used for auto-import parameter type inference.
+ *
+ * @param {any} node - AST node (array or primitive)
+ * @param {Object} [ctx={}] - Context with locals/funcs type info
+ * @returns {string|null} Type string or null if unknown
+ */
 const exprType = (node, ctx = {}) => {
   if (!Array.isArray(node)) {
     // local.get $x - lookup type
@@ -42,7 +55,12 @@ const exprType = (node, ctx = {}) => {
 }
 
 /**
- * Walk AST and transform nodes, handling array splicing
+ * Walk AST and transform nodes depth-first.
+ * Handles array splicing when child has `_splice` property.
+ *
+ * @param {any} node - AST node to walk
+ * @param {Function} fn - Transform function (node) => node
+ * @returns {any} Transformed node
  */
 function walk(node, fn) {
   node = fn(node)
@@ -57,7 +75,13 @@ function walk(node, fn) {
 }
 
 /**
- * Find function calls in AST and infer types for imported functions
+ * Find function references in AST and infer import signatures.
+ * Scans for `(call fn args...)` where fn is a JS function,
+ * infers param types from arguments, generates import entries.
+ *
+ * @param {Array} ast - AST to scan
+ * @param {Function[]} funcs - Functions to look for
+ * @returns {Array<{idx: number, name: string, params: string[], fn: Function}>} Import entries
  */
 function inferImports(ast, funcs) {
   const imports = []
@@ -97,7 +121,10 @@ function inferImports(ast, funcs) {
 }
 
 /**
- * Generate import declarations
+ * Generate WAT import declarations from inferred imports.
+ *
+ * @param {Array<{name: string, params: string[]}>} imports - Import entries
+ * @returns {Array} AST nodes for import declarations
  */
 function genImports(imports) {
   return imports.map(({ name, params }) =>
