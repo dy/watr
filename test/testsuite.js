@@ -2,7 +2,18 @@ import t, { is, ok, same, throws } from 'tst'
 import { file } from './util.js'
 
 // Feature detection for experimental WASM features
-const hasExceptionHandling = typeof WebAssembly.Tag === 'function'
+// Must actually compile WASM to detect runtime support (not just API existence)
+const hasExceptionHandling = (() => {
+  try {
+    // Simple module with exnref type: (module (type (func)) (tag (type 0)))
+    new WebAssembly.Module(new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic + version
+      0x01, 0x04, 0x01, 0x60, 0x00, 0x00,             // type section: (func)
+      0x0d, 0x03, 0x01, 0x00, 0x00                    // tag section: tag using type 0
+    ]))
+    return true
+  } catch { return false }
+})()
 const hasWideArithmetic = (() => {
   try {
     // i64.add128 requires wide arithmetic support

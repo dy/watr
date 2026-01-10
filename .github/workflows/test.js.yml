@@ -16,8 +16,8 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [20.x, 22.x, 24.x]
-        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+        node-version: [22.x, 24.x]
+        # Node 20 lacks GC/multi-memory/etc; Node 22+ has most features
 
     steps:
     - uses: actions/checkout@v3
