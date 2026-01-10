@@ -58,6 +58,226 @@ t('error: position tracking - parse error unclosed', () => {
   }
 })
 
+// Unexpected token (non-array in module)
+t('error: unexpected token', () => {
+  try {
+    compile(`(module Factorial using recursion)`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unexpected token Factorial'), e.message)
+    ok(e.message.includes('at 1:9'), e.message) // points to "Factorial"
+  }
+})
+
+// Duplicate errors
+t('error: duplicate type', () => {
+  try {
+    compile(`(type $t (func))
+(type $t (func))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Duplicate type $t'), e.message)
+  }
+})
+
+t('error: duplicate local', () => {
+  try {
+    compile(`(func (local $x i32) (local $x i32))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Duplicate local $x'), e.message)
+  }
+})
+
+// Unknown references
+t('error: unknown func', () => {
+  try {
+    compile(`(func (call $missing))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown func $missing'), e.message)
+  }
+})
+
+t('error: unknown type', () => {
+  try {
+    compile(`(func (result unknown))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown type'), e.message)
+  }
+})
+
+t('error: unknown global', () => {
+  try {
+    compile(`(func (global.get $missing))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown global $missing'), e.message)
+  }
+})
+
+t('error: unknown table', () => {
+  try {
+    compile(`(func (table.get $missing (i32.const 0)))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown table $missing'), e.message)
+  }
+})
+
+t('error: unknown memory', () => {
+  try {
+    compile(`(func (i32.load $missing (i32.const 0)))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown memory $missing'), e.message)
+  }
+})
+
+// Parse errors
+t('error: unclosed quote', () => {
+  try {
+    compile(`(func (i32.const "unclosed))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unclosed quote'), e.message)
+  }
+})
+
+t('error: unclosed block comment', () => {
+  try {
+    compile(`(func (; unclosed comment)`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unclosed block comment'), e.message)
+  }
+})
+
+t('error: unexpected closing paren', () => {
+  try {
+    compile(`) (func)`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unexpected closing parenthesis'), e.message)
+  }
+})
+
+// Memarg errors
+t('error: bad align', () => {
+  try {
+    compile(`(func (i32.load align=3 (i32.const 0)))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Bad align'), e.message)
+  }
+})
+
+// Integer encoding errors
+t('error: i32 out of range', () => {
+  try {
+    compile(`(func (i32.const 0x1ffffffff))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('out of range'), e.message)
+  }
+})
+
+t('error: i64 out of range', () => {
+  try {
+    compile(`(func (i64.const 0x1ffffffffffffffff))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('out of range'), e.message)
+  }
+})
+
+// Unknown section/kind
+t('error: unknown section', () => {
+  try {
+    compile(`(moduled (func))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown section moduled'), e.message)
+    ok(e.message.includes('at 1:'), `should have line, got: ${e.message}`)
+  }
+})
+
+t('error: unknown import kind', () => {
+  try {
+    compile(`(import "m" "n" (unknown))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown'), e.message)
+  }
+})
+
+// Duplicate identifiers
+t('error: duplicate memory', () => {
+  try {
+    compile(`(memory $m 1) (memory $m 1)`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Duplicate memory $m'), e.message)
+  }
+})
+
+t('error: duplicate table', () => {
+  try {
+    compile(`(table $t 1 funcref) (table $t 1 funcref)`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Duplicate table $t'), e.message)
+  }
+})
+
+t('error: duplicate global', () => {
+  try {
+    compile(`(global $g i32 (i32.const 0)) (global $g i32 (i32.const 0))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Duplicate global $g'), e.message)
+  }
+})
+
+// Unknown references
+t('error: unknown data', () => {
+  try {
+    compile(`(func (data.drop $missing))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown data $missing'), e.message)
+  }
+})
+
+t('error: unknown elem', () => {
+  try {
+    compile(`(table 1 funcref) (func (table.init $missing (i32.const 0) (i32.const 0) (i32.const 0)))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown elem $missing'), e.message)
+  }
+})
+
+t('error: unknown tag', () => {
+  try {
+    compile(`(func (throw $missing))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown tag $missing'), e.message)
+  }
+})
+
+// Type errors
+t('error: unknown type reference', () => {
+  try {
+    compile(`(func (type $missing))`)
+    ok(false, 'should throw')
+  } catch (e) {
+    ok(e.message.includes('Unknown type $missing'), e.message)
+  }
+})
+
 // Demo tests (visual inspection)
 t.demo('Unknown instruction', () => {
   compile(`(module

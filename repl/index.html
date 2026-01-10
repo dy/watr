@@ -268,6 +268,15 @@
         .annot {
           color: var(--annot);
         }
+
+        .error-line {
+          background: rgba(220, 53, 69, 0.15);
+          display: inline-block;
+          width: 100%;
+          margin: 0 -0.25rem;
+          padding: 0 0.25rem;
+          border-left: 2px solid var(--error);
+        }
       }
     </style>
 
@@ -352,7 +361,7 @@
   </div>
 
 
-  <output id="log" :ref="logEl" :fx="logEl.innerHTML = logHtml" :style="{ color: error ? 'var(--error)' : 'var(--success)' }"></output>
+  <output id="log" :ref="logEl" :fx="logEl.innerHTML = logHtml" :onclick="scrollToError" :style="{ color: error ? 'var(--error)' : 'var(--success)' }"></output>
   <style>
     #log {
       padding: 2rem 1rem 1rem;
@@ -362,6 +371,15 @@
       left: 0;
       text-align: left;
       background: linear-gradient(to top, white 50%, rgba(255, 255, 255, 0) 100%);
+    }
+    .err-loc {
+      cursor: pointer;
+      text-decoration: underline;
+      text-decoration-color: color-mix(in srgb, currentColor 27%, transparent);
+      text-underline-offset: 3px;
+    }
+    .err-loc:hover {
+      text-decoration-color: currentColor;
     }
   </style>
 
@@ -601,6 +619,7 @@
       binaryHtml: '',
       logHtml: '',
       error: false,
+      errorLine: null, // Line number with error (1-based)
       prettified: false,
       binaryEl: null,
       logEl: null,
@@ -912,10 +931,70 @@
         })
       },
 
+      // Highlight error line in editor (preserves caret position)
+      highlightErrorLine(lineNum) {
+        if (!lineNum) return
+        const el = document.getElementById('source')
+
+        // Save caret position
+        const sel = window.getSelection()
+        let caretOffset = 0
+        if (sel.rangeCount && el.contains(sel.anchorNode)) {
+          const range = document.createRange()
+          range.selectNodeContents(el)
+          range.setEnd(sel.anchorNode, sel.anchorOffset)
+          caretOffset = range.toString().length
+        }
+
+        // Apply error highlight
+        const lines = el.innerHTML.split('\n')
+        if (lineNum > 0 && lineNum <= lines.length) {
+          lines[lineNum - 1] = `<span class="error-line">${lines[lineNum - 1]}</span>`
+          el.innerHTML = lines.join('\n')
+        }
+
+        // Restore caret position
+        if (caretOffset > 0) {
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+          let pos = 0, node
+          while (walker.nextNode()) {
+            node = walker.currentNode
+            if (pos + node.length >= caretOffset) {
+              const range = document.createRange()
+              range.setStart(node, caretOffset - pos)
+              range.collapse(true)
+              sel.removeAllRanges()
+              sel.addRange(range)
+              break
+            }
+            pos += node.length
+          }
+        }
+      },
+
+      // Clear error highlighting
+      clearErrorHighlight() {
+        state.errorLine = null
+        // Re-highlight without error marks (codejar will handle this on next update)
+      },
+
+      // Scroll to error line when clicking on error log
+      scrollToError() {
+        if (!state.error || !state.errorLine) return
+        const el = document.getElementById('source')
+        const wrapper = document.getElementById('editor-wrapper')
+        const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 16
+        const targetScroll = (state.errorLine - 1) * lineHeight - wrapper.clientHeight / 3
+        wrapper.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' })
+        // Focus editor and place cursor at error line
+        el.focus()
+      },
+
       // Debounced recompile
       recompile() {
         clearTimeout(timeout)
         state.logHtml = ''
+        state.clearErrorHighlight()
         state.updateLineNumbers()
         if (!state.sourceCode) state.binaryHtml = ''
         timeout = setTimeout(() => state.compile(), 300)
@@ -926,6 +1005,7 @@
         state.binaryHtml = ''
         state.logHtml = ''
         state.error = false
+        state.errorLine = null
 
         if (!state.sourceCode.trim()) return
 
@@ -953,8 +1033,16 @@
           }
         } catch (e) {
           console.error(e)
-          state.logHtml = String(e)
+          // Wrap line:col in clickable underlined span
+          state.logHtml = String(e).replace(/at (\d+:\d+)/, 'at <span class="err-loc">$1</span>')
           state.error = true
+
+          // Parse error line from "at line:col" format
+          const match = String(e).match(/at (\d+):(\d+)/)
+          if (match) {
+            state.errorLine = parseInt(match[1], 10)
+            state.highlightErrorLine(state.errorLine)
+          }
         }
       },
 

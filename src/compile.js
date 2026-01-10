@@ -63,6 +63,11 @@ export default function compile(nodes) {
 
   // initialize types
   nodes.slice(idx).filter((n) => {
+    if (!Array.isArray(n)) {
+      let pos = err.src?.indexOf(n, err.i)
+      if (pos >= 0) err.i = pos
+      err(`Unexpected token ${n}`)
+    }
     let [kind, ...node] = n
     err.i = n.i // track position for errors
     // (@custom "name" placement? data) - custom section support
@@ -107,11 +112,12 @@ export default function compile(nodes) {
 
       // index, alias
       let items = ctx[kind];
+      if (!items) err(`Unknown section ${kind}`)
       name(node, items);
 
       // export abbr
       // (table|memory|global|func|tag id? (export n)* ...) -> (table|memory|global|func|tag id ...) (export n (table|memory|global|func id))
-      while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items.length]])
+      while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items?.length]])
 
       // for import nodes - redirect output to import
       if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
@@ -841,6 +847,12 @@ const instr = (nodes, ctx) => {
     if (op?.[0] === '@metadata') {
       meta.push(op.slice(1))
       continue
+    }
+
+    // Array = unknown instruction passed through from normalize
+    if (Array.isArray(op)) {
+      op.i != null && (err.i = op.i)
+      err(`Unknown instruction ${op[0]}`)
     }
 
     let [...bytes] = INSTR[op] || err(`Unknown instruction ${op}`)
