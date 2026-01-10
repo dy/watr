@@ -1,8 +1,11 @@
 {
   "name": "watr",
   "version": "3.3.0",
-  "description": "Light & fast WAT compiler",
+  "description": "Light & fast WAT compiler – WebAssembly Text to binary, parse, print, transform",
   "main": "watr.js",
+  "bin": {
+    "watr": "./bin/watr.js"
+  },
   "types": "types/watr.d.ts",
   "exports": {
     ".": {
@@ -54,19 +57,28 @@
     "src",
     "types",
     "watr.js",
-    "dist"
+    "dist",
+    "bin"
   ],
   "keywords": [
     "wat",
     "wasm",
-    "wasm compiler",
+    "webassembly",
+    "compiler",
     "wat2wasm",
     "wabt",
-    "pretty-print",
-    "webassembly",
-    "wasm-text",
     "wast",
-    "wat-compiler"
+    "parser",
+    "printer",
+    "formatter",
+    "bytecode",
+    "binary",
+    "text-format",
+    "s-expression",
+    "assembly",
+    "jit",
+    "codegen",
+    "zero-dependency"
   ],
   "author": "Dmitry Iv",
   "license": "MIT",

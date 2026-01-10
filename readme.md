@@ -49,6 +49,16 @@ print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)
 [wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB | 539 op/s | MVP only
 
 
+## CLI
+
+```sh
+npx watr input.wat              # → input.wasm
+npx watr input.wat -o out.wasm  # custom output
+npx watr input.wat --print      # pretty-print
+npx watr input.wat --minify     # minify
+```
+
+
 ## Used by
 
 * [jz](https://github.com/dy/jz) – minimal static JS subset

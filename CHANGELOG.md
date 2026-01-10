@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Template literal API**: `watr\`...\`` for instant WASM functions
 - **Auto-import JS functions**: `watr\`(call ${console.log} (i32.const 42))\``
 - **Value interpolation**: numbers, BigInts, identifiers, Uint8Arrays, code strings
+- **CLI**: `npx watr input.wat` compiles to `.wasm`, `--print`/`--minify` for formatting
 - **REPL**: Interactive playground at https://dy.github.io/watr/repl/
 - **Error positions**: Line:column in error messages
 - **JSDoc**: Comprehensive documentation for all exports

@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+/**
+ * watr CLI - WebAssembly Text Format compiler
+ *
+ * Usage:
+ *   watr input.wat                    # compile to input.wasm
+ *   watr input.wat -o output.wasm     # compile to output.wasm
+ *   watr input.wat --print            # pretty-print WAT
+ *   watr input.wat --minify           # minify WAT
+ *   watr --help                       # show help
+ *
+ * @module watr/bin
+ */
+
+import { readFileSync, writeFileSync } from 'fs'
+import { basename } from 'path'
+import compile from '../src/compile.js'
+import print from '../src/print.js'
+
+const args = process.argv.slice(2)
+const flags = new Set(args.filter(a => a.startsWith('-')))
+const files = args.filter(a => !a.startsWith('-'))
+
+// Help
+if (flags.has('-h') || flags.has('--help') || !files.length) {
+  console.log(`
+watr - Light & fast WAT compiler
+
+Usage:
+  watr <input.wat> [options]
+
+Options:
+  -o, --output <file>   Output file (default: input.wasm)
+  -p, --print           Pretty-print WAT to stdout
+  -m, --minify          Minify WAT to stdout
+  -h, --help            Show this help
+
+Examples:
+  watr add.wat                    # → add.wasm
+  watr add.wat -o lib/add.wasm    # → lib/add.wasm
+  watr add.wat --print            # pretty-print
+  cat add.wat | watr -            # stdin → stdout (binary)
+
+ॐ https://github.com/dy/watr
+`)
+  process.exit(flags.has('-h') || flags.has('--help') ? 0 : 1)
+}
+
+// Input
+const input = files[0]
+const src = input === '-'
+  ? readFileSync(0, 'utf8')
+  : readFileSync(input, 'utf8')
+
+// Print mode
+if (flags.has('-p') || flags.has('--print')) {
+  console.log(print(src, { indent: '  ', newline: '\n' }))
+  process.exit(0)
+}
+
+// Minify mode
+if (flags.has('-m') || flags.has('--minify')) {
+  console.log(print(src, { indent: '', newline: '' }))
+  process.exit(0)
+}
+
+// Compile mode
+const binary = compile(src)
+
+// Output
+const outIdx = args.findIndex(a => a === '-o' || a === '--output')
+const output = outIdx !== -1 && args[outIdx + 1]
+  ? args[outIdx + 1]
+  : input === '-'
+    ? null
+    : input.replace(/\.wat$/, '') + '.wasm'
+
+if (output) {
+  writeFileSync(output, binary)
+  console.error(`✓ ${basename(output)} (${binary.length} bytes)`)
+} else {
+  process.stdout.write(binary)
+}
