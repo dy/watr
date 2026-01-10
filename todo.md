@@ -146,11 +146,12 @@
 * [x] perf stats: time took to compile
 * [x] prettify / minify
 * [x] ~~PWA~~
-* [ ] drop wasm binary?
+* [x] drop wasm binary?
 * [x] ~~normalize code button (when normalizer step is ready)~~
-* [ ] compile button? better for SEO and UI - can have a shortcut
-* [ ] button shortcuts: ctrl + enter, ctrl + /
-* [ ] history
+* [x] ~~compile button? better for SEO and UI - can have a shortcut~~
+* [x] button shortcuts: Cmd+/ (comment), Cmd+]/[ (indent/outdent), Cmd+Enter (compile)
+* [x] line numbers display
+* [x] ~~history~~
 * [x] ~~binary copy~~ -> just copy text as is
 * [x] download wasm binary
 * [x] binary analysis with highlight
@@ -167,7 +168,7 @@
 * [ ] offline use
 * [ ] random code generator? (AI)?
 * [ ] copy as binary
-* [ ] make a component? going to need it for jz, piezo
+* [x] ~~make a component? going to need it for jz, piezo~~ -> build from scratch
 
 ## Backlog
 

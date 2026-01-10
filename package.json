@@ -9,6 +9,8 @@
       "types": "./types/watr.d.ts",
       "default": "./watr.js"
     },
+    "./dist": "./dist/watr.js",
+    "./dist/watr.min.js": "./dist/watr.min.js",
     "./parse": {
       "types": "./types/src/parse.d.ts",
       "default": "./src/parse.js"
@@ -37,10 +39,11 @@
   },
   "type": "module",
   "scripts": {
+    "build": "esbuild watr.js --bundle --format=esm --outfile=dist/watr.js && esbuild watr.js --bundle --format=esm --minify --outfile=dist/watr.min.js",
     "test": "node --experimental-wasm-exnref test",
     "test:repl": "npx playwright test",
     "types": "npx tsc src/*.js watr.js --allowJs --declaration --emitDeclarationOnly --declarationMap --outDir types",
-    "prepublishOnly": "npm run types",
+    "prepublishOnly": "npm run build && npm run types",
     "postinstall": "git submodule update --init --recursive"
   },
   "repository": {
@@ -50,7 +53,8 @@
   "files": [
     "src",
     "types",
-    "watr.js"
+    "watr.js",
+    "dist"
   ],
   "keywords": [
     "wat",
@@ -72,6 +76,7 @@
   "homepage": "https://github.com/dy/watr#readme",
   "devDependencies": {
     "@playwright/test": "^1.57.0",
-    "tst": "^8.0.2"
+    "esbuild": "^0.24.2",
+    "tst": "^9.0.0"
   }
 }

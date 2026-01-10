@@ -20,7 +20,7 @@ export default function print(tree, options = {}) {
   // If tree[0] is a string but NOT starting with `;` (comment), it's a keyword like `module` - print as single node
   // Otherwise it's multiple nodes (comments + module) - print each separately
   if (typeof tree[0] === 'string' && tree[0][0] !== ';') return printNode(tree)
-  
+
   // Multiple top-level nodes - filter out comments if comments option is false
   return tree
     .filter(node => comments || !isComment(node))
@@ -36,6 +36,7 @@ export default function print(tree, options = {}) {
 
     let content = node[0]
     if (!content) return ''
+    let afterLineComment = false // track if we just printed a line comment
 
     // Special handling for try_table: keep catch clauses inline
     if (content === 'try_table') {
@@ -65,8 +66,9 @@ export default function print(tree, options = {}) {
         // line comments (;;) - MUST end with newline to avoid consuming following elements
         if (sub[0] === ';') {
           if (newline) {
-            // prettified: own line with indent, newline after
-            content += newline + curIndent + sub.trimEnd() + newline
+            // prettified: own line with indent, next element adds its own newline
+            content += newline + curIndent + sub.trimEnd()
+            afterLineComment = true
           } else {
             // minified: keep inline but must have newline after
             const last = content[content.length - 1]
@@ -85,21 +87,26 @@ export default function print(tree, options = {}) {
       else if (Array.isArray(sub)) {
         if (flat) flat = sub.every(sub => !Array.isArray(sub))
         content += newline + curIndent + printNode(sub, level + 1)
+        afterLineComment = false
       }
       // data chunks "\00..."
       else if (node[0] === 'data')   {
         flat = false;
         if (newline || content[content.length-1] !== ')') content += newline || ' '
         content += curIndent + sub
+        afterLineComment = false
       }
       // inline nodes
       else {
         const last = content[content.length - 1]
-        // after newline from line comment, add indent in prettified mode
-        if (last === '\n') content += newline ? curIndent : ''
+        // after line comment in prettified mode, need newline + indent
+        if (afterLineComment && newline) content += newline + curIndent
+        // after newline from line comment (minified), add indent
+        else if (last === '\n') content += ''
         else if (last && last !== ')' && last !== ' ') content += ' '
         else if (newline || last === ')') content += ' '
         content += sub
+        afterLineComment = false
       }
     }
 

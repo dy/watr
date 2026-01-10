@@ -19,6 +19,8 @@ async function getState(page) {
 // Helper to set source code
 async function setSource(page, code) {
   await page.evaluate((code) => {
+    const el = document.getElementById('source');
+    el.textContent = code;
     window.state.sourceCode = code;
     window.state.recompile();
   }, code);
@@ -128,5 +130,53 @@ test.describe('REPL', () => {
     expect(state.sourceCode).toContain('memory'); // memory.wat has memory definition
     expect(state.binaryHtml).toContain('00 61 73 6d'); // Should compile
     expect(state.error).toBe(false);
+  });
+
+  test('line numbers display', async ({ page }) => {
+    // Load a simple example
+    await setSource(page, '(module\n  (func)\n  (func)\n)');
+
+    // Wait for line numbers to update
+    await page.waitForTimeout(200);
+
+    const lineNumbers = await page.locator('#line-numbers').textContent();
+    expect(lineNumbers).toContain('1');
+    expect(lineNumbers).toContain('2');
+    expect(lineNumbers).toContain('3');
+    expect(lineNumbers).toContain('4');
+  });
+
+  test('toggle comment shortcut (Cmd+/)', async ({ page }) => {
+    await setSource(page, '(module\n(func)\n)');
+    await page.waitForTimeout(200);
+
+    const editor = page.locator('#source');
+    await editor.click();
+
+    // Press Cmd+/ to comment current line
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.keyboard.press(`${modifier}+/`);
+    await page.waitForTimeout(300);
+
+    let state = await getState(page);
+    // At least one line should now have ;;
+    expect(state.sourceCode).toContain(';;');
+  });
+
+  test('indent/outdent shortcuts (Cmd+]/Cmd+[)', async ({ page }) => {
+    await setSource(page, '(module\nfoo\n)');
+    await page.waitForTimeout(200);
+
+    const editor = page.locator('#source');
+    await editor.click();
+
+    // Press Cmd+] to indent
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.keyboard.press(`${modifier}+]`);
+    await page.waitForTimeout(300);
+
+    let state = await getState(page);
+    // Source should have some indentation added
+    expect(state.sourceCode).toMatch(/  \w/); // 2 spaces before a word
   });
 });

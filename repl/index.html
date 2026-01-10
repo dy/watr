@@ -201,8 +201,34 @@
       }
     </style>
 
-    <code id="source" :ref="initEditor" title="WebAssembly Text Format (WAT) code" aria-label="WebAssembly Text Format (WAT) code" lang="plaintext"></code>
+    <div id="editor-wrapper">
+      <pre id="line-numbers" :ref="lineNumbersEl" aria-hidden="true"></pre>
+      <code id="source" :ref="initEditor"
+        :onkeydown.capture.meta:onkeydown.capture.ctrl="handleKey"
+        title="WebAssembly Text Format (WAT) code" aria-label="WebAssembly Text Format (WAT) code" lang="plaintext"></code>
+    </div>
     <style>
+      #editor-wrapper {
+        display: flex;
+        flex: 1;
+        min-width: 0;
+        position: relative;
+        overflow: auto;
+      }
+
+      #line-numbers {
+        padding: 0 0.5rem 0 0;
+        margin: 0;
+        text-align: right;
+        color: var(--comment);
+        user-select: none;
+        font-family: monospace;
+        line-height: inherit;
+        border-right: 1px solid gainsboro;
+        margin-right: 0.5rem;
+        min-width: 2ch;
+      }
+
       /* theme */
       #source {
         min-height: 2rem;
@@ -243,20 +269,23 @@
       }
     </style>
 
-    <output id="binary" :ref="binaryEl" :fx="binaryEl.innerHTML = binaryHtml" title="WebAssembly WASM binary" aria-label="WebAssembly WASM binary" lang="plaintext"></output>
+    <div id="binary-wrapper">
+      <output id="binary" :ref="binaryEl" :fx="binaryEl.innerHTML = binaryHtml" title="WebAssembly WASM binary" aria-label="WebAssembly WASM binary" lang="plaintext"></output>
+    </div>
     <style>
-      #binary {
-        position: relative;
-        width: 48ch;
-        flex-shrink: 0;
-        margin: 0;
+      #binary-wrapper {
+        flex: 1;
+        min-width: 0;
+        overflow: auto;
+        display: flex;
+        justify-content: center;
       }
 
-      @media (max-width: 960px) {
-        #binary {
-          width: auto;
-          margin: 0;
-        }
+      #binary {
+        position: relative;
+        max-width: 80ch;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
       }
 
       .preamble {
@@ -501,8 +530,184 @@
       binaryEl: null,
       logEl: null,
       loadBinaryInput: null,
+      lineNumbersEl: null,
 
       loadExample, // expose to template
+
+      // Update line numbers display
+      updateLineNumbers() {
+        if (!state.lineNumbersEl) return
+        const lines = (state.sourceCode || '').split('\n').length
+        state.lineNumbersEl.textContent = Array.from({ length: lines }, (_, i) => i + 1).join('\n')
+      },
+
+      // Edit line(s) with transform function, restore cursor/selection
+      editLine(fn) {
+        const el = document.getElementById('source')
+        const sel = window.getSelection()
+        if (!sel.rangeCount) return
+
+        const text = el.textContent
+        const range = sel.getRangeAt(0)
+
+        // Get selection boundaries
+        const preStart = document.createRange()
+        preStart.selectNodeContents(el)
+        preStart.setEnd(range.startContainer, range.startOffset)
+        const selStart = preStart.toString().length
+
+        const preEnd = document.createRange()
+        preEnd.selectNodeContents(el)
+        preEnd.setEnd(range.endContainer, range.endOffset)
+        const selEnd = preEnd.toString().length
+
+        // Find line boundaries for selection
+        const lineStart = text.lastIndexOf('\n', selStart - 1) + 1
+        const lineEnd = text.indexOf('\n', selEnd - 1)
+        const selectedText = text.slice(lineStart, lineEnd < 0 ? undefined : lineEnd)
+
+        // Transform each line
+        const lines = selectedText.split('\n')
+        const newLines = lines.map(fn)
+        const newText = text.slice(0, lineStart) + newLines.join('\n') + text.slice(lineStart + selectedText.length)
+
+        // Calculate delta for cursor restoration
+        // Cursor moves with indentation on current line too
+        let deltaStart = 0, deltaEnd = 0
+        for (let i = 0, pos = lineStart; i < lines.length; i++) {
+          const lineDelta = newLines[i].length - lines[i].length
+          // Include delta if cursor is on or past this line
+          if (selStart > pos) deltaStart += lineDelta
+          if (selEnd > pos) deltaEnd += lineDelta
+          pos += lines[i].length + 1
+        }
+
+        codejar.updateCode(newText)
+        state.sourceCode = newText
+
+        // Restore selection
+        const newStart = Math.max(lineStart, selStart + deltaStart)
+        const newEnd = Math.max(lineStart, selEnd + deltaEnd)
+        requestAnimationFrame(() => {
+          const sel = window.getSelection()
+          const range = document.createRange()
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+          let pos = 0, startNode, startOff, endNode, endOff
+          while (walker.nextNode()) {
+            const len = walker.currentNode.length
+            if (!startNode && pos + len >= newStart) {
+              startNode = walker.currentNode
+              startOff = newStart - pos
+            }
+            if (pos + len >= newEnd) {
+              endNode = walker.currentNode
+              endOff = newEnd - pos
+              break
+            }
+            pos += len
+          }
+          if (startNode) {
+            range.setStart(startNode, startOff)
+            range.setEnd(endNode || startNode, endOff ?? startOff)
+            sel.removeAllRanges()
+            sel.addRange(range)
+          }
+        })
+      },
+
+      // Handle keyboard shortcuts
+      handleKey(e) {
+        if (e.key === '/') {
+          e.preventDefault()
+          state.toggleComment()
+        } else if (e.key === ']') {
+          e.preventDefault()
+          state.editLine(line => '  ' + line)
+        } else if (e.key === '[') {
+          e.preventDefault()
+          state.editLine(line => line.replace(/^ {1,2}/, ''))
+        } else if (e.key === 'Enter') {
+          e.preventDefault()
+          state.compile()
+        }
+      },
+
+      // Toggle comments: uncomment only if ALL lines are commented
+      toggleComment() {
+        const el = document.getElementById('source')
+        const sel = window.getSelection()
+        if (!sel.rangeCount) return
+
+        const text = el.textContent
+        const range = sel.getRangeAt(0)
+
+        // Get selection boundaries
+        const preStart = document.createRange()
+        preStart.selectNodeContents(el)
+        preStart.setEnd(range.startContainer, range.startOffset)
+        const selStart = preStart.toString().length
+
+        const preEnd = document.createRange()
+        preEnd.selectNodeContents(el)
+        preEnd.setEnd(range.endContainer, range.endOffset)
+        const selEnd = preEnd.toString().length
+
+        // Find line boundaries
+        const lineStart = text.lastIndexOf('\n', selStart - 1) + 1
+        const lineEnd = text.indexOf('\n', selEnd - 1)
+        const selectedText = text.slice(lineStart, lineEnd < 0 ? undefined : lineEnd)
+        const lines = selectedText.split('\n')
+
+        // Check if ALL non-empty lines are commented
+        const allCommented = lines.every(line => !line.trim() || line.trimStart().startsWith(';;'))
+        const fn = allCommented
+          ? line => line.replace(/^(\s*);; ?/, '$1')  // uncomment
+          : line => line.trim() ? line.replace(/^(\s*)/, '$1;; ') : line  // comment (skip empty)
+
+        const newLines = lines.map(fn)
+        const newText = text.slice(0, lineStart) + newLines.join('\n') + text.slice(lineStart + selectedText.length)
+
+        // Calculate delta for cursor restoration
+        let deltaStart = 0, deltaEnd = 0
+        for (let i = 0, pos = lineStart; i < lines.length; i++) {
+          const lineDelta = newLines[i].length - lines[i].length
+          if (selStart > pos) deltaStart += lineDelta
+          if (selEnd > pos) deltaEnd += lineDelta
+          pos += lines[i].length + 1
+        }
+
+        codejar.updateCode(newText)
+        state.sourceCode = newText
+
+        // Restore selection
+        const newStart = Math.max(lineStart, selStart + deltaStart)
+        const newEnd = Math.max(lineStart, selEnd + deltaEnd)
+        requestAnimationFrame(() => {
+          const sel = window.getSelection()
+          const range = document.createRange()
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+          let pos = 0, startNode, startOff, endNode, endOff
+          while (walker.nextNode()) {
+            const len = walker.currentNode.length
+            if (!startNode && pos + len >= newStart) {
+              startNode = walker.currentNode
+              startOff = newStart - pos
+            }
+            if (pos + len >= newEnd) {
+              endNode = walker.currentNode
+              endOff = newEnd - pos
+              break
+            }
+            pos += len
+          }
+          if (startNode) {
+            range.setStart(startNode, startOff)
+            range.setEnd(endNode || startNode, endOff ?? startOff)
+            sel.removeAllRanges()
+            sel.addRange(range)
+          }
+        })
+      },
 
       // Handle file input change
       async loadFile(e) {
@@ -539,23 +744,27 @@
         })
 
         // Watch for changes
-        const observer = new MutationObserver(() => {
-          state.sourceCode = el.textContent
+        codejar.onUpdate(code => {
+          state.sourceCode = code
+          state.updateLineNumbers()
           if (!loadingExample) state.example = '' // Switch to Custom when user edits
           state.recompile()
         })
-        observer.observe(el, { childList: true, subtree: true, characterData: true })
+
+        // Sync scroll between editor and line numbers
+        el.addEventListener('scroll', () => {
+          if (state.lineNumbersEl) state.lineNumbersEl.scrollTop = el.scrollTop
+        })
 
         // Load initial example (deferred to allow state assignment to complete)
         queueMicrotask(() => loadExample('hello'))
-
-        return () => observer.disconnect()
       },
 
       // Debounced recompile
       recompile() {
         clearTimeout(timeout)
         state.logHtml = ''
+        state.updateLineNumbers()
         if (!state.sourceCode) state.binaryHtml = ''
         timeout = setTimeout(() => state.compile(), 300)
       },
