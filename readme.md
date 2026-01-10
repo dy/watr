@@ -41,13 +41,13 @@ print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)
 
 ## Metrics
 
-&nbsp; | Size | Speed | &nbsp;
----|---|---|---
-**watr** | **10 KB** | **4,460 op/s** |
-[spec/wast.js](https://github.com/WebAssembly/spec) | 216 KB | 2,185 op/s |
-[wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,273 op/s |
-[binaryen](https://github.com/WebAssembly/binaryen) | 1,100 KB | 718 op/s |
-[wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB | 539 op/s | MVP only
+&nbsp; | Size | Speed
+---|---|---
+**watr** | **10 KB** | **4,460 op/s** 
+[spec/wast.js](https://github.com/WebAssembly/spec) | 216 KB | 2,185 op/s 
+[wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,273 op/s 
+[binaryen](https://github.com/WebAssembly/binaryen) | 1,100 KB | 718 op/s 
+[wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB (MVP) | 539 op/s |
 
 
 ## CLI
