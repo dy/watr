@@ -206,6 +206,7 @@
     <div id="editor-wrapper">
       <pre id="line-numbers" :ref="lineNumbersEl" aria-hidden="true"></pre>
       <code id="source" :ref="initEditor"
+        :oninput.debounce-300="handleInput"
         :onkeydown.capture.meta:onkeydown.capture.ctrl="handleKey"
         title="WebAssembly Text Format (WAT) code" aria-label="WebAssembly Text Format (WAT) code" lang="plaintext"></code>
     </div>
@@ -567,7 +568,6 @@
     // Reactive state - sprae returns the reactive proxy
     let codejar = null
     let buf = null
-    let timeout = null
     let state = null
     let loadingExample = false // Flag to prevent MutationObserver from resetting example
 
@@ -638,6 +638,11 @@
       loadBinaryInput: null,
       lineNumbersEl: null,
       urlHashTimeout: null,
+      showGzip: false, // gzip-size display toggle
+      compiling: false,
+      lastSize: 0,
+      lastGzip: 0,
+      lastTime: 0,
 
       loadExample, // expose to template
 
@@ -722,6 +727,24 @@
             sel.addRange(range)
           }
         })
+      },
+
+      // Handle user input (debounced from UI)
+      handleInput(e) {
+        const code = e.target.textContent
+        state.sourceCode = code
+        state.updateLineNumbers()
+        if (!loadingExample) {
+          state.example = ''
+          state.updateUrlHash()
+        }
+        state.clearErrorHighlight()
+        state.logHtml = ''
+        if (!code.trim()) {
+          state.binaryHtml = ''
+          return
+        }
+        state.compile()
       },
 
       // Handle keyboard shortcuts
@@ -885,17 +908,6 @@
           history: true,
         })
 
-        // Watch for changes
-        codejar.onUpdate(code => {
-          state.sourceCode = code
-          state.updateLineNumbers()
-          if (!loadingExample) {
-            state.example = '' // Switch to Custom when user edits
-            state.updateUrlHash() // Update URL as user types
-          }
-          state.recompile()
-        })
-
         // Sync scroll between editor and line numbers
         el.addEventListener('scroll', () => {
           if (state.lineNumbersEl) state.lineNumbersEl.scrollTop = el.scrollTop
@@ -996,6 +1008,11 @@
           state.recompile()
           return
         }
+        if (e.target.classList.contains('log-size')) {
+          state.showGzip = !state.showGzip
+          state.updateSizeLog()
+          return
+        }
         if (!state.error || !state.errorLine) return
         const el = document.getElementById('source')
         const wrapper = document.getElementById('editor-wrapper')
@@ -1006,24 +1023,39 @@
         el.focus()
       },
 
-      // Debounced recompile
+      // Recompile (immediate, for programmatic calls)
       recompile() {
-        clearTimeout(timeout)
         state.logHtml = ''
         state.clearErrorHighlight()
         state.updateLineNumbers()
-        if (!state.sourceCode) state.binaryHtml = ''
-        timeout = setTimeout(() => state.compile(), 300)
+        if (!state.sourceCode) {
+          state.binaryHtml = ''
+          return
+        }
+        state.compile()
+      },
+
+      // Update log with current size info
+      updateSizeLog() {
+        if (!state.lastSize) return
+        const sizeText = state.showGzip ? `${fmtSize(state.lastGzip)} gz` : fmtSize(state.lastSize)
+        const title = `size: ${fmtSize(state.lastSize)}\ngzip: ${fmtSize(state.lastGzip)}`
+        state.logHtml = `Compiled to <span class="log-info log-size" title="${title}">${sizeText}</span> in <span class="log-info log-time" title="Recompile (Ctrl+Enter)">${state.lastTime.toFixed(1)}ms</span>`
       },
 
       // Compile source code
       async compile() {
         state.binaryHtml = ''
-        state.logHtml = ''
         state.error = false
         state.errorLine = null
+        state.compiling = true
+        state.logHtml = 'Compiling…'
 
-        if (!state.sourceCode.trim()) return
+        if (!state.sourceCode.trim()) {
+          state.compiling = false
+          state.logHtml = ''
+          return
+        }
 
         try {
           const start = performance.now()
@@ -1031,9 +1063,11 @@
           const end = performance.now()
 
           state.binaryHtml = hihex(buf)
-          const gzipped = await gzipSize(buf)
-          const gzTitle = gzipped < buf.byteLength ? `gzip: ${fmtSize(gzipped)}` : ''
-          state.logHtml = `Compiled to <span class="log-info" title="${gzTitle}">${fmtSize(buf.byteLength)}</span> in <span class="log-info log-time" title="Recompile (Ctrl+Enter)">${(end - start).toFixed(1)}ms</span>`
+          state.lastSize = buf.byteLength
+          state.lastGzip = await gzipSize(buf)
+          state.lastTime = end - start
+          state.compiling = false
+          state.updateSizeLog()
           state.error = false
 
           // Flash animation on update
@@ -1051,6 +1085,7 @@
           }
         } catch (e) {
           console.error(e)
+          state.compiling = false
           // Wrap line:col in clickable underlined span
           state.logHtml = String(e).replace(/at (\d+:\d+)/, 'at <span class="err-loc">$1</span>')
           state.error = true
