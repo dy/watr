@@ -9,6 +9,7 @@ Light & fast WAT compiler.
 
 **[Docs](./docs.md)** · **[Repl](https://dy.github.io/watr/repl/)**
 
+
 ## Usage
 
 ```js
@@ -46,5 +47,10 @@ print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)
 [wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,273 op/s |
 [binaryen](https://github.com/WebAssembly/binaryen) | 1,100 KB | 718 op/s |
 [wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB | 539 op/s | MVP only
+
+
+## Used by
+
+* [jz](https://github.com/dy/jz) – minimal static JS subset
 
 <p align=center><a href="https://github.com/krsnzd/license/">ॐ</a></p>
