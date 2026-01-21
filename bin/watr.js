@@ -18,6 +18,7 @@ import { basename } from 'path'
 import compile from '../src/compile.js'
 import print from '../src/print.js'
 import polyfill from '../src/polyfill.js'
+import optimize from '../src/optimize.js'
 import parse from '../src/parse.js'
 
 const args = process.argv.slice(2)
@@ -37,12 +38,26 @@ if (polyfillIdx !== -1) {
   }
 }
 
+// Parse optimize option
+let optimizeOpts = null
+const optimizeIdx = args.findIndex(a => a === '-O' || a === '--optimize')
+let optimizeFeatureArg = null
+if (optimizeIdx !== -1) {
+  const next = args[optimizeIdx + 1]
+  if (next && !next.startsWith('-') && !next.includes('.') && next !== '-') {
+    optimizeOpts = next
+    optimizeFeatureArg = next
+  } else {
+    optimizeOpts = true
+  }
+}
+
 // Parse -o output arg
 const outIdx = args.findIndex(a => a === '-o' || a === '--output')
 const outArg = outIdx !== -1 ? args[outIdx + 1] : null
 
 const flags = new Set(args.filter(a => a.startsWith('-') && a !== '-'))
-const files = args.filter(a => (!a.startsWith('-') || a === '-') && a !== polyfillFeatureArg && a !== outArg)
+const files = args.filter(a => (!a.startsWith('-') || a === '-') && a !== polyfillFeatureArg && a !== optimizeFeatureArg && a !== outArg)
 
 // Help
 if (flags.has('-h') || flags.has('--help') || !files.length) {
@@ -56,6 +71,8 @@ Options:
   -o, --output <file>   Output file (default: input.wasm)
   -p, --print           Pretty-print WAT to stdout
   -m, --minify          Minify WAT to stdout
+  -O, --optimize [opts] Optimize AST (default: all)
+                        Options: treeshake fold deadcode locals
   --polyfill [features] Polyfill newer features to MVP (default: all)
                         Features: funcref sign_ext nontrapping bulk_memory
                                   return_call i31ref extended_const multi_value
@@ -65,11 +82,13 @@ Examples:
   watr add.wat                    # → add.wasm
   watr add.wat -o lib/add.wasm    # → lib/add.wasm
   watr add.wat --print            # pretty-print
+  watr add.wat -O                 # optimize all
+  watr add.wat -O treeshake       # optimize specific
   watr add.wat --polyfill         # polyfill all features
   watr add.wat --polyfill funcref # polyfill specific features
   cat add.wat | watr -            # stdin → stdout (binary)
 
-ॐ https://github.com/dy/watr
+ॐ
 `)
   process.exit(flags.has('-h') || flags.has('--help') ? 0 : 1)
 }
@@ -80,21 +99,24 @@ const src = input === '-'
   ? readFileSync(0, 'utf8')
   : readFileSync(input, 'utf8')
 
+// Parse and transform
+let ast = parse(src)
+if (polyfillOpts) ast = polyfill(ast, polyfillOpts)
+if (optimizeOpts) ast = optimize(ast, optimizeOpts)
+
 // Print mode
 if (flags.has('-p') || flags.has('--print')) {
-  console.log(print(src, { indent: '  ', newline: '\n' }))
+  console.log(print(ast, { indent: '  ', newline: '\n' }))
   process.exit(0)
 }
 
 // Minify mode
 if (flags.has('-m') || flags.has('--minify')) {
-  console.log(print(src, { indent: '', newline: '' }))
+  console.log(print(ast, { indent: '', newline: '' }))
   process.exit(0)
 }
 
 // Compile mode
-let ast = parse(src)
-if (polyfillOpts) ast = polyfill(ast, polyfillOpts)
 const binary = compile(ast)
 
 // Output

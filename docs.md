@@ -63,6 +63,13 @@ compile`(func (export "f") (f64.const \${Math.PI}))` // template
 // polyfill newer features to MVP
 compile(src, { polyfill: true })           // all features
 compile(src, { polyfill: 'funcref' })      // specific features
+
+// optimize
+compile(src, { optimize: true })           // all optimizations
+compile(src, { optimize: 'fold' })         // specific optimizations
+
+// both
+compile(src, { polyfill: true, optimize: true })
 ```
 
 ### `polyfill(ast, options?)`
@@ -105,6 +112,36 @@ polyfill(ast, { funcref: true })      // object
 | Memory64 | Cannot emulate 64-bit address space |
 | Exception handling | Complex control flow transforms |
 | `externref` | Requires JS-side reference tracking |
+
+### `optimize(ast, options?)`
+
+Optimize AST for smaller size and better performance.
+
+```js
+import { optimize, parse, print, compile } from 'watr'
+
+// auto-detect and apply all optimizations
+const ast = optimize(parse(src))
+compile(ast)
+
+// specific optimizations
+optimize(ast, 'fold')                   // constant folding only
+optimize(ast, 'treeshake fold')         // multiple optimizations
+optimize(ast, { fold: true })           // object form
+
+// can accept string directly
+print(optimize('(func (i32.add (i32.const 1) (i32.const 2)))'))
+// (func (i32.const 3))
+```
+
+**Available optimizations:**
+
+| Optimization | Description | Example |
+|--------------|-------------|---------|
+| `fold` | Constant folding | `(i32.add (i32.const 1) (i32.const 2))` → `(i32.const 3)` |
+| `deadcode` | Remove unreachable code | Code after `unreachable`, `br`, `return` |
+| `locals` | Remove unused locals | Locals never read/written |
+| `treeshake` | Remove unused definitions | Functions/globals not exported or called |
 
 ### `parse(source, options?)`
 

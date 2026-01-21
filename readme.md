@@ -18,7 +18,7 @@ _Light & fast WAT compiler_
 ## Usage
 
 ```js
-import watr, { compile, polyfill, parse, print } from 'watr'
+import watr, { compile, polyfill, optimize, parse, print } from 'watr'
 
 // compile to binary
 const binary = compile('(func (export "f") (result f64) (f64.const 1))')
@@ -30,6 +30,9 @@ parse('(i32.const 42)') // ['i32.const', 42]
 
 // polyfill (transform newer features to MVP)
 print(polyfill('(func (i32.extend8_s ...))')) // (func (i32.shr_s (i32.shl ...) ...))
+
+// optimize (constant folding, treeshake, dead code elimination)
+print(optimize('(func (i32.add (i32.const 1) (i32.const 2)))')) // (func (i32.const 3))
 
 // print
 print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)\n    ...
@@ -52,6 +55,7 @@ npx watr input.wat              # → input.wasm
 npx watr input.wat -o out.wasm  # custom output
 npx watr input.wat --print      # pretty-print
 npx watr input.wat --minify     # minify
+npx watr input.wat -O           # optimize (fold, treeshake, deadcode)
 npx watr input.wat --polyfill   # polyfill newer features to MVP
 ```
 

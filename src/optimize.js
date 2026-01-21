@@ -1,0 +1,608 @@
+/**
+ * AST optimizations for WebAssembly modules.
+ * Reduces code size and improves runtime performance.
+ *
+ * @module watr/optimize
+ */
+
+import parse from './parse.js'
+
+/** Optimizations that can be applied */
+const OPTS = {
+  treeshake: true,    // remove unused funcs/globals/types/tables
+  fold: true,         // constant folding
+  deadcode: true,     // eliminate dead code after unreachable/br/return
+  locals: true,       // reuse locals of same type
+}
+
+/** All optimization names */
+const ALL = Object.keys(OPTS)
+
+/**
+ * Normalize options to { opt: bool } map.
+ * @param {boolean|string|Object} opts
+ * @returns {Object}
+ */
+const normalize = (opts) => {
+  if (opts === true) return { ...OPTS }
+  if (opts === false) return {}
+  if (typeof opts === 'string') {
+    const set = new Set(opts.split(/\s+/).filter(Boolean))
+    // If single optimization name, enable just that one
+    if (set.size === 1 && ALL.includes([...set][0])) {
+      return Object.fromEntries(ALL.map(f => [f, set.has(f)]))
+    }
+    return Object.fromEntries(ALL.map(f => [f, set.has(f) || set.has('all')]))
+  }
+  return { ...OPTS, ...opts }
+}
+/**
+ * Deep clone AST.
+ * @param {any} node
+ * @returns {any}
+ */
+const clone = (node) => {
+  if (!Array.isArray(node)) return node
+  return node.map(clone)
+}
+
+/**
+ * Walk AST depth-first (pre-order).
+ * @param {any} node
+ * @param {Function} fn - (node, parent, idx) => void
+ * @param {any} [parent]
+ * @param {number} [idx]
+ */
+const walk = (node, fn, parent, idx) => {
+  fn(node, parent, idx)
+  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walk(node[i], fn, node, i)
+}
+
+/**
+ * Walk AST depth-first (post-order), transform children before parent.
+ * Returns the (potentially replaced) node.
+ * @param {any} node
+ * @param {Function} fn - (node, parent, idx) => newNode|undefined
+ * @param {any} [parent]
+ * @param {number} [idx]
+ * @returns {any}
+ */
+const walkPost = (node, fn, parent, idx) => {
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const result = walkPost(node[i], fn, node, i)
+      if (result !== undefined) node[i] = result
+    }
+  }
+  const result = fn(node, parent, idx)
+  return result !== undefined ? result : node
+}
+
+// ==================== TREESHAKE ====================
+
+/**
+ * Remove unused functions, globals, types, tables.
+ * Keeps exports and their transitive dependencies.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const treeshake = (ast) => {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+
+  // Collect all definitions
+  const funcs = new Map()    // $name|idx → node
+  const globals = new Map()
+  const types = new Map()
+  const tables = new Map()
+  const memories = new Map()
+  const exports = []
+  const starts = []
+
+  let funcIdx = 0, globalIdx = 0, typeIdx = 0, tableIdx = 0, memIdx = 0, importFuncIdx = 0
+
+  for (const node of ast.slice(1)) {
+    if (!Array.isArray(node)) continue
+    const kind = node[0]
+
+    if (kind === 'type') {
+      const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : typeIdx
+      types.set(name, { node, idx: typeIdx, used: false })
+      if (typeof name === 'string') types.set(typeIdx, types.get(name))
+      typeIdx++
+    }
+    else if (kind === 'func') {
+      const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : funcIdx
+      // Check for inline export: (func $name (export "...") ...)
+      const hasInlineExport = node.some(sub => Array.isArray(sub) && sub[0] === 'export')
+      funcs.set(name, { node, idx: funcIdx, used: hasInlineExport })
+      if (typeof name === 'string') funcs.set(funcIdx, funcs.get(name))
+      funcIdx++
+    }
+    else if (kind === 'global') {
+      const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : globalIdx
+      const hasInlineExport = node.some(sub => Array.isArray(sub) && sub[0] === 'export')
+      globals.set(name, { node, idx: globalIdx, used: hasInlineExport })
+      if (typeof name === 'string') globals.set(globalIdx, globals.get(name))
+      globalIdx++
+    }
+    else if (kind === 'table') {
+      const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : tableIdx
+      const hasInlineExport = node.some(sub => Array.isArray(sub) && sub[0] === 'export')
+      tables.set(name, { node, idx: tableIdx, used: hasInlineExport })
+      if (typeof name === 'string') tables.set(tableIdx, tables.get(name))
+      tableIdx++
+    }
+    else if (kind === 'memory') {
+      const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : memIdx
+      const hasInlineExport = node.some(sub => Array.isArray(sub) && sub[0] === 'export')
+      memories.set(name, { node, idx: memIdx, used: hasInlineExport })
+      if (typeof name === 'string') memories.set(memIdx, memories.get(name))
+      memIdx++
+    }
+    else if (kind === 'import') {
+      // Imports are always kept; mark as used
+      for (const sub of node) {
+        if (Array.isArray(sub) && sub[0] === 'func') {
+          const name = typeof sub[1] === 'string' && sub[1][0] === '$' ? sub[1] : importFuncIdx
+          funcs.set(name, { node, idx: importFuncIdx, used: true, isImport: true })
+          if (typeof name === 'string') funcs.set(importFuncIdx, funcs.get(name))
+          importFuncIdx++
+          funcIdx++
+        }
+      }
+    }
+    else if (kind === 'export') {
+      exports.push(node)
+    }
+    else if (kind === 'start') {
+      starts.push(node)
+    }
+  }
+
+  // Mark exports as used
+  for (const exp of exports) {
+    for (const sub of exp) {
+      if (!Array.isArray(sub)) continue
+      const [kind, ref] = sub
+      if (kind === 'func' && funcs.has(ref)) funcs.get(ref).used = true
+      else if (kind === 'global' && globals.has(ref)) globals.get(ref).used = true
+      else if (kind === 'table' && tables.has(ref)) tables.get(ref).used = true
+      else if (kind === 'memory' && memories.has(ref)) memories.get(ref).used = true
+    }
+  }
+
+  // Mark start function as used
+  for (const start of starts) {
+    const ref = start[1]
+    if (funcs.has(ref)) funcs.get(ref).used = true
+  }
+
+  // Count items with inline exports
+  let hasExports = exports.length > 0 || starts.length > 0
+  if (!hasExports) {
+    for (const [, entry] of funcs) if (entry.used) { hasExports = true; break }
+    if (!hasExports) for (const [, entry] of globals) if (entry.used) { hasExports = true; break }
+    if (!hasExports) for (const [, entry] of tables) if (entry.used) { hasExports = true; break }
+    if (!hasExports) for (const [, entry] of memories) if (entry.used) { hasExports = true; break }
+  }
+
+  // If no exports/start at all, keep everything (module may be used differently)
+  if (!hasExports) {
+    for (const [, entry] of funcs) entry.used = true
+    for (const [, entry] of globals) entry.used = true
+    for (const [, entry] of tables) entry.used = true
+    for (const [, entry] of memories) entry.used = true
+  }
+
+  // Mark elem-referenced functions as used
+  for (const node of ast.slice(1)) {
+    if (!Array.isArray(node) || node[0] !== 'elem') continue
+    walk(node, n => {
+      if (Array.isArray(n) && n[0] === 'ref.func') {
+        const ref = n[1]
+        if (funcs.has(ref)) funcs.get(ref).used = true
+      }
+      // Also plain func refs in elem
+      if (typeof n === 'string' && n[0] === '$' && funcs.has(n)) funcs.get(n).used = true
+    })
+  }
+
+  // Propagate: find dependencies of used functions
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const [, entry] of funcs) {
+      if (!entry.used || entry.isImport) continue
+      walk(entry.node, n => {
+        if (!Array.isArray(n)) {
+          // Direct func reference
+          if (typeof n === 'string' && n[0] === '$' && funcs.has(n) && !funcs.get(n).used) {
+            funcs.get(n).used = true
+            changed = true
+          }
+          return
+        }
+        const [op, ref] = n
+        if ((op === 'call' || op === 'return_call' || op === 'ref.func') && funcs.has(ref) && !funcs.get(ref).used) {
+          funcs.get(ref).used = true
+          changed = true
+        }
+        if ((op === 'global.get' || op === 'global.set') && globals.has(ref) && !globals.get(ref).used) {
+          globals.get(ref).used = true
+          changed = true
+        }
+        if (op === 'call_indirect' || op === 'return_call_indirect') {
+          // Tables used by call_indirect
+          for (const sub of n) {
+            if (typeof sub === 'string' && sub[0] === '$' && tables.has(sub) && !tables.get(sub).used) {
+              tables.get(sub).used = true
+              changed = true
+            }
+          }
+        }
+        if (op === 'type' && types.has(ref) && !types.get(ref).used) {
+          types.get(ref).used = true
+          changed = true
+        }
+      })
+    }
+  }
+
+  // Filter AST keeping only used items
+  const result = ['module']
+  for (const node of ast.slice(1)) {
+    if (!Array.isArray(node)) { result.push(node); continue }
+    const kind = node[0]
+
+    if (kind === 'func') {
+      const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
+      const entry = name ? funcs.get(name) : [...funcs.values()].find(e => e.node === node)
+      if (entry?.used) result.push(node)
+    }
+    else if (kind === 'global') {
+      const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
+      const entry = name ? globals.get(name) : [...globals.values()].find(e => e.node === node)
+      if (entry?.used) result.push(node)
+    }
+    else if (kind === 'type') {
+      // Keep all types for now (complex to treeshake due to inline types)
+      result.push(node)
+    }
+    else {
+      result.push(node)
+    }
+  }
+
+  return result
+}
+
+// ==================== CONSTANT FOLDING ====================
+
+/** Operators that can be constant-folded */
+const FOLDABLE = {
+  // i32
+  'i32.add': (a, b) => (a + b) | 0,
+  'i32.sub': (a, b) => (a - b) | 0,
+  'i32.mul': (a, b) => Math.imul(a, b),
+  'i32.div_s': (a, b) => b !== 0 ? (a / b) | 0 : null,
+  'i32.div_u': (a, b) => b !== 0 ? ((a >>> 0) / (b >>> 0)) | 0 : null,
+  'i32.rem_s': (a, b) => b !== 0 ? (a % b) | 0 : null,
+  'i32.rem_u': (a, b) => b !== 0 ? ((a >>> 0) % (b >>> 0)) | 0 : null,
+  'i32.and': (a, b) => a & b,
+  'i32.or': (a, b) => a | b,
+  'i32.xor': (a, b) => a ^ b,
+  'i32.shl': (a, b) => a << (b & 31),
+  'i32.shr_s': (a, b) => a >> (b & 31),
+  'i32.shr_u': (a, b) => a >>> (b & 31),
+  'i32.rotl': (a, b) => { b &= 31; return ((a << b) | (a >>> (32 - b))) | 0 },
+  'i32.rotr': (a, b) => { b &= 31; return ((a >>> b) | (a << (32 - b))) | 0 },
+  'i32.eq': (a, b) => a === b ? 1 : 0,
+  'i32.ne': (a, b) => a !== b ? 1 : 0,
+  'i32.lt_s': (a, b) => a < b ? 1 : 0,
+  'i32.lt_u': (a, b) => (a >>> 0) < (b >>> 0) ? 1 : 0,
+  'i32.gt_s': (a, b) => a > b ? 1 : 0,
+  'i32.gt_u': (a, b) => (a >>> 0) > (b >>> 0) ? 1 : 0,
+  'i32.le_s': (a, b) => a <= b ? 1 : 0,
+  'i32.le_u': (a, b) => (a >>> 0) <= (b >>> 0) ? 1 : 0,
+  'i32.ge_s': (a, b) => a >= b ? 1 : 0,
+  'i32.ge_u': (a, b) => (a >>> 0) >= (b >>> 0) ? 1 : 0,
+  'i32.eqz': (a) => a === 0 ? 1 : 0,
+  'i32.clz': (a) => Math.clz32(a),
+  'i32.ctz': (a) => a === 0 ? 32 : 31 - Math.clz32(a & -a),
+  'i32.popcnt': (a) => { let c = 0; while (a) { c += a & 1; a >>>= 1 } return c },
+  'i32.wrap_i64': (a) => Number(BigInt.asIntN(32, a)),
+
+  // i64 (using BigInt)
+  'i64.add': (a, b) => BigInt.asIntN(64, a + b),
+  'i64.sub': (a, b) => BigInt.asIntN(64, a - b),
+  'i64.mul': (a, b) => BigInt.asIntN(64, a * b),
+  'i64.div_s': (a, b) => b !== 0n ? BigInt.asIntN(64, a / b) : null,
+  'i64.div_u': (a, b) => b !== 0n ? BigInt.asUintN(64, BigInt.asUintN(64, a) / BigInt.asUintN(64, b)) : null,
+  'i64.rem_s': (a, b) => b !== 0n ? BigInt.asIntN(64, a % b) : null,
+  'i64.rem_u': (a, b) => b !== 0n ? BigInt.asUintN(64, BigInt.asUintN(64, a) % BigInt.asUintN(64, b)) : null,
+  'i64.and': (a, b) => BigInt.asIntN(64, a & b),
+  'i64.or': (a, b) => BigInt.asIntN(64, a | b),
+  'i64.xor': (a, b) => BigInt.asIntN(64, a ^ b),
+  'i64.shl': (a, b) => BigInt.asIntN(64, a << (b & 63n)),
+  'i64.shr_s': (a, b) => BigInt.asIntN(64, a >> (b & 63n)),
+  'i64.shr_u': (a, b) => BigInt.asUintN(64, BigInt.asUintN(64, a) >> (b & 63n)),
+  'i64.eq': (a, b) => a === b ? 1 : 0,
+  'i64.ne': (a, b) => a !== b ? 1 : 0,
+  'i64.lt_s': (a, b) => a < b ? 1 : 0,
+  'i64.lt_u': (a, b) => BigInt.asUintN(64, a) < BigInt.asUintN(64, b) ? 1 : 0,
+  'i64.gt_s': (a, b) => a > b ? 1 : 0,
+  'i64.gt_u': (a, b) => BigInt.asUintN(64, a) > BigInt.asUintN(64, b) ? 1 : 0,
+  'i64.le_s': (a, b) => a <= b ? 1 : 0,
+  'i64.le_u': (a, b) => BigInt.asUintN(64, a) <= BigInt.asUintN(64, b) ? 1 : 0,
+  'i64.ge_s': (a, b) => a >= b ? 1 : 0,
+  'i64.ge_u': (a, b) => BigInt.asUintN(64, a) >= BigInt.asUintN(64, b) ? 1 : 0,
+  'i64.eqz': (a) => a === 0n ? 1 : 0,
+  'i64.extend_i32_s': (a) => BigInt(a),
+  'i64.extend_i32_u': (a) => BigInt(a >>> 0),
+
+  // f32/f64 - be careful with NaN/precision
+  'f32.add': (a, b) => Math.fround(a + b),
+  'f32.sub': (a, b) => Math.fround(a - b),
+  'f32.mul': (a, b) => Math.fround(a * b),
+  'f32.div': (a, b) => Math.fround(a / b),
+  'f32.neg': (a) => Math.fround(-a),
+  'f32.abs': (a) => Math.fround(Math.abs(a)),
+  'f32.sqrt': (a) => Math.fround(Math.sqrt(a)),
+  'f32.ceil': (a) => Math.fround(Math.ceil(a)),
+  'f32.floor': (a) => Math.fround(Math.floor(a)),
+  'f32.trunc': (a) => Math.fround(Math.trunc(a)),
+  'f32.nearest': (a) => Math.fround(Math.round(a)),
+
+  'f64.add': (a, b) => a + b,
+  'f64.sub': (a, b) => a - b,
+  'f64.mul': (a, b) => a * b,
+  'f64.div': (a, b) => a / b,
+  'f64.neg': (a) => -a,
+  'f64.abs': (a) => Math.abs(a),
+  'f64.sqrt': (a) => Math.sqrt(a),
+  'f64.ceil': (a) => Math.ceil(a),
+  'f64.floor': (a) => Math.floor(a),
+  'f64.trunc': (a) => Math.trunc(a),
+  'f64.nearest': (a) => Math.round(a),
+}
+
+/**
+ * Extract constant value from node.
+ * @param {any} node
+ * @returns {{type: string, value: number|bigint}|null}
+ */
+const getConst = (node) => {
+  if (!Array.isArray(node) || node.length !== 2) return null
+  const [op, val] = node
+  if (op === 'i32.const') return { type: 'i32', value: Number(val) | 0 }
+  if (op === 'i64.const') return { type: 'i64', value: BigInt(val) }
+  if (op === 'f32.const') return { type: 'f32', value: Math.fround(Number(val)) }
+  if (op === 'f64.const') return { type: 'f64', value: Number(val) }
+  return null
+}
+
+/**
+ * Create const node from value.
+ * @param {string} type
+ * @param {number|bigint} value
+ * @returns {Array}
+ */
+const makeConst = (type, value) => {
+  if (type === 'i32') return ['i32.const', value | 0]
+  if (type === 'i64') return ['i64.const', value]
+  if (type === 'f32') return ['f32.const', Math.fround(value)]
+  if (type === 'f64') return ['f64.const', value]
+  return null
+}
+
+/**
+ * Fold constant expressions.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const fold = (ast) => {
+  return walkPost(clone(ast), (node) => {
+    if (!Array.isArray(node)) return
+    const op = node[0]
+    const fn = FOLDABLE[op]
+    if (!fn) return
+
+    // Unary ops
+    if (fn.length === 1 && node.length === 2) {
+      const a = getConst(node[1])
+      if (!a) return
+      const result = fn(a.value)
+      if (result === null) return
+      const resultType = op.startsWith('i64.') && !op.includes('eqz') ? 'i64' :
+                         op.startsWith('f32.') ? 'f32' :
+                         op.startsWith('f64.') ? 'f64' : 'i32'
+      return makeConst(resultType, result)
+    }
+
+    // Binary ops
+    if (fn.length === 2 && node.length === 3) {
+      const a = getConst(node[1])
+      const b = getConst(node[2])
+      if (!a || !b) return
+      const result = fn(a.value, b.value)
+      if (result === null) return
+      // Comparisons return i32
+      const isCompare = /\.(eq|ne|[lg][te])/.test(op)
+      const resultType = isCompare ? 'i32' :
+                         op.startsWith('i64.') ? 'i64' :
+                         op.startsWith('f32.') ? 'f32' :
+                         op.startsWith('f64.') ? 'f64' : 'i32'
+      return makeConst(resultType, result)
+    }
+  })
+}
+
+// ==================== DEAD CODE ELIMINATION ====================
+
+/** Control flow terminators */
+const TERMINATORS = new Set(['unreachable', 'return', 'br', 'br_table'])
+
+/**
+ * Remove dead code after control flow terminators.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const deadcode = (ast) => {
+  const result = clone(ast)
+
+  // Process each function body
+  walk(result, (node) => {
+    if (!Array.isArray(node)) return
+    const kind = node[0]
+
+    // Process blocks: func, block, loop, if branches
+    if (kind === 'func' || kind === 'block' || kind === 'loop') {
+      eliminateDeadInBlock(node)
+    }
+    if (kind === 'if') {
+      // Process then/else branches
+      for (let i = 1; i < node.length; i++) {
+        if (Array.isArray(node[i]) && (node[i][0] === 'then' || node[i][0] === 'else')) {
+          eliminateDeadInBlock(node[i])
+        }
+      }
+    }
+  })
+
+  return result
+}
+
+/**
+ * Remove instructions after terminators within a block.
+ * @param {Array} block
+ */
+const eliminateDeadInBlock = (block) => {
+  let terminated = false
+  let firstTerminator = -1
+
+  for (let i = 1; i < block.length; i++) {
+    const node = block[i]
+
+    // Skip type annotations
+    if (Array.isArray(node)) {
+      const op = node[0]
+      if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') continue
+
+      if (terminated) {
+        if (firstTerminator === -1) firstTerminator = i
+      }
+
+      if (TERMINATORS.has(op)) {
+        terminated = true
+        firstTerminator = i + 1
+      }
+    } else if (typeof node === 'string') {
+      // String instructions like 'unreachable', 'return', 'drop', 'nop'
+      if (terminated) {
+        if (firstTerminator === -1) firstTerminator = i
+      }
+
+      if (TERMINATORS.has(node)) {
+        terminated = true
+        firstTerminator = i + 1
+      }
+    }
+  }
+
+  // Remove dead code
+  if (firstTerminator > 0 && firstTerminator < block.length) {
+    block.splice(firstTerminator)
+  }
+}
+
+// ==================== LOCAL REUSE ====================
+
+/**
+ * Reuse locals of the same type to reduce total local count.
+ * Basic version: deduplicate unused locals.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const localReuse = (ast) => {
+  const result = clone(ast)
+
+  walk(result, (node) => {
+    if (!Array.isArray(node) || node[0] !== 'func') return
+
+    // Collect local declarations and their types
+    const localDecls = []
+    const localTypes = new Map() // $name → type
+    const usedLocals = new Set()
+
+    // Find all local declarations and usages
+    for (let i = 1; i < node.length; i++) {
+      const sub = node[i]
+      if (!Array.isArray(sub)) continue
+
+      if (sub[0] === 'local') {
+        localDecls.push({ idx: i, node: sub })
+        // (local $name type) or (local type)
+        if (typeof sub[1] === 'string' && sub[1][0] === '$') {
+          localTypes.set(sub[1], sub[2])
+        }
+      }
+      if (sub[0] === 'param') {
+        // Params are also locals
+        if (typeof sub[1] === 'string' && sub[1][0] === '$') {
+          localTypes.set(sub[1], sub[2])
+          usedLocals.add(sub[1]) // params always used
+        }
+      }
+    }
+
+    // Find which locals are actually used
+    walk(node, (n) => {
+      if (!Array.isArray(n)) return
+      const op = n[0]
+      if (op === 'local.get' || op === 'local.set' || op === 'local.tee') {
+        const ref = n[1]
+        if (typeof ref === 'string') usedLocals.add(ref)
+      }
+    })
+
+    // Remove unused local declarations
+    for (let i = localDecls.length - 1; i >= 0; i--) {
+      const { idx, node: decl } = localDecls[i]
+      const name = typeof decl[1] === 'string' && decl[1][0] === '$' ? decl[1] : null
+      if (name && !usedLocals.has(name)) {
+        node.splice(idx, 1)
+      }
+    }
+  })
+
+  return result
+}
+
+// ==================== MAIN ====================
+
+/**
+ * Optimize AST.
+ *
+ * @param {Array|string} ast - AST or WAT source
+ * @param {boolean|string|Object} [opts=true] - Optimization options
+ * @returns {Array} Optimized AST
+ *
+ * @example
+ * optimize(ast)                      // all optimizations
+ * optimize(ast, 'treeshake')         // only treeshake
+ * optimize(ast, { fold: true })      // explicit
+ */
+export default function optimize(ast, opts = true) {
+  if (typeof ast === 'string') ast = parse(ast)
+  ast = clone(ast)
+  opts = normalize(opts)
+
+  if (opts.fold) ast = fold(ast)
+  if (opts.deadcode) ast = deadcode(ast)
+  if (opts.locals) ast = localReuse(ast)
+  if (opts.treeshake) ast = treeshake(ast)
+
+  return ast
+}
+
+export { optimize, treeshake, fold, deadcode, localReuse, normalize, OPTS }

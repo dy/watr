@@ -8,6 +8,7 @@ import _compile from './src/compile.js'
 import parse from './src/parse.js'
 import print from './src/print.js'
 import _polyfill from './src/polyfill.js'
+import _optimize from './src/optimize.js'
 
 /** Private Use Area character as placeholder for interpolation */
 const PUA = '\uE000'
@@ -138,13 +139,15 @@ function genImports(imports) {
  *
  * @param {string|TemplateStringsArray} source - WAT source or template strings
  * @param {...any} values - Interpolation values (for template literal)
- *   Last value can be options object: { polyfill: true | 'funcref' | { funcref: true } }
+ *   Last value can be options object:
+ *   - polyfill: true | 'funcref sign_ext' | { funcref: true }
+ *   - optimize: true | 'fold treeshake' | { fold: true }
  * @returns {Uint8Array} WebAssembly binary
  *
  * @example
  * compile('(func (export "f") (result i32) (i32.const 42))')
  * compile`(func (export "f") (result f64) (f64.const ${Math.PI}))`
- * compile(src, { polyfill: true })
+ * compile(src, { polyfill: true, optimize: true })
  */
 function compile(source, ...values) {
   // Options object as last argument (non-template call)
@@ -216,8 +219,9 @@ function compile(source, ...values) {
       }
     }
 
-    // Apply polyfill if requested
+    // Apply transforms
     if (opts.polyfill) ast = _polyfill(ast, opts.polyfill)
+    if (opts.optimize) ast = _optimize(ast, opts.optimize)
 
     const binary = _compile(ast)
     // Attach imports for watr() to use
@@ -226,8 +230,10 @@ function compile(source, ...values) {
   }
 
   // String/AST source with options
-  if (opts.polyfill) {
-    const ast = _polyfill(source, opts.polyfill)
+  if (opts.polyfill || opts.optimize) {
+    let ast = typeof source === 'string' ? parse(source) : source
+    if (opts.polyfill) ast = _polyfill(ast, opts.polyfill)
+    if (opts.optimize) ast = _optimize(ast, opts.optimize)
     return _compile(ast)
   }
   return _compile(source)
@@ -257,4 +263,4 @@ function watr(strings, ...values) {
 }
 
 export default watr
-export { watr, compile, parse, print, _polyfill as polyfill }
+export { watr, compile, parse, print, _polyfill as polyfill, _optimize as optimize }

@@ -185,8 +185,21 @@
   * [ ] ~~memory64~~ can't emulate
   * [ ] ~~exceptions~~ complex control flow
 
-* [ ] optimize
-  * [ ] treeshake (remove unused functions)
+* [x] optimize
+  * high value
+    * [x] treeshake (remove unused funcs/globals/types/tables)
+    * [x] constant folding (`(i32.add (i32.const 1) (i32.const 2))` → `(i32.const 3)`)
+    * [x] dead code elimination (after `unreachable`, `br`, `return`)
+    * [x] local reuse (reuse locals of same type to reduce count)
+  * medium value
+    * [ ] constant propagation (track const values through locals)
+    * [ ] branch simplification (`(if (i32.const 1) A B)` → `A`)
+    * [ ] identity removal (`(i32.add x (i32.const 0))` → `x`)
+    * [ ] strength reduction (`(i32.mul x (i32.const 2))` → `(i32.shl x (i32.const 1))`)
+  * lower priority
+    * [ ] function inlining (inline tiny functions)
+    * [ ] common subexpression (cache repeated expressions)
+    * [ ] loop invariant hoisting (move const ops out of loops)
 
 * [ ] compile wasm component
 
