@@ -106,6 +106,10 @@ i32.parse = n => {
  */
 export function i64(n, buffer = []) {
   if (typeof n === 'string') n = i64.parse(n)
+  // Normalize unsigned to signed: values > MAX_INT64 become negative
+  else if (typeof n === 'bigint' && n > 0x7fffffffffffffffn) {
+    n = n - 0x10000000000000000n
+  }
 
   while (true) {
     const byte = Number(n & 0x7Fn)

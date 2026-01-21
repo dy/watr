@@ -305,11 +305,12 @@ const nontrapping = (ast, ctx) => {
     // if (f > max) return max
     // return trunc(f)
     const truncOp = `${itype}.trunc_${ftype}_${signed ? 's' : 'u'}`
+    const zero = itype === 'i64' ? 0n : 0
     const helper = ['func', id, ['param', '$v', ftype], ['result', itype],
       // NaN check: if v != v return 0
       ['if', ['result', itype],
         [`${ftype}.ne`, ['local.get', '$v'], ['local.get', '$v']],
-        ['then', [`${itype}.const`, 0]],
+        ['then', [`${itype}.const`, zero]],
         ['else',
           // Below min check
           ['if', ['result', itype],

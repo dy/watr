@@ -594,6 +594,43 @@ t('polyfill: nontrapping i32.trunc_sat_f64_s', () => {
   is(trunc(NaN), 0)
 })
 
+t('polyfill: nontrapping i64.trunc_sat_f64_s', () => {
+  const src = `(module
+    (func (export "trunc") (param f64) (result i64)
+      (i64.trunc_sat_f64_s (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'nontrapping')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { trunc } = new WebAssembly.Instance(mod).exports
+
+  is(trunc(1.5), 1n, 'trunc(1.5) = 1')
+  is(trunc(-1.5), -1n, 'trunc(-1.5) = -1')
+  is(trunc(1e30), 9223372036854775807n, 'trunc(1e30) = MAX_INT64')
+  is(trunc(-1e30), -9223372036854775808n, 'trunc(-1e30) = MIN_INT64')
+  is(trunc(NaN), 0n, 'trunc(NaN) = 0')
+})
+
+t('polyfill: nontrapping i64.trunc_sat_f64_u', () => {
+  const src = `(module
+    (func (export "trunc") (param f64) (result i64)
+      (i64.trunc_sat_f64_u (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'nontrapping')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { trunc } = new WebAssembly.Instance(mod).exports
+
+  is(trunc(1.5), 1n, 'trunc(1.5) = 1')
+  is(trunc(0.0), 0n, 'trunc(0) = 0')
+  is(trunc(-1.0), 0n, 'trunc(-1) = 0 (unsigned clamps to 0)')
+  is(trunc(NaN), 0n, 'trunc(NaN) = 0')
+})
+
 // ============================================================================
 // BULK MEMORY POLYFILL TESTS
 // ============================================================================
@@ -882,6 +919,24 @@ t('polyfill: i31ref get_s sign extends', () => {
   is(get_s(0x40000000), -0x40000000, 'get_s(sign bit set) = negative')
 })
 
+t('polyfill: i31ref get_u zero extends', () => {
+  const src = `(module
+    (func (export "get_u") (param i32) (result i32)
+      (i31.get_u (ref.i31 (local.get 0)))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'i31ref')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { get_u } = new WebAssembly.Instance(mod).exports
+
+  is(get_u(42), 42, 'get_u(42) = 42')
+  is(get_u(0x7fffffff), 0x7fffffff, 'get_u(max) = max (masked)')
+  // i31.get_u should not sign extend
+  is(get_u(0x40000000) >>> 0, 0x40000000, 'get_u(sign bit) stays positive')
+})
+
 // ============================================================================
 // EXTENDED CONST POLYFILL TESTS
 // ============================================================================
@@ -960,6 +1015,27 @@ t('polyfill: multi_value single result ok', () => {
   // Should not detect multi_value for single result
   const detected = detect(parse(src))
   ok(!detected.has('multi_value'), 'no multi_value for single result')
+})
+
+t('polyfill: multi_value transform', () => {
+  const src = `(module
+    (func $swap (param i32 i32) (result i32 i32)
+      (local.get 1) (local.get 0)
+    )
+    (func (export "test") (result i32)
+      (local $a i32) (local $b i32)
+      (local.set $a (i32.const 10))
+      (local.set $b (i32.const 20))
+      (call $swap (local.get $a) (local.get $b))
+      (drop)
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'multi_value')
+  const printed = print(ast)
+
+  // Should add globals for extra returns
+  ok(printed.includes('global'), 'multi_value adds globals')
 })
 
 // ============================================================================
@@ -1149,4 +1225,39 @@ t('polyfill: ref.test compiles and runs', () => {
   is(inst.exports.is_point(b), 0, 'box is_point = false')
   is(inst.exports.is_box(p), 0, 'point is_box = false')
   is(inst.exports.is_box(b), 1, 'box is_box = true')
+})
+
+t('polyfill: ref.test null check', () => {
+  const src = `(module
+    (memory (export "mem") 1)
+    (type $point (struct (field i32)))
+
+    (func (export "is_point") (param i32) (result i32)
+      (ref.test (ref $point) (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), { gc: true, ref_cast: true })
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const inst = new WebAssembly.Instance(mod)
+
+  // null (0) should return 0
+  is(inst.exports.is_point(0), 0, 'ref.test(null) = false')
+})
+
+t('polyfill: ref.cast transform', () => {
+  const src = `(module
+    (memory 1)
+    (type $a (struct))
+    (func (export "cast") (param i32) (result i32)
+      (ref.cast (ref $a) (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), { gc: true, ref_cast: true })
+  const printed = print(ast)
+
+  // Should have unreachable for failed cast
+  ok(printed.includes('unreachable'), 'ref.cast has trap path')
 })
