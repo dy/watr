@@ -2,7 +2,7 @@ import { err } from "./util.js"
 
 /**
  * Parses a wasm text string and constructs a nested array structure (AST).
- * Each array node has `.i` property with source offset for error reporting.
+ * Each array node has `.loc` property with source offset for error reporting.
  *
  * @param {string} str - The input string with WAT code to parse.
  * @returns {Array} An array representing the nested syntax tree (AST).
@@ -13,7 +13,7 @@ export default (str) => {
   const commit = () => buf && (level.push(buf), buf = '')
 
   const parseLevel = (pos) => {
-    level.i = pos // store start position for error reporting
+    level.loc = pos // store start position for error reporting
     for (let c, root, p; i < str.length;) {
       c = str.charCodeAt(i)
 

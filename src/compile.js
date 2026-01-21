@@ -7,7 +7,7 @@ import { err, unescape, str } from './util.js'
 
 /**
  * Clean up AST: remove comments, normalize quoted ids, convert strings to bytes.
- * Preserves @custom and @metadata.code.* annotations. Preserves .i for error reporting.
+ * Preserves @custom and @metadata.code.* annotations. Preserves .loc for error reporting.
  *
  * @param {any} node - AST node
  * @param {Array} [result] - Internal accumulator
@@ -25,8 +25,8 @@ const cleanup = (node, result) => !Array.isArray(node) ? (
 ) :
   // remove annotations like (@name ...) except @custom and @metadata.code.*
   node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@metadata.code.') ? null :
-  // unwrap single-element array containing module (after removing comments), preserve .i
-  (result = node.map(cleanup).filter(n => n != null), result.i = node.i, result.length === 1 && result[0]?.[0] === 'module' ? result[0] : result)
+  // unwrap single-element array containing module (after removing comments), preserve .loc
+  (result = node.map(cleanup).filter(n => n != null), result.loc = node.loc, result.length === 1 && result[0]?.[0] === 'module' ? result[0] : result)
 
 
 /**
@@ -39,7 +39,7 @@ export default function compile(nodes) {
   // normalize to (module ...) form
   if (typeof nodes === 'string') err.src = nodes, nodes = parse(nodes) || []
   else err.src = '' // clear source if AST passed directly
-  err.i = 0
+  err.loc = 0
 
   nodes = cleanup(nodes) || []
 
@@ -64,12 +64,22 @@ export default function compile(nodes) {
   // initialize types
   nodes.slice(idx).filter((n) => {
     if (!Array.isArray(n)) {
-      let pos = err.src?.indexOf(n, err.i)
-      if (pos >= 0) err.i = pos
+      // find token as standalone word (not substring of another token)
+      let pos = err.loc, src = err.src, c
+      while ((pos = src.indexOf(n, pos)) >= 0) {
+        c = src.charCodeAt(pos - 1)
+        // check not preceded by word char or $
+        if (pos > 0 && (c > 47 && c < 58 || c > 64 && c < 91 || c > 96 && c < 123 || c === 95 || c === 36)) { pos++; continue }
+        c = src.charCodeAt(pos + n.length)
+        // check not followed by word char
+        if (c > 47 && c < 58 || c > 64 && c < 91 || c > 96 && c < 123 || c === 95) { pos++; continue }
+        break
+      }
+      if (pos >= 0) err.loc = pos
       err(`Unexpected token ${n}`)
     }
     let [kind, ...node] = n
-    err.i = n.i // track position for errors
+    err.loc = n.loc // track position for errors
     // (@custom "name" placement? data) - custom section support
     if (kind === '@custom') {
       ctx.custom.push(node)
@@ -103,7 +113,7 @@ export default function compile(nodes) {
     // prepare/normalize nodes
     .forEach((n) => {
       let [kind, ...node] = n
-      err.i = n.i // track position for errors
+      err.loc = n.loc // track position for errors
       let imported // if node needs to be imported
 
       // import abbr
@@ -266,7 +276,7 @@ function normalize(nodes, ctx) {
     }
     else if (Array.isArray(node)) {
       const op = node[0]
-      node.i != null && (err.i = node.i) // track position for errors
+      node.loc != null && (err.loc = node.loc) // track position for errors
 
       // code metadata annotations - pass through as marker with metadata type and data
       // (@metadata.code.<type> data:str)
@@ -851,7 +861,7 @@ const instr = (nodes, ctx) => {
 
     // Array = unknown instruction passed through from normalize
     if (Array.isArray(op)) {
-      op.i != null && (err.i = op.i)
+      op.loc != null && (err.loc = op.loc)
       err(`Unknown instruction ${op[0]}`)
     }
 

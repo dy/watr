@@ -1,13 +1,13 @@
 /**
  * Throws an error with optional source position.
- * Uses err.src for source and err.i for default position.
- * If pos provided or err.i set, appends "at line:col".
+ * Uses err.src for source and err.loc for default position.
+ * If pos provided or err.loc set, appends "at line:col".
  *
  * @param {string} text - Error message
- * @param {number} [pos] - Byte offset in source (defaults to err.i)
+ * @param {number} [pos] - Byte offset in source (defaults to err.loc)
  * @throws {Error}
  */
-export const err = (text, pos=err.i) => {
+export const err = (text, pos=err.loc) => {
   if (pos != null && err.src) {
     let line = 1, col = 1
     for (let i = 0; i < pos && i < err.src.length; i++) {
