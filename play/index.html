@@ -308,6 +308,24 @@
         animation: flash 0.3s ease-out;
       }
 
+      #binary[data-copied]::before {
+        content: 'Copied!';
+        position: absolute;
+        top: 0;
+        right: 0;
+        background: gainsboro;
+        color: gray;
+        padding: 0.25rem 0.5rem;
+        border-radius: 3px;
+        font-size: 0.75rem;
+        animation: fadeout 1s ease-out forwards;
+      }
+
+      @keyframes fadeout {
+        0%, 70% { opacity: 1; }
+        100% { opacity: 0; }
+      }
+
       @keyframes flash {
         0% { opacity: 0.4; }
         100% { opacity: 1; }
@@ -1121,6 +1139,14 @@
         if (!buf) return
         const base64 = btoa(String.fromCharCode(...buf))
         navigator.clipboard.writeText(base64)
+        // Flash binary and show copied indicator
+        const el = state.binaryEl
+        el.classList.add('flash')
+        el.dataset.copied = 'true'
+        setTimeout(() => {
+          el.classList.remove('flash')
+          delete el.dataset.copied
+        }, 1000)
       },
 
       // Toggle between prettify/minify
