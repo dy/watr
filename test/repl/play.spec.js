@@ -12,7 +12,6 @@ async function getState(page) {
       error: window.state?.error,
       compiler: window.state?.compiler,
       prettified: window.state?.prettified,
-      polyfill: window.state?.polyfill,
     };
   });
 }
@@ -181,28 +180,26 @@ test.describe('REPL', () => {
     expect(state.sourceCode).toMatch(/  \w/); // 2 spaces before a word
   });
 
-  test('polyfill toggle works with watr compiler', async ({ page }) => {
-    // Polyfill checkbox only visible when watr selected
-    await expect(page.locator('label:has-text("polyfill")')).toBeVisible();
+  test('polyfill button works with watr compiler', async ({ page }) => {
+    // Polyfill button only visible when watr selected
+    await expect(page.locator('button:has-text("polyfill")')).toBeVisible();
 
-    // Enable polyfill
-    await page.click('input[type="checkbox"]');
+    // Set some code with sign extension op
+    await setSource(page, '(module (func (result i32) (i32.extend8_s (i32.const -1))))');
+    await page.waitForTimeout(300);
+
+    // Click polyfill button
+    await page.click('button:has-text("polyfill")');
     await page.waitForTimeout(500);
 
     let state = await getState(page);
-    expect(state.polyfill).toBe(true);
+    // Should have transformed the code (sign extension polyfilled)
+    expect(state.sourceCode).toContain('i32.shl');
+    expect(state.error).toBe(false);
 
-    // Switch to another compiler - polyfill hidden
+    // Switch to another compiler - polyfill button hidden
     await page.evaluate(() => { window.state.compiler = 'wabt' });
     await page.waitForTimeout(100);
-    await expect(page.locator('label:has-text("polyfill")')).toBeHidden();
-
-    // Switch back - polyfill still enabled
-    await page.evaluate(() => { window.state.compiler = 'watr' });
-    await page.waitForTimeout(100);
-    await expect(page.locator('label:has-text("polyfill")')).toBeVisible();
-
-    state = await getState(page);
-    expect(state.polyfill).toBe(true);
+    await expect(page.locator('button:has-text("polyfill")')).toBeHidden();
   });
 });

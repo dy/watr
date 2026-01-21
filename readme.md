@@ -18,15 +18,20 @@ _Light & fast WAT compiler_
 ## Usage
 
 ```js
-import watr, { compile, parse, print } from 'watr'
+import watr, { compile, polyfill, parse, print } from 'watr'
 
 // compile to binary
 const binary = compile('(func (export "f") (result f64) (f64.const 1))')
 const module = new WebAssembly.Module(binary)
 const { f } = new WebAssembly.Instance(module).exports
 
-// parse / print
+// parse
 parse('(i32.const 42)') // ['i32.const', 42]
+
+// polyfill (transform newer features to MVP)
+print(polyfill('(func (i32.extend8_s ...))')) // (func (i32.shr_s (i32.shl ...) ...))
+
+// print
 print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)\n    ...
 
 // instant wasm function

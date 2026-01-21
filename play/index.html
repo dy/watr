@@ -184,6 +184,8 @@
     <button :onclick="toggleFormat()" :title="prettified ? 'Minify WAT source' : 'Prettify WAT source'" :aria-label="prettified ? 'Minify WAT code' : 'Prettify WAT code'" :icon="prettified ? '🗜️' : '🪷'"><span
         :text="prettified ? ' minify' : ' prettify'"></span></button>
 
+    <button :hidden="compiler !== 'watr'" :onclick="applyPolyfill()" title="Polyfill GC, sign-ext, nontrapping, bulk, return_call, i31ref, extended_const, multi_value, funcref" icon="🔧"> polyfill</button>
+
     <button style="margin-left: auto" :onclick="download()" title="Download WASM binary" aria-label="Download WASM binary" icon="📥"> .wasm</button>
     <button :onclick="copyBase64()" title="Copy binary as base64 string" aria-label="Copy binary as base64 string" icon="📑"> base64</button>
   </nav>
@@ -387,7 +389,7 @@
   <script type="module">
     import sprae from './lib/sprae.js'
     import Codejar from './lib/codejar.js'
-    import { compile as watrCompile, print } from '../watr.js'
+    import { compile as watrCompile, print, parse, polyfill as watrPolyfill } from '../watr.js'
 
     const SECTION = 'custom type import func table memory global export start elem code data datacount'.split(' ')
 
@@ -1135,6 +1137,16 @@
           state.prettified = true
         }
         state.updateUrlHash()
+      },
+
+      // Apply polyfill transform to source
+      applyPolyfill() {
+        const ast = watrPolyfill(state.sourceCode, true)
+        const code = print(ast)
+        codejar.updateCode(code)
+        state.sourceCode = code
+        state.prettified = true
+        state.recompile()
       }
     })
 
