@@ -430,6 +430,33 @@ watr`(func (export "g") (param i64) (result i64) (i64.mul (local.get 0) (i64.con
 ```
 
 
+## Features
+
+| Feature | Status | Polyfill |
+|---------|--------|----------|
+| [MVP](https://webassembly.org/docs/mvp/) | yes | n/a |
+| [BigInt / i64](https://github.com/WebAssembly/JS-BigInt-integration) | yes | n/a |
+| [Multi-value](https://github.com/WebAssembly/multi-value) | yes | partial (no blocks) |
+| [Sign extension](https://github.com/WebAssembly/sign-extension-ops) | yes | yes |
+| [Non-trapping conversions](https://github.com/WebAssembly/nontrapping-float-to-int-conversions) | yes | yes |
+| [Bulk memory](https://github.com/WebAssembly/bulk-memory-operations) | yes | copy/fill only |
+| [Reference types](https://github.com/WebAssembly/reference-types) | yes | funcref only |
+| [Typed function refs](https://github.com/WebAssembly/function-references) | yes | yes |
+| [Tail calls](https://github.com/WebAssembly/tail-call) | yes | yes |
+| [Extended const](https://github.com/WebAssembly/extended-const) | yes | yes |
+| [Multiple memories](https://github.com/WebAssembly/multi-memory) | yes | n/a |
+| [Memory64](https://github.com/WebAssembly/memory64) | yes | no |
+| [SIMD](https://github.com/WebAssembly/simd) | yes | no |
+| [Relaxed SIMD](https://github.com/WebAssembly/relaxed-simd) | yes | no |
+| [Threads](https://github.com/WebAssembly/threads) | yes | no |
+| [GC](https://github.com/WebAssembly/gc) | yes | i31/struct/array/cast |
+| [Exceptions](https://github.com/WebAssembly/exception-handling) | yes | no |
+| [Annotations](https://github.com/WebAssembly/annotations) | yes | n/a |
+| [Wide arithmetic](https://github.com/WebAssembly/wide-arithmetic) | yes | n/a |
+| [JS string builtins](https://github.com/WebAssembly/js-string-builtins) | yes | n/a |
+
+**Legend**: `yes` = full support, `partial` = limited, `no` = not feasible, `n/a` = MVP or no runtime impact
+
 ## See Also
 
 * [Examples](./test/example/)
