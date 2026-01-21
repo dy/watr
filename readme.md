@@ -1,13 +1,28 @@
-# ![logo](./logo.svg) watr [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![demo](https://img.shields.io/badge/play-%F0%9F%9A%80-white)](https://dy.github.io/watr/play/)
+<h1 align=center> <img src="./logo.svg"><br> watr</h1>
+
+<div align="center">
+
+[![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![demo](https://img.shields.io/badge/play-%F0%9F%9A%80-white)](https://dy.github.io/watr/play/)
+
+</div>
+
+<p align="center">
 
 Light & fast WAT compiler: **[docs](./docs.md)**, **[play](https://dy.github.io/watr/play/)**
 
-* [feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
-* parse · compile · print · minify · polyfill
-* instant wasm, JS interop, clear errors
+</p>
 
+<div align="center">
+
+[feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
+<br>
+parse · compile · print · minify · polyfill
+<br>
+instant wasm, JS interop, clear errors
+<br><br>
 Useful for backends, JIT compilers, DSLs, code generators, dev tools.
 
+</div>
 
 ## Usage
 
