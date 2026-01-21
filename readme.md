@@ -1,4 +1,4 @@
-# <img src="./logo.svg" height="16"> watr [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml) 
+# <img src="./logo.svg" height="16"> watr [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml)
 
 <div align="left">
 
@@ -59,7 +59,6 @@ npx watr input.wat --polyfill   # polyfill newer features to MVP
 [wabt](https://github.com/WebAssembly/wabt) | 282 KB | 1,273 op/s
 [binaryen](https://github.com/WebAssembly/binaryen) | 1,100 KB | 718 op/s
 [wat-compiler](https://github.com/stagas/wat-compiler) | 7.7 KB (MVP) | 539 op/s |
-
 
 
 ## Used by
