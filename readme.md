@@ -1,23 +1,17 @@
-<h1 align=center> <img src="./logo.svg"><br> watr</h1>
+# <img src="./logo.svg" height="16"> watr [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml) 
 
-<div align="center">
+<div align="left">
 
-[![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr)
+_Light & fast WAT compiler_
 
-</div>
+* [feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
+* parse · compile · polyfill · print · minify
+* instant wasm, JS interop, clear errors
 
-<div align="center">
+**[docs](./docs.md)**  **·**  **[demo](https://dy.github.io/watr/play/)**
 
-Light & fast WAT compiler: **[docs](./docs.md)**, **[demo](https://dy.github.io/watr/play/)**
-<br>
 
-[feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
-<br>
-parse · compile · print · minify · polyfill
-<br>
-instant wasm, JS interop, clear errors
-<br><br>
-Useful for backends, JIT compilers, DSLs, code generators, dev tools.
+<!-- _Use for_: backends, compilers, DSLs, codegen, dev tools -->
 
 </div>
 
