@@ -72,7 +72,7 @@ Options:
   -p, --print           Pretty-print WAT to stdout
   -m, --minify          Minify WAT to stdout
   -O, --optimize [opts] Optimize AST (default: all)
-                        Options: treeshake fold deadcode locals
+                        Options: fold identity strength branch deadcode locals treeshake
   --polyfill [features] Polyfill newer features to MVP (default: all)
                         Features: funcref sign_ext nontrapping bulk_memory
                                   return_call i31ref extended_const multi_value

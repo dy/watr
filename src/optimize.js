@@ -12,7 +12,10 @@ const OPTS = {
   treeshake: true,    // remove unused funcs/globals/types/tables
   fold: true,         // constant folding
   deadcode: true,     // eliminate dead code after unreachable/br/return
-  locals: true,       // reuse locals of same type
+  locals: true,       // remove unused locals
+  identity: true,     // remove identity ops (x + 0 → x)
+  strength: true,     // strength reduction (x * 2 → x << 1)
+  branch: true,       // simplify constant branches
 }
 
 /** All optimization names */
@@ -437,6 +440,263 @@ const fold = (ast) => {
   })
 }
 
+// ==================== IDENTITY REMOVAL ====================
+
+/** Identity operations that can be simplified */
+const IDENTITIES = {
+  // x + 0 → x, 0 + x → x
+  'i32.add': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === 0) return b
+    if (cb?.value === 0) return a
+    return null
+  },
+  'i64.add': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === 0n) return b
+    if (cb?.value === 0n) return a
+    return null
+  },
+  // x - 0 → x
+  'i32.sub': (a, b) => getConst(b)?.value === 0 ? a : null,
+  'i64.sub': (a, b) => getConst(b)?.value === 0n ? a : null,
+  // x * 1 → x, 1 * x → x
+  'i32.mul': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === 1) return b
+    if (cb?.value === 1) return a
+    return null
+  },
+  'i64.mul': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === 1n) return b
+    if (cb?.value === 1n) return a
+    return null
+  },
+  // x / 1 → x
+  'i32.div_s': (a, b) => getConst(b)?.value === 1 ? a : null,
+  'i32.div_u': (a, b) => getConst(b)?.value === 1 ? a : null,
+  'i64.div_s': (a, b) => getConst(b)?.value === 1n ? a : null,
+  'i64.div_u': (a, b) => getConst(b)?.value === 1n ? a : null,
+  // x & -1 → x, -1 & x → x (all bits set)
+  'i32.and': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === -1) return b
+    if (cb?.value === -1) return a
+    return null
+  },
+  'i64.and': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === -1n) return b
+    if (cb?.value === -1n) return a
+    return null
+  },
+  // x | 0 → x, 0 | x → x
+  'i32.or': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === 0) return b
+    if (cb?.value === 0) return a
+    return null
+  },
+  'i64.or': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === 0n) return b
+    if (cb?.value === 0n) return a
+    return null
+  },
+  // x ^ 0 → x, 0 ^ x → x
+  'i32.xor': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === 0) return b
+    if (cb?.value === 0) return a
+    return null
+  },
+  'i64.xor': (a, b) => {
+    const ca = getConst(a), cb = getConst(b)
+    if (ca?.value === 0n) return b
+    if (cb?.value === 0n) return a
+    return null
+  },
+  // x << 0 → x, x >> 0 → x
+  'i32.shl': (a, b) => getConst(b)?.value === 0 ? a : null,
+  'i32.shr_s': (a, b) => getConst(b)?.value === 0 ? a : null,
+  'i32.shr_u': (a, b) => getConst(b)?.value === 0 ? a : null,
+  'i64.shl': (a, b) => getConst(b)?.value === 0n ? a : null,
+  'i64.shr_s': (a, b) => getConst(b)?.value === 0n ? a : null,
+  'i64.shr_u': (a, b) => getConst(b)?.value === 0n ? a : null,
+  // f + 0 → x (careful with -0.0, skip for floats)
+  // f * 1 → x (careful with NaN, skip for floats)
+}
+
+/**
+ * Remove identity operations.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const identity = (ast) => {
+  return walkPost(clone(ast), (node) => {
+    if (!Array.isArray(node) || node.length !== 3) return
+    const fn = IDENTITIES[node[0]]
+    if (!fn) return
+    const result = fn(node[1], node[2])
+    if (result === null) return  // no optimization, keep original
+    return result
+  })
+}
+
+// ==================== STRENGTH REDUCTION ====================
+
+/**
+ * Strength reduction: replace expensive ops with cheaper equivalents.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const strength = (ast) => {
+  return walkPost(clone(ast), (node) => {
+    if (!Array.isArray(node) || node.length !== 3) return
+    const [op, a, b] = node
+
+    // x * 2^n → x << n
+    if (op === 'i32.mul') {
+      const cb = getConst(b)
+      if (cb && cb.value > 0 && (cb.value & (cb.value - 1)) === 0) {
+        const shift = Math.log2(cb.value)
+        if (Number.isInteger(shift)) return ['i32.shl', a, ['i32.const', shift]]
+      }
+      const ca = getConst(a)
+      if (ca && ca.value > 0 && (ca.value & (ca.value - 1)) === 0) {
+        const shift = Math.log2(ca.value)
+        if (Number.isInteger(shift)) return ['i32.shl', b, ['i32.const', shift]]
+      }
+    }
+    if (op === 'i64.mul') {
+      const cb = getConst(b)
+      if (cb && cb.value > 0n && (cb.value & (cb.value - 1n)) === 0n) {
+        const shift = BigInt(cb.value.toString(2).length - 1)
+        return ['i64.shl', a, ['i64.const', shift]]
+      }
+      const ca = getConst(a)
+      if (ca && ca.value > 0n && (ca.value & (ca.value - 1n)) === 0n) {
+        const shift = BigInt(ca.value.toString(2).length - 1)
+        return ['i64.shl', b, ['i64.const', shift]]
+      }
+    }
+
+    // x / 2^n → x >> n (unsigned only, signed division is more complex)
+    if (op === 'i32.div_u') {
+      const cb = getConst(b)
+      if (cb && cb.value > 0 && (cb.value & (cb.value - 1)) === 0) {
+        const shift = Math.log2(cb.value)
+        if (Number.isInteger(shift)) return ['i32.shr_u', a, ['i32.const', shift]]
+      }
+    }
+    if (op === 'i64.div_u') {
+      const cb = getConst(b)
+      if (cb && cb.value > 0n && (cb.value & (cb.value - 1n)) === 0n) {
+        const shift = BigInt(cb.value.toString(2).length - 1)
+        return ['i64.shr_u', a, ['i64.const', shift]]
+      }
+    }
+
+    // x % 2^n → x & (2^n - 1) (unsigned only)
+    if (op === 'i32.rem_u') {
+      const cb = getConst(b)
+      if (cb && cb.value > 0 && (cb.value & (cb.value - 1)) === 0) {
+        return ['i32.and', a, ['i32.const', cb.value - 1]]
+      }
+    }
+    if (op === 'i64.rem_u') {
+      const cb = getConst(b)
+      if (cb && cb.value > 0n && (cb.value & (cb.value - 1n)) === 0n) {
+        return ['i64.and', a, ['i64.const', cb.value - 1n]]
+      }
+    }
+  })
+}
+
+// ==================== BRANCH SIMPLIFICATION ====================
+
+/**
+ * Simplify branches with constant conditions.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const branch = (ast) => {
+  return walkPost(clone(ast), (node) => {
+    if (!Array.isArray(node)) return
+    const op = node[0]
+
+    // (if (i32.const 0) then else) → else
+    // (if (i32.const N) then else) → then (N != 0)
+    if (op === 'if') {
+      // Find condition - first non-annotation child that's an expression
+      let condIdx = 1
+      while (condIdx < node.length) {
+        const child = node[condIdx]
+        if (Array.isArray(child) && (child[0] === 'then' || child[0] === 'else' || child[0] === 'result' || child[0] === 'param')) {
+          condIdx++
+          continue
+        }
+        break
+      }
+
+      const cond = node[condIdx]
+      const c = getConst(cond)
+      if (!c) return
+
+      // Find then/else branches
+      let thenBranch = null, elseBranch = null
+      for (let i = condIdx + 1; i < node.length; i++) {
+        const child = node[i]
+        if (Array.isArray(child)) {
+          if (child[0] === 'then') thenBranch = child
+          else if (child[0] === 'else') elseBranch = child
+        }
+      }
+
+      // Condition is truthy → replace with then contents
+      if (c.value !== 0 && c.value !== 0n) {
+        if (thenBranch && thenBranch.length > 1) {
+          // Return block with then contents (or just contents if single)
+          const contents = thenBranch.slice(1)
+          if (contents.length === 1) return contents[0]
+          return ['block', ...contents]
+        }
+        return ['nop']
+      }
+      // Condition is falsy → replace with else contents
+      else {
+        if (elseBranch && elseBranch.length > 1) {
+          const contents = elseBranch.slice(1)
+          if (contents.length === 1) return contents[0]
+          return ['block', ...contents]
+        }
+        return ['nop']
+      }
+    }
+
+    // (br_if $label (i32.const 0)) → nop
+    // (br_if $label (i32.const N)) → br $label (N != 0)
+    if (op === 'br_if' && node.length >= 3) {
+      const cond = node[node.length - 1]
+      const c = getConst(cond)
+      if (!c) return
+      if (c.value === 0 || c.value === 0n) return ['nop']
+      return ['br', node[1]]
+    }
+
+    // (select a b (i32.const 0)) → b
+    // (select a b (i32.const N)) → a (N != 0)
+    if (op === 'select' && node.length >= 4) {
+      const cond = node[node.length - 1]
+      const c = getConst(cond)
+      if (!c) return
+      if (c.value === 0 || c.value === 0n) return node[2] // b
+      return node[1] // a
+    }
+  })
+}
+
 // ==================== DEAD CODE ELIMINATION ====================
 
 /** Control flow terminators */
@@ -598,6 +858,9 @@ export default function optimize(ast, opts = true) {
   opts = normalize(opts)
 
   if (opts.fold) ast = fold(ast)
+  if (opts.identity) ast = identity(ast)
+  if (opts.strength) ast = strength(ast)
+  if (opts.branch) ast = branch(ast)
   if (opts.deadcode) ast = deadcode(ast)
   if (opts.locals) ast = localReuse(ast)
   if (opts.treeshake) ast = treeshake(ast)
@@ -605,4 +868,4 @@ export default function optimize(ast, opts = true) {
   return ast
 }
 
-export { optimize, treeshake, fold, deadcode, localReuse, normalize, OPTS }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, normalize, OPTS }

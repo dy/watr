@@ -192,11 +192,11 @@
     * [x] dead code elimination (after `unreachable`, `br`, `return`)
     * [x] local reuse (reuse locals of same type to reduce count)
   * medium value
-    * [ ] constant propagation (track const values through locals)
-    * [ ] branch simplification (`(if (i32.const 1) A B)` → `A`)
-    * [ ] identity removal (`(i32.add x (i32.const 0))` → `x`)
-    * [ ] strength reduction (`(i32.mul x (i32.const 2))` → `(i32.shl x (i32.const 1))`)
+    * [x] branch simplification (`(if (i32.const 1) A B)` → `A`)
+    * [x] identity removal (`(i32.add x (i32.const 0))` → `x`)
+    * [x] strength reduction (`(i32.mul x (i32.const 2))` → `(i32.shl x (i32.const 1))`)
   * lower priority
+    * [ ] constant propagation (track const values through locals)
     * [ ] function inlining (inline tiny functions)
     * [ ] common subexpression (cache repeated expressions)
     * [ ] loop invariant hoisting (move const ops out of loops)

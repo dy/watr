@@ -141,8 +141,9 @@ print(optimize('(func (i32.add (i32.const 1) (i32.const 2)))'))
 | `fold` | Constant folding | `(i32.add (i32.const 1) (i32.const 2))` → `(i32.const 3)` |
 | `deadcode` | Remove unreachable code | Code after `unreachable`, `br`, `return` |
 | `locals` | Remove unused locals | Locals never read/written |
-| `treeshake` | Remove unused definitions | Functions/globals not exported or called |
-
+| `treeshake` | Remove unused definitions | Functions/globals not exported or called || `identity` | Remove identity ops | `(i32.add x (i32.const 0))` → `x` |
+| `strength` | Strength reduction | `(i32.mul x (i32.const 2))` → `(i32.shl x (i32.const 1))` |
+| `branch` | Simplify constant branches | `(if (i32.const 1) A B)` → `A` |
 ### `parse(source, options?)`
 
 Parse to AST.

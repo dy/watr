@@ -92,6 +92,108 @@ test('deadcode: preserves live code', () => {
   assert(src.includes('i32.add'), 'should keep add')
 })
 
+// ==================== IDENTITY REMOVAL ====================
+
+test('identity: x + 0 → x', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.add (local.get $x) (i32.const 0))))')
+  const opt = optimize(ast, 'identity')
+  const src = print(opt)
+  assert(!src.includes('i32.add'), 'should remove add with 0')
+  assert(!src.includes('i32.const 0'), 'should remove const 0')
+  assert(src.includes('local.get'), 'should keep local.get')
+})
+
+test('identity: x * 1 → x', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.mul (local.get $x) (i32.const 1))))')
+  const opt = optimize(ast, 'identity')
+  const src = print(opt)
+  assert(!src.includes('i32.mul'), 'should remove mul with 1')
+})
+
+test('identity: x | 0 → x', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.or (i32.const 0) (local.get $x))))')
+  const opt = optimize(ast, 'identity')
+  const src = print(opt)
+  assert(!src.includes('i32.or'), 'should remove or with 0')
+})
+
+test('identity: x << 0 → x', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.shl (local.get $x) (i32.const 0))))')
+  const opt = optimize(ast, 'identity')
+  const src = print(opt)
+  assert(!src.includes('i32.shl'), 'should remove shift by 0')
+})
+
+// ==================== STRENGTH REDUCTION ====================
+
+test('strength: x * 2 → x << 1', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.mul (local.get $x) (i32.const 2))))')
+  const opt = optimize(ast, 'strength')
+  const src = print(opt)
+  assert(!src.includes('i32.mul'), 'should remove mul')
+  assert(src.includes('i32.shl'), 'should have shift')
+  assert(src.includes('i32.const 1'), 'should shift by 1')
+})
+
+test('strength: x * 8 → x << 3', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.mul (local.get $x) (i32.const 8))))')
+  const opt = optimize(ast, 'strength')
+  const src = print(opt)
+  assert(src.includes('i32.shl'), 'should have shift')
+  assert(src.includes('i32.const 3'), 'should shift by 3')
+})
+
+test('strength: x / 4 (unsigned) → x >> 2', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.div_u (local.get $x) (i32.const 4))))')
+  const opt = optimize(ast, 'strength')
+  const src = print(opt)
+  assert(!src.includes('i32.div_u'), 'should remove div')
+  assert(src.includes('i32.shr_u'), 'should have shift')
+})
+
+test('strength: x % 8 (unsigned) → x & 7', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.rem_u (local.get $x) (i32.const 8))))')
+  const opt = optimize(ast, 'strength')
+  const src = print(opt)
+  assert(!src.includes('i32.rem_u'), 'should remove rem')
+  assert(src.includes('i32.and'), 'should have and')
+  assert(src.includes('i32.const 7'), 'should mask with 7')
+})
+
+// ==================== BRANCH SIMPLIFICATION ====================
+
+test('branch: if const true → then', () => {
+  const ast = parse('(module (func (result i32) (if (result i32) (i32.const 1) (then (i32.const 42)) (else (i32.const 0)))))')
+  const opt = optimize(ast, 'branch')
+  const src = print(opt)
+  assert(src.includes('i32.const 42'), 'should keep then value')
+  assert(!src.includes('i32.const 0'), 'should remove else value')
+  assert(!src.includes('if'), 'should remove if')
+})
+
+test('branch: if const false → else', () => {
+  const ast = parse('(module (func (result i32) (if (result i32) (i32.const 0) (then (i32.const 42)) (else (i32.const 99)))))')
+  const opt = optimize(ast, 'branch')
+  const src = print(opt)
+  assert(!src.includes('i32.const 42'), 'should remove then value')
+  assert(src.includes('i32.const 99'), 'should keep else value')
+})
+
+test('branch: br_if const false → nop', () => {
+  const ast = parse('(module (func (block $b (br_if $b (i32.const 0)))))')
+  const opt = optimize(ast, 'branch')
+  const src = print(opt)
+  assert(!src.includes('br_if'), 'should remove br_if')
+})
+
+test('branch: select const → chosen value', () => {
+  const ast = parse('(module (func (result i32) (select (i32.const 1) (i32.const 2) (i32.const 1))))')
+  const opt = optimize(ast, 'branch')
+  const src = print(opt)
+  assert(!src.includes('select'), 'should remove select')
+  // Should keep the first value (condition is truthy)
+})
+
 // ==================== LOCAL REUSE ====================
 
 test('locals: removes unused', () => {
