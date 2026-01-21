@@ -18,6 +18,9 @@ const FEATURES = {
   i31ref: ['ref.i31', 'i31.get_s', 'i31.get_u'],
   extended_const: ['global.get'], // in const context - detected specially
   multi_value: [], // detected by result count
+  gc: ['struct.new', 'struct.get', 'struct.set', 'array.new', 'array.get', 'array.set', 'array.len',
+    'struct.new_default', 'array.new_default', 'array.new_fixed', 'array.copy'],
+  ref_cast: ['ref.test', 'ref.cast', 'br_on_cast', 'br_on_cast_fail'],
 }
 
 /** All feature names */
@@ -692,6 +695,485 @@ const multi_value = (ast, ctx) => {
 }
 
 transforms.multi_value = multi_value
+
+// ============================================================================
+// GC (STRUCT/ARRAY) POLYFILL
+// Transforms GC types to linear memory with bump allocator.
+// Each struct/array gets a type tag stored at offset 0.
+// Layout: [type_tag:i32][...fields/elements]
+// ============================================================================
+
+const TYPE_SIZES = { i32: 4, i64: 8, f32: 4, f64: 8 }
+
+const gc = (ast, ctx) => {
+  // Collect type definitions
+  const types = new Map() // typeid -> { kind: 'struct'|'array', fields: [...] }
+  const typeIndices = new Map() // typeid -> numeric index for type tag
+
+  let typeIdx = 1 // 0 reserved for null
+  walk(ast, node => {
+    if (!Array.isArray(node) || node[0] !== 'type') return
+    const id = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
+    if (!id) return
+
+    for (const def of node) {
+      if (!Array.isArray(def)) continue
+
+      if (def[0] === 'struct') {
+        const fields = []
+        for (const f of def) {
+          if (Array.isArray(f) && f[0] === 'field') {
+            const fname = typeof f[1] === 'string' && f[1][0] === '$' ? f[1] : null
+            const ftype = fname ? f[2] : f[1]
+            // Handle (mut type) wrapper
+            const actualType = Array.isArray(ftype) && ftype[0] === 'mut' ? ftype[1] : ftype
+            fields.push({ name: fname, type: actualType })
+          }
+        }
+        types.set(id, { kind: 'struct', fields })
+        typeIndices.set(id, typeIdx++)
+      }
+
+      if (def[0] === 'array') {
+        // (array (mut i32)) or (array i32)
+        const elemDef = def[1]
+        const elemType = Array.isArray(elemDef) && elemDef[0] === 'mut' ? elemDef[1] : elemDef
+        types.set(id, { kind: 'array', elemType })
+        typeIndices.set(id, typeIdx++)
+      }
+    }
+  })
+
+  if (!types.size) return ast
+
+  // Ensure memory exists, add bump allocator global
+  const hasMemory = findNodes(ast, 'memory').length > 0
+  const allocId = genId('alloc')
+  const heapPtrId = genId('heap_ptr')
+  const insertPos = ast[0] === 'module' ? 1 : 0
+
+  if (!hasMemory) {
+    insert(ast, insertPos, ['memory', 1])
+  }
+
+  // Add heap pointer global (starts at 1024 to leave space for stack)
+  insert(ast, insertPos + 1, ['global', heapPtrId, ['mut', 'i32'], ['i32.const', 1024]])
+
+  // Add allocator function: (func $alloc (param $size i32) (result i32) ...)
+  const allocFunc = ['func', allocId, ['param', '$size', 'i32'], ['result', 'i32'],
+    ['local', '$ptr', 'i32'],
+    ['local.set', '$ptr', ['global.get', heapPtrId]],
+    ['global.set', heapPtrId, ['i32.add', ['global.get', heapPtrId], ['local.get', '$size']]],
+    ['local.get', '$ptr']
+  ]
+  ast.push(allocFunc)
+
+  // Helper: calculate struct size
+  const structSize = (typeDef) => {
+    let size = 4 // type tag
+    for (const f of typeDef.fields) {
+      size += TYPE_SIZES[f.type] || 4 // default to i32 for ref types
+    }
+    return size
+  }
+
+  // Helper: calculate field offset
+  const fieldOffset = (typeDef, fieldIdx) => {
+    let offset = 4 // skip type tag
+    for (let i = 0; i < fieldIdx; i++) {
+      offset += TYPE_SIZES[typeDef.fields[i].type] || 4
+    }
+    return offset
+  }
+
+  // Helper: find field index by name
+  const findFieldIdx = (typeDef, fieldName) => {
+    for (let i = 0; i < typeDef.fields.length; i++) {
+      if (typeDef.fields[i].name === fieldName) return i
+    }
+    return -1
+  }
+
+  // Generate unique local names per function
+  let localCounter = 0
+  const genLocal = () => `$__gc_tmp${localCounter++}`
+
+  // First pass: find functions that need gc locals, add them
+  walk(ast, node => {
+    if (!Array.isArray(node) || node[0] !== 'func') return
+
+    let needsStructPtr = false
+    let needsArrayPtr = false
+    let needsArrayLen = false
+    let needsArrayIdx = false
+
+    walk(node, n => {
+      if (!Array.isArray(n)) return
+      if (n[0] === 'struct.new' || n[0] === 'struct.new_default') needsStructPtr = true
+      if (n[0] === 'array.new' || n[0] === 'array.new_default') {
+        needsArrayPtr = true
+        needsArrayLen = true
+        needsArrayIdx = true
+      }
+    })
+
+    if (!needsStructPtr && !needsArrayPtr) return
+
+    // Find insertion point (after params, results, locals, exports, type, before body)
+    let insertIdx = 1
+    for (let i = 1; i < node.length; i++) {
+      const item = node[i]
+      if (Array.isArray(item) && (item[0] === 'param' || item[0] === 'result' || item[0] === 'local' || item[0] === 'export' || item[0] === 'type')) {
+        insertIdx = i + 1
+      } else if (typeof item === 'string' && item[0] === '$') {
+        insertIdx = i + 1 // skip function name
+      } else if (!Array.isArray(item)) {
+        // skip scalars that aren't body
+        insertIdx = i + 1
+      } else {
+        break
+      }
+    }
+
+    if (needsStructPtr) node.splice(insertIdx++, 0, ['local', '$__gc_ptr', 'i32'])
+    if (needsArrayPtr) node.splice(insertIdx++, 0, ['local', '$__gc_aptr', 'i32'])
+    if (needsArrayLen) node.splice(insertIdx++, 0, ['local', '$__gc_alen', 'i32'])
+    if (needsArrayIdx) node.splice(insertIdx++, 0, ['local', '$__gc_aidx', 'i32'])
+  })
+
+  // Transform GC operations
+  walkPost(ast, (node, parent, idx) => {
+    if (!Array.isArray(node) || !parent) return
+
+    // struct.new $type arg1 arg2 ... → alloc + stores + return ptr
+    if (node[0] === 'struct.new' || node[0] === 'struct.new_default') {
+      const typeId = node[1]
+      const typeDef = types.get(typeId)
+      if (!typeDef || typeDef.kind !== 'struct') return
+
+      const size = structSize(typeDef)
+      const typeTag = typeIndices.get(typeId)
+      const args = node.slice(2)
+      const ptrLocal = '$__gc_ptr'
+
+      // Build sequence: alloc, store tag, store fields, return ptr
+      const stores = [
+        ['local.set', ptrLocal, ['call', allocId, ['i32.const', size]]],
+        ['i32.store', ['local.get', ptrLocal], ['i32.const', typeTag]] // store type tag
+      ]
+
+      if (node[0] === 'struct.new') {
+        // Store each field value
+        for (let i = 0; i < typeDef.fields.length; i++) {
+          const f = typeDef.fields[i]
+          const offset = fieldOffset(typeDef, i)
+          const storeOp = f.type === 'i64' ? 'i64.store' : f.type === 'f32' ? 'f32.store' : f.type === 'f64' ? 'f64.store' : 'i32.store'
+          stores.push([storeOp, ['i32.add', ['local.get', ptrLocal], ['i32.const', offset]], args[i] || [`${f.type}.const`, 0]])
+        }
+      } else {
+        // struct.new_default - zero initialize
+        for (let i = 0; i < typeDef.fields.length; i++) {
+          const f = typeDef.fields[i]
+          const offset = fieldOffset(typeDef, i)
+          const storeOp = f.type === 'i64' ? 'i64.store' : f.type === 'f32' ? 'f32.store' : f.type === 'f64' ? 'f64.store' : 'i32.store'
+          const zero = f.type === 'i64' ? ['i64.const', 0n] : f.type === 'f32' ? ['f32.const', 0] : f.type === 'f64' ? ['f64.const', 0] : ['i32.const', 0]
+          stores.push([storeOp, ['i32.add', ['local.get', ptrLocal], ['i32.const', offset]], zero])
+        }
+      }
+
+      stores.push(['local.get', ptrLocal])
+
+      // Wrap in block
+      parent[idx] = ['block', ['result', 'i32'], ...stores]
+    }
+
+    // struct.get $type $field ref → load from offset
+    if (node[0] === 'struct.get') {
+      const typeId = node[1]
+      const fieldId = node[2]
+      const ref = node[3]
+      const typeDef = types.get(typeId)
+      if (!typeDef || typeDef.kind !== 'struct') return
+
+      const fieldIdx = typeof fieldId === 'string' && fieldId[0] === '$'
+        ? findFieldIdx(typeDef, fieldId)
+        : parseInt(fieldId)
+      if (fieldIdx < 0) return
+
+      const f = typeDef.fields[fieldIdx]
+      const offset = fieldOffset(typeDef, fieldIdx)
+      const loadOp = f.type === 'i64' ? 'i64.load' : f.type === 'f32' ? 'f32.load' : f.type === 'f64' ? 'f64.load' : 'i32.load'
+
+      parent[idx] = [loadOp, ['i32.add', ref, ['i32.const', offset]]]
+    }
+
+    // struct.set $type $field ref val → store at offset
+    if (node[0] === 'struct.set') {
+      const typeId = node[1]
+      const fieldId = node[2]
+      const ref = node[3]
+      const val = node[4]
+      const typeDef = types.get(typeId)
+      if (!typeDef || typeDef.kind !== 'struct') return
+
+      const fieldIdx = typeof fieldId === 'string' && fieldId[0] === '$'
+        ? findFieldIdx(typeDef, fieldId)
+        : parseInt(fieldId)
+      if (fieldIdx < 0) return
+
+      const f = typeDef.fields[fieldIdx]
+      const offset = fieldOffset(typeDef, fieldIdx)
+      const storeOp = f.type === 'i64' ? 'i64.store' : f.type === 'f32' ? 'f32.store' : f.type === 'f64' ? 'f64.store' : 'i32.store'
+
+      parent[idx] = [storeOp, ['i32.add', ref, ['i32.const', offset]], val]
+    }
+
+    // array.new $type val len → alloc + fill
+    if (node[0] === 'array.new' || node[0] === 'array.new_default') {
+      const typeId = node[1]
+      const typeDef = types.get(typeId)
+      if (!typeDef || typeDef.kind !== 'array') return
+
+      const typeTag = typeIndices.get(typeId)
+      const elemSize = TYPE_SIZES[typeDef.elemType] || 4
+      const val = node[0] === 'array.new' ? node[2] : null
+      const len = node[0] === 'array.new' ? node[3] : node[2]
+
+      // Layout: [tag:4][len:4][elem0][elem1]...
+      // Size = 8 + len * elemSize
+      const ptrLocal = '$__gc_aptr'
+      const lenLocal = '$__gc_alen'
+      const iLocal = '$__gc_aidx'
+
+      const storeOp = typeDef.elemType === 'i64' ? 'i64.store' : typeDef.elemType === 'f32' ? 'f32.store' : typeDef.elemType === 'f64' ? 'f64.store' : 'i32.store'
+
+      const ops = [
+        ['local.set', lenLocal, len],
+        ['local.set', ptrLocal, ['call', allocId, ['i32.add', ['i32.const', 8], ['i32.mul', ['local.get', lenLocal], ['i32.const', elemSize]]]]],
+        ['i32.store', ['local.get', ptrLocal], ['i32.const', typeTag]],
+        ['i32.store', ['i32.add', ['local.get', ptrLocal], ['i32.const', 4]], ['local.get', lenLocal]],
+      ]
+
+      // Fill loop (if array.new with value)
+      if (val) {
+        ops.push(
+          ['local.set', iLocal, ['i32.const', 0]],
+          ['block', '$done',
+            ['loop', '$loop',
+              ['br_if', '$done', ['i32.ge_u', ['local.get', iLocal], ['local.get', lenLocal]]],
+              [storeOp,
+                ['i32.add', ['i32.add', ['local.get', ptrLocal], ['i32.const', 8]],
+                  ['i32.mul', ['local.get', iLocal], ['i32.const', elemSize]]],
+                val],
+              ['local.set', iLocal, ['i32.add', ['local.get', iLocal], ['i32.const', 1]]],
+              ['br', '$loop']
+            ]
+          ]
+        )
+      }
+
+      ops.push(['local.get', ptrLocal])
+      parent[idx] = ['block', ['result', 'i32'], ...ops]
+    }
+
+    // array.get $type ref idx → load
+    if (node[0] === 'array.get') {
+      const typeId = node[1]
+      const ref = node[2]
+      const idx_val = node[3]
+      const typeDef = types.get(typeId)
+      if (!typeDef || typeDef.kind !== 'array') return
+
+      const elemSize = TYPE_SIZES[typeDef.elemType] || 4
+      const loadOp = typeDef.elemType === 'i64' ? 'i64.load' : typeDef.elemType === 'f32' ? 'f32.load' : typeDef.elemType === 'f64' ? 'f64.load' : 'i32.load'
+
+      // offset = 8 + idx * elemSize
+      parent[idx] = [loadOp, ['i32.add', ['i32.add', ref, ['i32.const', 8]], ['i32.mul', idx_val, ['i32.const', elemSize]]]]
+    }
+
+    // array.set $type ref idx val → store
+    if (node[0] === 'array.set') {
+      const typeId = node[1]
+      const ref = node[2]
+      const idx_val = node[3]
+      const val = node[4]
+      const typeDef = types.get(typeId)
+      if (!typeDef || typeDef.kind !== 'array') return
+
+      const elemSize = TYPE_SIZES[typeDef.elemType] || 4
+      const storeOp = typeDef.elemType === 'i64' ? 'i64.store' : typeDef.elemType === 'f32' ? 'f32.store' : typeDef.elemType === 'f64' ? 'f64.store' : 'i32.store'
+
+      parent[idx] = [storeOp, ['i32.add', ['i32.add', ref, ['i32.const', 8]], ['i32.mul', idx_val, ['i32.const', elemSize]]], val]
+    }
+
+    // array.len ref → load length from offset 4
+    if (node[0] === 'array.len') {
+      const ref = node[1]
+      parent[idx] = ['i32.load', ['i32.add', ref, ['i32.const', 4]]]
+    }
+  })
+
+  return ast
+}
+
+transforms.gc = gc
+
+// ============================================================================
+// REF.TEST / REF.CAST POLYFILL
+// Runtime type checking using type tags stored at offset 0.
+// ref.test checks if tag matches, ref.cast traps if not.
+// ============================================================================
+
+const ref_cast = (ast, ctx) => {
+  // Collect type indices (must match gc polyfill's numbering)
+  const typeIndices = new Map()
+  let typeIdx = 1
+
+  walk(ast, node => {
+    if (!Array.isArray(node) || node[0] !== 'type') return
+    const id = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
+    if (!id) return
+
+    for (const def of node) {
+      if (Array.isArray(def) && (def[0] === 'struct' || def[0] === 'array')) {
+        typeIndices.set(id, typeIdx++)
+      }
+    }
+  })
+
+  if (!typeIndices.size) return ast
+
+  // Transform ref.test/ref.cast
+  walkPost(ast, (node, parent, idx) => {
+    if (!Array.isArray(node) || !parent) return
+
+    // ref.test (ref $type) val → (i32.eq (i32.load val) typeTag)
+    if (node[0] === 'ref.test') {
+      // Parse the reftype - could be (ref $type) or (ref null $type)
+      const reftype = node[1]
+      let typeId = null
+      if (Array.isArray(reftype) && reftype[0] === 'ref') {
+        typeId = reftype[1] === 'null' ? reftype[2] : reftype[1]
+      }
+      const val = node[2]
+      const typeTag = typeIndices.get(typeId)
+
+      if (typeTag !== undefined) {
+        // Check if null first, then check tag
+        parent[idx] = ['if', ['result', 'i32'],
+          ['i32.eqz', val],
+          ['then', ['i32.const', 0]], // null fails test
+          ['else', ['i32.eq', ['i32.load', val], ['i32.const', typeTag]]]
+        ]
+      }
+    }
+
+    // ref.cast (ref $type) val → val (with trap if wrong type)
+    if (node[0] === 'ref.cast') {
+      const reftype = node[1]
+      let typeId = null
+      let allowNull = false
+      if (Array.isArray(reftype) && reftype[0] === 'ref') {
+        if (reftype[1] === 'null') {
+          allowNull = true
+          typeId = reftype[2]
+        } else {
+          typeId = reftype[1]
+        }
+      }
+      const val = node[2]
+      const typeTag = typeIndices.get(typeId)
+
+      if (typeTag !== undefined) {
+        // Cast: check type, trap if wrong
+        const checkLocal = genId('cast')
+        if (allowNull) {
+          // Allow null to pass through
+          parent[idx] = ['block', ['result', 'i32'],
+            ['local', checkLocal, 'i32'],
+            ['local.set', checkLocal, val],
+            ['if', ['i32.and',
+              ['i32.ne', ['local.get', checkLocal], ['i32.const', 0]],
+              ['i32.ne', ['i32.load', ['local.get', checkLocal]], ['i32.const', typeTag]]],
+              ['then', ['unreachable']]
+            ],
+            ['local.get', checkLocal]
+          ]
+        } else {
+          // Null or wrong type = trap
+          parent[idx] = ['block', ['result', 'i32'],
+            ['local', checkLocal, 'i32'],
+            ['local.set', checkLocal, val],
+            ['if', ['i32.or',
+              ['i32.eqz', ['local.get', checkLocal]],
+              ['i32.ne', ['i32.load', ['local.get', checkLocal]], ['i32.const', typeTag]]],
+              ['then', ['unreachable']]
+            ],
+            ['local.get', checkLocal]
+          ]
+        }
+      }
+    }
+
+    // br_on_cast $label (ref $from) (ref $to) val
+    if (node[0] === 'br_on_cast') {
+      const label = node[1]
+      const fromType = node[2]
+      const toType = node[3]
+      const val = node[4]
+
+      let typeId = null
+      if (Array.isArray(toType) && toType[0] === 'ref') {
+        typeId = toType[1] === 'null' ? toType[2] : toType[1]
+      }
+      const typeTag = typeIndices.get(typeId)
+
+      if (typeTag !== undefined) {
+        const checkLocal = genId('brcast')
+        // If type matches, branch; otherwise fall through
+        parent[idx] = ['block', ['result', 'i32'],
+          ['local', checkLocal, 'i32'],
+          ['local.set', checkLocal, val],
+          ['br_if', label, ['i32.and',
+            ['i32.ne', ['local.get', checkLocal], ['i32.const', 0]],
+            ['i32.eq', ['i32.load', ['local.get', checkLocal]], ['i32.const', typeTag]]]],
+          ['local.get', checkLocal]
+        ]
+      }
+    }
+
+    // br_on_cast_fail $label (ref $from) (ref $to) val
+    if (node[0] === 'br_on_cast_fail') {
+      const label = node[1]
+      const fromType = node[2]
+      const toType = node[3]
+      const val = node[4]
+
+      let typeId = null
+      if (Array.isArray(toType) && toType[0] === 'ref') {
+        typeId = toType[1] === 'null' ? toType[2] : toType[1]
+      }
+      const typeTag = typeIndices.get(typeId)
+
+      if (typeTag !== undefined) {
+        const checkLocal = genId('brfail')
+        // If type does NOT match, branch; otherwise fall through
+        parent[idx] = ['block', ['result', 'i32'],
+          ['local', checkLocal, 'i32'],
+          ['local.set', checkLocal, val],
+          ['br_if', label, ['i32.or',
+            ['i32.eqz', ['local.get', checkLocal]],
+            ['i32.ne', ['i32.load', ['local.get', checkLocal]], ['i32.const', typeTag]]]],
+          ['local.get', checkLocal]
+        ]
+      }
+    }
+  })
+
+  return ast
+}
+
+transforms.ref_cast = ref_cast
 
 /**
  * Apply polyfill transforms to AST.

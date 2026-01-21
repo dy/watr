@@ -8,7 +8,8 @@ t('polyfill: normalize options', () => {
   // true → all features
   same(normalize(true), {
     funcref: true, sign_ext: true, nontrapping: true, bulk_memory: true,
-    return_call: true, i31ref: true, extended_const: true, multi_value: true
+    return_call: true, i31ref: true, extended_const: true, multi_value: true,
+    gc: true, ref_cast: true
   })
 
   // false → none
@@ -17,7 +18,8 @@ t('polyfill: normalize options', () => {
   // string → set
   same(normalize('funcref'), {
     funcref: true, sign_ext: false, nontrapping: false, bulk_memory: false,
-    return_call: false, i31ref: false, extended_const: false, multi_value: false
+    return_call: false, i31ref: false, extended_const: false, multi_value: false,
+    gc: false, ref_cast: false
   })
 
   // object passthrough
@@ -960,3 +962,191 @@ t('polyfill: multi_value single result ok', () => {
   ok(!detected.has('multi_value'), 'no multi_value for single result')
 })
 
+// ============================================================================
+// GC POLYFILL TESTS (struct/array)
+// ============================================================================
+
+t('polyfill: gc struct detection', () => {
+  const src = `(module
+    (type $point (struct (field $x i32) (field $y i32)))
+    (func (struct.new $point (i32.const 1) (i32.const 2)))
+  )`
+  ok(detect(parse(src)).has('gc'), 'detects gc from struct.new')
+})
+
+t('polyfill: gc array detection', () => {
+  const src = `(module
+    (type $arr (array i32))
+    (func (array.new $arr (i32.const 0) (i32.const 10)))
+  )`
+  ok(detect(parse(src)).has('gc'), 'detects gc from array.new')
+})
+
+t('polyfill: gc struct transform', () => {
+  const src = `(module
+    (memory 1)
+    (type $point (struct (field $x i32) (field $y i32)))
+    (func (export "test") (result i32)
+      (local $p (ref $point))
+      (local.set $p (struct.new $point (i32.const 10) (i32.const 20)))
+      (i32.add
+        (struct.get $point $x (local.get $p))
+        (struct.get $point $y (local.get $p))
+      )
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'gc')
+  const printed = print(ast)
+
+  // Should have memory ops
+  ok(printed.includes('i32.store'), 'struct.new → i32.store')
+  ok(printed.includes('i32.load'), 'struct.get → i32.load')
+})
+
+t('polyfill: gc struct compiles and runs', () => {
+  const src = `(module
+    (memory (export "mem") 1)
+    (type $point (struct (field $x i32) (field $y i32)))
+    (func (export "test") (result i32)
+      (local $p i32)
+      (local.set $p (struct.new $point (i32.const 10) (i32.const 20)))
+      (i32.add
+        (struct.get $point $x (local.get $p))
+        (struct.get $point $y (local.get $p))
+      )
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'gc')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const inst = new WebAssembly.Instance(mod)
+
+  is(inst.exports.test(), 30, 'struct field access works')
+})
+
+t('polyfill: gc struct.set', () => {
+  const src = `(module
+    (memory (export "mem") 1)
+    (type $box (struct (field $val (mut i32))))
+    (func (export "test") (result i32)
+      (local $b i32)
+      (local.set $b (struct.new $box (i32.const 5)))
+      (struct.set $box $val (local.get $b) (i32.const 42))
+      (struct.get $box $val (local.get $b))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'gc')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const inst = new WebAssembly.Instance(mod)
+
+  is(inst.exports.test(), 42, 'struct.set works')
+})
+
+t('polyfill: gc array compiles and runs', () => {
+  const src = `(module
+    (memory (export "mem") 1)
+    (type $arr (array (mut i32)))
+    (func (export "test") (result i32)
+      (local $a i32)
+      (local.set $a (array.new $arr (i32.const 99) (i32.const 5)))
+      (array.get $arr (local.get $a) (i32.const 2))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'gc')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const inst = new WebAssembly.Instance(mod)
+
+  is(inst.exports.test(), 99, 'array.new fills with value')
+})
+
+t('polyfill: gc array.set and array.len', () => {
+  const src = `(module
+    (memory (export "mem") 1)
+    (type $arr (array (mut i32)))
+    (func (export "test") (result i32)
+      (local $a i32)
+      (local.set $a (array.new $arr (i32.const 0) (i32.const 3)))
+      (array.set $arr (local.get $a) (i32.const 1) (i32.const 77))
+      (i32.add
+        (array.get $arr (local.get $a) (i32.const 1))
+        (array.len (local.get $a))
+      )
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'gc')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const inst = new WebAssembly.Instance(mod)
+
+  is(inst.exports.test(), 80, 'array.set=77, array.len=3, sum=80')
+})
+
+// ============================================================================
+// REF_CAST POLYFILL TESTS
+// ============================================================================
+
+t('polyfill: ref_cast detection', () => {
+  const src = `(module
+    (type $a (struct))
+    (func (param anyref) (drop (ref.test (ref $a) (local.get 0))))
+  )`
+  ok(detect(parse(src)).has('ref_cast'), 'detects ref_cast from ref.test')
+})
+
+t('polyfill: ref.test transform', () => {
+  const src = `(module
+    (memory 1)
+    (type $a (struct))
+    (func (export "test") (param i32) (result i32)
+      (ref.test (ref $a) (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), { gc: true, ref_cast: true })
+  const printed = print(ast)
+
+  // Should have i32.load for type tag check
+  ok(printed.includes('i32.load'), 'ref.test → i32.load type check')
+  ok(printed.includes('i32.eq'), 'ref.test → i32.eq comparison')
+})
+
+t('polyfill: ref.test compiles and runs', () => {
+  const src = `(module
+    (memory (export "mem") 1)
+    (type $point (struct (field i32) (field i32)))
+    (type $box (struct (field i32)))
+
+    (func (export "make_point") (result i32)
+      (struct.new $point (i32.const 1) (i32.const 2))
+    )
+    (func (export "make_box") (result i32)
+      (struct.new $box (i32.const 42))
+    )
+    (func (export "is_point") (param i32) (result i32)
+      (ref.test (ref $point) (local.get 0))
+    )
+    (func (export "is_box") (param i32) (result i32)
+      (ref.test (ref $box) (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), { gc: true, ref_cast: true })
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const inst = new WebAssembly.Instance(mod)
+
+  const p = inst.exports.make_point()
+  const b = inst.exports.make_box()
+
+  is(inst.exports.is_point(p), 1, 'point is_point = true')
+  is(inst.exports.is_point(b), 0, 'box is_point = false')
+  is(inst.exports.is_box(p), 0, 'point is_box = false')
+  is(inst.exports.is_box(b), 1, 'box is_box = true')
+})

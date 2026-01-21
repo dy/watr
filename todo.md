@@ -178,8 +178,8 @@
   * [x] i31ref (i32 with masking)
   * [x] extended const (compile-time eval)
   * [x] multi-value (extra returns via globals) - partial
-  * [ ] struct/array (bump allocator + type tags)
-  * [ ] ref.test/ref.cast (runtime type tag check)
+  * [x] struct/array (bump allocator + type tags)
+  * [x] ref.test/ref.cast (runtime type tag check)
   * [ ] ~~SIMD~~ too slow
   * [ ] ~~threads~~ needs host
   * [ ] ~~memory64~~ can't emulate

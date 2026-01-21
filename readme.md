@@ -54,26 +54,28 @@ npx watr input.wat --polyfill   # polyfill newer features to MVP
 
 | Feature | Status | Polyfill |
 |---------|--------|----------|
-| [MVP](https://webassembly.org/docs/mvp/) | ✅ | — |
-| [BigInt / i64](https://github.com/WebAssembly/JS-BigInt-integration) | ✅ | — |
-| [Multi-value](https://github.com/WebAssembly/multi-value) | ✅ | ✅ partial |
-| [Sign extension](https://github.com/WebAssembly/sign-extension-ops) | ✅ | ✅ |
-| [Non-trapping conversions](https://github.com/WebAssembly/nontrapping-float-to-int-conversions) | ✅ | ✅ |
-| [Bulk memory](https://github.com/WebAssembly/bulk-memory-operations) | ✅ | ✅ copy/fill |
-| [Reference types](https://github.com/WebAssembly/reference-types) | ✅ | ✅ funcref |
-| [Typed function refs](https://github.com/WebAssembly/function-references) | ✅ | ✅ |
-| [Tail calls](https://github.com/WebAssembly/tail-call) | ✅ | ✅ |
-| [Extended const](https://github.com/WebAssembly/extended-const) | ✅ | ✅ |
-| [Multiple memories](https://github.com/WebAssembly/multi-memory) | ✅ | — |
-| [Memory64](https://github.com/WebAssembly/memory64) | ✅ | ✗ |
-| [SIMD](https://github.com/WebAssembly/simd) | ✅ | ✗ |
-| [Relaxed SIMD](https://github.com/WebAssembly/relaxed-simd) | ✅ | ✗ |
-| [Threads](https://github.com/WebAssembly/threads) | ✅ | ✗ |
-| [GC](https://github.com/WebAssembly/gc) | ✅ | ✅ i31ref |
-| [Exceptions](https://github.com/WebAssembly/exception-handling) | ✅ | ✗ |
-| [Annotations](https://github.com/WebAssembly/annotations) | ✅ | — |
-| [Wide arithmetic](https://github.com/WebAssembly/wide-arithmetic) | ✅ | — |
-| [JS string builtins](https://github.com/WebAssembly/js-string-builtins) | ✅ | — |
+| [MVP](https://webassembly.org/docs/mvp/) | yes | n/a |
+| [BigInt / i64](https://github.com/WebAssembly/JS-BigInt-integration) | yes | n/a |
+| [Multi-value](https://github.com/WebAssembly/multi-value) | yes | partial (no blocks) |
+| [Sign extension](https://github.com/WebAssembly/sign-extension-ops) | yes | yes |
+| [Non-trapping conversions](https://github.com/WebAssembly/nontrapping-float-to-int-conversions) | yes | yes |
+| [Bulk memory](https://github.com/WebAssembly/bulk-memory-operations) | yes | copy/fill only |
+| [Reference types](https://github.com/WebAssembly/reference-types) | yes | funcref only |
+| [Typed function refs](https://github.com/WebAssembly/function-references) | yes | yes |
+| [Tail calls](https://github.com/WebAssembly/tail-call) | yes | yes |
+| [Extended const](https://github.com/WebAssembly/extended-const) | yes | yes |
+| [Multiple memories](https://github.com/WebAssembly/multi-memory) | yes | n/a |
+| [Memory64](https://github.com/WebAssembly/memory64) | yes | no |
+| [SIMD](https://github.com/WebAssembly/simd) | yes | no |
+| [Relaxed SIMD](https://github.com/WebAssembly/relaxed-simd) | yes | no |
+| [Threads](https://github.com/WebAssembly/threads) | yes | no |
+| [GC](https://github.com/WebAssembly/gc) | yes | i31/struct/array |
+| [Exceptions](https://github.com/WebAssembly/exception-handling) | yes | no |
+| [Annotations](https://github.com/WebAssembly/annotations) | yes | n/a |
+| [Wide arithmetic](https://github.com/WebAssembly/wide-arithmetic) | yes | n/a |
+| [JS string builtins](https://github.com/WebAssembly/js-string-builtins) | yes | n/a |
+
+**Polyfill legend**: `yes` = full support, `partial` = limited support noted, `no` = not feasible, `n/a` = already MVP or no runtime impact
 
 ## Metrics
 
