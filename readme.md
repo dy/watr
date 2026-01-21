@@ -8,7 +8,9 @@
 
 <p align="center">
 
-Light & fast WAT compiler: **[docs](./docs.md)**, **[play](https://dy.github.io/watr/play/)**
+[![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr)
+
+Light & fast WAT compiler: **[docs](./docs.md)**, **[demo](https://dy.github.io/watr/play/)**
 
 </p>
 
