@@ -7,6 +7,7 @@
 import _compile from './src/compile.js'
 import parse from './src/parse.js'
 import print from './src/print.js'
+import _polyfill from './src/polyfill.js'
 
 /** Private Use Area character as placeholder for interpolation */
 const PUA = '\uE000'
@@ -137,13 +138,21 @@ function genImports(imports) {
  *
  * @param {string|TemplateStringsArray} source - WAT source or template strings
  * @param {...any} values - Interpolation values (for template literal)
+ *   Last value can be options object: { polyfill: true | 'funcref' | { funcref: true } }
  * @returns {Uint8Array} WebAssembly binary
  *
  * @example
  * compile('(func (export "f") (result i32) (i32.const 42))')
  * compile`(func (export "f") (result f64) (f64.const ${Math.PI}))`
+ * compile(src, { polyfill: true })
  */
 function compile(source, ...values) {
+  // Options object as last argument (non-template call)
+  let opts = {}
+  if (!Array.isArray(source) && values.length && typeof values[values.length - 1] === 'object' && values[values.length - 1] !== null && !(values[values.length - 1] instanceof Uint8Array)) {
+    opts = values.pop()
+  }
+
   // Template literal: source is TemplateStringsArray
   if (Array.isArray(source) && source.raw) {
     // Build source with placeholders
@@ -207,10 +216,19 @@ function compile(source, ...values) {
       }
     }
 
+    // Apply polyfill if requested
+    if (opts.polyfill) ast = _polyfill(ast, opts.polyfill)
+
     const binary = _compile(ast)
     // Attach imports for watr() to use
     if (importObjs) binary._imports = importObjs
     return binary
+  }
+
+  // String/AST source with options
+  if (opts.polyfill) {
+    const ast = _polyfill(source, opts.polyfill)
+    return _compile(ast)
   }
   return _compile(source)
 }
@@ -239,4 +257,4 @@ function watr(strings, ...values) {
 }
 
 export default watr
-export { watr, compile, parse, print }
+export { watr, compile, parse, print, _polyfill as polyfill }

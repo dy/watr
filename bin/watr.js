@@ -7,6 +7,7 @@
  *   watr input.wat -o output.wasm     # compile to output.wasm
  *   watr input.wat --print            # pretty-print WAT
  *   watr input.wat --minify           # minify WAT
+ *   watr input.wat --polyfill         # polyfill newer features to MVP
  *   watr --help                       # show help
  *
  * @module watr/bin
@@ -16,6 +17,8 @@ import { readFileSync, writeFileSync } from 'fs'
 import { basename } from 'path'
 import compile from '../src/compile.js'
 import print from '../src/print.js'
+import polyfill from '../src/polyfill.js'
+import parse from '../src/parse.js'
 
 const args = process.argv.slice(2)
 const flags = new Set(args.filter(a => a.startsWith('-')))
@@ -33,12 +36,16 @@ Options:
   -o, --output <file>   Output file (default: input.wasm)
   -p, --print           Pretty-print WAT to stdout
   -m, --minify          Minify WAT to stdout
+  --polyfill [features] Polyfill newer features to MVP (default: all)
+                        Features: funcref (space-separated)
   -h, --help            Show this help
 
 Examples:
   watr add.wat                    # → add.wasm
   watr add.wat -o lib/add.wasm    # → lib/add.wasm
   watr add.wat --print            # pretty-print
+  watr add.wat --polyfill         # polyfill all features
+  watr add.wat --polyfill funcref # polyfill specific features
   cat add.wat | watr -            # stdin → stdout (binary)
 
 ॐ https://github.com/dy/watr
@@ -64,8 +71,23 @@ if (flags.has('-m') || flags.has('--minify')) {
   process.exit(0)
 }
 
+// Polyfill option
+let polyfillOpts = null
+const polyfillIdx = args.findIndex(a => a === '--polyfill')
+if (polyfillIdx !== -1) {
+  // Check if next arg is feature list (not a flag or file)
+  const next = args[polyfillIdx + 1]
+  if (next && !next.startsWith('-') && !next.includes('.')) {
+    polyfillOpts = next
+  } else {
+    polyfillOpts = true
+  }
+}
+
 // Compile mode
-const binary = compile(src)
+let ast = parse(src)
+if (polyfillOpts) ast = polyfill(ast, polyfillOpts)
+const binary = compile(ast)
 
 // Output
 const outIdx = args.findIndex(a => a === '-o' || a === '--output')

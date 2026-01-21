@@ -48,7 +48,7 @@ watr`(func (export "f") (result i32) \${ops})`
 watr('(func (export "f") (result i32) (i32.const 42))')
 ```
 
-### `compile(source)`
+### `compile(source, options?)`
 
 Compile to binary. Accepts a string, AST, or template literal.
 
@@ -59,7 +59,56 @@ compile(`(func (export "f"))`)                       // string
 compile(['func', ['export', '"f"']])                 // AST
 compile`(func (export "f") (f64.const \${Math.PI}))` // template
 // Uint8Array
+
+// polyfill newer features to MVP
+compile(src, { polyfill: true })           // all features
+compile(src, { polyfill: 'funcref' })      // specific features
 ```
+
+### `polyfill(ast, options?)`
+
+Transform AST to polyfill newer WebAssembly features for older runtimes.
+
+```js
+import { polyfill, parse, compile } from 'watr'
+
+// auto-detect and polyfill all
+const ast = polyfill(parse(src))
+compile(ast)
+
+// specific features
+polyfill(ast, 'funcref')              // space-separated string
+polyfill(ast, { funcref: true })      // object
+```
+
+**Available polyfills:**
+
+| Feature | Transforms | Notes |
+|---------|------------|-------|
+| `funcref` | `ref.func` → `i32.const`, `call_ref`/`return_call_ref` → `call_indirect` | Creates hidden table |
+
+**Planned polyfills:**
+
+| Feature | Strategy |
+|---------|----------|
+| `return_call` | Tail call → trampoline loop |
+| `sign_ext` | `extend8_s` etc → shift pairs |
+| `nontrapping` | `trunc_sat` → conditional clamp |
+| `bulk_memory` | `memory.copy`/`fill` → loops |
+| `multi_value` | Extra returns via memory/globals |
+| `extended_const` | Compile-time eval or init function |
+| `struct`/`array` | Bump allocator + type tags |
+| `i31ref` | i32 with masking |
+
+**Not polyfillable:**
+
+| Feature | Reason |
+|---------|--------|
+| SIMD | Scalar emulation too slow |
+| Threads/Atomics | Requires host support |
+| Memory64 | Cannot emulate 64-bit address space |
+| Exception handling | Complex control flow transforms |
+| `externref` | Requires JS-side reference tracking |
 
 ### `parse(source, options?)`
 

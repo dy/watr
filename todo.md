@@ -169,6 +169,27 @@
 * [x] ~~copy as binary~~ why?
 * [x] ~~make a component? going to need it for jz, piezo~~ -> build from scratch
 
+* [ ] polyfill
+  * [x] funcref (ref.func → i32, call_ref → call_indirect)
+  * [ ] return_call (tail call → trampoline loop)
+  * [ ] sign extension (extend8_s etc → shift pairs)
+  * [ ] non-trapping (trunc_sat → conditional clamp)
+  * [ ] bulk memory (memory.copy/fill → loops)
+  * [ ] multi-value (extra returns via memory/globals)
+  * [ ] extended const (compile-time eval or init func)
+  * [ ] struct/array (bump allocator + type tags)
+  * [ ] i31ref (i32 with masking)
+  * [ ] ref.test/ref.cast (runtime type tag check)
+  * [ ] ~~SIMD~~ too slow
+  * [ ] ~~threads~~ needs host
+  * [ ] ~~memory64~~ can't emulate
+  * [ ] ~~exceptions~~ complex control flow
+
+* [ ] optimize
+  * [ ] treeshake (remove unused functions)
+
+* [ ] compile wasm component
+
 ## Future
 
 * [ ] VSCode formatter plugin

@@ -3,7 +3,7 @@
 Light & fast WAT compiler: **[docs](./docs.md)**, **[play](https://dy.github.io/watr/play/)**
 
 * [feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
-* parse · compile · print · minify
+* parse · compile · print · minify · polyfill
 * instant wasm, JS interop, clear errors
 
 Useful for backends, JIT compilers, DSLs, code generators, dev tools.
@@ -41,6 +41,7 @@ npx watr input.wat              # → input.wasm
 npx watr input.wat -o out.wasm  # custom output
 npx watr input.wat --print      # pretty-print
 npx watr input.wat --minify     # minify
+npx watr input.wat --polyfill   # polyfill newer features to MVP
 ```
 
 ## Metrics
