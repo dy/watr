@@ -92,7 +92,9 @@ polyfill(ast, { funcref: true })      // object
 | `return_call` | `return_call` → `return` + `call` | Loses tail call optimization |
 | `i31ref` | `ref.i31` → `i32.and`, `i31.get_s/u` → shift/mask | 31-bit tagged integers |
 | `extended_const` | `global.get` in initializers → evaluated constant | Compile-time evaluation |
-| `multi_value` | Multiple results → single + globals | Partial support |
+| `multi_value` | Multiple results → single + globals | Partial: functions only, not blocks |
+| `gc` | `struct.new/get/set`, `array.new/get/set/len` → memory ops | Bump allocator, type tags |
+| `ref_cast` | `ref.test`, `ref.cast`, `br_on_cast` → type tag checks | Runtime tag comparison |
 
 **Not polyfillable:**
 

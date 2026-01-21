@@ -69,7 +69,7 @@ npx watr input.wat --polyfill   # polyfill newer features to MVP
 | [SIMD](https://github.com/WebAssembly/simd) | yes | no |
 | [Relaxed SIMD](https://github.com/WebAssembly/relaxed-simd) | yes | no |
 | [Threads](https://github.com/WebAssembly/threads) | yes | no |
-| [GC](https://github.com/WebAssembly/gc) | yes | i31/struct/array |
+| [GC](https://github.com/WebAssembly/gc) | yes | i31/struct/array/cast |
 | [Exceptions](https://github.com/WebAssembly/exception-handling) | yes | no |
 | [Annotations](https://github.com/WebAssembly/annotations) | yes | n/a |
 | [Wide arithmetic](https://github.com/WebAssembly/wide-arithmetic) | yes | n/a |
