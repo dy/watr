@@ -2,10 +2,8 @@
 
 Fast WebAssembly Text Format (WAT) compiler for JavaScript/Node.js.
 
-Supports [finished (phase 5)](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md) + [planned (phase 4)](https://github.com/WebAssembly/proposals) proposals, full [spec syntax](https://webassembly.github.io/spec/core/text/index.html) and passes the [WebAssembly test suite](https://github.com/WebAssembly/testsuite).
+Supports [finished (phase 5)](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md) + [planned (phase 4)](https://github.com/WebAssembly/proposals) proposals, full [spec syntax](https://webassembly.github.io/spec/core/text/index.html) and passes the [WebAssembly test suite](https://github.com/WebAssembly/testsuite). Supports partial polyfills.
 
-
-## Features
 
 | Feature | Status | Polyfill |
 |---------|--------|----------|
