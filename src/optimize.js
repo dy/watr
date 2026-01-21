@@ -16,6 +16,8 @@ const OPTS = {
   identity: true,     // remove identity ops (x + 0 → x)
   strength: true,     // strength reduction (x * 2 → x << 1)
   branch: true,       // simplify constant branches
+  propagate: true,    // constant propagation through locals
+  inline: true,       // inline tiny functions
 }
 
 /** All optimization names */
@@ -838,6 +840,302 @@ const localReuse = (ast) => {
   return result
 }
 
+// ==================== CONSTANT PROPAGATION ====================
+
+/**
+ * Propagate constant values through local variables.
+ * When a local is set to a constant and not modified before use, replace the get with the constant.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const propagate = (ast) => {
+  const result = clone(ast)
+
+  walk(result, (node) => {
+    if (!Array.isArray(node) || node[0] !== 'func') return
+
+    // Track which locals have known constant values
+    // This is a simple single-pass analysis within straight-line code
+    const constLocals = new Map() // $name → const node
+
+    // Process function body in order
+    const processBlock = (block, startIdx = 1) => {
+      for (let i = startIdx; i < block.length; i++) {
+        const instr = block[i]
+        if (!Array.isArray(instr)) continue
+
+        const op = instr[0]
+
+        // local.set $x (const) → remember constant
+        if (op === 'local.set' && instr.length === 3) {
+          const local = instr[1]
+          const val = instr[2]
+          const c = getConst(val)
+          if (c && typeof local === 'string') {
+            constLocals.set(local, val)
+          } else if (typeof local === 'string') {
+            constLocals.delete(local) // invalidate if set to non-const
+          }
+        }
+        // local.tee also sets
+        else if (op === 'local.tee' && instr.length === 3) {
+          const local = instr[1]
+          const val = instr[2]
+          const c = getConst(val)
+          if (c && typeof local === 'string') {
+            constLocals.set(local, val)
+          } else if (typeof local === 'string') {
+            constLocals.delete(local)
+          }
+        }
+        // local.get $x → replace with const if known
+        else if (op === 'local.get' && instr.length === 2) {
+          const local = instr[1]
+          if (typeof local === 'string' && constLocals.has(local)) {
+            const constVal = constLocals.get(local)
+            // Replace in place
+            instr.length = 0
+            instr.push(...clone(constVal))
+          }
+        }
+        // Control flow invalidates all knowledge (conservative)
+        else if (op === 'block' || op === 'loop' || op === 'if' || op === 'call' || op === 'call_indirect') {
+          constLocals.clear()
+        }
+
+        // Recursively process nested expressions that might have local.get
+        walkPost(instr, (n) => {
+          if (!Array.isArray(n) || n[0] !== 'local.get' || n.length !== 2) return
+          const local = n[1]
+          if (typeof local === 'string' && constLocals.has(local)) {
+            const constVal = constLocals.get(local)
+            return clone(constVal)
+          }
+        })
+      }
+    }
+
+    processBlock(node)
+  })
+
+  return result
+}
+
+// ==================== FUNCTION INLINING ====================
+
+/**
+ * Inline tiny functions (single expression, no locals, no params or simple params).
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const inline = (ast) => {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  const result = clone(ast)
+
+  // Collect inlinable functions
+  const inlinable = new Map() // $name → { body, params }
+
+  for (const node of result.slice(1)) {
+    if (!Array.isArray(node) || node[0] !== 'func') continue
+
+    const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
+    if (!name) continue
+
+    // Check if function is small enough to inline
+    let params = []
+    let body = []
+    let hasLocals = false
+    let hasExport = false
+
+    for (let i = 1; i < node.length; i++) {
+      const sub = node[i]
+      if (!Array.isArray(sub)) continue
+      if (sub[0] === 'param') {
+        // Collect param names and types
+        if (typeof sub[1] === 'string' && sub[1][0] === '$') {
+          params.push({ name: sub[1], type: sub[2] })
+        } else {
+          // Unnamed params - harder to inline
+          params = null
+          break
+        }
+      } else if (sub[0] === 'local') {
+        hasLocals = true
+      } else if (sub[0] === 'export') {
+        hasExport = true
+      } else if (sub[0] !== 'result' && sub[0] !== 'type') {
+        body.push(sub)
+      }
+    }
+
+    // Only inline: no locals, <= 2 params, single expression body, not exported
+    if (params && !hasLocals && !hasExport && params.length <= 2 && body.length === 1) {
+      inlinable.set(name, { body: body[0], params })
+    }
+  }
+
+  // Replace calls with inlined body
+  if (inlinable.size === 0) return result
+
+  walkPost(result, (node) => {
+    if (!Array.isArray(node) || node[0] !== 'call') return
+    const fname = node[1]
+    if (!inlinable.has(fname)) return
+
+    const { body, params } = inlinable.get(fname)
+    const args = node.slice(2)
+
+    // Simple case: no params
+    if (params.length === 0) {
+      return clone(body)
+    }
+
+    // Substitute params with args
+    const substituted = clone(body)
+    walkPost(substituted, (n) => {
+      if (!Array.isArray(n) || n[0] !== 'local.get') return
+      const local = n[1]
+      const paramIdx = params.findIndex(p => p.name === local)
+      if (paramIdx !== -1 && args[paramIdx]) {
+        return clone(args[paramIdx])
+      }
+    })
+
+    return substituted
+  })
+
+  return result
+}
+
+// ==================== COMMON SUBEXPRESSION ELIMINATION ====================
+
+/**
+ * Hash an expression for comparison.
+ * @param {any} node
+ * @returns {string}
+ */
+const exprHash = (node) => JSON.stringify(node)
+
+/**
+ * Eliminate common subexpressions by caching repeated computations.
+ * Limited to pure expressions within a function.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const cse = (ast) => {
+  // CSE is complex and can increase code size (extra locals)
+  // Simple version: detect and report, but actual elimination needs careful analysis
+  // For now, implement a basic version that works on adjacent identical expressions
+
+  const result = clone(ast)
+
+  walk(result, (node) => {
+    if (!Array.isArray(node) || node[0] !== 'func') return
+
+    // Find sequences of identical pure expressions
+    const seen = new Map() // hash → { node, count }
+
+    walk(node, (n) => {
+      if (!Array.isArray(n)) return
+      const op = n[0]
+      // Only consider pure operations
+      if (!op || typeof op !== 'string') return
+      if (op.startsWith('i32.') || op.startsWith('i64.') || op.startsWith('f32.') || op.startsWith('f64.')) {
+        // Skip simple consts
+        if (op.endsWith('.const')) return
+        // Skip if has side effects (calls, memory ops)
+        let hasSideEffects = false
+        walk(n, (sub) => {
+          if (Array.isArray(sub) && (sub[0] === 'call' || sub[0]?.includes('load') || sub[0]?.includes('store'))) {
+            hasSideEffects = true
+          }
+        })
+        if (hasSideEffects) return
+
+        const hash = exprHash(n)
+        if (seen.has(hash)) {
+          seen.get(hash).count++
+        } else {
+          seen.set(hash, { node: n, count: 1 })
+        }
+      }
+    })
+
+    // For now, just report - full CSE would require inserting locals
+    // which changes the function structure significantly
+  })
+
+  return result
+}
+
+// ==================== LOOP INVARIANT HOISTING ====================
+
+/**
+ * Hoist loop-invariant computations out of loops.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const hoist = (ast) => {
+  const result = clone(ast)
+
+  walk(result, (node) => {
+    if (!Array.isArray(node) || node[0] !== 'func') return
+
+    // Find loops
+    walk(node, (loopNode, parent, idx) => {
+      if (!Array.isArray(loopNode) || loopNode[0] !== 'loop') return
+
+      // Collect all locals modified in loop
+      const modifiedLocals = new Set()
+      walk(loopNode, (n) => {
+        if (!Array.isArray(n)) return
+        if (n[0] === 'local.set' || n[0] === 'local.tee') {
+          if (typeof n[1] === 'string') modifiedLocals.add(n[1])
+        }
+      })
+
+      // Find invariant expressions (don't depend on modified locals or memory)
+      const invariants = []
+
+      for (let i = 1; i < loopNode.length; i++) {
+        const instr = loopNode[i]
+        if (!Array.isArray(instr)) continue
+
+        const op = instr[0]
+        // Skip control flow
+        if (op === 'block' || op === 'loop' || op === 'if' || op === 'br' || op === 'br_if') continue
+
+        // Check if pure and invariant
+        let isInvariant = true
+        let isPure = true
+
+        walk(instr, (n) => {
+          if (!Array.isArray(n)) return
+          const subOp = n[0]
+          // Side effects
+          if (subOp === 'call' || subOp === 'call_indirect' || subOp?.includes('store') || subOp?.includes('load')) {
+            isPure = false
+          }
+          // Depends on modified local
+          if (subOp === 'local.get' && typeof n[1] === 'string' && modifiedLocals.has(n[1])) {
+            isInvariant = false
+          }
+        })
+
+        // Only hoist simple const expressions for safety
+        if (isPure && isInvariant && op?.endsWith('.const')) {
+          // Actually, consts are already cheap - skip
+        }
+      }
+
+      // Full hoisting would require inserting code before the loop
+      // This is complex and risky, so we keep it minimal
+    })
+  })
+
+  return result
+}
+
 // ==================== MAIN ====================
 
 /**
@@ -861,6 +1159,8 @@ export default function optimize(ast, opts = true) {
   if (opts.identity) ast = identity(ast)
   if (opts.strength) ast = strength(ast)
   if (opts.branch) ast = branch(ast)
+  if (opts.propagate) ast = propagate(ast)
+  if (opts.inline) ast = inline(ast)
   if (opts.deadcode) ast = deadcode(ast)
   if (opts.locals) ast = localReuse(ast)
   if (opts.treeshake) ast = treeshake(ast)
@@ -868,4 +1168,4 @@ export default function optimize(ast, opts = true) {
   return ast
 }
 
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, normalize, OPTS }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, normalize, OPTS }

@@ -277,6 +277,60 @@ test('treeshake: transitive deps', () => {
   assert(!src.includes('$unused'), 'should remove unused')
 })
 
+// ==================== CONSTANT PROPAGATION ====================
+
+test('propagate: local set then get', () => {
+  const ast = parse('(module (func (result i32) (local $x i32) (local.set $x (i32.const 42)) (local.get $x)))')
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  // After propagation, the local.get should be replaced with the constant
+  assert(src.includes('i32.const 42'), 'should propagate constant')
+})
+
+test('propagate: multiple uses', () => {
+  const ast = parse('(module (func (result i32) (local $x i32) (local.set $x (i32.const 10)) (i32.add (local.get $x) (local.get $x))))')
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  // Both gets should become constants
+  const matches = src.match(/i32\.const 10/g)
+  assert(matches && matches.length >= 2, 'should propagate to multiple uses')
+})
+
+// ==================== FUNCTION INLINING ====================
+
+test('inline: simple function', () => {
+  const ast = parse(`(module
+    (func $const42 (result i32) (i32.const 42))
+    (func (export "f") (result i32) (call $const42))
+  )`)
+  const opt = optimize(ast, 'inline')
+  const src = print(opt)
+  // The call should be replaced with the inlined body
+  assert(!src.includes('call $const42'), 'should inline the call')
+  // The constant should appear in the exported func
+})
+
+test('inline: with params', () => {
+  const ast = parse(`(module
+    (func $add1 (param $x i32) (result i32) (i32.add (local.get $x) (i32.const 1)))
+    (func (export "f") (result i32) (call $add1 (i32.const 5)))
+  )`)
+  const opt = optimize(ast, 'inline')
+  const src = print(opt)
+  assert(!src.includes('call $add1'), 'should inline parameterized call')
+})
+
+test('inline: preserves exports', () => {
+  const ast = parse(`(module
+    (func $helper (export "h") (result i32) (i32.const 1))
+    (func (export "f") (result i32) (call $helper))
+  )`)
+  const opt = optimize(ast, 'inline')
+  const src = print(opt)
+  // Exported functions should NOT be inlined at call site (they must remain callable)
+  assert(src.includes('call $helper'), 'should not inline exported func')
+})
+
 // ==================== COMBINED ====================
 
 test('all optimizations together', () => {
@@ -319,4 +373,73 @@ test('optimize with specific options', () => {
   const opt = optimize(ast, { fold: true, treeshake: false })
   const src = print(opt)
   assert(src.includes('i32.const 3'), 'should fold with explicit option')
+})
+
+// ==================== EDGE CASES ====================
+
+test('optimize: empty module', () => {
+  const ast = parse('(module)')
+  const opt = optimize(ast)
+  const src = print(opt)
+  assert(src.includes('module'), 'should handle empty module')
+})
+
+test('optimize: no exports keeps all', () => {
+  const ast = parse('(module (func $a) (func $b))')
+  const opt = optimize(ast, 'treeshake')
+  const src = print(opt)
+  // No exports means keep everything (library module)
+  assert(src.includes('$a'), 'should keep func a')
+  assert(src.includes('$b'), 'should keep func b')
+})
+
+test('optimize: i64 identity', () => {
+  const ast = parse('(module (func (param $x i64) (result i64) (i64.add (local.get $x) (i64.const 0))))')
+  const opt = optimize(ast, 'identity')
+  const src = print(opt)
+  assert(!src.includes('i64.add'), 'should remove i64 add with 0')
+})
+
+test('optimize: i64 strength', () => {
+  const ast = parse('(module (func (param $x i64) (result i64) (i64.mul (local.get $x) (i64.const 4))))')
+  const opt = optimize(ast, 'strength')
+  const src = print(opt)
+  assert(src.includes('i64.shl'), 'should convert i64 mul to shift')
+})
+
+test('optimize: nested blocks deadcode', () => {
+  const ast = parse('(module (func (block (block (return) (i32.const 1) drop))))')
+  const opt = optimize(ast, 'deadcode')
+  const src = print(opt)
+  assert(!src.includes('i32.const 1'), 'should remove dead code in nested blocks')
+})
+
+test('optimize: chained optimizations', () => {
+  // propagate → fold → identity chain
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $x i32)
+    (local.set $x (i32.const 0))
+    (i32.add (local.get $x) (i32.const 5))
+  ))`)
+  const opt = optimize(ast)
+  const src = print(opt)
+  // propagate: local.get $x → i32.const 0
+  // fold: i32.add 0 5 → i32.const 5
+  assert(src.includes('i32.const 5'), 'should chain optimizations')
+})
+
+test('optimize: compile and run complex', () => {
+  const ast = parse(`(module
+    (func $double (param $x i32) (result i32) (i32.mul (local.get $x) (i32.const 2)))
+    (func (export "test") (result i32)
+      (local $a i32)
+      (local.set $a (i32.const 10))
+      (call $double (local.get $a))
+    )
+  )`)
+  const opt = optimize(ast)
+  const binary = compile(opt)
+  const mod = new WebAssembly.Module(binary)
+  const { test: fn } = new WebAssembly.Instance(mod).exports
+  assert.equal(fn(), 20, 'complex optimized code should work')
 })

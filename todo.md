@@ -196,10 +196,10 @@
     * [x] identity removal (`(i32.add x (i32.const 0))` → `x`)
     * [x] strength reduction (`(i32.mul x (i32.const 2))` → `(i32.shl x (i32.const 1))`)
   * lower priority
-    * [ ] constant propagation (track const values through locals)
-    * [ ] function inlining (inline tiny functions)
-    * [ ] common subexpression (cache repeated expressions)
-    * [ ] loop invariant hoisting (move const ops out of loops)
+    * [x] constant propagation (track const values through locals)
+    * [x] function inlining (inline tiny functions)
+    * [ ] ~~common subexpression~~ (cache repeated expressions) (complex, needs extra locals)
+    * [ ] ~~loop invariant hoisting~~ (move const ops out of loops) (complex, risky transforms)
 
 * [ ] compile wasm component
 
