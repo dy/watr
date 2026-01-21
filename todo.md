@@ -201,7 +201,7 @@
     * [ ] ~~common subexpression~~ (cache repeated expressions) (complex, needs extra locals)
     * [ ] ~~loop invariant hoisting~~ (move const ops out of loops) (complex, risky transforms)
 
-* [ ] compile wasm component
+* [ ] ~~compile wasm component~~ -> low ROI
 
 ## Future
 

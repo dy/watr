@@ -3,6 +3,7 @@ import print from '../src/print.js'
 import { f32, f64, i64, i32, uleb } from '../src/encode.js'
 import parse from '../src/parse.js'
 import compile from '../src/compile.js'
+import optimize from '../src/optimize.js'
 import { throws, ok, is } from 'tst'
 import { unescape } from '../src/util.js'
 
@@ -87,13 +88,16 @@ export function inline(src, importObj) {
 
 
 // execute test case from file
-export async function file(path, imports = {}) {
+export async function file(path, imports = {}, options = {}) {
   // load src
   let res = await fetch(path)
   let src = await res.text()
 
   // parse
   let nodes = parse(src)
+
+  // optimize if requested
+  if (options.optimize) nodes = optimize(nodes, true)
 
   // skip ((@) module) or ;;
   nodes.forEach(node => {

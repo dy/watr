@@ -178,7 +178,9 @@ const treeshake = (ast) => {
 
   // Mark start function as used
   for (const start of starts) {
-    const ref = start[1]
+    let ref = start[1]
+    // Convert numeric string refs to numbers
+    if (typeof ref === 'string' && ref[0] !== '$') ref = +ref
     if (funcs.has(ref)) funcs.get(ref).used = true
   }
 
@@ -970,7 +972,18 @@ const inline = (ast) => {
 
     // Only inline: no locals, <= 2 params, single expression body, not exported
     if (params && !hasLocals && !hasExport && params.length <= 2 && body.length === 1) {
-      inlinable.set(name, { body: body[0], params })
+      // Check if function mutates any of its params (local.set/tee on param)
+      const paramNames = new Set(params.map(p => p.name))
+      let mutatesParam = false
+      walk(body[0], (n) => {
+        if (!Array.isArray(n)) return
+        if ((n[0] === 'local.set' || n[0] === 'local.tee') && paramNames.has(n[1])) {
+          mutatesParam = true
+        }
+      })
+      if (!mutatesParam) {
+        inlinable.set(name, { body: body[0], params })
+      }
     }
   }
 

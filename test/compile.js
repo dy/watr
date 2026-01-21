@@ -2563,3 +2563,10 @@ t('/test/example/loops.wat', async function () { await file(this.name, {console}
 t('/test/example/memory.wat', async function () { await file(this.name, {js:{log:console.log, mem:new WebAssembly.Memory({maximum:2,shared:false,initial:2})}}) })
 t('/test/example/stack.wat', async function () { await file(this.name) })
 t('/test/example/raycast.wat', async function () { await file(this.name, { console, Math }) })
+
+// Optimized examples
+t('/test/example/loops.wat (optimized)', async function () { await file('/test/example/loops.wat', {console}, { optimize: true }) })
+t('/test/example/maze.wat (optimized)', async function () { await file('/test/example/maze.wat', { Math, env:{t(){}} }, { optimize: true }) })
+t('/test/example/fire.wat (optimized)', async function () { await file('/test/example/fire.wat', { '': {rand:Math.random} }, { optimize: true }) })
+t('/test/example/snake.wat (optimized)', async function () { await file('/test/example/snake.wat', { Math }, { optimize: true }) })
+t('/test/example/raytrace.wat (optimized)', async function () { await file('/test/example/raytrace.wat', { Math }, { optimize: true }) })
