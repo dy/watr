@@ -60,6 +60,5 @@ npx watr input.wat --polyfill   # polyfill newer features to MVP
 
 * [jz](https://github.com/dy/jz) – minimal static JS subset
 
----
 
 <p align="center"><a href="https://krishnized.github.io/license">ॐ</a></p>
