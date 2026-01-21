@@ -171,10 +171,10 @@
 
 * [ ] polyfill
   * [x] funcref (ref.func → i32, call_ref → call_indirect)
-  * [ ] return_call (tail call → trampoline loop)
-  * [ ] sign extension (extend8_s etc → shift pairs)
-  * [ ] non-trapping (trunc_sat → conditional clamp)
-  * [ ] bulk memory (memory.copy/fill → loops)
+  * [x] return_call (return_call → return + call)
+  * [x] sign extension (extend8_s etc → shift pairs)
+  * [x] non-trapping (trunc_sat → helper funcs)
+  * [x] bulk memory (memory.copy/fill → loops)
   * [ ] multi-value (extra returns via memory/globals)
   * [ ] extended const (compile-time eval or init func)
   * [ ] struct/array (bump allocator + type tags)

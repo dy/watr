@@ -86,15 +86,15 @@ polyfill(ast, { funcref: true })      // object
 | Feature | Transforms | Notes |
 |---------|------------|-------|
 | `funcref` | `ref.func` → `i32.const`, `call_ref`/`return_call_ref` → `call_indirect` | Creates hidden table |
+| `sign_ext` | `i32.extend8_s` → shift pairs, etc | Shift left + arithmetic shift right |
+| `nontrapping` | `i32.trunc_sat_f32_s` → helper function, etc | Injects helper functions |
+| `bulk_memory` | `memory.copy`/`fill` → loop helpers | Byte-by-byte loops |
+| `return_call` | `return_call` → `return` + `call` | Loses tail call optimization |
 
 **Planned polyfills:**
 
 | Feature | Strategy |
 |---------|----------|
-| `return_call` | Tail call → trampoline loop |
-| `sign_ext` | `extend8_s` etc → shift pairs |
-| `nontrapping` | `trunc_sat` → conditional clamp |
-| `bulk_memory` | `memory.copy`/`fill` → loops |
 | `multi_value` | Extra returns via memory/globals |
 | `extended_const` | Compile-time eval or init function |
 | `struct`/`array` | Bump allocator + type tags |

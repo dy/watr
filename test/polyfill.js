@@ -6,14 +6,14 @@ import print from '../src/print.js'
 
 t('polyfill: normalize options', () => {
   // true → all features
-  same(normalize(true), { funcref: true })
+  same(normalize(true), { funcref: true, sign_ext: true, nontrapping: true, bulk_memory: true, return_call: true })
 
   // false → none
   same(normalize(false), {})
 
   // string → set
-  same(normalize('funcref'), { funcref: true })
-  same(normalize('funcref struct'), { funcref: true, struct: false }) // struct not implemented yet
+  same(normalize('funcref'), { funcref: true, sign_ext: false, nontrapping: false, bulk_memory: false, return_call: false })
+  same(normalize('funcref sign_ext'), { funcref: true, sign_ext: true, nontrapping: false, bulk_memory: false, return_call: false })
 
   // object passthrough
   same(normalize({ funcref: false }), { funcref: false })
@@ -425,4 +425,397 @@ t('polyfill: disabled feature', () => {
   // Should NOT transform
   ok(print(ast).includes('call_ref'), 'call_ref preserved when disabled')
   ok(print(ast).includes('ref.func'), 'ref.func preserved when disabled')
+})
+
+// ============================================================================
+// SIGN EXTENSION POLYFILL TESTS
+// ============================================================================
+
+t('polyfill: sign_ext → shift pairs', () => {
+  const src = `(module
+    (func (export "ext8") (param i32) (result i32) (i32.extend8_s (local.get 0)))
+    (func (export "ext16") (param i32) (result i32) (i32.extend16_s (local.get 0)))
+  )`
+
+  const ast = polyfill(parse(src), 'sign_ext')
+  const printed = print(ast)
+
+  // Should transform to shift pairs
+  ok(printed.includes('i32.shl'), 'uses shl')
+  ok(printed.includes('i32.shr_s'), 'uses shr_s')
+  ok(!printed.includes('extend8_s'), 'extend8_s removed')
+  ok(!printed.includes('extend16_s'), 'extend16_s removed')
+})
+
+t('polyfill: sign_ext compiles and runs i32', () => {
+  const src = `(module
+    (func (export "ext8") (param i32) (result i32) (i32.extend8_s (local.get 0)))
+    (func (export "ext16") (param i32) (result i32) (i32.extend16_s (local.get 0)))
+  )`
+
+  const ast = polyfill(parse(src), 'sign_ext')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { ext8, ext16 } = new WebAssembly.Instance(mod).exports
+
+  // extend8_s: sign extend from 8 bits
+  is(ext8(0x7f), 127, 'ext8(0x7f) = 127')
+  is(ext8(0x80), -128, 'ext8(0x80) = -128')
+  is(ext8(0xff), -1, 'ext8(0xff) = -1')
+  is(ext8(0x100), 0, 'ext8(0x100) = 0 (overflow)')
+
+  // extend16_s: sign extend from 16 bits
+  is(ext16(0x7fff), 32767, 'ext16(0x7fff) = 32767')
+  is(ext16(0x8000), -32768, 'ext16(0x8000) = -32768')
+  is(ext16(0xffff), -1, 'ext16(0xffff) = -1')
+})
+
+t('polyfill: sign_ext compiles and runs i64', () => {
+  const src = `(module
+    (func (export "ext8") (param i64) (result i64) (i64.extend8_s (local.get 0)))
+    (func (export "ext16") (param i64) (result i64) (i64.extend16_s (local.get 0)))
+    (func (export "ext32") (param i64) (result i64) (i64.extend32_s (local.get 0)))
+  )`
+
+  const ast = polyfill(parse(src), 'sign_ext')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { ext8, ext16, ext32 } = new WebAssembly.Instance(mod).exports
+
+  // i64.extend8_s
+  is(ext8(0x7fn), 127n, 'ext8(0x7f) = 127')
+  is(ext8(0xffn), -1n, 'ext8(0xff) = -1')
+
+  // i64.extend16_s
+  is(ext16(0x7fffn), 32767n, 'ext16(0x7fff) = 32767')
+  is(ext16(0xffffn), -1n, 'ext16(0xffff) = -1')
+
+  // i64.extend32_s
+  is(ext32(0x7fffffffn), 2147483647n, 'ext32(0x7fffffff) = 2147483647')
+  is(ext32(0xffffffffn), -1n, 'ext32(0xffffffff) = -1')
+})
+
+// ============================================================================
+// NON-TRAPPING CONVERSIONS POLYFILL TESTS
+// ============================================================================
+
+t('polyfill: nontrapping → helper functions', () => {
+  const src = `(module
+    (func (export "test") (param f32) (result i32)
+      (i32.trunc_sat_f32_s (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'nontrapping')
+  const printed = print(ast)
+
+  // Should have generated helper function
+  ok(printed.includes('$__trunc'), 'helper function created')
+  ok(printed.includes('call'), 'uses call to helper')
+  ok(!printed.includes('trunc_sat'), 'trunc_sat removed')
+})
+
+t('polyfill: nontrapping i32.trunc_sat_f32_s', () => {
+  const src = `(module
+    (func (export "trunc") (param f32) (result i32)
+      (i32.trunc_sat_f32_s (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'nontrapping')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { trunc } = new WebAssembly.Instance(mod).exports
+
+  // Normal truncation
+  is(trunc(1.5), 1, 'trunc(1.5) = 1')
+  is(trunc(-1.5), -1, 'trunc(-1.5) = -1')
+  is(trunc(0.0), 0, 'trunc(0) = 0')
+
+  // Saturation cases
+  is(trunc(1e30), 2147483647, 'trunc(1e30) = MAX_INT32')
+  is(trunc(-1e30), -2147483648, 'trunc(-1e30) = MIN_INT32')
+
+  // NaN returns 0
+  is(trunc(NaN), 0, 'trunc(NaN) = 0')
+
+  // Infinity saturates
+  is(trunc(Infinity), 2147483647, 'trunc(+inf) = MAX_INT32')
+  is(trunc(-Infinity), -2147483648, 'trunc(-inf) = MIN_INT32')
+})
+
+t('polyfill: nontrapping i32.trunc_sat_f32_u', () => {
+  const src = `(module
+    (func (export "trunc") (param f32) (result i32)
+      (i32.trunc_sat_f32_u (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'nontrapping')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { trunc } = new WebAssembly.Instance(mod).exports
+
+  // Normal
+  is(trunc(1.5), 1, 'trunc(1.5) = 1')
+  is(trunc(0.0), 0, 'trunc(0) = 0')
+
+  // Saturation
+  is(trunc(1e30) >>> 0, 4294967295, 'trunc(1e30) = MAX_UINT32')
+  is(trunc(-1.0), 0, 'trunc(-1) = 0 (unsigned)')
+
+  // NaN
+  is(trunc(NaN), 0, 'trunc(NaN) = 0')
+})
+
+t('polyfill: nontrapping i32.trunc_sat_f64_s', () => {
+  const src = `(module
+    (func (export "trunc") (param f64) (result i32)
+      (i32.trunc_sat_f64_s (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'nontrapping')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { trunc } = new WebAssembly.Instance(mod).exports
+
+  is(trunc(1.5), 1)
+  is(trunc(-1.5), -1)
+  is(trunc(1e30), 2147483647)
+  is(trunc(-1e30), -2147483648)
+  is(trunc(NaN), 0)
+})
+
+// ============================================================================
+// BULK MEMORY POLYFILL TESTS
+// ============================================================================
+
+t('polyfill: bulk_memory → helper functions', () => {
+  const src = `(module
+    (memory 1)
+    (func (export "copy")
+      (memory.copy (i32.const 0) (i32.const 100) (i32.const 10))
+    )
+    (func (export "fill")
+      (memory.fill (i32.const 0) (i32.const 0xff) (i32.const 64))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'bulk_memory')
+  const printed = print(ast)
+
+  // Should have generated helper functions
+  ok(printed.includes('$__memcpy'), 'memcpy helper created')
+  ok(printed.includes('$__memset'), 'memset helper created')
+  ok(!printed.includes('memory.copy'), 'memory.copy removed')
+  ok(!printed.includes('memory.fill'), 'memory.fill removed')
+})
+
+t('polyfill: bulk_memory memory.copy compiles and runs', () => {
+  const src = `(module
+    (memory (export "mem") 1)
+    (data (i32.const 0) "hello")
+    (func (export "copy")
+      (memory.copy (i32.const 100) (i32.const 0) (i32.const 5))
+    )
+    (func (export "get") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'bulk_memory')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { copy, get, mem } = new WebAssembly.Instance(mod).exports
+
+  // Before copy
+  is(get(100), 0, 'dest initially 0')
+  is(get(0), 104, 'src has "h" (104)')
+
+  // After copy
+  copy()
+  is(get(100), 104, 'dest[0] = "h"')
+  is(get(101), 101, 'dest[1] = "e"')
+  is(get(102), 108, 'dest[2] = "l"')
+  is(get(103), 108, 'dest[3] = "l"')
+  is(get(104), 111, 'dest[4] = "o"')
+})
+
+t('polyfill: bulk_memory memory.fill compiles and runs', () => {
+  const src = `(module
+    (memory (export "mem") 1)
+    (func (export "fill")
+      (memory.fill (i32.const 0) (i32.const 0xAB) (i32.const 10))
+    )
+    (func (export "get") (param i32) (result i32)
+      (i32.load8_u (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'bulk_memory')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { fill, get } = new WebAssembly.Instance(mod).exports
+
+  // Before fill
+  is(get(0), 0, 'initially 0')
+  is(get(9), 0, 'initially 0')
+  is(get(10), 0, 'boundary initially 0')
+
+  // After fill
+  fill()
+  is(get(0), 0xAB, 'filled[0] = 0xAB')
+  is(get(5), 0xAB, 'filled[5] = 0xAB')
+  is(get(9), 0xAB, 'filled[9] = 0xAB')
+  is(get(10), 0, 'boundary unchanged')
+})
+
+// ============================================================================
+// RETURN CALL POLYFILL TESTS
+// ============================================================================
+
+t('polyfill: return_call → return + call', () => {
+  const src = `(module
+    (func $inner (result i32) (i32.const 42))
+    (func (export "test") (result i32)
+      (return_call $inner)
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'return_call')
+  const printed = print(ast)
+
+  // Should have converted return_call to return + call
+  ok(!printed.includes('return_call'), 'return_call removed')
+  ok(printed.includes('return'), 'return added')
+  ok(printed.includes('call'), 'call added')
+})
+
+t('polyfill: return_call compiles and runs', () => {
+  const src = `(module
+    (func $factorial_tail (param $n i64) (param $acc i64) (result i64)
+      (if (result i64) (i64.le_u (local.get $n) (i64.const 1))
+        (then (local.get $acc))
+        (else
+          (return_call $factorial_tail
+            (i64.sub (local.get $n) (i64.const 1))
+            (i64.mul (local.get $n) (local.get $acc))
+          )
+        )
+      )
+    )
+    (func (export "factorial") (param i64) (result i64)
+      (call $factorial_tail (local.get 0) (i64.const 1))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'return_call')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { factorial } = new WebAssembly.Instance(mod).exports
+
+  is(factorial(0n), 1n, 'factorial(0) = 1')
+  is(factorial(1n), 1n, 'factorial(1) = 1')
+  is(factorial(5n), 120n, 'factorial(5) = 120')
+  is(factorial(10n), 3628800n, 'factorial(10) = 3628800')
+})
+
+t('polyfill: return_call_indirect → return + call_indirect', () => {
+  const src = `(module
+    (type $fn (func (result i32)))
+    (table funcref (elem $f1 $f2))
+    (func $f1 (result i32) (i32.const 1))
+    (func $f2 (result i32) (i32.const 2))
+    (func (export "test") (param i32) (result i32)
+      (return_call_indirect (type $fn) (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'return_call')
+  const printed = print(ast)
+
+  ok(!printed.includes('return_call_indirect'), 'return_call_indirect removed')
+})
+
+t('polyfill: return_call_indirect compiles and runs', () => {
+  const src = `(module
+    (type $fn (func (result i32)))
+    (table funcref (elem $f1 $f2))
+    (func $f1 (result i32) (i32.const 1))
+    (func $f2 (result i32) (i32.const 2))
+    (func (export "test") (param i32) (result i32)
+      (return_call_indirect (type $fn) (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'return_call')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { test } = new WebAssembly.Instance(mod).exports
+
+  is(test(0), 1, 'indirect call f1')
+  is(test(1), 2, 'indirect call f2')
+})
+
+// ============================================================================
+// COMBINED POLYFILLS TEST
+// ============================================================================
+
+t('polyfill: multiple features combined', () => {
+  const src = `(module
+    (memory 1)
+    (func (export "ext8") (param i32) (result i32)
+      (i32.extend8_s (local.get 0))
+    )
+    (func (export "fill")
+      (memory.fill (i32.const 0) (i32.const 42) (i32.const 10))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'sign_ext bulk_memory')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { ext8, fill } = new WebAssembly.Instance(mod).exports
+
+  is(ext8(0xff), -1, 'sign_ext works')
+
+  const mem = new Uint8Array(new WebAssembly.Instance(mod).exports.mem?.buffer || new ArrayBuffer(0))
+  // Note: fill doesn't return, just test ext8 works
+})
+
+t('polyfill: all features auto-detect', () => {
+  const src = `(module
+    (func (export "ext") (param i32) (result i32) (i32.extend8_s (local.get 0)))
+  )`
+
+  // true should auto-detect and apply sign_ext
+  const ast = polyfill(parse(src), true)
+  const printed = print(ast)
+
+  ok(printed.includes('i32.shl'), 'sign_ext auto-applied')
+})
+
+t('polyfill: detect all features', () => {
+  const src = `(module
+    (memory 1)
+    (type $fn (func))
+    (func $f)
+    (func
+      (i32.extend8_s (i32.const 1))
+      (drop)
+      (i32.trunc_sat_f32_s (f32.const 1.0))
+      (drop)
+      (memory.fill (i32.const 0) (i32.const 0) (i32.const 1))
+      (return_call $f)
+    )
+    (func (call_ref $fn (ref.func $f)))
+  )`
+
+  const detected = detect(parse(src))
+  ok(detected.has('sign_ext'), 'detects sign_ext')
+  ok(detected.has('nontrapping'), 'detects nontrapping')
+  ok(detected.has('bulk_memory'), 'detects bulk_memory')
+  ok(detected.has('return_call'), 'detects return_call')
+  ok(detected.has('funcref'), 'detects funcref')
 })

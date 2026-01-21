@@ -21,8 +21,28 @@ import polyfill from '../src/polyfill.js'
 import parse from '../src/parse.js'
 
 const args = process.argv.slice(2)
-const flags = new Set(args.filter(a => a.startsWith('-')))
-const files = args.filter(a => !a.startsWith('-'))
+
+// Parse polyfill option first (to exclude feature arg from files)
+let polyfillOpts = null
+const polyfillIdx = args.findIndex(a => a === '--polyfill')
+let polyfillFeatureArg = null
+if (polyfillIdx !== -1) {
+  // Check if next arg is feature list (not a flag or file)
+  const next = args[polyfillIdx + 1]
+  if (next && !next.startsWith('-') && !next.includes('.') && next !== '-') {
+    polyfillOpts = next
+    polyfillFeatureArg = next
+  } else {
+    polyfillOpts = true
+  }
+}
+
+// Parse -o output arg
+const outIdx = args.findIndex(a => a === '-o' || a === '--output')
+const outArg = outIdx !== -1 ? args[outIdx + 1] : null
+
+const flags = new Set(args.filter(a => a.startsWith('-') && a !== '-'))
+const files = args.filter(a => (!a.startsWith('-') || a === '-') && a !== polyfillFeatureArg && a !== outArg)
 
 // Help
 if (flags.has('-h') || flags.has('--help') || !files.length) {
@@ -37,7 +57,7 @@ Options:
   -p, --print           Pretty-print WAT to stdout
   -m, --minify          Minify WAT to stdout
   --polyfill [features] Polyfill newer features to MVP (default: all)
-                        Features: funcref (space-separated)
+                        Features: funcref sign_ext nontrapping bulk_memory return_call
   -h, --help            Show this help
 
 Examples:
@@ -71,26 +91,12 @@ if (flags.has('-m') || flags.has('--minify')) {
   process.exit(0)
 }
 
-// Polyfill option
-let polyfillOpts = null
-const polyfillIdx = args.findIndex(a => a === '--polyfill')
-if (polyfillIdx !== -1) {
-  // Check if next arg is feature list (not a flag or file)
-  const next = args[polyfillIdx + 1]
-  if (next && !next.startsWith('-') && !next.includes('.')) {
-    polyfillOpts = next
-  } else {
-    polyfillOpts = true
-  }
-}
-
 // Compile mode
 let ast = parse(src)
 if (polyfillOpts) ast = polyfill(ast, polyfillOpts)
 const binary = compile(ast)
 
 // Output
-const outIdx = args.findIndex(a => a === '-o' || a === '--output')
 const output = outIdx !== -1 && args[outIdx + 1]
   ? args[outIdx + 1]
   : input === '-'
