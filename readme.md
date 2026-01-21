@@ -1,4 +1,4 @@
-# <img src="./logo.svg" height="16"> watr [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml)
+# <img src="./watr.svg" height="16"> watr [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml)
 
 <div align="left">
 
