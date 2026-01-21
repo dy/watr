@@ -1,4 +1,4 @@
-# ![logo](./logo.svg) watr [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![demo](https://img.shields.io/badge/play-%F0%9F%9A%80-white)](https://dy.github.io/watr/play/)
+# <img src="./logo.svg" width="25"> watr [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![demo](https://img.shields.io/badge/play-%F0%9F%9A%80-white)](https://dy.github.io/watr/play/)
 
 Light & fast WAT compiler: **[docs](./docs.md)**, **[play](https://dy.github.io/watr/play/)**
 
