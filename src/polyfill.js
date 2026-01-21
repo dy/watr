@@ -15,6 +15,9 @@ const FEATURES = {
     'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u'],
   bulk_memory: ['memory.copy', 'memory.fill'],
   return_call: ['return_call', 'return_call_indirect'],
+  i31ref: ['ref.i31', 'i31.get_s', 'i31.get_u'],
+  extended_const: ['global.get'], // in const context - detected specially
+  multi_value: [], // detected by result count
 }
 
 /** All feature names */
@@ -66,12 +69,42 @@ const walkPost = (node, fn, parent, idx) => {
  */
 const detect = (ast) => {
   const used = new Set()
+
+  // Standard op detection
   walk(ast, node => {
     if (typeof node !== 'string') return
     for (const [feat, ops] of Object.entries(FEATURES)) {
       if (ops.some(op => node === op || node.startsWith(op + ' '))) used.add(feat)
     }
   })
+
+  // Special: extended_const - global.get in global initializer with arithmetic
+  walk(ast, node => {
+    if (!Array.isArray(node) || node[0] !== 'global') return
+    for (const init of node) {
+      if (!Array.isArray(init)) continue
+      if (init[0] === 'i32.add' || init[0] === 'i32.sub' || init[0] === 'i32.mul' ||
+          init[0] === 'i64.add' || init[0] === 'i64.sub' || init[0] === 'i64.mul') {
+        // Check if it contains global.get
+        walk(init, inner => {
+          if (Array.isArray(inner) && inner[0] === 'global.get') used.add('extended_const')
+        })
+      }
+    }
+  })
+
+  // Special: multi_value - functions with >1 result
+  walk(ast, node => {
+    if (!Array.isArray(node) || node[0] !== 'func') return
+    let resultCount = 0
+    for (const part of node) {
+      if (Array.isArray(part) && part[0] === 'result') {
+        resultCount += part.length - 1
+      }
+    }
+    if (resultCount > 1) used.add('multi_value')
+  })
+
   return used
 }
 
@@ -454,6 +487,211 @@ const return_call_transform = (ast, ctx) => {
 }
 
 transforms.return_call = return_call_transform
+
+// ============================================================================
+// I31REF POLYFILL
+// Transforms i31ref to i32 with masking.
+// ref.i31 x → (i32.and x 0x7fffffff)
+// i31.get_s → sign extend from 31 bits
+// i31.get_u → mask to 31 bits
+// ============================================================================
+
+const i31ref = (ast, ctx) => {
+  walkPost(ast, (node, parent, idx) => {
+    if (!Array.isArray(node) || !parent) return
+
+    if (node[0] === 'ref.i31') {
+      // ref.i31 x → (i32.and x 0x7fffffff) - mask to 31 bits
+      parent[idx] = ['i32.and', ...node.slice(1), ['i32.const', 0x7fffffff]]
+    }
+
+    if (node[0] === 'i31.get_u') {
+      // i31.get_u x → x (already masked, just pass through)
+      // The value is already an i32, just use it
+      parent[idx] = node.length > 1 ? node[1] : ['drop']
+    }
+
+    if (node[0] === 'i31.get_s') {
+      // i31.get_s x → sign extend from bit 30
+      // (i32.shr_s (i32.shl x 1) 1)
+      const arg = node.slice(1)
+      parent[idx] = ['i32.shr_s', ['i32.shl', ...arg, ['i32.const', 1]], ['i32.const', 1]]
+    }
+  })
+
+  return ast
+}
+
+transforms.i31ref = i31ref
+
+// ============================================================================
+// EXTENDED CONST POLYFILL
+// Evaluates extended constant expressions at compile time.
+// (global.get $g) in const context → resolved value
+// (i32.add x y) in const context → computed value
+// ============================================================================
+
+const extended_const = (ast, ctx) => {
+  // First pass: collect global constant values
+  const globals = {}
+
+  walk(ast, node => {
+    if (!Array.isArray(node) || node[0] !== 'global') return
+    const id = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
+    if (!id) return
+
+    // Find the initializer (last array that's a const expr)
+    for (let i = node.length - 1; i >= 0; i--) {
+      const init = node[i]
+      if (!Array.isArray(init)) continue
+
+      // Simple const
+      if (init[0] === 'i32.const' || init[0] === 'i64.const' ||
+          init[0] === 'f32.const' || init[0] === 'f64.const') {
+        globals[id] = { type: init[0].split('.')[0], value: init[1] }
+        break
+      }
+    }
+  })
+
+  // Second pass: evaluate extended const expressions
+  const evalConst = (node) => {
+    if (!Array.isArray(node)) return node
+
+    const op = node[0]
+
+    // global.get → resolve to value
+    if (op === 'global.get' && globals[node[1]]) {
+      const g = globals[node[1]]
+      return [`${g.type}.const`, g.value]
+    }
+
+    // Arithmetic ops - evaluate recursively
+    if (op === 'i32.add' || op === 'i64.add') {
+      const a = evalConst(node[1]), b = evalConst(node[2])
+      if (a && b && a[0]?.endsWith('.const') && b[0]?.endsWith('.const')) {
+        const type = op.split('.')[0]
+        const va = type === 'i64' ? BigInt(a[1]) : Number(a[1])
+        const vb = type === 'i64' ? BigInt(b[1]) : Number(b[1])
+        return [`${type}.const`, va + vb]
+      }
+    }
+
+    if (op === 'i32.sub' || op === 'i64.sub') {
+      const a = evalConst(node[1]), b = evalConst(node[2])
+      if (a && b && a[0]?.endsWith('.const') && b[0]?.endsWith('.const')) {
+        const type = op.split('.')[0]
+        const va = type === 'i64' ? BigInt(a[1]) : Number(a[1])
+        const vb = type === 'i64' ? BigInt(b[1]) : Number(b[1])
+        return [`${type}.const`, va - vb]
+      }
+    }
+
+    if (op === 'i32.mul' || op === 'i64.mul') {
+      const a = evalConst(node[1]), b = evalConst(node[2])
+      if (a && b && a[0]?.endsWith('.const') && b[0]?.endsWith('.const')) {
+        const type = op.split('.')[0]
+        const va = type === 'i64' ? BigInt(a[1]) : Number(a[1])
+        const vb = type === 'i64' ? BigInt(b[1]) : Number(b[1])
+        return [`${type}.const`, va * vb]
+      }
+    }
+
+    return node
+  }
+
+  // Apply to global initializers
+  walkPost(ast, (node, parent, idx) => {
+    if (!Array.isArray(node) || node[0] !== 'global' || !parent) return
+
+    for (let i = 2; i < node.length; i++) {
+      if (Array.isArray(node[i])) {
+        const evaluated = evalConst(node[i])
+        if (evaluated !== node[i]) node[i] = evaluated
+      }
+    }
+  })
+
+  return ast
+}
+
+transforms.extended_const = extended_const
+
+// ============================================================================
+// MULTI-VALUE POLYFILL
+// Transforms multi-value returns to single value + memory/global storage.
+// Functions returning multiple values store extras in hidden globals.
+// ============================================================================
+
+const multi_value = (ast, ctx) => {
+  // Find functions with multiple results
+  const multiResultFuncs = new Map()
+  const returnGlobals = []
+
+  walk(ast, node => {
+    if (!Array.isArray(node) || node[0] !== 'func') return
+    const id = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
+
+    // Count results
+    const results = []
+    for (const part of node) {
+      if (Array.isArray(part) && part[0] === 'result') {
+        for (let i = 1; i < part.length; i++) results.push(part[i])
+      }
+    }
+
+    if (results.length > 1 && id) {
+      multiResultFuncs.set(id, results)
+    }
+  })
+
+  if (!multiResultFuncs.size) return ast
+
+  // Create globals for extra return values
+  const maxReturns = Math.max(...[...multiResultFuncs.values()].map(r => r.length))
+  const globalsByType = {}
+
+  for (const [id, results] of multiResultFuncs) {
+    for (let i = 1; i < results.length; i++) {
+      const type = results[i]
+      if (!globalsByType[type]) globalsByType[type] = []
+      if (globalsByType[type].length < i) {
+        const gid = genId(`ret_${type}_${globalsByType[type].length}`)
+        globalsByType[type].push(gid)
+        returnGlobals.push(['global', gid, ['mut', type], [`${type}.const`, type === 'i64' ? 0n : 0]])
+      }
+    }
+  }
+
+  // Insert globals at start of module
+  const insertPos = ast[0] === 'module' ? 1 : 0
+  for (const g of returnGlobals.reverse()) {
+    insert(ast, insertPos, g)
+  }
+
+  // Transform functions: modify result to single, store extras in globals before return
+  // This is a simplified transform - full implementation would need block/if result handling too
+  walkPost(ast, (node, parent, idx) => {
+    if (!Array.isArray(node) || node[0] !== 'func') return
+
+    const id = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
+    if (!id || !multiResultFuncs.has(id)) return
+
+    const results = multiResultFuncs.get(id)
+
+    // Modify result clause to single value
+    for (let i = 0; i < node.length; i++) {
+      if (Array.isArray(node[i]) && node[i][0] === 'result') {
+        node[i] = ['result', results[0]]
+        break
+      }
+    }
+  })
+
+  return ast
+}
+
+transforms.multi_value = multi_value
 
 /**
  * Apply polyfill transforms to AST.

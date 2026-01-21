@@ -50,6 +50,31 @@ npx watr input.wat --minify     # minify
 npx watr input.wat --polyfill   # polyfill newer features to MVP
 ```
 
+## Features
+
+| Feature | Status | Polyfill |
+|---------|--------|----------|
+| [MVP](https://webassembly.org/docs/mvp/) | ✅ | — |
+| [BigInt / i64](https://github.com/WebAssembly/JS-BigInt-integration) | ✅ | — |
+| [Multi-value](https://github.com/WebAssembly/multi-value) | ✅ | ✅ partial |
+| [Sign extension](https://github.com/WebAssembly/sign-extension-ops) | ✅ | ✅ |
+| [Non-trapping conversions](https://github.com/WebAssembly/nontrapping-float-to-int-conversions) | ✅ | ✅ |
+| [Bulk memory](https://github.com/WebAssembly/bulk-memory-operations) | ✅ | ✅ copy/fill |
+| [Reference types](https://github.com/WebAssembly/reference-types) | ✅ | ✅ funcref |
+| [Typed function refs](https://github.com/WebAssembly/function-references) | ✅ | ✅ |
+| [Tail calls](https://github.com/WebAssembly/tail-call) | ✅ | ✅ |
+| [Extended const](https://github.com/WebAssembly/extended-const) | ✅ | ✅ |
+| [Multiple memories](https://github.com/WebAssembly/multi-memory) | ✅ | — |
+| [Memory64](https://github.com/WebAssembly/memory64) | ✅ | ✗ |
+| [SIMD](https://github.com/WebAssembly/simd) | ✅ | ✗ |
+| [Relaxed SIMD](https://github.com/WebAssembly/relaxed-simd) | ✅ | ✗ |
+| [Threads](https://github.com/WebAssembly/threads) | ✅ | ✗ |
+| [GC](https://github.com/WebAssembly/gc) | ✅ | ✅ i31ref |
+| [Exceptions](https://github.com/WebAssembly/exception-handling) | ✅ | ✗ |
+| [Annotations](https://github.com/WebAssembly/annotations) | ✅ | — |
+| [Wide arithmetic](https://github.com/WebAssembly/wide-arithmetic) | ✅ | — |
+| [JS string builtins](https://github.com/WebAssembly/js-string-builtins) | ✅ | — |
+
 ## Metrics
 
 &nbsp; | Size | Speed

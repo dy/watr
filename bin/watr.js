@@ -57,7 +57,8 @@ Options:
   -p, --print           Pretty-print WAT to stdout
   -m, --minify          Minify WAT to stdout
   --polyfill [features] Polyfill newer features to MVP (default: all)
-                        Features: funcref sign_ext nontrapping bulk_memory return_call
+                        Features: funcref sign_ext nontrapping bulk_memory
+                                  return_call i31ref extended_const multi_value
   -h, --help            Show this help
 
 Examples:

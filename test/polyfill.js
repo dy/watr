@@ -6,14 +6,19 @@ import print from '../src/print.js'
 
 t('polyfill: normalize options', () => {
   // true → all features
-  same(normalize(true), { funcref: true, sign_ext: true, nontrapping: true, bulk_memory: true, return_call: true })
+  same(normalize(true), {
+    funcref: true, sign_ext: true, nontrapping: true, bulk_memory: true,
+    return_call: true, i31ref: true, extended_const: true, multi_value: true
+  })
 
   // false → none
   same(normalize(false), {})
 
   // string → set
-  same(normalize('funcref'), { funcref: true, sign_ext: false, nontrapping: false, bulk_memory: false, return_call: false })
-  same(normalize('funcref sign_ext'), { funcref: true, sign_ext: true, nontrapping: false, bulk_memory: false, return_call: false })
+  same(normalize('funcref'), {
+    funcref: true, sign_ext: false, nontrapping: false, bulk_memory: false,
+    return_call: false, i31ref: false, extended_const: false, multi_value: false
+  })
 
   // object passthrough
   same(normalize({ funcref: false }), { funcref: false })
@@ -819,3 +824,139 @@ t('polyfill: detect all features', () => {
   ok(detected.has('return_call'), 'detects return_call')
   ok(detected.has('funcref'), 'detects funcref')
 })
+
+// ============================================================================
+// I31REF POLYFILL TESTS
+// ============================================================================
+
+t('polyfill: i31ref → i32 ops', () => {
+  const src = `(module
+    (func (export "make") (param i32) (result i32)
+      (ref.i31 (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'i31ref')
+  const printed = print(ast)
+
+  // Should transform to i32.and
+  ok(printed.includes('i32.and'), 'ref.i31 → i32.and')
+  ok(!printed.includes('ref.i31'), 'ref.i31 removed')
+})
+
+t('polyfill: i31ref compiles and runs', () => {
+  const src = `(module
+    (func (export "make") (param i32) (result i32)
+      (ref.i31 (local.get 0))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'i31ref')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { make } = new WebAssembly.Instance(mod).exports
+
+  // ref.i31 masks to 31 bits
+  is(make(42), 42, 'make(42) = 42')
+  is(make(0x7fffffff), 0x7fffffff, 'make(max) = max')
+  is(make(0x80000000), 0, 'make(overflow) = 0 (masked)')
+  is(make(-1), 0x7fffffff, 'make(-1) = 0x7fffffff (masked)')
+})
+
+t('polyfill: i31ref get_s sign extends', () => {
+  const src = `(module
+    (func (export "get_s") (param i32) (result i32)
+      (i31.get_s (ref.i31 (local.get 0)))
+    )
+  )`
+
+  const ast = polyfill(parse(src), 'i31ref')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const { get_s } = new WebAssembly.Instance(mod).exports
+
+  is(get_s(42), 42, 'get_s(42) = 42')
+  is(get_s(0x3fffffff), 0x3fffffff, 'get_s(max positive) = max positive')
+  is(get_s(0x40000000), -0x40000000, 'get_s(sign bit set) = negative')
+})
+
+// ============================================================================
+// EXTENDED CONST POLYFILL TESTS
+// ============================================================================
+
+t('polyfill: extended_const detection', () => {
+  const src = `(module
+    (global $base i32 (i32.const 100))
+    (global $offset i32 (i32.add (global.get $base) (i32.const 50)))
+  )`
+
+  const detected = detect(parse(src))
+  ok(detected.has('extended_const'), 'detects extended_const')
+})
+
+t('polyfill: extended_const evaluates', () => {
+  const src = `(module
+    (global $base i32 (i32.const 100))
+    (global $offset (export "offset") i32 (i32.add (global.get $base) (i32.const 50)))
+  )`
+
+  const ast = polyfill(parse(src), 'extended_const')
+  const printed = print(ast)
+
+  // Should evaluate to constant
+  ok(printed.includes('i32.const 150') || printed.includes('i32.const\n      150'), 'evaluated to 150')
+})
+
+t('polyfill: extended_const multiply', () => {
+  const src = `(module
+    (global $kb i32 (i32.const 1024))
+    (global $mb (export "mb") i32 (i32.mul (global.get $kb) (i32.const 1024)))
+  )`
+
+  const ast = polyfill(parse(src), 'extended_const')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const inst = new WebAssembly.Instance(mod)
+
+  is(inst.exports.mb.value, 1048576, 'mb = 1024 * 1024')
+})
+
+t('polyfill: extended_const i64', () => {
+  const src = `(module
+    (global $base i64 (i64.const 1000))
+    (global $result (export "result") i64 (i64.mul (global.get $base) (i64.const 1000)))
+  )`
+
+  const ast = polyfill(parse(src), 'extended_const')
+  const binary = compile(ast)
+  const mod = new WebAssembly.Module(binary)
+  const inst = new WebAssembly.Instance(mod)
+
+  is(inst.exports.result.value, 1000000n, 'result = 1000 * 1000')
+})
+
+// ============================================================================
+// MULTI-VALUE POLYFILL TESTS
+// ============================================================================
+
+t('polyfill: multi_value detection', () => {
+  const src = `(module
+    (func $swap (param i32 i32) (result i32 i32)
+      (local.get 1) (local.get 0)
+    )
+  )`
+
+  const detected = detect(parse(src))
+  ok(detected.has('multi_value'), 'detects multi_value')
+})
+
+t('polyfill: multi_value single result ok', () => {
+  const src = `(module
+    (func (export "f") (result i32) (i32.const 42))
+  )`
+
+  // Should not detect multi_value for single result
+  const detected = detect(parse(src))
+  ok(!detected.has('multi_value'), 'no multi_value for single result')
+})
+

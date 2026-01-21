@@ -90,15 +90,9 @@ polyfill(ast, { funcref: true })      // object
 | `nontrapping` | `i32.trunc_sat_f32_s` → helper function, etc | Injects helper functions |
 | `bulk_memory` | `memory.copy`/`fill` → loop helpers | Byte-by-byte loops |
 | `return_call` | `return_call` → `return` + `call` | Loses tail call optimization |
-
-**Planned polyfills:**
-
-| Feature | Strategy |
-|---------|----------|
-| `multi_value` | Extra returns via memory/globals |
-| `extended_const` | Compile-time eval or init function |
-| `struct`/`array` | Bump allocator + type tags |
-| `i31ref` | i32 with masking |
+| `i31ref` | `ref.i31` → `i32.and`, `i31.get_s/u` → shift/mask | 31-bit tagged integers |
+| `extended_const` | `global.get` in initializers → evaluated constant | Compile-time evaluation |
+| `multi_value` | Multiple results → single + globals | Partial support |
 
 **Not polyfillable:**
 

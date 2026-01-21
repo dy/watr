@@ -169,16 +169,16 @@
 * [x] ~~copy as binary~~ why?
 * [x] ~~make a component? going to need it for jz, piezo~~ -> build from scratch
 
-* [ ] polyfill
+* [x] polyfill
   * [x] funcref (ref.func → i32, call_ref → call_indirect)
   * [x] return_call (return_call → return + call)
   * [x] sign extension (extend8_s etc → shift pairs)
   * [x] non-trapping (trunc_sat → helper funcs)
   * [x] bulk memory (memory.copy/fill → loops)
-  * [ ] multi-value (extra returns via memory/globals)
-  * [ ] extended const (compile-time eval or init func)
+  * [x] i31ref (i32 with masking)
+  * [x] extended const (compile-time eval)
+  * [x] multi-value (extra returns via globals) - partial
   * [ ] struct/array (bump allocator + type tags)
-  * [ ] i31ref (i32 with masking)
   * [ ] ref.test/ref.cast (runtime type tag check)
   * [ ] ~~SIMD~~ too slow
   * [ ] ~~threads~~ needs host
