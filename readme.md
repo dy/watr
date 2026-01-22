@@ -18,24 +18,21 @@ _Light & fast WAT compiler_
 ## Usage
 
 ```js
-import watr, { compile, polyfill, optimize, parse, print } from 'watr'
+import watr, { compile, parse, print } from 'watr'
 
 // compile to binary
-const binary = compile('(func (export "f") (result f64) (f64.const 1))')
+const binary = compile('(func (export "f") (result f64) (f64.const 1))', {
+  polyfill: false, // transform newer features to MVP
+  optimize: true   // fold constants, treeshake, eliminate dead code ...
+})
 const module = new WebAssembly.Module(binary)
 const { f } = new WebAssembly.Instance(module).exports
 
 // parse
 parse('(i32.const 42)') // ['i32.const', 42]
 
-// polyfill (transform newer features to MVP)
-print(polyfill('(func (i32.extend8_s ...))')) // (func (i32.shr_s (i32.shl ...) ...))
-
-// optimize (constant folding, treeshake, dead code elimination)
-print(optimize('(func (i32.add (i32.const 1) (i32.const 2)))')) // (func (i32.const 3))
-
 // print
-print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)\n    ...
+print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)\n  ...
 
 // instant wasm function
 const { add } = watr`(func (export "add") (param i32 i32) (result i32)
@@ -43,7 +40,7 @@ const { add } = watr`(func (export "add") (param i32 i32) (result i32)
 )`
 add(2, 3) // 5
 
-// auto-import
+// instant wasm: interpolate, auto-import ...
 const { test } = watr`(func (export "test") (call ${console.log} (i32.const 42)))`
 test() // logs 42
 ```
