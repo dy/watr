@@ -4,8 +4,6 @@ Fast WebAssembly Text Format (WAT) compiler for JavaScript/Node.js.
 
 Supports [finished (phase 5)](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md) + [planned (phase 4)](https://github.com/WebAssembly/proposals) features, full [spec syntax](https://webassembly.github.io/spec/core/text/index.html) and passes the [WebAssembly test suite](https://github.com/WebAssembly/testsuite).
 
-Supports partial polyfills.
-
 
 | Feature | Status | Polyfill |
 |---------|--------|----------|
@@ -29,8 +27,6 @@ Supports partial polyfills.
 | [Annotations](https://github.com/WebAssembly/annotations) | yes | n/a |
 | [Wide arithmetic](https://github.com/WebAssembly/wide-arithmetic) | yes | n/a |
 | [JS string builtins](https://github.com/WebAssembly/js-string-builtins) | yes | n/a |
-
-**Legend**: `yes` = full support, `partial` = limited, `no` = not feasible, `n/a` = MVP or no runtime impact
 
 
 ## Install
@@ -462,5 +458,5 @@ watr`(func (export "g") (param i64) (result i64) (i64.mul (local.get 0) (i64.con
 ## See Also
 
 * [Examples](./test/example/)
-* [REPL](https://dy.github.io/watr/play/)
+* [Playground](https://dy.github.io/watr/play/)
 * [WebAssembly Spec](https://webassembly.github.io/spec/)
