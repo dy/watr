@@ -154,7 +154,7 @@
     </nav>
   </header>
 
-  <nav style="display: flex; align-items: center; margin: 0 1rem; gap: 1rem;">
+  <nav style="display: flex; align-items: center; margin: 0 1rem; gap: 1rem; flex-wrap: wrap;">
     <label for="example" title="Example">
       <select name="example" :value="example" :onchange="e => e.target.value === '_load' ? loadBinaryInput.click() : loadExample(e.target.value)">
         <option value="">Custom</option>
