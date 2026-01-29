@@ -34,15 +34,13 @@ parse('(i32.const 42)') // ['i32.const', 42]
 // print
 print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)\n  ...
 
-// instant wasm function
-const { add } = watr`(func (export "add") (param i32 i32) (result i32)
-  (i32.add (local.get 0) (local.get 1))
-)`
+// instant wasm
+const { add, log } = watr`
+(func (export "add") (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))
+(func (export "log") (param f64) (call ${console.log} (local.get 0)))
+`
 add(2, 3) // 5
-
-// instant wasm: interpolate, auto-import ...
-const { test } = watr`(func (export "test") (call ${console.log} (i32.const 42)))`
-test() // logs 42
+log(42) // logs 42
 ```
 
 ## CLI
