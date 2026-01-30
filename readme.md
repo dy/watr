@@ -1,7 +1,5 @@
 # <img src="./watr.svg" height="16"> watr [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml)
 
-<div align="left">
-
 _Light & fast WAT compiler_
 
 * [feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
@@ -12,8 +10,6 @@ _Light & fast WAT compiler_
 
 
 <!-- _Use for_: backends, compilers, DSLs, codegen, dev tools -->
-
-</div>
 
 ## Usage
 
