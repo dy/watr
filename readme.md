@@ -1,5 +1,7 @@
 # <img src="./watr.svg" height="16"> watr [![npm bundle size](https://img.shields.io/bundlephobia/minzip/watr/latest?color=white&label=gzip)](https://bundlephobia.com/package/watr) [![npm](https://img.shields.io/npm/v/watr?color=white)](https://npmjs.org/watr) [![test](https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg)](https://github.com/dy/watr/actions/workflows/test.js.yml)
 
+<div align="left">
+
 _Light & fast WAT compiler_
 
 * [feature](https://webassembly.org/features/) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
@@ -10,6 +12,8 @@ _Light & fast WAT compiler_
 
 
 <!-- _Use for_: backends, compilers, DSLs, codegen, dev tools -->
+
+</div>
 
 ## Usage
 
@@ -30,13 +34,15 @@ parse('(i32.const 42)') // ['i32.const', 42]
 // print
 print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)\n  ...
 
-// instant wasm
-const { add, log } = watr`
-(func (export "add") (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))
-(func (export "log") (param f64) (call ${console.log} (local.get 0)))
-`
+// instant wasm function
+const { add } = watr`(func (export "add") (param i32 i32) (result i32)
+  (i32.add (local.get 0) (local.get 1))
+)`
 add(2, 3) // 5
-log(42) // logs 42
+
+// instant wasm: interpolate, auto-import ...
+const { test } = watr`(func (export "test") (call ${console.log} (i32.const 42)))`
+test() // logs 42
 ```
 
 ## CLI

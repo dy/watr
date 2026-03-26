@@ -409,7 +409,9 @@
   <script type="module">
     import sprae from './lib/sprae.js'
     import Codejar from './lib/codejar.js'
-    import { compile as watrCompile, print, parse, polyfill as watrPolyfill, optimize as watrOptimize } from '../watr.js'
+    import watr, { compile as watrCompile, print, parse, polyfill as watrPolyfill, optimize as watrOptimize } from '../watr.js'
+
+    globalThis.watr = watr
 
     const SECTION = 'custom type import func table memory global export start elem code data datacount'.split(' ')
 
