@@ -48,15 +48,21 @@ export const INSTR = [
   'i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s', , , , , , , , , , , ,
   // 0xd0-0xd6: reference
   'ref.null ref_null', 'ref.is_null', 'ref.func funcidx', 'ref.eq', 'ref.as_non_null', 'br_on_null labelidx', 'br_on_non_null labelidx',
-  // 0xd7-0xfa: padding to 0xfb (36 empty slots)
-  , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
+  // 0xd7-0xdf: padding (9 empty slots)
+  , , , , , , , , ,
+  // 0xe0-0xe6: stack switching (Phase 3)
+  'cont.new typeidx', 'cont.bind cont_bind', 'suspend tagidx', 'resume resume', 'resume_throw resume_throw', 'resume_throw_ref resume_throw_ref', 'switch switch_cont',
+  // 0xe7-0xfa: padding (20 empty slots)
+  , , , , , , , , , , , , , , , , , , , ,
   // 0xfb: GC instructions (nested array for multi-byte opcodes)
   [
     'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx_field', 'struct.get_s typeidx_field', 'struct.get_u typeidx_field', 'struct.set typeidx_field',
     'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx_multi', 'array.new_data typeidx_dataidx', 'array.new_elem typeidx_elemidx',
     'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx_typeidx',
     'array.init_data typeidx_dataidx', 'array.init_elem typeidx_elemidx', 'ref.test reftype', '', 'ref.cast reftype', '', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
-    'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u'
+    'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u',
+    // custom descriptors (Phase 3): 0xFB 0x20-0x26
+    , 'struct.new_desc typeidx', 'struct.new_default_desc typeidx', 'ref.get_desc typeidx', 'ref.cast_desc_eq reftype', , 'br_on_cast_desc_eq reftype2', 'br_on_cast_desc_eq_fail reftype2'
   ],
 
   // 0xfc: Bulk memory/table operations (nested array)
@@ -146,9 +152,11 @@ export const TYPE = {
   i8: 0x78, i16: 0x77, i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B,
   // Heap types
   exn: 0x69, noexn: 0x74, nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A,
+  cont: 0x68, nocont: 0x75,  // stack switching (Phase 3)
   // Reference type abbreviations (absheaptype abbrs)
   nullfuncref: 0x73, nullexternref: 0x72, nullexnref: 0x74, nullref: 0x71,
   funcref: 0x70, externref: 0x6F, exnref: 0x69, anyref: 0x6E, eqref: 0x6D, i31ref: 0x6C, structref: 0x6B, arrayref: 0x6A,
+  contref: 0x68, nocontref: 0x75,  // stack switching abbreviations
   // ref, refnull
   ref: 0x64, // -0x1c
   refnull: 0x63, // -0x1d
@@ -157,7 +165,7 @@ export const TYPE = {
 }
 
 // Type definition codes (different from heap types - func is 0x60 not 0x70)
-export const DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, sub: 0x50, subfinal: 0x4F, rec: 0x4E }
+export const DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, cont: 0x5D, sub: 0x50, subfinal: 0x4F, rec: 0x4E }
 
 // Import/export kind codes
 export const KIND = { func: 0, table: 1, memory: 2, global: 3, tag: 4 }

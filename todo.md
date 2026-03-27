@@ -127,6 +127,11 @@
   * [x] Threads https://github.com/webassembly/threads
   * [x] ~~JS Promise Integration https://github.com/WebAssembly/js-promise-integration~~
   * [x] ~~Web Content Security Policy https://github.com/WebAssembly/content-security-policy~~
+  * [x] Custom Descriptors https://github.com/WebAssembly/custom-descriptors (Phase 3; runtime needs --experimental-wasm-custom-descriptors)
+  * [x] Stack Switching https://github.com/WebAssembly/stack-switching (Phase 3; cont type + resume/suspend/switch instrs)
+  * [x] Custom Page Sizes https://github.com/WebAssembly/custom-page-sizes (Phase 3; (pagesize N) attr)
+  * [x] Compact Import Section https://github.com/WebAssembly/import-reflection (Phase 3; grouped import expansion)
+  * [x] WAT Numeric Values https://github.com/WebAssembly/wat-numeric-values (Phase 2; i8/i16/i32/i64/f32/f64 in data segments)
 * [x] Print: make it as nice as AI
 * [x] Bench binaryen
 * [x] ~~replace wabt with spec/wasm for tests~~ -> no meaningful way to normalize ulebs

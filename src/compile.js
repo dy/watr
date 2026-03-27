@@ -56,6 +56,20 @@ export default function compile(nodes) {
   // quote "a" "b"
   if (nodes[idx] === 'quote') return compile(nodes.slice(++idx).map(v => v.valueOf().slice(1, -1)).flat().join(''))
 
+  // expand grouped imports: (import "mod" (item "name" type)*) -> individual imports
+  // compact import section (Phase 3)
+  nodes = nodes.flatMap((n, i) => {
+    if (i < idx || !Array.isArray(n) || n[0] !== 'import') return [n]
+    const [, mod, ...rest] = n
+    if (!rest.some(r => Array.isArray(r) && r[0] === 'item')) return [n]
+    const lastIsType = Array.isArray(rest.at(-1)) && rest.at(-1)[0] !== 'item'
+    if (lastIsType) {
+      const type = rest.at(-1)
+      return rest.slice(0, -1).filter(r => r[0] === 'item').map(([, nm]) => ['import', mod, nm, type])
+    }
+    return rest.filter(r => r[0] === 'item').map(([, nm, type]) => ['import', mod, nm, type])
+  })
+
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
@@ -91,8 +105,12 @@ export default function compile(nodes) {
       // add rest of subtypes as regular type nodes with subtype flag
       for (let i = 0; i < node.length; i++) {
         let [, ...subnode] = node[i]
-        name(subnode, ctx.type);
-        (subnode = typedef(subnode, ctx)).push(i ? true : [ctx.type.length, node.length])
+        name(subnode, ctx.type)
+        // extract top-level descriptor/describes (custom descriptors, Phase 3)
+        const tdesc = []
+        while (subnode[0]?.[0] === 'descriptor' || subnode[0]?.[0] === 'describes') tdesc.push(subnode.shift())
+        ;(subnode = typedef(subnode, ctx)).push(i ? true : [ctx.type.length, node.length])
+        if (tdesc.length) subnode.desc = subnode.desc ? [...tdesc, ...subnode.desc] : tdesc
         ctx.type.push(subnode)
       }
     }
@@ -101,8 +119,13 @@ export default function compile(nodes) {
     // (type (struct (field a)*)
     // (type (sub final? $nm* (struct|array|func ...)))
     else if (kind === 'type') {
-      name(node, ctx.type);
-      ctx.type.push(typedef(node, ctx));
+      name(node, ctx.type)
+      // extract top-level descriptor/describes (custom descriptors, Phase 3)
+      const tdesc = []
+      while (node[0]?.[0] === 'descriptor' || node[0]?.[0] === 'describes') tdesc.push(node.shift())
+      const td = typedef(node, ctx)
+      if (tdesc.length) td.desc = td.desc ? [...tdesc, ...td.desc] : tdesc
+      ctx.type.push(td)
     }
     // other sections may have id
     else if (kind === 'start' || kind === 'export') ctx[kind].push(node)
@@ -146,7 +169,8 @@ export default function compile(nodes) {
       else if (kind === 'memory') {
         const is64 = node[0] === 'i64', idx = is64 ? 1 : 0
         if (node[idx]?.[0] === 'data') {
-          let [, ...data] = node.splice(idx, 1)[0], m = '' + Math.ceil(data.reduce((s, d) => s + d.length, 0) / 65536)
+          const ps = (node.find(n => Array.isArray(n) && n[0] === 'pagesize')?.[1]) ?? 65536
+          let [, ...data] = node.splice(idx, 1)[0], m = '' + Math.ceil(data.reduce((s, d) => s + d.length, 0) / ps)
           ctx.data.push([['memory', items.length], [is64 ? 'i64.const' : 'i32.const', is64 ? 0n : 0], ...data])
           node = is64 ? ['i64', m, m] : [m, m]
         }
@@ -318,7 +342,7 @@ function normalize(nodes, ctx) {
       else {
         const imm = []
         // Collect immediate operands (non-arrays or special forms like type/param/result/ref)
-        while (parts.length && (!Array.isArray(parts[0]) || 'type,param,result,ref'.includes(parts[0][0]))) imm.push(parts.shift())
+        while (parts.length && (!Array.isArray(parts[0]) || 'type,param,result,ref,exact,on'.includes(parts[0][0]))) imm.push(parts.shift())
         out.push(...normalize(parts, ctx), op, ...imm)
         nodes.unshift(...out.splice(out.length - 1 - imm.length))
       }
@@ -418,18 +442,20 @@ const name = (node, list) => {
 }
 
 /**
- * Parse type definition: func, array, struct, or sub(type).
- * Handles recursive types and subtyping.
+ * Parse type definition: func, array, struct, cont, or sub(type).
+ * Handles recursive types, subtyping, and custom descriptor clauses (Phase 3).
  *
- * @param {Array} node - [definition] where definition is func/array/struct/sub
+ * @param {Array} node - [definition] where definition is func/array/struct/cont/sub
  * @param {Object} ctx - Compilation context
- * @returns {[string, any, string, string[]]} [kind, fields, subkind, supertypes]
+ * @returns {Array} [kind, fields, subkind, supertypes] with optional .desc property
  */
 const typedef = ([dfn], ctx) => {
-  let subkind = 'subfinal', supertypes = [], compkind
+  let subkind = 'subfinal', supertypes = [], compkind, desc = []
   if (dfn[0] === 'sub') {
     subkind = dfn.shift(), dfn[0] === 'final' && (subkind += dfn.shift())
     dfn = (supertypes = dfn).pop() // last item is definition
+    // extract descriptor/describes from supertypes (custom descriptors, Phase 3)
+    supertypes = supertypes.filter(n => Array.isArray(n) && (n[0] === 'descriptor' || n[0] === 'describes') ? (desc.push(n), false) : true)
   }
 
   [compkind, ...dfn] = dfn // composite type kind
@@ -437,8 +463,11 @@ const typedef = ([dfn], ctx) => {
   if (compkind === 'func') dfn = paramres(dfn), ctx.type['$' + dfn.join('>')] ??= ctx.type.length
   else if (compkind === 'struct') dfn = fieldseq(dfn, 'field')
   else if (compkind === 'array') [dfn] = dfn
+  // cont type: (cont $ft) - continuation wrapping function type (stack switching, Phase 3)
 
-  return [compkind, dfn, subkind, supertypes]
+  const result = [compkind, dfn, subkind, supertypes]
+  if (desc.length) result.desc = desc
+  return result
 }
 
 
@@ -460,40 +489,50 @@ const build = [
   // (func params result)
   // (array i8)
   // (struct ...fields)
-  ([kind, fields, subkind, supertypes, rec], ctx) => {
+  // (cont $ft) - stack switching (Phase 3)
+  (node, ctx) => {
+    const [kind, fields, subkind, supertypes, rec] = node
     if (rec === true) return // ignore rec subtypes cept for 1st one
 
-    let details
+    // descriptor/describes prefix bytes (custom descriptors, Phase 3)
+    const descPfx = (node.desc ?? []).flatMap(([clause, ref]) =>
+      [clause === 'descriptor' ? 0x4D : 0x4C, ...uleb(id(ref, ctx.type))])
+
+    // build comptype bytes without sub wrapper or descriptor prefix
+    const comptype = (k, f) => {
+      if (k === 'func') return [DEFTYPE.func, ...vec(f[0].map(t => reftype(t, ctx))), ...vec(f[1].map(t => reftype(t, ctx)))]
+      if (k === 'array') return [DEFTYPE.array, ...fieldtype(f, ctx)]
+      if (k === 'struct') return [DEFTYPE.struct, ...vec(f.map(t => fieldtype(t, ctx)))]
+      if (k === 'cont') return [DEFTYPE.cont, ...uleb(id(f[0] ?? f, ctx.type))]
+      return [DEFTYPE[k]]
+    }
+
     // (rec (sub ...)*)
     if (rec) {
-      kind = 'rec'
-      let [from, length] = rec, subtypes = Array.from({ length }, (_, i) => build[SECTION.type](ctx.type[from + i].slice(0, 4), ctx))
-      details = vec(subtypes)
+      let [from, length] = rec
+      const subtypes = Array.from({ length }, (_, i) => {
+        const t = ctx.type[from + i], sub = t.slice(0, 4)
+        if (t.desc) sub.desc = t.desc
+        return build[SECTION.type](sub, ctx)
+      })
+      return [DEFTYPE.rec, ...vec(subtypes)]
     }
     // (sub final? sups* (type...))
     else if (subkind === 'sub' || supertypes?.length) {
-      details = [...vec(supertypes.map(n => id(n, ctx.type))), ...build[SECTION.type]([kind, fields], ctx)]
-      kind = subkind
+      return [DEFTYPE[subkind], ...vec(supertypes.map(n => id(n, ctx.type))), ...descPfx, ...comptype(kind, fields)]
     }
 
-    else if (kind === 'func') {
-      details = [...vec(fields[0].map(t => reftype(t, ctx))), ...vec(fields[1].map(t => reftype(t, ctx)))]
-    }
-    else if (kind === 'array') {
-      details = fieldtype(fields, ctx)
-    }
-    else if (kind === 'struct') {
-      details = vec(fields.map(t => fieldtype(t, ctx)))
-    }
-
-    return [DEFTYPE[kind], ...details]
+    return [...descPfx, ...comptype(kind, fields)]
   },
 
   // (import "math" "add" (func|table|global|memory|tag dfn?))
   ([mod, field, [kind, ...dfn]], ctx) => {
-    let details
+    let details, kindByte = KIND[kind]
 
     if (kind === 'func') {
+      // exact func import: (func exact (type $t)) - custom descriptors (Phase 3)
+      const isExact = dfn[0] === 'exact' && dfn.shift()
+      if (isExact) kindByte = 0x20
       // we track imported funcs in func section to share namespace, and skip them on final build
       let [[, typeidx]] = dfn
       details = uleb(id(typeidx, ctx.type))
@@ -513,7 +552,7 @@ const build = [
     }
     else err(`Unknown kind ${kind}`)
 
-    return ([...vec(mod), ...vec(field), KIND[kind], ...details])
+    return ([...vec(mod), ...vec(field), kindByte, ...details])
   },
 
   // (func $name? ...params result ...body)
@@ -677,6 +716,7 @@ const build = [
   // (data (i32.const 0) "\aa" "\bb"?)
   // (data (memory ref) (offset (i32.const 0)) "\aa" "\bb"?)
   // (data (global.get $x) "\aa" "\bb"?)
+  // (data (i8 1 2 3) ...) numeric values (WAT numeric values, Phase 2)
   (inits, ctx) => {
     let offset, memidx = 0
 
@@ -707,7 +747,7 @@ const build = [
             // passive: 1
             [1]
       ),
-      ...vec(inits.flat())
+      ...vec(inits.flatMap(item => numdata(item) ?? [...item]))
     ])
   },
 
@@ -720,10 +760,15 @@ const build = [
 
 // Build reference type encoding (ref/refnull forms, not related to regtype which handles func types)
 // https://webassembly.github.io/gc/core/binary/types.html#reference-types
+// (exact $T) support added for custom descriptors (Phase 3): encoded as 0x62 typeidx
 const reftype = (t, ctx) => (
   t[0] === 'ref' ?
     t[1] == 'null' ?
+      // (ref null (exact $T)) - exact nullable ref
+      Array.isArray(t[2]) && t[2][0] === 'exact' ? [TYPE.refnull, 0x62, ...uleb(id(t[2][1], ctx.type))] :
       TYPE[t[2]] ? [TYPE[t[2]]] : [TYPE.refnull, ...uleb(id(t[t.length - 1], ctx.type))] :
+      // (ref (exact $T)) - exact non-null ref
+      Array.isArray(t[1]) && t[1][0] === 'exact' ? [TYPE.ref, 0x62, ...uleb(id(t[1][1], ctx.type))] :
       [TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))] :
     // abbrs
     [TYPE[t] ?? err(`Unknown type ${t}`)]
@@ -770,11 +815,11 @@ const IMM = {
     return [...uleb(count - 1), ...labels]
   },
   select: (n, c) => { let r = n.shift() || []; return r.length ? vec(r.map(t => reftype(t, c))) : [] },
-  ref_null: (n, c) => { let t = n.shift(); return TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)) },
+  ref_null: (n, c) => { let t = n.shift(); return Array.isArray(t) && t[0] === 'exact' ? [0x62, ...uleb(id(t[1], c.type))] : TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)) },
   memarg: (n, c, op) => memargEnc(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0),
   opt_memory: (n, c) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
   reftype: (n, c) => { let ht = reftype(n.shift(), c); return ht.length > 1 ? ht.slice(1) : ht },
-  reftype2: (n, c) => { let b = blockid(n.shift(), c.block), h1 = reftype(n.shift(), c), h2 = reftype(n.shift(), c); return [((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), h1.pop(), h2.pop()] },
+  reftype2: (n, c) => { let b = blockid(n.shift(), c.block), h1 = reftype(n.shift(), c), h2 = reftype(n.shift(), c), ht = h => h.length > 1 ? h.slice(1) : h; return [((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), ...ht(h1), ...ht(h2)] },
   v128const: (n) => {
     let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3; num = +num
     if (t[0] === 'i') {
@@ -828,7 +873,45 @@ const IMM = {
   typeidx_typeidx: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.type))],
   dataidx_memoryidx: (n, c) => [...uleb(id(n.shift(), c.data)), ...uleb(id(n.shift(), c.memory))],
   memoryidx_memoryidx: (n, c) => [...uleb(id(n.shift(), c.memory)), ...uleb(id(n.shift(), c.memory))],
-  tableidx_tableidx: (n, c) => [...uleb(id(n.shift(), c.table)), ...uleb(id(n.shift(), c.table))]
+  tableidx_tableidx: (n, c) => [...uleb(id(n.shift(), c.table)), ...uleb(id(n.shift(), c.table))],
+
+  // stack switching handlers (Phase 3)
+  cont_bind: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.type))],
+  switch_cont: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.tag))],
+  resume: (n, c) => {
+    const typeidx = uleb(id(n.shift(), c.type))
+    const handlers = []; let cnt = 0
+    while (n[0]?.[0] === 'on') {
+      const [, tag, label] = n.shift()
+      if (label === 'switch') handlers.push(0x01, ...uleb(id(tag, c.tag)))
+      else handlers.push(0x00, ...uleb(id(tag, c.tag)), ...uleb(blockid(label, c.block)))
+      cnt++
+    }
+    return [...typeidx, ...uleb(cnt), ...handlers]
+  },
+  resume_throw: (n, c) => {
+    const typeidx = uleb(id(n.shift(), c.type))
+    const exnidx = uleb(id(n.shift(), c.tag))
+    const handlers = []; let cnt = 0
+    while (n[0]?.[0] === 'on') {
+      const [, tag, label] = n.shift()
+      if (label === 'switch') handlers.push(0x01, ...uleb(id(tag, c.tag)))
+      else handlers.push(0x00, ...uleb(id(tag, c.tag)), ...uleb(blockid(label, c.block)))
+      cnt++
+    }
+    return [...typeidx, ...exnidx, ...uleb(cnt), ...handlers]
+  },
+  resume_throw_ref: (n, c) => {
+    const typeidx = uleb(id(n.shift(), c.type))
+    const handlers = []; let cnt = 0
+    while (n[0]?.[0] === 'on') {
+      const [, tag, label] = n.shift()
+      if (label === 'switch') handlers.push(0x01, ...uleb(id(tag, c.tag)))
+      else handlers.push(0x00, ...uleb(id(tag, c.tag)), ...uleb(blockid(label, c.block)))
+      cnt++
+    }
+    return [...typeidx, ...uleb(cnt), ...handlers]
+  }
 };
 
 // per-op imm handlers
@@ -939,23 +1022,46 @@ const align = (op) => {
   return Math.log2(m ? (m[2] === 'x' ? 8 : m[1] / 8) : +group / 8)
 }
 
+// Convert WAT numeric data (i8/i16/i32/i64/f32/f64 lists) to bytes (Phase 2: WAT numeric values)
+const numdata = (item) => {
+  if (!Array.isArray(item)) return null
+  const [t, ...vs] = item
+  if (t !== 'i8' && t !== 'i16' && t !== 'i32' && t !== 'i64' && t !== 'f32' && t !== 'f64') return null
+  const out = [], dv = new DataView(new ArrayBuffer(8))
+  for (const v of vs) {
+    if (t === 'i8') out.push((i32.parse(v) & 0xFF + 0x100) & 0xFF)
+    else if (t === 'i16') (dv.setInt16(0, i32.parse(v), true), out.push(...new Uint8Array(dv.buffer, 0, 2)))
+    else if (t === 'i32') (dv.setInt32(0, i32.parse(v), true), out.push(...new Uint8Array(dv.buffer, 0, 4)))
+    else if (t === 'i64') (dv.setBigInt64(0, BigInt(v), true), out.push(...new Uint8Array(dv.buffer, 0, 8)))
+    else if (t === 'f32') out.push(...encode.f32(v))
+    else if (t === 'f64') out.push(...encode.f64(v))
+  }
+  return out
+}
+
 // build limits sequence (consuming)
 // Memory64: i64 index type uses flags 0x04-0x07 (bit 2 = is_64)
+// Custom page sizes (Phase 3): (pagesize N) attr adds bit 3, appends log2(pagesize) as u32
 const limits = (node) => {
   const is64 = node[0] === 'i64' && node.shift()
   const shared = node[node.length - 1] === 'shared' && node.pop()
+  // custom page size: (pagesize N) sub-node
+  const psIdx = node.findIndex(n => Array.isArray(n) && n[0] === 'pagesize')
+  let psLog2 = -1
+  if (psIdx >= 0) psLog2 = Math.log2(+node.splice(psIdx, 1)[0][1])
   const hasMax = !isNaN(parseInt(node[1]))
-  const flag = (is64 ? 4 : 0) | (shared ? 2 : 0) | (hasMax ? 1 : 0)
+  const flag = (psLog2 >= 0 ? 8 : 0) | (is64 ? 4 : 0) | (shared ? 2 : 0) | (hasMax ? 1 : 0)
   // For i64, parse as unsigned BigInt (limits are always unsigned)
   const parse = is64 ? v => {
     if (typeof v === 'bigint') return v
     const str = typeof v === 'string' ? v.replaceAll('_', '') : String(v)
     return BigInt(str)
   } : parseUint
+  const ps = psLog2 >= 0 ? uleb(psLog2) : []
 
   return hasMax
-    ? [flag, ...uleb(parse(node.shift())), ...uleb(parse(node.shift()))]
-    : [flag, ...uleb(parse(node.shift()))]
+    ? [flag, ...uleb(parse(node.shift())), ...uleb(parse(node.shift())), ...ps]
+    : [flag, ...uleb(parse(node.shift())), ...ps]
 }
 
 // check if node is valid int in a range

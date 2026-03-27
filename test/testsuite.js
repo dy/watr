@@ -12,7 +12,7 @@ const hasExceptionHandling = (() => {
       0x01,0x04,0x01,0x60,0x00,0x00,              // type: (func)
       0x03,0x02,0x01,0x00,                        // func: type 0
       0x0d,0x03,0x01,0x00,0x00,                   // tag: type 0
-      0x0a,0x0b,0x01,0x09,0x00,0x1f,0x40,0x01,0x00,0x00,0x0b,0x0b  // code: try_table (catch 0 0) end end
+      0x0a,0x0b,0x01,0x09,0x00,0x1f,0x40,0x01,0x00,0x00,0x00,0x0b,0x0b  // code: try_table (catch 0 0) end end
     ]))
     return true
   } catch { return false }
@@ -340,10 +340,27 @@ t.mute('/test/official/utf8-import-module.wast', async function () { await file(
 t.mute('/test/official/utf8-invalid-encoding.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - custom-page-sizes
-t.todo('/test/official/proposals/custom-page-sizes/custom-page-sizes-invalid.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/custom-page-sizes/custom-page-sizes.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/custom-page-sizes/memory_max.wast', async function () { await file(this.name, { spectest }) })
-t.todo('/test/official/proposals/custom-page-sizes/memory_max_i64.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-page-sizes/binary.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-page-sizes/custom-page-sizes-invalid.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-page-sizes/custom-page-sizes.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-page-sizes/memory_max.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-page-sizes/memory_max_i64.wast', async function () { await file(this.name, { spectest }) })
+
+// Proposals - custom-descriptors
+t.mute('/test/official/proposals/custom-descriptors/descriptors.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/exact.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/binary-descriptors.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/binary.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/struct_new_desc.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/ref_get_desc.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/ref_cast_desc_eq.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/br_on_cast_desc_eq.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/br_on_cast_desc_eq_fail.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/exact-casts.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/exact-func-import.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/array_new_exact.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/br_on_cast.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/br_on_cast_fail.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - threads
 t.mute('/test/official/proposals/threads/atomic.wast', async function () { await file(this.name, { spectest }) })
