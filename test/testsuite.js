@@ -25,6 +25,15 @@ const hasWideArithmetic = (() => {
   } catch { return false }
 })()
 
+const hasExnRef = (() => {
+  try {
+    // catch_ref with nullable exnref - semantics changed between Node v22 and v25
+    // (module (tag $e) (func (result exnref) (block $h (result exnref) (try_table (result exnref) (catch_ref $e $h) (ref.null exn)))))
+    new WebAssembly.Module(new Uint8Array([0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,0x01,0x08,0x02,0x60,0x00,0x00,0x60,0x00,0x01,0x69,0x03,0x02,0x01,0x01,0x0d,0x03,0x01,0x00,0x00,0x0a,0x10,0x01,0x0e,0x00,0x02,0x69,0x1f,0x69,0x01,0x01,0x00,0x00,0xd0,0x69,0x0b,0x0b,0x0b]))
+    return true
+  } catch { return false }
+})()
+
 // Conditional test runner: use todo() if feature missing, mute() if supported
 const ifExn = hasExceptionHandling ? t.mute : t.todo
 const ifWide = hasWideArithmetic ? t.mute : t.todo
@@ -324,7 +333,7 @@ ifExn('/test/official/throw.wast', async function () { await file(this.name, { s
 t.mute('/test/official/token.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/traps.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/traps0.wast', async function () { await file(this.name, { spectest }) })
-ifExn('/test/official/try_table.wast', async function () { await file(this.name, { spectest }) })
+;(hasExnRef ? t.mute : t.skip)('/test/official/try_table.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-canon.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-equivalence.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-rec.wast', async function () { await file(this.name, { spectest }) })
