@@ -20,7 +20,7 @@ const hasExceptionHandling = (() => {
 const hasWideArithmetic = (() => {
   try {
     // i64.add128 requires wide arithmetic support
-    new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,1,9,1,96,4,126,126,126,126,2,126,126,3,2,1,0,10,9,1,7,0,32,0,32,1,32,2,32,3,252,19,11]))
+    new WebAssembly.Module(new Uint8Array([0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,0x01,0x0a,0x01,0x60,0x04,0x7e,0x7e,0x7e,0x7e,0x02,0x7e,0x7e,0x03,0x02,0x01,0x00,0x0a,0x0e,0x01,0x0c,0x00,0x20,0x00,0x20,0x01,0x20,0x02,0x20,0x03,0xfc,0x13,0x0b]))
     return true
   } catch { return false }
 })()
@@ -162,7 +162,7 @@ t.mute('/test/official/imports1.wast', async function () { await file(this.name,
 t.mute('/test/official/imports2.wast', async function () { await file(this.name, { spectest: { ...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }) } }) })
 t.mute('/test/official/imports3.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/imports4.wast', async function () { await file(this.name, { spectest: { ...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }) } }) })
-t.skip('/test/official/inline-module.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/inline-module.wast', async function () { await file(this.name, { spectest }) })
 t.skip('/test/official/instance.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/int_exprs.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/int_literals.wast', async function () { await file(this.name, { spectest }) })

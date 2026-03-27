@@ -314,6 +314,9 @@ export async function file(path, imports = {}, options = {}) {
     }
   }
 
+  // inline module: bare module items without (module ...) wrapper
+  if (nodes.every(n => typeof n === 'string' || !ex[n[0]])) nodes = [['module', ...nodes]]
+
   for (let node of nodes) {
     if (typeof node === 'string') lastComment = node
     else ex[node[0]](node.map(v => v.valueOf()))
