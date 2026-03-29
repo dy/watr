@@ -226,6 +226,14 @@ export default function compile(nodes) {
   }
 
 
+  // pre-compute sections that may collect string constants (for strings section ordering)
+  const globalSection = bin(SECTION.global)
+  const elemSection = bin(SECTION.elem)
+  const codeSection = bin(SECTION.code)
+  const metaSection = binMeta()
+  const dataSection = bin(SECTION.data)
+  const stringsSection = ctx.strings.length ? [SECTION.strings, ...vec([0x00, ...vec(ctx.strings.map(s => vec(s)))])] : []
+
   // build final binary
   return Uint8Array.from([
     0x00, 0x61, 0x73, 0x6d, // magic
@@ -237,14 +245,15 @@ export default function compile(nodes) {
     ...bin(SECTION.table),
     ...bin(SECTION.memory),
     ...bin(SECTION.tag),
-    ...bin(SECTION.global),
+    ...stringsSection,
+    ...globalSection,
     ...bin(SECTION.export),
     ...bin(SECTION.start, false),
-    ...bin(SECTION.elem),
+    ...elemSection,
     ...bin(SECTION.datacount, false),
-    ...bin(SECTION.code),
-    ...binMeta(),
-    ...bin(SECTION.data)
+    ...codeSection,
+    ...metaSection,
+    ...dataSection
   ])
 }
 
@@ -342,7 +351,7 @@ function normalize(nodes, ctx) {
       else {
         const imm = []
         // Collect immediate operands (non-arrays or special forms like type/param/result/ref)
-        while (parts.length && (!Array.isArray(parts[0]) || 'type,param,result,ref,exact,on'.includes(parts[0][0]))) imm.push(parts.shift())
+        while (parts.length && (!Array.isArray(parts[0]) || parts[0].valueOf !== Array.prototype.valueOf || 'type,param,result,ref,exact,on'.includes(parts[0][0]))) imm.push(parts.shift())
         out.push(...normalize(parts, ctx), op, ...imm)
         nodes.unshift(...out.splice(out.length - 1 - imm.length))
       }
@@ -857,6 +866,7 @@ const IMM = {
   elemidx: (n, c) => uleb(id(n.shift(), c.elem)),
   tagidx: (n, c) => uleb(id(n.shift(), c.tag)),
   'memoryidx?': (n, c) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
+  stringidx: (n, c) => { let s = n.shift(), key = s.valueOf(), idx = c.strings.findIndex(x => x.valueOf() === key); if (idx < 0) idx = c.strings.push(s) - 1; return uleb(idx) },
 
   // Value type
   i32: (n) => encode.i32(n.shift()),

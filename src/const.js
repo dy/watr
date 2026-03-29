@@ -62,7 +62,23 @@ export const INSTR = [
     'array.init_data typeidx_dataidx', 'array.init_elem typeidx_elemidx', 'ref.test reftype', '', 'ref.cast reftype', '', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
     'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u',
     // custom descriptors (Phase 3): 0xFB 0x20-0x26
-    , 'struct.new_desc typeidx', 'struct.new_default_desc typeidx', 'ref.get_desc typeidx', 'ref.cast_desc_eq reftype', , 'br_on_cast_desc_eq reftype2', 'br_on_cast_desc_eq_fail reftype2'
+    , 'struct.new_desc typeidx', 'struct.new_default_desc typeidx', 'ref.get_desc typeidx', 'ref.cast_desc_eq reftype', , 'br_on_cast_desc_eq reftype2', 'br_on_cast_desc_eq_fail reftype2',
+    // 0xFB 0x28-0x7F: padding (88 empty slots)
+    ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+    // stringref: 0xFB 0x80-0xB7
+    'string.new_utf8 memoryidx?', 'string.new_wtf16 memoryidx?', 'string.const stringidx', 'string.measure_utf8', 'string.measure_wtf8', 'string.measure_wtf16',
+    'string.encode_utf8 memoryidx?', 'string.encode_wtf16 memoryidx?', 'string.concat', 'string.eq', 'string.is_usv_sequence',
+    'string.new_lossy_utf8 memoryidx?', 'string.new_wtf8 memoryidx?', 'string.encode_lossy_utf8 memoryidx?', 'string.encode_wtf8 memoryidx?',
+    , // 0x8F
+    'string.as_wtf8', 'stringview_wtf8.advance', 'stringview_wtf8.encode_utf8 memoryidx?', 'stringview_wtf8.slice',
+    'stringview_wtf8.encode_lossy_utf8 memoryidx?', 'stringview_wtf8.encode_wtf8 memoryidx?',
+    ,, // 0x96-0x97
+    'string.as_wtf16', 'stringview_wtf16.length', 'stringview_wtf16.get_codeunit', 'stringview_wtf16.encode memoryidx?', 'stringview_wtf16.slice',
+    ,,, // 0x9D-0x9F
+    'string.as_iter', 'stringview_iter.next', 'stringview_iter.advance', 'stringview_iter.rewind', 'stringview_iter.slice',
+    ,,,,,,,,,,, // 0xA5-0xAF
+    'string.new_utf8_array', 'string.new_wtf16_array', 'string.encode_utf8_array', 'string.encode_wtf16_array',
+    'string.new_lossy_utf8_array', 'string.new_wtf8_array', 'string.encode_lossy_utf8_array', 'string.encode_wtf8_array'
   ],
 
   // 0xfc: Bulk memory/table operations (nested array)
@@ -144,7 +160,7 @@ export const INSTR = [
 ]
 
 // Binary section type codes
-export const SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, tag: 13, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 }
+export const SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, tag: 13, strings: 14, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 }
 
 // Type codes
 export const TYPE = {
@@ -153,10 +169,12 @@ export const TYPE = {
   // Heap types
   exn: 0x69, noexn: 0x74, nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A,
   cont: 0x68, nocont: 0x75,  // stack switching (Phase 3)
+  string: 0x67, stringview_wtf8: 0x66, stringview_wtf16: 0x60, stringview_iter: 0x61,  // stringref
   // Reference type abbreviations (absheaptype abbrs)
   nullfuncref: 0x73, nullexternref: 0x72, nullexnref: 0x74, nullref: 0x71,
   funcref: 0x70, externref: 0x6F, exnref: 0x69, anyref: 0x6E, eqref: 0x6D, i31ref: 0x6C, structref: 0x6B, arrayref: 0x6A,
   contref: 0x68, nocontref: 0x75,  // stack switching abbreviations
+  stringref: 0x67,  // stringref abbreviation
   // ref, refnull
   ref: 0x64, // -0x1c
   refnull: 0x63, // -0x1d
