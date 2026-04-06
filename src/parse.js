@@ -25,14 +25,18 @@ export default (str) => {
         c === 59 && str.charCodeAt(i + 1) === 41 ? (buf += str[i++] + str[i++], --q === 59 && (commit(), q = 0)) : // ;)
         buf += str[i++]
       )
-      // inside ;; ...\n
-      else if (q < 0) (c === 10 || c === 13 ? (buf += str[i++], commit(), q = 0) : buf += str[i++])
+      // inside ;; ..\n: q=-1 normal (has newline), q=-2 inline (no newline — ) ends comment)
+      else if (q < 0) (
+        c === 10 || c === 13 ? (buf += str[i++], commit(), q = 0) :
+        q === -2 && c === 41 ? (commit(), q = 0) :
+        buf += str[i++]
+      )
       // start "
       else if (c === 34) (buf !== '$' && commit(), q = 34, buf += str[i++])
       // start (;
       else if (c === 40 && str.charCodeAt(i + 1) === 59) (commit(), q = 60, buf = str[i++] + str[i++])
       // start ;;
-      else if (c === 59 && str.charCodeAt(i + 1) === 59) (commit(), q = -1, buf = str[i++] + str[i++])
+      else if (c === 59 && str.charCodeAt(i + 1) === 59) (commit(), q = str.indexOf('\n', i) < 0 ? -2 : -1, buf = str[i++] + str[i++])
       // start (@
       else if (c === 40 && str.charCodeAt(i + 1) === 64) (commit(), p = i, i += 2, buf = '@', depth++, (root = level).push(level = []), parseLevel(p), level = root)
       // start (
