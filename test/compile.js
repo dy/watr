@@ -1,6 +1,7 @@
 import t, { is, ok, same, throws } from 'tst'
 import compile from '../src/compile.js'
 import parse from '../src/parse.js'
+import { v128 } from '../src/encode.js'
 import {inline, file, wat2wasm, save} from './util.js'
 
 
@@ -1473,6 +1474,21 @@ t('compile: simd const', () => {
   (global v128 (v128.const i64x2 0xffffffffffffffff -9223372036854775808))
   (global v128 (v128.const f64x2 nan -inf))`
   is(compile(parse(src)), wat2wasm(src).buffer)
+})
+
+t('encode: v128', () => {
+  // zero
+  same(v128('0'), [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0])
+  // one — little-endian
+  same(v128('1'), [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0])
+  // 256 = 0x100
+  same(v128('256'), [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0])
+  // max u128
+  same(v128('0xffffffffffffffffffffffffffffffff'), [255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255])
+  // hex with underscores
+  same(v128('0xff_ff'), [255,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0])
+  // large value spanning multiple bytes
+  same(v128('0x0102030405060708090a0b0c0d0e0f10'), [16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1])
 })
 
 t('compile: simd shuffle, swizzle, splat', () => {

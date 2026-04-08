@@ -220,3 +220,10 @@ f64.parse = (input, max=Number.MAX_VALUE) => {
 }
 
 f32.parse = input => f64.parse(input, 3.4028234663852886e+38)
+
+export const v128 = (input) => {
+  let n = typeof input === 'string' ? BigInt(input.replaceAll('_', '')) : BigInt(input)
+  let arr = new Uint8Array(16)
+  for (let i = 0; i < 16; i++) arr[i] = Number(n & 0xffn), n >>= 8n
+  return [...arr]
+}
