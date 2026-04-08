@@ -50,7 +50,7 @@ export const uleb = (n, buffer = []) => {
  * @param {number} value - 32-bit unsigned value
  * @returns {number[]} 5-byte array
  */
-export const uleb5 = (value) => {
+export function uleb5(value) {
   const result = [];
   for (let i = 0; i < 5; i++) {
     let byte = value & 0x7f;
@@ -70,7 +70,7 @@ export const uleb5 = (value) => {
  * @param {number[]} [buffer=[]] - Output buffer
  * @returns {number[]} Encoded bytes
  */
-export const i32 = (n, buffer = []) => {
+export function i32(n, buffer = []) {
   if (typeof n === 'string') n = i32.parse(n)
 
   while (true) {
@@ -104,11 +104,10 @@ i32.parse = n => {
  * @param {number[]} [buffer=[]] - Output buffer
  * @returns {number[]} Encoded bytes
  */
-export const i64 = (n, buffer = []) => {
+export function i64(n, buffer = []) {
   if (typeof n === 'string') n = i64.parse(n)
-  else if (typeof n === 'number') n = BigInt(n)
   // Normalize unsigned to signed: values > MAX_INT64 become negative
-  if (typeof n === 'bigint' && n > 0x7fffffffffffffffn) {
+  else if (typeof n === 'bigint' && n > 0x7fffffffffffffffn) {
     n = n - 0x10000000000000000n
   }
 
@@ -134,7 +133,7 @@ i64.parse = n => {
 const byteView = new DataView(new Float64Array(1).buffer)
 
 const F32_SIGN = 0x80000000, F32_NAN = 0x7f800000
-export const f32 = (input, value, idx) => {
+export function f32(input, value, idx) {
   if (typeof input === 'string' && ~(idx = input.indexOf('nan:'))) {
     value = i32.parse(input.slice(idx + 4))
     value |= F32_NAN
@@ -155,7 +154,7 @@ export const f32 = (input, value, idx) => {
 }
 
 const F64_SIGN = 0x8000000000000000n, F64_NAN = 0x7ff0000000000000n
-export const f64 = (input, value, idx) => {
+export function f64(input, value, idx) {
   if (typeof input === 'string' && ~(idx = input.indexOf('nan:'))) {
     value = i64.parse(input.slice(idx + 4))
     value |= F64_NAN

@@ -1191,7 +1191,7 @@ transforms.ref_cast = ref_cast
  * polyfill(ast, 'funcref')           // only funcref
  * polyfill(ast, { funcref: true })   // explicit
  */
-const polyfill = (ast, opts = true) => {
+export default function polyfill(ast, opts = true) {
   if (typeof ast === 'string') ast = parse(ast)
   ast = clone(ast)
   opts = normalize(opts)
@@ -1207,7 +1207,5 @@ const polyfill = (ast, opts = true) => {
 
   return ast
 }
-
-export default polyfill
 
 export { polyfill, detect, normalize, FEATURES }

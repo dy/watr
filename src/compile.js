@@ -35,7 +35,7 @@ const cleanup = (node, result) => !Array.isArray(node) ? (
  * @param {string|Array} nodes - The WAT tree or string to be compiled to WASM binary.
  * @returns {Uint8Array} The compiled WASM binary data.
  */
-const compile = (nodes) => {
+export default function compile(nodes) {
   // normalize to (module ...) form
   if (typeof nodes === 'string') err.src = nodes, nodes = parse(nodes) || []
   else err.src = '' // clear source if AST passed directly
@@ -257,7 +257,6 @@ const compile = (nodes) => {
   ])
 }
 
-export default compile
 
 /** Check if node is a valid index reference ($name or number) */
 const isIdx = n => n?.[0] === '$' || !isNaN(n)
@@ -275,7 +274,7 @@ const isMemParam = n => n?.[0] === 'a' || n?.[0] === 'o'
  * @param {Object} ctx - Compilation context with type info
  * @returns {Array} Flattened instruction sequence
  */
-const normalize = (nodes, ctx) => {
+function normalize(nodes, ctx) {
   const out = []
   nodes = [...nodes]
   while (nodes.length) {
@@ -930,14 +929,13 @@ const HANDLER = {};
 
 
 // Populate INSTR and IMM
-const populate = (items, pre) => {
+(function populate(items, pre) {
   for (let op = 0, item, nm, imm; op < items.length; op++) if (item = items[op]) {
     // Nested array (0xfb, 0xfc, 0xfd opcodes)
     if (Array.isArray(item)) populate(item, op)
     else [nm, imm] = item.split(' '), INSTR[nm] = pre ? [pre, ...uleb(op)] : [op], imm && (HANDLER[nm] = IMM[imm])
   }
-}
-populate(INSTR);
+})(INSTR);
 
 
 // instruction encoder
