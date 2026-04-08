@@ -316,7 +316,7 @@ const FOLDABLE = {
   'i32.eqz': (a) => a === 0 ? 1 : 0,
   'i32.clz': (a) => Math.clz32(a),
   'i32.ctz': (a) => a === 0 ? 32 : 31 - Math.clz32(a & -a),
-  'i32.popcnt': (a) => { let c = 0; while (a) { c += a & 1; a >>>= 1 } return c },
+  'i32.popcnt': (a) => { let c = 0; while (a) { c += a & 1; a >>>= 1 }; return c },
   'i32.wrap_i64': (a) => Number(BigInt.asIntN(32, a)),
 
   // i64 (using BigInt)
@@ -1163,7 +1163,7 @@ const hoist = (ast) => {
  * optimize(ast, 'treeshake')         // only treeshake
  * optimize(ast, { fold: true })      // explicit
  */
-export default function optimize(ast, opts = true) {
+const optimize = (ast, opts = true) => {
   if (typeof ast === 'string') ast = parse(ast)
   ast = clone(ast)
   opts = normalize(opts)
@@ -1180,5 +1180,7 @@ export default function optimize(ast, opts = true) {
 
   return ast
 }
+
+export default optimize
 
 export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, normalize, OPTS }

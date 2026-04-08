@@ -11,27 +11,15 @@ import parse from './parse.js';
  * @param {boolean} [options.comments=false] - Whether to include comments in the output. Defaults to false.
  * @returns {string} The formatted WAT string.
  */
-export default function print(tree, options = {}) {
+const print = (tree, options = {}) => {
   if (typeof tree === 'string') tree = parse(tree);
 
   let { indent='  ', newline='\n', comments=true } = options;
   indent ||= '', newline ||= ''; // false -> str
 
-  // If tree[0] is a string but NOT starting with `;` (comment), it's a keyword like `module` - print as single node
-  // Otherwise it's multiple nodes (comments + module) - print each separately
-  if (typeof tree[0] === 'string' && tree[0][0] !== ';') return printNode(tree)
+  const isComment = (node) => typeof node === 'string' && node[1] === ';'
 
-  // Multiple top-level nodes - filter out comments if comments option is false
-  return tree
-    .filter(node => comments || !isComment(node))
-    .map(node => printNode(node))
-    .join(newline)
-
-  function isComment(node) {
-    return typeof node === 'string' && node[1] === ';'
-  }
-
-  function printNode(node, level = 0) {
+  const printNode = (node, level = 0) => {
     if (!Array.isArray(node)) return node
 
     let content = node[0]
@@ -115,4 +103,16 @@ export default function print(tree, options = {}) {
 
     return `(${content + newline + indent.repeat(level)})`
   }
+
+  // If tree[0] is a string but NOT starting with `;` (comment), it's a keyword like `module` - print as single node
+  // Otherwise it's multiple nodes (comments + module) - print each separately
+  if (typeof tree[0] === 'string' && tree[0][0] !== ';') return printNode(tree)
+
+  // Multiple top-level nodes - filter out comments if comments option is false
+  return tree
+    .filter(node => comments || !isComment(node))
+    .map(node => printNode(node))
+    .join(newline)
 }
+
+export default print
