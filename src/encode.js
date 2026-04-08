@@ -106,8 +106,9 @@ i32.parse = n => {
  */
 export function i64(n, buffer = []) {
   if (typeof n === 'string') n = i64.parse(n)
+  else if (typeof n === 'number') n = BigInt(n)
   // Normalize unsigned to signed: values > MAX_INT64 become negative
-  else if (typeof n === 'bigint' && n > 0x7fffffffffffffffn) {
+  if (typeof n === 'bigint' && n > 0x7fffffffffffffffn) {
     n = n - 0x10000000000000000n
   }
 
@@ -122,15 +123,16 @@ export function i64(n, buffer = []) {
   }
   return buffer
 }
+const _buf = new ArrayBuffer(8)
+const _u8 = new Uint8Array(_buf), _i32 = new Int32Array(_buf), _f32 = new Float32Array(_buf), _f64 = new Float64Array(_buf), _i64 = new BigInt64Array(_buf)
+
 i64.parse = n => {
   n = cleanInt(n)
   n = n[0] === '-' ? -BigInt(n.slice(1)) : BigInt(n) // can be -0x123
   if (n < -0x8000000000000000n || n > 0xffffffffffffffffn) err(`i64 constant out of range`)
-  byteView.setBigInt64(0, n)
-  return byteView.getBigInt64(0)
+  _i64[0] = n
+  return _i64[0]
 }
-
-const byteView = new DataView(new Float64Array(1).buffer)
 
 const F32_SIGN = 0x80000000, F32_NAN = 0x7f800000
 export function f32(input, value, idx) {
@@ -138,19 +140,14 @@ export function f32(input, value, idx) {
     value = i32.parse(input.slice(idx + 4))
     value |= F32_NAN
     if (input[0] === '-') value |= F32_SIGN
-    byteView.setInt32(0, value)
+    _i32[0] = value
   }
   else {
     value = typeof input === 'string' ? f32.parse(input) : input
-    byteView.setFloat32(0, value);
+    _f32[0] = value
   }
 
-  return [
-    byteView.getUint8(3),
-    byteView.getUint8(2),
-    byteView.getUint8(1),
-    byteView.getUint8(0)
-  ];
+  return [_u8[0], _u8[1], _u8[2], _u8[3]]
 }
 
 const F64_SIGN = 0x8000000000000000n, F64_NAN = 0x7ff0000000000000n
@@ -159,23 +156,14 @@ export function f64(input, value, idx) {
     value = i64.parse(input.slice(idx + 4))
     value |= F64_NAN
     if (input[0] === '-') value |= F64_SIGN
-    byteView.setBigInt64(0, value)
+    _i64[0] = value
   }
   else {
     value = typeof input === 'string' ? f64.parse(input) : input
-    byteView.setFloat64(0, value);
+    _f64[0] = value
   }
 
-  return ([
-    byteView.getUint8(7),
-    byteView.getUint8(6),
-    byteView.getUint8(5),
-    byteView.getUint8(4),
-    byteView.getUint8(3),
-    byteView.getUint8(2),
-    byteView.getUint8(1),
-    byteView.getUint8(0)
-  ]);
+  return [_u8[0], _u8[1], _u8[2], _u8[3], _u8[4], _u8[5], _u8[6], _u8[7]]
 }
 
 f64.parse = (input, max=Number.MAX_VALUE) => {

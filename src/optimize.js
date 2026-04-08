@@ -804,7 +804,7 @@ const localReuse = (ast) => {
       if (!Array.isArray(sub)) continue
 
       if (sub[0] === 'local') {
-        localDecls.push({ idx: i, node: sub })
+        localDecls.push({ node: sub, idx: i })
         // (local $name type) or (local type)
         if (typeof sub[1] === 'string' && sub[1][0] === '$') {
           localTypes.set(sub[1], sub[2])
