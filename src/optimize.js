@@ -285,6 +285,9 @@ const treeshake = (ast) => {
 
 // ==================== CONSTANT FOLDING ====================
 
+/** IEEE 754 roundTiesToEven (bankers' rounding) */
+const roundEven = (x) => x - Math.floor(x) !== 0.5 ? Math.round(x) : 2 * Math.round(x / 2)
+
 /** Operators that can be constant-folded */
 const FOLDABLE = {
   // i32
@@ -358,7 +361,7 @@ const FOLDABLE = {
   'f32.ceil': (a) => Math.fround(Math.ceil(a)),
   'f32.floor': (a) => Math.fround(Math.floor(a)),
   'f32.trunc': (a) => Math.fround(Math.trunc(a)),
-  'f32.nearest': (a) => Math.fround(Math.round(a)),
+  'f32.nearest': (a) => Math.fround(roundEven(a)),
 
   'f64.add': (a, b) => a + b,
   'f64.sub': (a, b) => a - b,
@@ -370,7 +373,7 @@ const FOLDABLE = {
   'f64.ceil': (a) => Math.ceil(a),
   'f64.floor': (a) => Math.floor(a),
   'f64.trunc': (a) => Math.trunc(a),
-  'f64.nearest': (a) => Math.round(a),
+  'f64.nearest': roundEven,
 }
 
 /**
@@ -842,82 +845,127 @@ const localReuse = (ast) => {
   return result
 }
 
-// ==================== CONSTANT PROPAGATION ====================
+// ==================== PROPAGATION & LOCAL ELIMINATION ====================
+
+/** Check if expression is pure (no side effects, no memory ops) */
+const isPure = (node) => {
+  if (!Array.isArray(node)) return true
+  const op = node[0]
+  if (typeof op !== 'string') return false
+  if (op === 'call' || op === 'call_indirect' || op === 'return_call' || op === 'return_call_indirect') return false
+  if (op.includes('.store') || op.includes('.load') || op.includes('memory.')) return false
+  if (op === 'global.set') return false
+  for (let i = 1; i < node.length; i++) if (Array.isArray(node[i]) && !isPure(node[i])) return false
+  return true
+}
+
+/** Count all local.get/set/tee occurrences in one walk */
+const countLocalUses = (node) => {
+  const counts = new Map()
+  const ensure = name => { if (!counts.has(name)) counts.set(name, { gets: 0, sets: 0, tees: 0 }); return counts.get(name) }
+  walk(node, n => {
+    if (!Array.isArray(n) || n.length < 2 || typeof n[1] !== 'string') return
+    if (n[0] === 'local.get') ensure(n[1]).gets++
+    else if (n[0] === 'local.set') ensure(n[1]).sets++
+    else if (n[0] === 'local.tee') ensure(n[1]).tees++
+  })
+  return counts
+}
+
+/** Can this tracked value be substituted for a local.get? */
+const canSubst = (k) => getConst(k.val) || (k.pure && k.singleUse)
+
+/** Try substitute local.get nodes with known values */
+const substGets = (node, known) => walkPost(node, n => {
+  if (!Array.isArray(n) || n[0] !== 'local.get' || n.length !== 2) return
+  const k = typeof n[1] === 'string' && known.get(n[1])
+  if (k && canSubst(k)) return clone(k.val)
+})
 
 /**
- * Propagate constant values through local variables.
- * When a local is set to a constant and not modified before use, replace the get with the constant.
- * @param {Array} ast
- * @returns {Array}
+ * Propagate values through locals and eliminate single-use/dead locals.
+ * Constants propagate to all uses; pure single-use exprs inline into get site.
+ * Multi-pass with batch counting for convergence.
  */
 const propagate = (ast) => {
   const result = clone(ast)
 
-  walk(result, (node) => {
-    if (!Array.isArray(node) || node[0] !== 'func') return
+  walk(result, (funcNode) => {
+    if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
 
-    // Track which locals have known constant values
-    // This is a simple single-pass analysis within straight-line code
-    const constLocals = new Map() // $name → const node
+    const params = new Set()
+    for (const sub of funcNode)
+      if (Array.isArray(sub) && sub[0] === 'param' && typeof sub[1] === 'string') params.add(sub[1])
 
-    // Process function body in order
-    const processBlock = (block, startIdx = 1) => {
-      for (let i = startIdx; i < block.length; i++) {
-        const instr = block[i]
+    for (let pass = 0; pass < 4; pass++) {
+      let changed = false
+      const uses = countLocalUses(funcNode)
+      const getUses = name => uses.get(name) || { gets: 0, sets: 0, tees: 0 }
+      const known = new Map()
+
+      for (let i = 1; i < funcNode.length; i++) {
+        const instr = funcNode[i]
         if (!Array.isArray(instr)) continue
-
         const op = instr[0]
 
-        // local.set $x (const) → remember constant
-        if (op === 'local.set' && instr.length === 3) {
-          const local = instr[1]
-          const val = instr[2]
-          const c = getConst(val)
-          if (c && typeof local === 'string') {
-            constLocals.set(local, val)
-          } else if (typeof local === 'string') {
-            constLocals.delete(local) // invalidate if set to non-const
-          }
-        }
-        // local.tee also sets
-        else if (op === 'local.tee' && instr.length === 3) {
-          const local = instr[1]
-          const val = instr[2]
-          const c = getConst(val)
-          if (c && typeof local === 'string') {
-            constLocals.set(local, val)
-          } else if (typeof local === 'string') {
-            constLocals.delete(local)
-          }
-        }
-        // local.get $x → replace with const if known
-        else if (op === 'local.get' && instr.length === 2) {
-          const local = instr[1]
-          if (typeof local === 'string' && constLocals.has(local)) {
-            const constVal = constLocals.get(local)
-            // Replace in place
-            instr.length = 0
-            instr.push(...clone(constVal))
-          }
-        }
-        // Control flow invalidates all knowledge (conservative)
-        else if (op === 'block' || op === 'loop' || op === 'if' || op === 'call' || op === 'call_indirect') {
-          constLocals.clear()
+        if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') continue
+
+        // Track local.set values
+        if (op === 'local.set' && instr.length === 3 && typeof instr[1] === 'string') {
+          substGets(instr[2], known) // substitute known values in RHS
+          const u = getUses(instr[1])
+          known.set(instr[1], {
+            val: instr[2], pure: isPure(instr[2]),
+            singleUse: u.gets <= 1 && u.sets <= 1 && u.tees === 0
+          })
+          continue
         }
 
-        // Recursively process nested expressions that might have local.get
-        walkPost(instr, (n) => {
-          if (!Array.isArray(n) || n[0] !== 'local.get' || n.length !== 2) return
-          const local = n[1]
-          if (typeof local === 'string' && constLocals.has(local)) {
-            const constVal = constLocals.get(local)
-            return clone(constVal)
+        // Invalidate at control-flow boundaries
+        if (op === 'block' || op === 'loop' || op === 'if') known.clear()
+        // Calls only invalidate non-constant tracked values
+        if (op === 'call' || op === 'call_indirect' || op === 'return_call' || op === 'return_call_indirect')
+          for (const [k, v] of known) if (!getConst(v.val)) known.delete(k)
+
+        // Substitute: standalone local.get (walkPost can't replace root)
+        if (op === 'local.get' && instr.length === 2 && typeof instr[1] === 'string') {
+          const k = known.get(instr[1])
+          if (k && canSubst(k)) {
+            const r = clone(k.val)
+            instr.length = 0; instr.push(...(Array.isArray(r) ? r : [r]))
+            changed = true; continue
           }
-        })
+        }
+
+        // Substitute nested local.gets (skip control-flow nodes — locals may be reassigned inside)
+        if (op !== 'block' && op !== 'loop' && op !== 'if') {
+          const prev = JSON.stringify(instr)
+          substGets(instr, known)
+          if (JSON.stringify(instr) !== prev) changed = true
+        }
       }
-    }
 
-    processBlock(node)
+      // Remove dead stores + unused local decls in one reverse pass
+      const postUses = countLocalUses(funcNode)
+      const pu = name => postUses.get(name) || { gets: 0, sets: 0, tees: 0 }
+      for (let i = funcNode.length - 1; i >= 1; i--) {
+        const sub = funcNode[i]
+        if (!Array.isArray(sub)) continue
+        const name = typeof sub[1] === 'string' ? sub[1] : null
+        if (!name || params.has(name)) continue
+        const u = pu(name)
+        // Dead store: set but never read, pure RHS
+        if (sub[0] === 'local.set' && u.gets === 0 && u.tees === 0 && isPure(sub[2])) {
+          funcNode.splice(i, 1); changed = true
+        }
+        // Unused local declaration
+        else if (sub[0] === 'local' && name[0] === '$' && u.gets === 0 && u.sets === 0 && u.tees === 0) {
+          funcNode.splice(i, 1); changed = true
+        }
+      }
+
+      if (!changed) break
+    }
   })
 
   return result

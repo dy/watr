@@ -443,3 +443,236 @@ test('optimize: compile and run complex', () => {
   const { test: fn } = new WebAssembly.Instance(mod).exports
   assert.equal(fn(), 20, 'complex optimized code should work')
 })
+
+// ==================== PROPAGATE: SINGLE-USE LOCAL ELIMINATION ====================
+
+test('propagate: inlines pure single-use local', () => {
+  // local set once, read once, pure expr → inline and eliminate
+  const ast = parse(`(module (func (export "f") (param $a i32) (result i32)
+    (local $tmp i32)
+    (local.set $tmp (i32.add (local.get $a) (i32.const 1)))
+    (i32.mul (local.get $tmp) (i32.const 2))
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  assert(!src.includes('$tmp'), 'should eliminate single-use local')
+  assert(src.includes('i32.add'), 'should inline the add expression')
+  assert(src.includes('i32.mul'), 'should keep the mul')
+})
+
+test('propagate: does not inline impure single-use', () => {
+  // call is impure → must not inline
+  const ast = parse(`(module
+    (func $side (result i32) (i32.const 1))
+    (func (export "f") (result i32)
+      (local $tmp i32)
+      (local.set $tmp (call $side))
+      (local.get $tmp)
+    )
+  )`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  // call should remain — impure exprs can't be inlined/moved
+  assert(src.includes('call'), 'should not inline impure expression')
+})
+
+test('propagate: removes dead stores', () => {
+  // local set but never read → remove the set
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $dead i32)
+    (local.set $dead (i32.const 99))
+    (i32.const 42)
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  assert(!src.includes('$dead'), 'should remove dead local')
+  assert(!src.includes('i32.const 99'), 'should remove dead store value')
+  assert(src.includes('i32.const 42'), 'should keep live code')
+})
+
+test('propagate: removes unused local declarations', () => {
+  const ast = parse(`(module (func (export "f")
+    (local $unused i32)
+    (local $also_unused f64)
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  assert(!src.includes('$unused'), 'should remove unused local decl')
+  assert(!src.includes('$also_unused'), 'should remove all unused local decls')
+})
+
+test('propagate: invalidates at block boundary', () => {
+  // local set before block, read inside block — block invalidates knowledge
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $x i32)
+    (local.set $x (i32.const 10))
+    (block (result i32) (local.get $x))
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  // After block boundary, propagation should be invalidated
+  assert(src.includes('block'), 'block structure preserved')
+})
+
+test('propagate: invalidates at loop boundary', () => {
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $x i32)
+    (local.set $x (i32.const 5))
+    (loop (result i32) (local.get $x))
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  assert(src.includes('loop'), 'loop structure preserved')
+})
+
+test('propagate: invalidates at if boundary', () => {
+  const ast = parse(`(module (func (export "f") (param $c i32) (result i32)
+    (local $x i32)
+    (local.set $x (i32.const 7))
+    (if (result i32) (local.get $c)
+      (then (local.get $x))
+      (else (i32.const 0))
+    )
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  assert(src.includes('if'), 'if structure preserved')
+})
+
+test('propagate: multi-use local not inlined as non-const', () => {
+  // local read twice → can't inline non-const expr (would duplicate side-effect-free work)
+  const ast = parse(`(module (func (export "f") (param $a i32) (result i32)
+    (local $tmp i32)
+    (local.set $tmp (i32.add (local.get $a) (i32.const 1)))
+    (i32.add (local.get $tmp) (local.get $tmp))
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  // With 2 gets + 1 set, not single-use → should keep local
+  assert(src.includes('local.get'), 'should keep multi-use local reads')
+})
+
+test('propagate: constant propagates to many uses', () => {
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $c i32)
+    (local.set $c (i32.const 3))
+    (i32.add (local.get $c) (local.get $c))
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  const matches = src.match(/i32\.const 3/g)
+  assert(matches && matches.length >= 2, 'should propagate constant to all uses')
+})
+
+test('propagate: does not remove param-related sets', () => {
+  const ast = parse(`(module (func (export "f") (param $p i32) (result i32)
+    (local.get $p)
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  assert(src.includes('param'), 'should preserve params')
+})
+
+test('propagate: compile and run single-use elimination', () => {
+  const ast = parse(`(module (func (export "f") (param $a i32) (result i32)
+    (local $tmp i32)
+    (local.set $tmp (i32.add (local.get $a) (i32.const 10)))
+    (i32.mul (local.get $tmp) (i32.const 3))
+  ))`)
+  const opt = optimize(ast)
+  const binary = compile(opt)
+  const mod = new WebAssembly.Module(binary)
+  const { f } = new WebAssembly.Instance(mod).exports
+  assert.equal(f(5), 45, 'single-use elimination should produce correct result')
+})
+
+test('propagate: constants survive across calls', () => {
+  const ast = parse(`(module
+    (func $side)
+    (func (export "f") (result i32)
+      (local $x i32)
+      (local.set $x (i32.const 7))
+      (call $side)
+      (local.get $x)
+    )
+  )`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  // Constants should propagate across call boundaries
+  assert(!src.includes('local.get'), 'should propagate constant past call')
+})
+
+// ==================== FOLD: f32/f64.nearest (roundTiesToEven) ====================
+
+test('fold: f64.nearest rounds half to even (bankers rounding)', () => {
+  // 0.5 → 0 (round to even)
+  let ast = parse('(module (func (result f64) (f64.nearest (f64.const 0.5))))')
+  let src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const 0'), '0.5 → 0 (even)')
+
+  // 1.5 → 2 (round to even)
+  ast = parse('(module (func (result f64) (f64.nearest (f64.const 1.5))))')
+  src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const 2'), '1.5 → 2 (even)')
+
+  // 2.5 → 2 (round to even)
+  ast = parse('(module (func (result f64) (f64.nearest (f64.const 2.5))))')
+  src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const 2'), '2.5 → 2 (even)')
+
+  // 3.5 → 4 (round to even)
+  ast = parse('(module (func (result f64) (f64.nearest (f64.const 3.5))))')
+  src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const 4'), '3.5 → 4 (even)')
+})
+
+test('fold: f64.nearest non-half values', () => {
+  // 1.3 → 1
+  let ast = parse('(module (func (result f64) (f64.nearest (f64.const 1.3))))')
+  let src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const 1'), '1.3 → 1')
+
+  // 1.7 → 2
+  ast = parse('(module (func (result f64) (f64.nearest (f64.const 1.7))))')
+  src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const 2'), '1.7 → 2')
+
+  // -1.5 → -2 (round to even, negative)
+  ast = parse('(module (func (result f64) (f64.nearest (f64.const -1.5))))')
+  src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const -2'), '-1.5 → -2 (even)')
+
+  // -2.5 → -2 (round to even, negative)
+  ast = parse('(module (func (result f64) (f64.nearest (f64.const -2.5))))')
+  src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const -2'), '-2.5 → -2 (even)')
+})
+
+test('fold: f32.nearest rounds half to even (bankers rounding)', () => {
+  // 0.5 → 0
+  let ast = parse('(module (func (result f32) (f32.nearest (f32.const 0.5))))')
+  let src = print(optimize(ast, 'fold'))
+  assert(src.includes('f32.const 0'), '0.5 → 0 (even)')
+
+  // 1.5 → 2
+  ast = parse('(module (func (result f32) (f32.nearest (f32.const 1.5))))')
+  src = print(optimize(ast, 'fold'))
+  assert(src.includes('f32.const 2'), '1.5 → 2 (even)')
+
+  // 2.5 → 2
+  ast = parse('(module (func (result f32) (f32.nearest (f32.const 2.5))))')
+  src = print(optimize(ast, 'fold'))
+  assert(src.includes('f32.const 2'), '2.5 → 2 (even)')
+})
+
+test('fold: f64.nearest special values', () => {
+  // already integer → unchanged
+  let ast = parse('(module (func (result f64) (f64.nearest (f64.const 4))))')
+  let src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const 4'), '4.0 → 4')
+
+  // 0 → 0
+  ast = parse('(module (func (result f64) (f64.nearest (f64.const 0))))')
+  src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const 0'), '0 → 0')
+})

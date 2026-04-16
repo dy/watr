@@ -152,7 +152,7 @@ function genImports(imports) {
 function compile(source, ...values) {
   // Options object as last argument (non-template call)
   let opts = {}
-  if (!Array.isArray(source) && values.length && typeof values[values.length - 1] === 'object' && values[values.length - 1] !== null && !(values[values.length - 1] instanceof Uint8Array)) {
+  if (!Array.isArray(source) && values.length && typeof values[values.length - 1] === 'object' && values[values.length - 1] !== null && !values[values.length - 1].byteLength) {
     opts = values.pop()
   }
 
@@ -189,7 +189,7 @@ function compile(source, ...values) {
           return parsed
         }
         // Uint8Array → convert to plain array for flat() compatibility
-        if (value instanceof Uint8Array) return [...value]
+        if (value.byteLength !== undefined) return [...value]
         return value
       }
       return node
