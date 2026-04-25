@@ -676,3 +676,640 @@ test('fold: f64.nearest special values', () => {
   src = print(optimize(ast, 'fold'))
   assert(src.includes('f64.const 0'), '0 → 0')
 })
+
+
+// ==================== VACUUM ====================
+
+test('vacuum: drop of pure const', () => {
+  const ast = parse('(module (func (drop (i32.const 42))))')
+  const opt = optimize(ast, 'vacuum')
+  const src = print(opt)
+  assert(!src.includes('i32.const 42'), 'should remove drop of pure const')
+  assert(!src.includes('drop'), 'should remove drop')
+})
+
+test('vacuum: drop of local.get', () => {
+  const ast = parse('(module (func (param $x i32) (drop (local.get $x))))')
+  const opt = optimize(ast, 'vacuum')
+  const src = print(opt)
+  assert(!src.includes('drop'), 'should remove drop of local.get')
+})
+
+test('vacuum: select identical arms', () => {
+  const ast = parse('(module (func (param $x i32) (param $c i32) (result i32) (select (local.get $x) (local.get $x) (local.get $c))))')
+  const opt = optimize(ast, 'vacuum')
+  const src = print(opt)
+  assert(!src.includes('select'), 'should remove select with identical arms')
+  assert(src.includes('local.get $x'), 'should keep the value')
+})
+
+test('vacuum: if with empty branches', () => {
+  const ast = parse('(module (func (param $c i32) (if (local.get $c) (then) (else))))')
+  const opt = optimize(ast, 'vacuum')
+  const src = print(opt)
+  assert(!src.includes('if'), 'should remove empty if')
+})
+
+test('vacuum: removes nop', () => {
+  const ast = parse('(module (func nop (i32.const 1) drop))')
+  const opt = optimize(ast, 'vacuum')
+  const src = print(opt)
+  assert(!src.includes('nop'), 'should remove nop')
+})
+
+// ==================== PEEPHOLE ====================
+
+test('peephole: x - x → 0', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.sub (local.get $x) (local.get $x))))')
+  const opt = optimize(ast, 'peephole')
+  const src = print(opt)
+  assert(src.includes('i32.const 0'), 'should fold x-x to 0')
+  assert(!src.includes('i32.sub'), 'should remove sub')
+})
+
+test('peephole: x ^ x → 0', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.xor (local.get $x) (local.get $x))))')
+  const opt = optimize(ast, 'peephole')
+  const src = print(opt)
+  assert(src.includes('i32.const 0'), 'should fold x^x to 0')
+})
+
+test('peephole: x & 0 → 0', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.and (local.get $x) (i32.const 0))))')
+  const opt = optimize(ast, 'peephole')
+  const src = print(opt)
+  assert(src.includes('i32.const 0'), 'should fold x&0 to 0')
+  assert(!src.includes('i32.and'), 'should remove and')
+})
+
+test('peephole: x | -1 → -1', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.or (local.get $x) (i32.const -1))))')
+  const opt = optimize(ast, 'peephole')
+  const src = print(opt)
+  assert(src.includes('i32.const -1'), 'should fold x|-1 to -1')
+  assert(!src.includes('i32.or'), 'should remove or')
+})
+
+test('peephole: x == x → 1', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.eq (local.get $x) (local.get $x))))')
+  const opt = optimize(ast, 'peephole')
+  const src = print(opt)
+  assert(src.includes('i32.const 1'), 'should fold x==x to 1')
+  assert(!src.includes('i32.eq'), 'should remove eq')
+})
+
+test('peephole: x < x → 0', () => {
+  const ast = parse('(module (func (param $x i32) (result i32) (i32.lt_s (local.get $x) (local.get $x))))')
+  const opt = optimize(ast, 'peephole')
+  const src = print(opt)
+  assert(src.includes('i32.const 0'), 'should fold x<x to 0')
+})
+
+test('peephole: redundant local.set', () => {
+  const ast = parse('(module (func (param $x i32) (local.set $x (local.get $x))))')
+  const opt = optimize(ast, 'peephole')
+  const src = print(opt)
+  assert(!src.includes('local.set'), 'should remove redundant set')
+})
+
+// ==================== GLOBAL CONSTANT PROPAGATION ====================
+
+test('globals: replaces immutable global.get', () => {
+  const ast = parse('(module (global $g i32 (i32.const 42)) (func (result i32) (global.get $g)))')
+  const opt = optimize(ast, 'globals')
+  const src = print(opt)
+  assert(src.includes('i32.const 42'), 'should replace global.get with const')
+  assert(!src.includes('global.get'), 'should remove global.get')
+})
+
+test('globals: preserves mutable global', () => {
+  const ast = parse('(module (global $g (mut i32) (i32.const 42)) (func (result i32) (global.get $g)))')
+  const opt = optimize(ast, 'globals')
+  const src = print(opt)
+  assert(src.includes('global.get $g'), 'should keep mutable global.get')
+})
+
+test('globals: preserves written global', () => {
+  const ast = parse('(module (global $g (mut i32) (i32.const 42)) (func (global.set $g (i32.const 1)) (global.get $g)))')
+  const opt = optimize(ast, 'globals')
+  const src = print(opt)
+  assert(src.includes('global.get $g'), 'should keep written global.get')
+})
+
+// ==================== LOAD/STORE OFFSET FOLDING ====================
+
+test('offset: load add+const', () => {
+  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load (i32.add (local.get $p) (i32.const 4)))))')
+  const opt = optimize(ast, 'offset')
+  const src = print(opt)
+  assert(src.includes('offset=4'), 'should fold const into load offset')
+  assert(!src.includes('i32.add'), 'should remove add')
+})
+
+test('offset: store add+const', () => {
+  const ast = parse('(module (memory 1) (func (param $p i32) (i32.store (i32.add (local.get $p) (i32.const 8)) (i32.const 99))))')
+  const opt = optimize(ast, 'offset')
+  const src = print(opt)
+  assert(src.includes('offset=8'), 'should fold const into store offset')
+  assert(!src.includes('i32.add'), 'should remove add')
+  assert(src.includes('i32.const 99'), 'should keep store value')
+})
+
+test('offset: accumulates existing offset', () => {
+  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load offset=4 (i32.add (local.get $p) (i32.const 8)))))')
+  const opt = optimize(ast, 'offset')
+  const src = print(opt)
+  assert(src.includes('offset=12'), 'should accumulate offsets')
+})
+
+// ==================== REDUNDANT BR REMOVAL ====================
+
+test('unbranch: removes redundant br at end of block', () => {
+  const ast = parse('(module (func (block $l (i32.const 1) drop (br $l))))')
+  const opt = optimize(ast, 'unbranch')
+  const src = print(opt)
+  assert(!src.includes('br $l'), 'should remove redundant br')
+})
+
+test('unbranch: keeps meaningful br', () => {
+  const ast = parse('(module (func (block $l (br $l) (i32.const 1) drop)))')
+  const opt = optimize(ast, 'unbranch')
+  const src = print(opt)
+  assert(src.includes('br $l'), 'should keep non-terminal br')
+})
+
+// ==================== TYPE TREESHAKE ====================
+
+test('treeshake: removes unused types', () => {
+  const ast = parse(`(module
+    (type $used (func (result i32)))
+    (type $unused (func (param i32)))
+    (func $f (export "f") (type $used) (result i32) (i32.const 1))
+  )`)
+  const opt = optimize(ast, 'treeshake')
+  const src = print(opt)
+  assert(src.includes('$used'), 'should keep used type')
+  assert(!src.includes('$unused'), 'should remove unused type')
+})
+
+// ==================== SMARTER INLINING ====================
+
+test('inline: up to 4 params', () => {
+  const ast = parse(`(module
+    (func $add4 (param $a i32) (param $b i32) (param $c i32) (param $d i32) (result i32)
+      (i32.add (i32.add (local.get $a) (local.get $b)) (i32.add (local.get $c) (local.get $d)))
+    )
+    (func (export "f") (result i32) (call $add4 (i32.const 1) (i32.const 2) (i32.const 3) (i32.const 4)))
+  )`)
+  const opt = optimize(ast, 'inline')
+  const src = print(opt)
+  assert(!src.includes('call $add4'), 'should inline 4-param function')
+})
+
+test('inline: multi-instruction body up to 3 instrs', () => {
+  const ast = parse(`(module
+    (func $triple (param $x i32) (result i32)
+      (i32.add (local.get $x) (local.get $x))
+    )
+    (func (export "f") (result i32) (call $triple (i32.const 5)))
+  )`)
+  const opt = optimize(ast, 'inline')
+  const src = print(opt)
+  assert(!src.includes('call $triple'), 'should inline multi-instr function')
+})
+
+// ==================== SET+GET ELIMINATION ====================
+
+test('propagate: adjacent set+get elimination', () => {
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $x i32)
+    (local.set $x (i32.const 42))
+    (local.get $x)
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  assert(!src.includes('local.set'), 'should remove set')
+  assert(!src.includes('local.get'), 'should remove get')
+  assert(src.includes('i32.const 42'), 'should keep the expression')
+})
+
+test('propagate: adjacent set+get with impure expr', () => {
+  const ast = parse(`(module
+    (func $side (result i32) (i32.const 1))
+    (func (export "f") (result i32)
+      (local $x i32)
+      (local.set $x (call $side))
+      (local.get $x)
+    )
+  )`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  assert(!src.includes('local.set'), 'should remove set even for impure')
+  assert(!src.includes('local.get'), 'should remove get')
+  assert(src.includes('call $side'), 'should keep the call')
+})
+
+// ==================== CONVERGENCE ====================
+
+test('convergence: chained optimizations across rounds', () => {
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $x i32)
+    (local.set $x (i32.const 0))
+    (i32.add (local.get $x) (i32.const 5))
+    (drop)
+  ))`)
+  const opt = optimize(ast)
+  const src = print(opt)
+  // propagate → fold → vacuum chain across rounds
+  assert(!src.includes('local.set'), 'should eliminate local')
+  assert(!src.includes('drop'), 'should vacuum drop')
+  assert(!src.includes('i32.add'), 'should fold add')
+})
+
+test('convergence: global const enables fold', () => {
+  const ast = parse(`(module
+    (global $g i32 (i32.const 10))
+    (func (export "f") (result i32)
+      (i32.add (global.get $g) (i32.const 5))
+    )
+  )`)
+  const opt = optimize(ast)
+  const src = print(opt)
+  assert(src.includes('i32.const 15'), 'should fold global+const')
+})
+
+
+// ==================== STRIP MUT FROM GLOBALS ====================
+
+test('stripmut: removes mut from never-written global', () => {
+  const ast = parse('(module (global $g (mut i32) (i32.const 42)) (func (result i32) (global.get $g)))')
+  const opt = optimize(ast, 'stripmut')
+  const src = print(opt)
+  assert(src.includes('global $g i32'), 'should strip mut')
+  assert(!src.includes('(mut i32)'), 'mut should be gone')
+})
+
+test('stripmut: preserves mut on written global', () => {
+  const ast = parse('(module (global $g (mut i32) (i32.const 0)) (func (global.set $g (i32.const 1))))')
+  const opt = optimize(ast, 'stripmut')
+  const src = print(opt)
+  assert(src.includes('(mut i32)'), 'should keep mut when written')
+})
+
+test('stripmut: enables global const propagation', () => {
+  const ast = parse('(module (global $g (mut i32) (i32.const 7)) (func (result i32) (global.get $g)))')
+  const opt = optimize(ast)
+  const src = print(opt)
+  assert(src.includes('i32.const 7'), 'should propagate after stripping mut')
+  assert(!src.includes('global.get'), 'should eliminate global.get')
+})
+
+// ==================== BR_IF SIMPLIFICATION ====================
+
+test('brif: if-then-br → br_if', () => {
+  const ast = parse('(module (func (block $done (if (local.get $c) (then (br $done))) (i32.const 1)))))')
+  const opt = optimize(ast, 'brif')
+  const src = print(opt)
+  assert(!/\(if\b/.test(src), 'should remove if')
+  assert(src.includes('br_if $done'), 'should introduce br_if')
+})
+
+test('brif: if-else-br → br_if with inverted condition', () => {
+  const ast = parse('(module (func (block $done (if (local.get $c) (then) (else (br $done))) (i32.const 1)))))')
+  const opt = optimize(ast, 'brif')
+  const src = print(opt)
+  assert(!/\(if\b/.test(src), 'should remove if')
+  assert(src.includes('br_if $done'), 'should introduce br_if')
+})
+
+test('brif: keeps multi-instruction arms', () => {
+  const ast = parse('(module (func (block $done (if (local.get $c) (then (i32.const 1) drop (br $done))) (i32.const 2)))))')
+  const opt = optimize(ast, 'brif')
+  const src = print(opt)
+  assert(src.includes('if'), 'should keep if when arm has extra instructions')
+})
+
+// ==================== MERGE IDENTICAL IF ARMS ====================
+
+test('foldarms: identical trailing instructions hoisted', () => {
+  const ast = parse(`(module (func (param $c i32) (result i32)
+    (if (result i32) (local.get $c)
+      (then (i32.const 1) (i32.const 10) (i32.add))
+      (else (i32.const 2) (i32.const 10) (i32.add))
+    )
+  )))`)
+  const opt = optimize(ast, 'foldarms')
+  const src = print(opt)
+  // The common suffix (const 10 + add) should be hoisted outside the if
+  // so the if arms should only contain the distinct constants
+  const thenMatch = src.match(/\(then[^)]*\)/)
+  const elseMatch = src.match(/\(else[^)]*\)/)
+  assert(thenMatch && !thenMatch[0].includes('i32.const 10'), 'then arm should not have hoisted code')
+  assert(elseMatch && !elseMatch[0].includes('i32.const 10'), 'else arm should not have hoisted code')
+  assert(src.includes('if'), 'should keep if')
+})
+
+test('foldarms: no change when arms differ', () => {
+  const ast = parse(`(module (func (param $c i32) (result i32)
+    (if (result i32) (local.get $c)
+      (then (i32.const 1))
+      (else (i32.const 2))
+    )
+  )))`)
+  const opt = optimize(ast, 'foldarms')
+  const src = print(opt)
+  assert(src.includes('i32.const 1'), 'should preserve then value')
+  assert(src.includes('i32.const 2'), 'should preserve else value')
+})
+
+// ==================== DUPLICATE FUNCTION ELIMINATION ====================
+
+test('dedupe: removes identical functions', () => {
+  const ast = parse(`(module
+    (func $a (i32.const 1) drop)
+    (func $b (i32.const 1) drop)
+    (func (export "f") (call $b))
+  )`)
+  const opt = optimize(ast, 'dedupe treeshake')
+  const src = print(opt)
+  assert(src.includes('$a'), 'should keep first occurrence')
+  assert(!src.includes('$b'), 'should remove duplicate')
+  assert(src.includes('call $a'), 'should redirect call to canonical')
+})
+
+test('dedupe: preserves different functions', () => {
+  const ast = parse(`(module
+    (func $a (i32.const 1) drop)
+    (func $b (i32.const 2) drop)
+    (func (export "f") (call $b))
+  )`)
+  const opt = optimize(ast, 'dedupe')
+  const src = print(opt)
+  assert(src.includes('$a'), 'should keep a')
+  assert(src.includes('$b'), 'should keep b')
+  assert(src.includes('call $b'), 'should keep original call')
+})
+
+test('dedupe: works with params', () => {
+  const ast = parse(`(module
+    (func $add1 (param $x i32) (result i32) (i32.add (local.get $x) (i32.const 1)))
+    (func $add1_copy (param $y i32) (result i32) (i32.add (local.get $y) (i32.const 1)))
+    (func (export "f") (result i32) (call $add1_copy (i32.const 5)))
+  )`)
+  const opt = optimize(ast, 'dedupe treeshake')
+  const src = print(opt)
+  assert(src.includes('$add1'), 'should keep first')
+  assert(!src.includes('$add1_copy'), 'should remove duplicate')
+  assert(src.includes('call $add1'), 'should redirect call')
+})
+
+// ==================== REORDER FUNCTIONS ====================
+
+test('reorder: hot functions come first', () => {
+  const ast = parse(`(module
+    (func $cold (i32.const 1) drop)
+    (func $hot (i32.const 2) drop)
+    (func $caller (call $hot) (call $hot) (call $cold))
+  )`)
+  const opt = optimize(ast, 'reorder')
+  const src = print(opt)
+  const hotIdx = src.indexOf('func $hot')
+  const coldIdx = src.indexOf('func $cold')
+  assert(hotIdx < coldIdx, 'hot function should appear before cold')
+})
+
+test('reorder: preserves module structure', () => {
+  const ast = parse(`(module
+    (global $g i32 (i32.const 0))
+    (func $f (i32.const 1) drop)
+    (export "f" (func $f))
+  )`)
+  const opt = optimize(ast, 'reorder')
+  const src = print(opt)
+  assert(src.includes('global $g'), 'should preserve globals')
+  assert(src.includes('export "f"'), 'should preserve exports')
+})
+
+// ==================== SIGN-EXTENSION FOLDING ====================
+
+test('fold: i32.extend8_s', () => {
+  const ast = parse('(module (func (result i32) (i32.extend8_s (i32.const 255))))')
+  const opt = optimize(ast, 'fold')
+  const src = print(opt)
+  assert(src.includes('i32.const -1'), 'should fold extend8_s(255) to -1')
+})
+
+test('fold: i32.extend16_s', () => {
+  const ast = parse('(module (func (result i32) (i32.extend16_s (i32.const 65535))))')
+  const opt = optimize(ast, 'fold')
+  const src = print(opt)
+  assert(src.includes('i32.const -1'), 'should fold extend16_s(65535) to -1')
+})
+
+test('fold: i64.extend8_s', () => {
+  const ast = parse('(module (func (result i64) (i64.extend8_s (i64.const 255))))')
+  const opt = optimize(ast, 'fold')
+  const src = print(opt)
+  assert(src.includes('i64.const -1'), 'should fold i64 extend8_s(255) to -1')
+})
+
+// ==================== VACUUM: EMPTY ELSE REMOVAL ====================
+
+test('vacuum: removes empty else branch', () => {
+  const ast = parse(`(module (func (param $c i32)
+    (if (local.get $c)
+      (then (i32.const 1) drop)
+      (else)
+    )
+  ))`)
+  const opt = optimize(ast, 'vacuum')
+  const src = print(opt)
+  assert(!src.includes('(else)'), 'should remove empty else')
+})
+
+// ==================== DEDUPE: REF.FUNC / ELEM / CALL_INDIRECT ====================
+
+test('dedupe: updates ref.func references', () => {
+  const ast = parse(`(module
+    (func $a (i32.const 1) drop)
+    (func $b (i32.const 1) drop)
+    (func (export "f") (result funcref) (ref.func $b))
+  )`)
+  const opt = optimize(ast, 'dedupe')
+  const src = print(opt)
+  assert(src.includes('ref.func $a'), 'should redirect ref.func to canonical')
+})
+
+test('dedupe: updates elem segment references', () => {
+  const ast = parse(`(module
+    (table 2 funcref)
+    (func $a (i32.const 1) drop)
+    (func $b (i32.const 1) drop)
+    (elem (i32.const 0) $b)
+  )`)
+  const opt = optimize(ast, 'dedupe')
+  const src = print(opt)
+  assert(src.includes('$a'), 'should redirect elem to canonical')
+})
+
+// ==================== TREESHAKE: UNUSED IMPORT REMOVAL ====================
+
+test('treeshake: removes unused function imports', () => {
+  const ast = parse(`(module
+    (import "env" "used" (func $used (result i32)))
+    (import "env" "unused" (func $unused (result i32)))
+    (func (export "f") (result i32) (call $used))
+  )`)
+  const opt = optimize(ast, 'treeshake')
+  const src = print(opt)
+  assert(src.includes('"used"'), 'should keep used import')
+  assert(!src.includes('"unused"'), 'should remove unused import')
+})
+
+// ==================== TYPE DEDUPLICATION ====================
+
+test('dedupTypes: merges identical types', () => {
+  const ast = parse(`(module
+    (type $t1 (func (param i32) (result i32)))
+    (type $t2 (func (param i32) (result i32)))
+    (func $f (type $t2) (param i32) (result i32) (local.get 0))
+    (func (export "main") (call_indirect (type $t2) (i32.const 0) (i32.const 1)))
+  )`)
+  const opt = optimize(ast, 'dedupTypes')
+  const src = print(opt)
+  assert(src.includes('$t1'), 'should keep first type')
+  assert(!src.includes('$t2'), 'should remove duplicate type')
+  assert(src.includes('(type $t1)'), 'should redirect func type ref')
+  assert(src.includes('(type $t1)'), 'should redirect call_indirect type ref')
+})
+
+test('dedupTypes: preserves different types', () => {
+  const ast = parse(`(module
+    (type $t1 (func (param i32)))
+    (type $t2 (func (param f32)))
+    (func $f (type $t1) (param i32) drop)
+  )`)
+  const opt = optimize(ast, 'dedupTypes')
+  const src = print(opt)
+  assert(src.includes('$t1'), 'should keep t1')
+  assert(src.includes('$t2'), 'should keep t2')
+})
+
+// ==================== DATA SEGMENT PACKING ====================
+
+test('packData: trims trailing zeros', () => {
+  const ast = parse(`(module
+    (data (i32.const 0) "\\01\\02\\00\\00")
+  )`)
+  const opt = optimize(ast, 'packData')
+  const src = print(opt)
+  assert(!src.includes('\\00\\00"'), 'should trim trailing zeros')
+  assert(src.includes('\\01\\02"'), 'should keep non-zero content')
+})
+
+test('packData: merges adjacent constant-offset segments', () => {
+  const ast = parse(`(module
+    (data (i32.const 0) "\\01\\02")
+    (data (i32.const 2) "\\03\\04")
+  )`)
+  const opt = optimize(ast, 'packData')
+  const src = print(opt)
+  assert(!src.includes('(i32.const 2)'), 'should merge second segment')
+  assert(src.includes('\\01\\02\\03\\04'), 'should have merged content')
+})
+
+// ==================== IMPORT FIELD MINIFICATION ====================
+
+test('minifyImports: shortens module and field names', () => {
+  const ast = parse(`(module
+    (import "long_module_name" "long_field_name" (func $f (result i32)))
+    (import "another_module" "another_field" (func $g (result i32)))
+  )`)
+  const opt = optimize(ast, 'minifyImports')
+  const src = print(opt)
+  assert(!src.includes('long_module_name'), 'should minify module name')
+  assert(!src.includes('long_field_name'), 'should minify field name')
+  assert(src.includes('"a"'), 'should use short module name')
+})
+
+// ==================== PROPAGATE: LOCAL.TEE CREATION ====================
+
+test('propagate: set+get with extra uses becomes tee', () => {
+  const ast = parse(`(module
+    (func $impure (result i32) (i32.const 1))
+    (func (export "f") (param $p i32) (result i32)
+      (local $x i32)
+      (local.set $x (call $impure))
+      (local.get $x)
+      (drop)
+      (local.get $x)
+    )
+  )`)
+  const opt = optimize(ast, 'propagate')
+  const src = print(opt)
+  assert(src.includes('local.tee'), 'should create local.tee for set+get with extra uses')
+})
+
+// ==================== INTEGRATION: COMBINATIONS ====================
+
+test('integration: dedupe then treeshake removes orphan', () => {
+  const ast = parse(`(module
+    (func $a (i32.const 1) drop)
+    (func $b (i32.const 1) drop)
+    (func (export "f") (call $a))
+  )`)
+  const opt = optimize(ast)
+  const src = print(opt)
+  assert(!src.includes('$b'), 'should remove deduped+treeshaken function')
+})
+
+test('integration: stripmut + globals + fold', () => {
+  const ast = parse(`(module
+    (global $g (mut i32) (i32.const 3))
+    (func (export "f") (result i32)
+      (i32.add (global.get $g) (i32.const 2))
+    )
+  )`)
+  const opt = optimize(ast)
+  const src = print(opt)
+  assert(src.includes('i32.const 5'), 'should fold 3+2 after global propagation')
+})
+
+test('integration: brif + unbranch + vacuum', () => {
+  const ast = parse(`(module (func (param $c i32) (result i32)
+    (block $done
+      (if (local.get $c)
+        (then (br $done))
+      )
+      (i32.const 1)
+      (return)
+    )
+    (i32.const 0)
+  ))`)
+  const opt = optimize(ast)
+  const src = print(opt)
+  assert(src.includes('br_if'), 'should use br_if')
+  assert(!/\(if\b/.test(src), 'should eliminate if')
+})
+
+test('integration: compile and run after all opts', () => {
+  const ast = parse(`(module
+    (global $g (mut i32) (i32.const 10))
+    (func $double (param $x i32) (result i32)
+      (i32.mul (local.get $x) (i32.const 2))
+    )
+    (func $double2 (param $y i32) (result i32)
+      (i32.mul (local.get $y) (i32.const 2))
+    )
+    (func (export "test") (result i32)
+      (local $a i32)
+      (local.set $a (call $double2 (i32.const 5)))
+      (i32.add (local.get $a) (global.get $g))
+    )
+  )`)
+  const opt = optimize(ast)
+  const binary = compile(opt)
+  const mod = new WebAssembly.Module(binary)
+  const { test: fn } = new WebAssembly.Instance(mod).exports
+  assert.equal(fn(), 20, 'integration: 5*2 + 10 = 20')
+})
