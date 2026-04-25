@@ -1503,6 +1503,12 @@ const foldarms = (ast) => {
     if (!thenBranch || !elseBranch) return
     if (thenBranch.length <= 1 || elseBranch.length <= 1) return
 
+    // Only fold when the if has an explicit result type.
+    // Without a result annotation the branches are void; hoisting a suffix
+    // like `drop` can expose a value and leave the if branches ill-typed.
+    const hasResult = node.some(c => Array.isArray(c) && c[0] === 'result')
+    if (!hasResult) return
+
     let common = 0
     const minLen = Math.min(thenBranch.length, elseBranch.length)
     for (let i = 1; i < minLen; i++) {

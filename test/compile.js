@@ -241,6 +241,18 @@ t('compile: set a start function', () => {
   is(get(), 666)
 })
 
+t('compile: start function with large index', () => {
+  // Regression: start section was missing the LEB128 continuation byte
+  // when the function index was >= 128.
+  let funcs = ''
+  for (let i = 0; i < 245; i++) funcs += ' (func)'
+  let src = `(module ${funcs} (start 244))`
+  let bin = compile(src)
+  // Should instantiate without "unable to read u32 leb128: start function index"
+  let mod = new WebAssembly.Module(bin)
+  ok(mod instanceof WebAssembly.Module)
+})
+
 t('compile: if else', () => {
   let src1 = `
     (func $dummy)

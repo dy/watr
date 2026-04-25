@@ -209,7 +209,7 @@ export default function compile(nodes) {
     // Custom sections - each is output as separate section with own header
     if (kind === SECTION.custom) return items.flatMap(content => [kind, ...vec(content)])
 
-    return !items.length ? [] : [kind, ...vec(count ? vec(items) : items)]
+    return !items.length ? [] : [kind, ...vec(count ? vec(items) : items.flat())]
   }
 
   // Generate metadata custom sections

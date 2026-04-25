@@ -1022,6 +1022,22 @@ test('foldarms: no change when arms differ', () => {
   assert(src.includes('i32.const 2'), 'should preserve else value')
 })
 
+test('foldarms: does not break void if with drop suffix', () => {
+  // Regression: foldarms used to hoist `drop` from void if branches,
+  // leaving value-producing branches in a result-less if.
+  const ast = parse(`(module (func (param $c i32)
+    (if (local.get $c)
+      (then (block (result f64) (f64.const 1)) drop)
+      (else (block (result f64) (f64.const 2)) drop)
+    )
+  ))`)
+  const opt = optimize(ast, 'foldarms')
+  const bin = compile(opt)
+  // Should compile to valid WASM (no type mismatch)
+  const mod = new WebAssembly.Module(bin)
+  assert(mod instanceof WebAssembly.Module, 'should produce valid wasm')
+})
+
 // ==================== DUPLICATE FUNCTION ELIMINATION ====================
 
 test('dedupe: removes identical functions', () => {
