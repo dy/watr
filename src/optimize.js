@@ -1391,7 +1391,9 @@ const unbranch = (ast) => {
   walk(result, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
-    if (op !== 'block' && op !== 'loop') return
+    // Loops: `br $loop_label` jumps BACK to loop top (continue), not out.
+    // Only `block` allows trailing-br elision because `br $block_label` exits the block.
+    if (op !== 'block') return
 
     // Get the block's label
     let labelIdx = 1
