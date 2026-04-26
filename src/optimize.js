@@ -234,12 +234,9 @@ const treeshake = (ast) => {
   }
   for (const d of data) {
     const first = d[1]
-    if (Array.isArray(first)) {
-      if (first[0] === 'memory') markMemory(first[1])
-      else markMemory(0)
-    } else if (typeof first === 'string' && first[0] === '$') {
-      markMemory(first)
-    }
+    if (Array.isArray(first) && first[0] === 'memory') markMemory(first[1])
+    else if (typeof first === 'string' && first[0] === '$') markMemory(first)
+    else if (Array.isArray(first)) markMemory(0)
   }
   for (const m of [funcs, globals, tables, memories]) for (const e of m.values()) if (e.used) enqueue(e)
 
@@ -269,17 +266,8 @@ const treeshake = (ast) => {
       else if (op === 'call_indirect' || op === 'return_call_indirect') {
         for (const sub of n) if (typeof sub === 'string' && sub[0] === '$') markTable(sub)
       }
-      const isMemoryOp = typeof op === 'string' && (op.startsWith('memory.') || /\.load/.test(op) || /\.store/.test(op))
-      if (isMemoryOp) {
-        let explicitMem = null
-        for (const sub of n) {
-          if (Array.isArray(sub) && sub[0] === 'memory' && sub.length >= 2) {
-            explicitMem = sub[1]
-            break
-          }
-        }
-        if (explicitMem != null) markMemory(explicitMem)
-        else markMemory(0)
+      if (typeof op === 'string' && (op.startsWith('memory.') || op.includes('.load') || op.includes('.store'))) {
+        markMemory(0)
       }
     })
   }
