@@ -171,7 +171,7 @@ const treeshake = (ast) => {
   }
 
   let funcIdx = 0, globalIdx = 0, typeIdx = 0, tableIdx = 0, memIdx = 0
-  const elems = [], exports = [], starts = []
+  const elems = [], data = [], exports = [], starts = []
 
   for (const node of ast.slice(1)) {
     if (!Array.isArray(node)) continue
@@ -194,6 +194,7 @@ const treeshake = (ast) => {
     else if (kind === 'export') exports.push(node)
     else if (kind === 'start') starts.push(node)
     else if (kind === 'elem') elems.push(node)
+    else if (kind === 'data') data.push(node)
   }
 
   // Worklist: function entries whose body still needs to be scanned for refs.
@@ -206,7 +207,7 @@ const treeshake = (ast) => {
   }
   const markGlobal = (ref) => { const e = globals.get(ref); if (e) e.used = true }
   const markTable  = (ref) => { const e = tables.get(ref);  if (e) e.used = true }
-  const markMemory = (ref) => { const e = memories.get(ref); if (e) e.used = true }
+  const markMemory = (ref) => { if (typeof ref === 'string' && ref[0] !== '$') ref = +ref; const e = memories.get(ref); if (e) e.used = true }
   const markType   = (ref) => { const e = types.get(ref);   if (e) e.used = true }
 
   // Roots: explicit exports, start funcs, elem-referenced funcs, inline-exported items.
@@ -230,6 +231,15 @@ const treeshake = (ast) => {
       if (Array.isArray(n) && n[0] === 'ref.func') markFunc(n[1])
       else if (typeof n === 'string' && n[0] === '$') markFunc(n)
     })
+  }
+  for (const d of data) {
+    const first = d[1]
+    if (Array.isArray(first)) {
+      if (first[0] === 'memory') markMemory(first[1])
+      else markMemory(0)
+    } else if (typeof first === 'string' && first[0] === '$') {
+      markMemory(first)
+    }
   }
   for (const m of [funcs, globals, tables, memories]) for (const e of m.values()) if (e.used) enqueue(e)
 
@@ -258,6 +268,18 @@ const treeshake = (ast) => {
       else if (op === 'type') markType(ref)
       else if (op === 'call_indirect' || op === 'return_call_indirect') {
         for (const sub of n) if (typeof sub === 'string' && sub[0] === '$') markTable(sub)
+      }
+      const isMemoryOp = typeof op === 'string' && (op.startsWith('memory.') || /\.load/.test(op) || /\.store/.test(op))
+      if (isMemoryOp) {
+        let explicitMem = null
+        for (const sub of n) {
+          if (Array.isArray(sub) && sub[0] === 'memory' && sub.length >= 2) {
+            explicitMem = sub[1]
+            break
+          }
+        }
+        if (explicitMem != null) markMemory(explicitMem)
+        else markMemory(0)
       }
     })
   }

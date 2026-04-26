@@ -277,6 +277,45 @@ test('treeshake: transitive deps', () => {
   assert(!src.includes('$unused'), 'should remove unused')
 })
 
+test('treeshake: keeps imported memory used by i32.load/store', () => {
+  // Repro: jz shared-memory mode. Memory ops (i32.load/i32.store) reference memory 0
+  // implicitly without naming it — without explicit anchoring the import is wrongly dropped.
+  const ast = parse(`(module
+    (import "env" "memory" (memory 1))
+    (func $f (export "f") (param $p i32) (result i32)
+      (i32.store (i32.const 0) (i32.const 42))
+      (i32.load (local.get $p))
+    )
+  )`)
+  const opt = optimize(ast, 'treeshake')
+  const src = print(opt)
+  assert(src.includes('(import'), 'should keep memory import (used by i32.load/store)')
+  assert(src.includes('"memory"'), 'should keep memory item name')
+})
+
+test('treeshake: keeps imported memory used by memory.copy', () => {
+  const ast = parse(`(module
+    (import "env" "memory" (memory 1))
+    (func $f (export "f") (param $p i32)
+      (memory.copy (i32.const 0) (local.get $p) (i32.const 16))
+    )
+  )`)
+  const opt = optimize(ast, 'treeshake')
+  const src = print(opt)
+  assert(src.includes('(import'), 'should keep memory import (used by memory.copy)')
+})
+
+test('treeshake: keeps imported memory used by active data segment', () => {
+  const ast = parse(`(module
+    (import "env" "memory" (memory 1))
+    (data (i32.const 0) "hello")
+    (func $f (export "f") (result i32) (i32.const 0))
+  )`)
+  const opt = optimize(ast, 'treeshake')
+  const src = print(opt)
+  assert(src.includes('(import'), 'should keep memory import (active data segment writes to it)')
+})
+
 // ==================== CONSTANT PROPAGATION ====================
 
 test('propagate: local set then get', () => {
