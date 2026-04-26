@@ -1540,10 +1540,15 @@ const foldarms = (ast) => {
       if (Array.isArray(c) && (c[0] === 'result' || c[0] === 'type')) block.push(c)
     }
 
+    // Inner if becomes void: the result/type annotation now lives on the outer block,
+    // since the value-producing trailing instructions have moved there. Without
+    // stripping, the inner (if (result f64)) claims to produce f64 from branches
+    // whose trailing value-producing instructions just got hoisted out — invalid.
     const newIf = ['if']
     for (let i = 1; i < node.length; i++) {
       const c = node[i]
       if (Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')) break
+      if (Array.isArray(c) && (c[0] === 'result' || c[0] === 'type')) continue
       newIf.push(c)
     }
     newIf.push(newThen.length > 1 ? newThen : ['then'])

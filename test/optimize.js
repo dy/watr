@@ -1077,6 +1077,29 @@ test('foldarms: does not break void if with drop suffix', () => {
   assert(mod instanceof WebAssembly.Module, 'should produce valid wasm')
 })
 
+test('foldarms: strips inner result when hoisting common tail to outer block', () => {
+  // Regression (from jz __dyn_get): when `(if (result f64) ...)` has a common
+  // trailing `(f64.const ...)` in both arms but the else has prefix statements
+  // (local.set, block, ...), foldarms hoists the const into a wrapping block.
+  // The new wrapping block carries `(result f64)`, but the inner `if` must lose
+  // it — its branches are now void (their value-producing tails just moved out).
+  // Previously the result annotation stayed on the inner if, breaking validation
+  // since both branches now fall through with no value.
+  const ast = parse(`(module (func $f (param $x f64) (result f64)
+    (local $bits i64)
+    (if (result f64) (f64.eq (local.get $x) (f64.const 0))
+      (then (f64.const nan:0x7FF8000000000001))
+      (else
+        (local.set $bits (i64.reinterpret_f64 (local.get $x)))
+        (block $b (loop $l (br_if $b (i64.eq (local.get $bits) (i64.const 0))) (br $l)))
+        (f64.const nan:0x7FF8000000000001)))
+    ) (export "f" (func $f)))`)
+  const opt = optimize(ast, 'foldarms')
+  const bin = compile(opt)
+  const mod = new WebAssembly.Module(bin)
+  assert(mod instanceof WebAssembly.Module, 'should produce valid wasm after foldarms hoist')
+})
+
 // ==================== DUPLICATE FUNCTION ELIMINATION ====================
 
 test('dedupe: removes identical functions', () => {
