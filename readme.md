@@ -56,7 +56,7 @@ npx watr input.wat --polyfill   # newer features → MVP
 
 ## Metrics
 
-* **watr** — 10 KB, 4,460 op/s
+* **watr** — ~84 KB minified (~24 KB gzipped), 4,460 op/s
 * [spec/wast.js](https://github.com/WebAssembly/spec) — 216 KB, 2,185 op/s
 * [wabt](https://github.com/WebAssembly/wabt) — 282 KB, 1,273 op/s
 * [binaryen](https://github.com/WebAssembly/binaryen) — 1,100 KB, 718 op/s

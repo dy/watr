@@ -167,12 +167,25 @@ print(optimize('(func (i32.add (i32.const 1) (i32.const 2)))'))
 | `fold` | Constant folding | `(i32.add (i32.const 1) (i32.const 2))` → `(i32.const 3)` |
 | `deadcode` | Remove unreachable code | Code after `unreachable`, `br`, `return` |
 | `locals` | Remove unused locals | Locals never read/written |
-| `treeshake` | Remove unused definitions | Functions/globals not exported or called |
+| `treeshake` | Remove unused definitions | Functions/globals/types/tables not exported or called |
 | `identity` | Remove identity ops | `(i32.add x (i32.const 0))` → `x` |
 | `strength` | Strength reduction | `(i32.mul x (i32.const 2))` → `(i32.shl x (i32.const 1))` |
 | `branch` | Simplify constant branches | `(if (i32.const 1) A B)` → `A` |
-| `propagate` | Constant propagation | `(local.set $x (i32.const 1)) (local.get $x)` → const |
+| `propagate` | Constant propagation through locals | `(local.set $x (i32.const 1)) (local.get $x)` → const |
 | `inline` | Inline tiny functions | Single-expression functions without locals |
+| `vacuum` | Remove no-ops | Nops, drop-of-pure, empty branches |
+| `peephole` | Algebraic identities | `x - x` → `0`, `x & 0` → `0` |
+| `globals` | Propagate immutable global constants | `global.get` of never-written global → const |
+| `offset` | Fold offsets into load/store | `(i32.load (i32.add ptr (i32.const 4)))` → `(i32.load offset=4 ptr)` |
+| `unbranch` | Remove redundant trailing `br` | `br $label` at end of its own block |
+| `stripmut` | Strip mut from unwritten globals | Enables further global propagation |
+| `brif` | Convert if-then-br to br_if | `(if cond (then (br $l)))` → `(br_if $l cond)` |
+| `foldarms` | Merge identical trailing if arms | `(if C (then A X) (else B X))` → `(if C (then A) (else B)) X` |
+| `dedupe` | Eliminate duplicate functions | Replace duplicates with a single canonical function |
+| `reorder` | Reorder functions by call frequency | Hot functions first for smaller LEB indices |
+| `dedupTypes` | Merge identical type definitions | Remove structurally duplicate `(type ...)` nodes |
+| `packData` | Pack data segments | Trim trailing zeros, merge adjacent segments |
+| `minifyImports` | Shorten import module/field names | `a`, `b`, `aa`… — disabled by default |
 
 ### `parse(source, options?)`
 
