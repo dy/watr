@@ -81,13 +81,28 @@ export const INSTR = [
     'string.new_lossy_utf8_array', 'string.new_wtf8_array', 'string.encode_lossy_utf8_array', 'string.encode_wtf8_array'
   ],
 
-  // 0xfc: Bulk memory/table operations (nested array)
+  // 0xfc: Bulk memory/table operations + rounding mode control (nested array)
   [
     'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
     'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
     'memory.init dataidx_memoryidx', 'data.drop dataidx', 'memory.copy memoryidx_memoryidx', 'memory.fill memoryidx?',
     'table.init reversed', 'elem.drop elemidx', 'table.copy tableidx_tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
-    'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u'
+    'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u',
+    // 0x17-0x7F: padding (105 empty slots)
+    ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+    // 0x80-0xBB: rounding mode control
+    'f32.sqrt_ceil', 'f32.add_ceil', 'f32.sub_ceil', 'f32.mul_ceil', 'f32.div_ceil',
+    'f64.sqrt_ceil', 'f64.add_ceil', 'f64.sub_ceil', 'f64.mul_ceil', 'f64.div_ceil',
+    'f32.convert_ceil_i32_s', 'f32.convert_ceil_i32_u', 'f32.convert_ceil_i64_s', 'f32.convert_ceil_i64_u', 'f32.demote_ceil_f64',
+    'f64.convert_ceil_i32_s', 'f64.convert_ceil_i32_u', 'f64.convert_ceil_i64_s', 'f64.convert_ceil_i64_u', 'f64.promote_ceil_f32',
+    'f32.sqrt_floor', 'f32.add_floor', 'f32.sub_floor', 'f32.mul_floor', 'f32.div_floor',
+    'f64.sqrt_floor', 'f64.add_floor', 'f64.sub_floor', 'f64.mul_floor', 'f64.div_floor',
+    'f32.convert_floor_i32_s', 'f32.convert_floor_i32_u', 'f32.convert_floor_i64_s', 'f32.convert_floor_i64_u', 'f32.demote_floor_f64',
+    'f64.convert_floor_i32_s', 'f64.convert_floor_i32_u', 'f64.convert_floor_i64_s', 'f64.convert_floor_i64_u', 'f64.promote_floor_f32',
+    'f32.sqrt_trunc', 'f32.add_trunc', 'f32.sub_trunc', 'f32.mul_trunc', 'f32.div_trunc',
+    'f64.sqrt_trunc', 'f64.add_trunc', 'f64.sub_trunc', 'f64.mul_trunc', 'f64.div_trunc',
+    'f32.convert_trunc_i32_s', 'f32.convert_trunc_i32_u', 'f32.convert_trunc_i64_s', 'f32.convert_trunc_i64_u', 'f32.demote_trunc_f64',
+    'f64.convert_trunc_i32_s', 'f64.convert_trunc_i32_u', 'f64.convert_trunc_i64_s', 'f64.convert_trunc_i64_u', 'f64.promote_trunc_f32'
   ],
 
   // 0xfd: SIMD instructions (nested array)

@@ -3,6 +3,7 @@
 Fast WebAssembly Text Format (WAT) compiler for JavaScript/Node.js.
 
 Supports [phase 5](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md), [phase 4](https://github.com/WebAssembly/proposals) and phase 3 features, full [spec syntax](https://webassembly.github.io/spec/core/text/index.html) and passes the [WebAssembly test suite](https://github.com/WebAssembly/testsuite).<br>
+Includes [stringref](https://github.com/WebAssembly/stringref), [rounding mode control](https://github.com/WebAssembly/rounding-mode-control), and [wide arithmetic](https://github.com/WebAssembly/wide-arithmetic).<br>
 Enables [polyfills](#available-polyfills) and [optimizations](#available-optimizations).
 
 
@@ -28,6 +29,8 @@ Enables [polyfills](#available-polyfills) and [optimizations](#available-optimiz
 | [Annotations](https://github.com/WebAssembly/annotations) | yes | n/a |
 | [Wide arithmetic](https://github.com/WebAssembly/wide-arithmetic) | yes | n/a |
 | [JS string builtins](https://github.com/WebAssembly/js-string-builtins) | yes | n/a |
+| [Stringref](https://github.com/WebAssembly/stringref) | yes | no |
+| [Rounding mode control](https://github.com/WebAssembly/rounding-mode-control) | yes | n/a |
 
 
 ## Install

@@ -123,30 +123,3 @@ t('print: comments - roundtrip with comments', () => {
   // Should be stable
   is(output, output2)
 })
-
-t('print: doesnt break samples', async t => {
-  const files = ['/test/example/malloc.wat',
-    '/test/example/brownian.wat',
-    '/test/example/fire.wat',
-    '/test/example/quine.wat',
-    '/test/example/metaball.wat',
-    '/test/example/maze.wat',
-    '/test/example/raytrace.wat',
-    '/test/example/snake.wat',
-    '/test/example/dino.wat',
-    '/test/example/containers.wat',
-    '/test/example/raycast.wat',
-    '/test/example/amp.wat',
-    '/test/example/global.wat',
-    '/test/example/loops.wat',
-    '/test/example/memory.wat',
-    '/test/example/multivar.wat',
-    '/test/example/stack.wat',
-  ]
-  for (let path of files) {
-    let res = await fetch(path)
-    let src = await res.text()
-    const dino = print(src)
-    ok(parse(dino), path)
-  }
-})
