@@ -2552,3 +2552,150 @@ t('compile: wide arithmetic - type signature validation', () => {
   // Note: WebAssembly.Module will fail because wide arithmetic
   // is not yet supported in JS engines, but the binary is correctly formatted
 })
+
+t('compile: exception handling - try/catch', () => {
+  let src = `(module
+    (tag $exn (param i32))
+    (func (export "throw_catch") (result i32)
+      (block (result i32)
+        (try_table (catch $exn 0)
+          (throw $exn (i32.const 42))
+          (i32.const 0)
+        )
+        (drop)
+        (i32.const 1)
+      )
+    )
+  )`
+  let wasm = compile(src)
+  let hex = Array.from(wasm)
+  ok(hex.includes(0x1f), 'has try_table opcode')
+  ok(hex.includes(0x08), 'has throw opcode')
+})
+
+t('compile: exception handling - catch_all', () => {
+  let src = `(module
+    (func (export "catch_all") (result i32)
+      (block (result i32)
+        (try_table (catch_all 0)
+          (i32.const 10)
+        )
+        (i32.const 20)
+      )
+    )
+  )`
+  let wasm = compile(src)
+  let hex = Array.from(wasm)
+  ok(hex.includes(0x1f), 'has try_table opcode')
+  ok(hex.includes(0x02), 'has catch_all clause')
+})
+
+t('compile: exception handling - multiple catches', () => {
+  let src = `(module
+    (tag $exn1 (param i32))
+    (tag $exn2 (param f32))
+    (func (export "multi_catch") (result i32)
+      (block (result i32)
+        (try_table (catch $exn1 0) (catch $exn2 1)
+          (throw $exn1 (i32.const 1))
+          (i32.const 0)
+        )
+        (drop)
+        (i32.const 10)
+        (drop)
+        (i32.const 20)
+      )
+    )
+  )`
+  let wasm = compile(src)
+  let hex = Array.from(wasm)
+  ok(hex.includes(0x1f), 'has try_table opcode')
+  ok(hex.includes(0x08), 'has throw opcode')
+})
+
+t('compile: custom descriptors - struct.new_desc', () => {
+  let src = `(module
+    (type $custom (struct (field $id i32)))
+    (func (export "create") (result anyref)
+      (struct.new_desc $custom (i32.const 42))
+    )
+  )`
+  let wasm = compile(src)
+  let hex = Array.from(wasm)
+  ok(hex.includes(0xfb), 'has 0xFB prefix')
+  ok(hex.includes(0x20), 'has struct.new_desc opcode')
+})
+
+t('compile: custom descriptors - struct.new_default_desc', () => {
+  let src = `(module
+    (type $custom (struct (field $id i32)))
+    (func (export "create") (result anyref)
+      (struct.new_default_desc $custom)
+    )
+  )`
+  let wasm = compile(src)
+  let hex = Array.from(wasm)
+  ok(hex.includes(0xfb), 'has 0xFB prefix')
+  ok(hex.includes(0x21), 'has struct.new_default_desc opcode')
+})
+
+t('compile: custom descriptors - ref.get_desc', () => {
+  let src = `(module
+    (type $custom (struct (field $id i32)))
+    (func (export "get_desc") (param anyref) (result i32)
+      (ref.get_desc $custom (local.get 0))
+    )
+  )`
+  let wasm = compile(src)
+  let hex = Array.from(wasm)
+  ok(hex.includes(0xfb), 'has 0xFB prefix')
+  ok(hex.includes(0x22), 'has ref.get_desc opcode')
+})
+
+t('compile: stack switching - cont.new', () => {
+  let src = `(module
+    (type $ft (func (param i32) (result i32)))
+    (type $cont_type (cont $ft))
+    (func (export "test_cont") (result (ref null $cont_type))
+      (cont.new $cont_type (ref.func $inner))
+    )
+    (func $inner (param i32) (result i32)
+      (i32.add (local.get 0) (i32.const 10))
+    )
+  )`
+  let wasm = compile(src)
+  let hex = Array.from(wasm)
+  ok(hex.includes(0xe0), 'has cont.new opcode')
+})
+
+t('compile: stack switching - suspend', () => {
+  let src = `(module
+    (type $ft (func (param i32) (result i32)))
+    (type $cont_type (cont $ft))
+    (tag $tag (param i32))
+    (func (export "suspend") (param i32) (result i32)
+      (block $handler (result i32)
+        (suspend $tag (local.get 0))
+        (i32.const 0)
+      )
+    )
+  )`
+  let wasm = compile(src)
+  let hex = Array.from(wasm)
+  ok(hex.includes(0xe2), 'has suspend opcode')
+})
+
+t('compile: stack switching - resume', () => {
+  let src = `(module
+    (type $ft (func (param i32) (result i32)))
+    (type $cont_type (cont $ft))
+    (tag $tag (param i32))
+    (func (export "resume") (param (ref $cont_type)) (result i32)
+      (resume $cont_type (on $tag 0) (local.get 0))
+      (i32.const 0)
+    )
+  )`
+  let wasm = compile(src)
+  let hex = Array.from(wasm)
+  ok(hex.includes(0xe3), 'has resume opcode')
+})
