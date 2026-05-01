@@ -1076,16 +1076,26 @@ const inline = (ast) => {
 
     // Inline: no locals, <= 4 params, single expression body, not exported
     if (params && !hasLocals && !hasExport && params.length <= 4 && body.length === 1) {
-      // Check if function mutates any of its params (local.set/tee on param)
+      // Check if function mutates any of its params (local.set/tee on param),
+      // or contains a control-transfer op (`return`, `return_call`,
+      // `return_call_indirect`). Inlining such bodies into a different-typed
+      // caller would propagate the transfer to the caller, returning from the
+      // wrong function with the wrong type. Lifting the body into a
+      // `(block $exit ...)` and rewriting returns to `(br $exit X)` would
+      // unlock these — left for a future pass.
       const paramNames = new Set(params.map(p => p.name))
       let mutatesParam = false
+      let hasReturn = false
       walk(body[0], (n) => {
         if (!Array.isArray(n)) return
         if ((n[0] === 'local.set' || n[0] === 'local.tee') && paramNames.has(n[1])) {
           mutatesParam = true
         }
+        if (n[0] === 'return' || n[0] === 'return_call' || n[0] === 'return_call_indirect') {
+          hasReturn = true
+        }
       })
-      if (!mutatesParam) {
+      if (!mutatesParam && !hasReturn) {
         inlinable.set(name, { body: body[0], params })
       }
     }

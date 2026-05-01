@@ -370,6 +370,34 @@ test('inline: preserves exports', () => {
   assert(src.includes('call $helper'), 'should not inline exported func')
 })
 
+test('inline: callee with return is NOT inlined into different-typed caller', () => {
+  // `(return X)` transfers control out of the enclosing function. If we inline
+  // such a callee body into a different-typed caller, the `return` would
+  // return from the CALLER with the callee's value type — type error at validation.
+  // The inliner must refuse such callees (or rewrite returns to block-exits).
+  const ast = parse(`(module
+    (func $inner (result i32) (return (i32.const 1)))
+    (func (export "wrap") (result f64)
+      (f64.convert_i32_s (call $inner)))
+  )`)
+  const opt = optimize(ast, 'inline')
+  // Validate via WebAssembly.Module (compile() returns bytes regardless of validity).
+  assert.doesNotThrow(() => new WebAssembly.Module(compile(opt)), 'inlined module must validate')
+})
+
+test('inline: callee with return_call is NOT inlined into different-typed caller', () => {
+  // Same hazard with `return_call` (tail call): control transfers to the called
+  // function with the result returning to the caller's caller.
+  const ast = parse(`(module
+    (func $eq (param $a f64) (param $b f64) (result i32) (i32.const 0))
+    (func $inner (result i32) (return_call $eq (f64.const 1) (f64.const 2)))
+    (func (export "wrap") (result f64)
+      (f64.convert_i32_s (call $inner)))
+  )`)
+  const opt = optimize(ast, 'inline')
+  assert.doesNotThrow(() => new WebAssembly.Module(compile(opt)), 'inlined module must validate')
+})
+
 // ==================== COMBINED ====================
 
 test('all optimizations together', () => {
