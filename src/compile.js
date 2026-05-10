@@ -24,7 +24,7 @@ const cleanup = (node, result) => !Array.isArray(node) ? (
   node
 ) :
   // remove annotations like (@name ...) except @custom and @metadata.code.*
-  node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@metadata.code.') ? null :
+  node[0]?.[0] === '@' && node[0] !== '@custom' && !(typeof node[0] === 'string' && node[0].startsWith('@metadata.code.')) ? null :
   // unwrap single-element array containing module (after removing comments), preserve .loc
   (result = node.map(cleanup).filter(n => n != null), result.loc = node.loc, result.length === 1 && result[0]?.[0] === 'module' ? result[0] : result)
 
@@ -73,7 +73,11 @@ export default function compile(nodes) {
   // scopes are aliased by key as well, eg. section.func.$name = section[SECTION.func] = idx
   const ctx = []
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
-  ctx.metadata = {} // code metadata storage: { type: [[funcIdx, [[pos, data]...]]] }
+  // code metadata: parallel arrays — types[i] is a type name, perType[i] is
+  // a list of [funcIdx, [[pos, data], ...]] pairs for that type.
+  // Parallel arrays avoid jz/wasm's brittle for-in over `obj.field = {}` patterns.
+  ctx.metaTypes = []
+  ctx.metaPerType = []
 
   // initialize types
   nodes.slice(idx).filter((n) => {
@@ -215,9 +219,11 @@ export default function compile(nodes) {
   // Generate metadata custom sections
   const binMeta = () => {
     const sections = []
-    for (const type in ctx.metadata) {
+    for (let i = 0; i < ctx.metaTypes.length; i++) {
+      const type = ctx.metaTypes[i]
+      const perFunc = ctx.metaPerType[i]
       const name = vec(str(`"metadata.code.${type}"`))
-      const content = vec(ctx.metadata[type].map(([funcIdx, instances]) =>
+      const content = vec(perFunc.map(([funcIdx, instances]) =>
         [...uleb(funcIdx), ...vec(instances.map(([pos, data]) => [...uleb(pos), ...vec(data)]))]
       ))
       sections.push(0, ...vec([...name, ...content]))
@@ -265,6 +271,33 @@ const isId = n => n?.[0] === '$'
 /** Check if node is align/offset memory parameter */
 const isMemParam = n => n?.[0] === 'a' || n?.[0] === 'o'
 
+// i64x2 v128 lane bytes. Inline the BigInt parse + byte extraction to keep
+// jz/wasm's static type tracking on BigInt across the operation. Crossing a
+// function boundary loses the BigInt type and routes assigns through the
+// f64.store fallback (__typed_set_idx) — silently corrupting the bit pattern.
+// Negate via `0n - bi` (not `(1n << 64n) - bi`): jz's i64-backed BigInt masks
+// shift counts mod 64, so `1n << 64n` is `1n`, off-by-one at the i64 min boundary.
+const i64x2Bytes = (s1, s2) => {
+  const arr = new Uint8Array(16)
+  let s = s1.replaceAll('_', '')
+  let neg = s[0] === '-'
+  let bi = BigInt(neg ? s.slice(1) : s)
+  if (neg) bi = 0n - bi
+  for (let k = 0; k < 8; k++) {
+    arr[k] = Number(bi & 0xffn)
+    bi >>= 8n
+  }
+  s = s2.replaceAll('_', '')
+  neg = s[0] === '-'
+  bi = BigInt(neg ? s.slice(1) : s)
+  if (neg) bi = 0n - bi
+  for (let k = 0; k < 8; k++) {
+    arr[k + 8] = Number(bi & 0xffn)
+    bi >>= 8n
+  }
+  return [...arr]
+}
+
 /**
  * Normalize and flatten function body to stack form.
  * Converts folded S-expressions to linear instruction sequence.
@@ -308,12 +341,14 @@ function normalize(nodes, ctx) {
       else if ((node.startsWith('memory.') || node.endsWith('load') || node.endsWith('store')) && isIdx(nodes[0])) out.push(nodes.shift())
     }
     else if (Array.isArray(node)) {
-      const op = node[0]
+      let op = node[0]
       node.loc != null && (err.loc = node.loc) // track position for errors
 
       // code metadata annotations - pass through as marker with metadata type and data
       // (@metadata.code.<type> data:str)
-      if (op?.startsWith?.('@metadata.code.')) {
+      // Avoid `op?.startsWith?.()` here — the optional-chained method call
+      // doesn't compile cleanly under jz/wasm when op is a known string.
+      if (typeof op === 'string' && op.startsWith('@metadata.code.')) {
         let type = op.slice(15) // remove '@metadata.code.' prefix
         out.push(['@metadata', type, node[1]])
         continue
@@ -347,6 +382,13 @@ function normalize(nodes, ctx) {
           out.push(parts.shift())
         }
         out.push(...normalize(parts, ctx), 'end')
+      }
+      else if (op === 'ref.test' || op === 'ref.cast') {
+        const type = parts[0]
+        const isNullable = !Array.isArray(type) || type[1] === 'null' || type[0] !== 'ref'
+        if (isNullable) op += '_null'
+        out.push(...normalize(parts.slice(1), ctx), op, type)
+        nodes.unshift(...out.splice(out.length - 2))
       }
       else {
         const imm = []
@@ -703,20 +745,31 @@ const build = [
       ctx.local.push(...types)
     }
 
-    // Setup metadata tracking for this function
-    ctx.meta = {}
+    // Setup metadata tracking for this function (parallel arrays — see header)
+    ctx.metaFnTypes = []
+    ctx.metaFnSlots = []
     const bytes = instr(body, ctx)
 
     // Store collected metadata for this function
     const funcIdx = ctx.import.filter(imp => imp[2][0] === 'func').length + codeIdx
-    for (const type in ctx.meta) ((ctx.metadata ??= {})[type] ??= []).push([funcIdx, ctx.meta[type]])
+    for (let i = 0; i < ctx.metaFnTypes.length; i++) {
+      const type = ctx.metaFnTypes[i]
+      let idx = ctx.metaTypes.indexOf(type)
+      if (idx === -1) {
+        ctx.metaTypes.push(type)
+        ctx.metaPerType.push([])
+        idx = ctx.metaTypes.length - 1
+      }
+      ctx.metaPerType[idx].push([funcIdx, ctx.metaFnSlots[i]])
+    }
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     // we skip locals provided by params
     let loctypes = ctx.local.slice(param.length).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
 
     // cleanup tmp state
-    ctx.local = ctx.block = ctx.meta = null
+    ctx.local = ctx.block = null
+    ctx.metaFnTypes = ctx.metaFnSlots = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
     return vec([...vec(loctypes.map(([n, t]) => [...uleb(n), ...reftype(t, ctx)])), ...bytes])
@@ -832,7 +885,12 @@ const IMM = {
   v128const: (n) => {
     let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3; num = +num
     if (t[0] === 'i') {
-      let arr = num === 16 ? new Uint8Array(16) : num === 8 ? new Uint16Array(8) : num === 4 ? new Uint32Array(4) : new BigUint64Array(2)
+      // i64x2: i64x2Bytes inlines parse + byte extraction. jz/wasm needs the
+      // BigInt to stay statically typed inside one function — handing it to a
+      // helper as an argument loses the type and routes the BigInt64Array
+      // store through f64.store, dropping the bit pattern.
+      if (num === 2) return i64x2Bytes(n.shift(), n.shift())
+      let arr = num === 16 ? new Uint8Array(16) : num === 8 ? new Uint16Array(8) : new Uint32Array(4)
       for (let j = 0; j < num; j++) arr[j] = encode[t].parse(n.shift())
       return [...new Uint8Array(arr.buffer)]
     }
@@ -965,14 +1023,23 @@ const instr = (nodes, ctx) => {
       // select: becomes typed select (opcode+1) if next node is an array with result types
       if (op === 'select' && nodes[0]?.length) bytes[0]++
       // ref.type|cast: opcode+1 if type is nullable: (ref null $t) or (funcref, anyref, etc.)
-      else if (HANDLER[op] === IMM.reftype && (nodes[0][1] === 'null' || nodes[0][0] !== 'ref')) {
+      else if (HANDLER[op] === IMM.reftype && !op.endsWith('_null') && (nodes[0][1] === 'null' || nodes[0][0] !== 'ref')) {
         bytes[bytes.length - 1]++
       }
       bytes.push(...HANDLER[op](nodes, ctx, op))
     }
 
-    // Record metadata at current byte position
-    for (const [type, data] of meta) ((ctx.meta[type] ??= []).push([out.length, data]))
+    // Record metadata at current byte position (parallel arrays for jz/wasm)
+    for (const m of meta) {
+      const type = m[0], data = m[1]
+      let idx = ctx.metaFnTypes.indexOf(type)
+      if (idx === -1) {
+        ctx.metaFnTypes.push(type)
+        ctx.metaFnSlots.push([])
+        idx = ctx.metaFnTypes.length - 1
+      }
+      ctx.metaFnSlots[idx].push([out.length, data])
+    }
 
     out.push(...bytes)
   }

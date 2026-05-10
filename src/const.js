@@ -59,7 +59,7 @@ export const INSTR = [
     'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx_field', 'struct.get_s typeidx_field', 'struct.get_u typeidx_field', 'struct.set typeidx_field',
     'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx_multi', 'array.new_data typeidx_dataidx', 'array.new_elem typeidx_elemidx',
     'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx_typeidx',
-    'array.init_data typeidx_dataidx', 'array.init_elem typeidx_elemidx', 'ref.test reftype', '', 'ref.cast reftype', '', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
+    'array.init_data typeidx_dataidx', 'array.init_elem typeidx_elemidx', 'ref.test reftype', 'ref.test_null reftype', 'ref.cast reftype', 'ref.cast_null reftype', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
     'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u',
     // custom descriptors (Phase 3): 0xFB 0x20-0x26
     , 'struct.new_desc typeidx', 'struct.new_default_desc typeidx', 'ref.get_desc typeidx', 'ref.cast_desc_eq reftype', , 'br_on_cast_desc_eq reftype2', 'br_on_cast_desc_eq_fail reftype2',
@@ -182,7 +182,7 @@ export const TYPE = {
   // Value types
   i8: 0x78, i16: 0x77, i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, void: 0x40, v128: 0x7B,
   // Heap types
-  exn: 0x69, noexn: 0x74, nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A,
+  exn: 0x69, noexn: 0x74, nofunc: 0x73, noextern: 0x72, none: 0x71, func: 0x70, extern: 0x6F, any: 0x6E, eq: 0x6D, i31: 0x6C, struct: 0x6B, array: 0x6A, data: 0x6B,
   cont: 0x68, nocont: 0x75,  // stack switching (Phase 3)
   string: 0x67, stringview_wtf8: 0x66, stringview_wtf16: 0x60, stringview_iter: 0x61,  // stringref
   // Reference type abbreviations (absheaptype abbrs)
