@@ -336,6 +336,10 @@ t.mute('/test/official/token.wast', async function () { await file(this.name, { 
 t.mute('/test/official/traps.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/traps0.wast', async function () { await file(this.name, { spectest }) })
 ;(hasExnRef ? t.mute : t.skip)('/test/official/try_table.wast', async function () { await file(this.name, { spectest }) })
+t.skip('/test/official/legacy/rethrow.wast', async function () { await file(this.name, { spectest }) })
+t.skip('/test/official/legacy/throw.wast', async function () { await file(this.name, { spectest }) })
+t.skip('/test/official/legacy/try_catch.wast', async function () { await file(this.name, { spectest }) })
+t.skip('/test/official/legacy/try_delegate.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-canon.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-equivalence.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/type-rec.wast', async function () { await file(this.name, { spectest }) })
@@ -349,6 +353,9 @@ t.mute('/test/official/utf8-custom-section-id.wast', async function () { await f
 t.mute('/test/official/utf8-import-field.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/utf8-import-module.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/utf8-invalid-encoding.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/custom/branch_hint.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/custom/custom_annot.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/custom/name_annot.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - custom-page-sizes
 t.skip('/test/official/proposals/custom-page-sizes/binary.wast', async function () { await file(this.name, { spectest }) })

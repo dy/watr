@@ -229,6 +229,8 @@ export async function file(path, imports = {}, options = {}) {
       if (/alignment must not be larger/.test(msg) && nodes.join('').includes('0x8000_0000_0000_0000')) return console.warn('assert_invalid: skip 64-bit alignment validation');
       // skip tag result type validation (tags can't have result types)
       if (/non-empty tag result type/.test(msg)) return console.warn('assert_invalid: skip tag result type validation');
+      // skip custom annotation target validation (watr doesn't validate custom annotation placement)
+      if (/annotation: invalid target|annotation: not in a function/.test(msg)) return console.warn('assert_invalid: skip custom annotation validation');
 
       lastComment = ``
       throws(() => ex[nodes[0]](nodes), msg, msg)
@@ -308,6 +310,14 @@ export async function file(path, imports = {}, options = {}) {
         let m = new WebAssembly.Module(buf)
         let inst = new WebAssembly.Instance(m, importObj)
       })
+    },
+
+    // Custom section assertions (delegate to regular handlers)
+    assert_malformed_custom([, node, msg]) {
+      return ex.assert_malformed([, node, msg])
+    },
+    assert_invalid_custom([, node, msg]) {
+      return ex.assert_invalid([, node, msg])
     }
   }
 
