@@ -108,6 +108,7 @@ export async function file(path, imports = {}, options = {}) {
 
   // test runtime
   let buf, mod = {},
+    definitions = {},
     importObj = { ...imports },
     lastExports,
     lastComment
@@ -121,6 +122,19 @@ export async function file(path, imports = {}, options = {}) {
       if (node[1] === 'definition') {
         const defName = node[2] // e.g., $M
         if (!defName || typeof defName !== 'string' || !defName.startsWith('$')) return console.warn('skip module definition without name')
+        definitions[defName] = node.slice(3)
+        return
+      }
+
+      // Handle (module instance $name $def) - instantiate from stored definition
+      let instName
+      if (node[1] === 'instance') {
+        instName = node[2]
+        const defName = node[3]
+        if (!instName?.startsWith('$') || !defName?.startsWith('$')) return console.warn('skip module instance without names')
+        const defContents = definitions[defName]
+        if (!defContents) return console.warn(`skip module instance: definition ${defName} not found`)
+        node = ['module', ...defContents]
       }
 
       if (node[1][0] === 'memory' && node[1][3]?.startsWith?.('0x1_0000_0000_0000')) return console.warn('skip huge memory')
@@ -145,13 +159,15 @@ export async function file(path, imports = {}, options = {}) {
 
       lastExports = inst.exports
       // collect exports under name
-      if (node[1]?.[0] === '$') mod[node[1]] = lastExports
+      if (instName) mod[instName] = lastExports
+      else if (node[1]?.[0] === '$') mod[node[1]] = lastExports
     },
 
-    register([, nm]) {
-      // include exports from prev module
-      console.log('register', nm, lastExports)
-      importObj[nm.slice(1,-1)] = lastExports
+    register([, nm, instName]) {
+      // include exports from prev module or named instance
+      const exports = instName && mod[instName] ? mod[instName] : lastExports
+      console.log('register', nm, exports)
+      importObj[nm.slice(1,-1)] = exports
     },
 
     assert_return([, [kind, ...args], ...expects]) {
