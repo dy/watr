@@ -130,9 +130,7 @@ i64.parse = n => {
   n = cleanInt(n)
   const neg = n[0] === '-'
   const body = neg ? n.slice(1) : n
-  // Range check on the literal string (lexicographic compare on clean digits)
-  // before BigInt conversion. Avoids BigInt vs 2^64 comparisons that jz/wasm's
-  // i64 carrier mangles when literals exceed signed-i64 range.
+  // Range check on the literal string before BigInt conversion (lexicographic compare on clean digits).
   let max
   if (body[0] === '0' && (body[1] === 'x' || body[1] === 'X')) {
     const hex = body.slice(2).replace(/^0+/, '') || '0'
@@ -151,9 +149,7 @@ i64.parse = n => {
 
 const F32_SIGN = 0x80000000, F32_NAN = 0x7f800000, F32_QUIET = 0x400000
 export function f32(input, value, idx) {
-  // Plain `nan` / `-nan` (with optional `:0xPAYLOAD`) — set the bit pattern
-  // explicitly. Going through `_f32[0] = -NaN` loses the sign bit on wasm runtimes
-  // that canonicalize NaN through f32.demote_f64.
+  // Plain `nan` / `-nan` (with optional `:0xPAYLOAD`) — set the bit pattern explicitly.
   if (typeof input === 'string' && (idx = input.indexOf('nan')) >= 0) {
     value = input[idx + 3] === ':' ? i32.parse(input.slice(idx + 4)) : F32_QUIET
     value |= F32_NAN
@@ -170,9 +166,7 @@ export function f32(input, value, idx) {
 
 const F64_SIGN = 0x8000000000000000n, F64_NAN = 0x7ff0000000000000n, F64_QUIET = 0x8000000000000n
 export function f64(input, value, idx) {
-  // Plain `nan` / `-nan` (with optional `:0xPAYLOAD`) — set the bit pattern
-  // explicitly. Storing `-NaN` to a Float64Array can drop the sign bit on
-  // runtimes that canonicalize NaN.
+  // Plain `nan` / `-nan` (with optional `:0xPAYLOAD`) — set the bit pattern explicitly.
   if (typeof input === 'string' && (idx = input.indexOf('nan')) >= 0) {
     value = input[idx + 3] === ':' ? i64.parse(input.slice(idx + 4)) : F64_QUIET
     value |= F64_NAN
@@ -200,8 +194,7 @@ f64.parse = (input, max=Number.MAX_VALUE) => {
     let [int, fract=''] = sig.split('.'); // integer and fractional parts
     let flen = fract.length ?? 0;
 
-    // Parse integer part — accumulate from least-significant digit to preserve
-    // precision when compiled by jz (which uses strict f64 arithmetic).
+    // Parse integer part — accumulate from least-significant digit to preserve precision.
     // parseInt loses low bits for values > 2^53 because left-to-right
     // accumulation rounds at each step; right-to-left keeps intermediates
     // small so the final large+small addition rounds correctly.
