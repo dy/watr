@@ -1,9 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert'
-import optimize, { treeshake, fold, deadcode, localReuse } from '../src/optimize.js'
-import parse from '../src/parse.js'
-import print from '../src/print.js'
-import compile from '../src/compile.js'
+import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize } from '../src/optimize.js'
+import { parse, print, compile } from './runner.js'
 
 // ==================== CONSTANT FOLDING ====================
 
@@ -328,11 +326,11 @@ test('propagate: local set then get', () => {
 
 test('propagate: multiple uses', () => {
   const ast = parse('(module (func (result i32) (local $x i32) (local.set $x (i32.const 10)) (i32.add (local.get $x) (local.get $x))))')
-  const opt = optimize(ast, 'propagate')
+  const opt = optimize(ast, 'propagate fold')
   const src = print(opt)
-  // Both gets should become constants
-  const matches = src.match(/i32\.const 10/g)
-  assert(matches && matches.length >= 2, 'should propagate to multiple uses')
+  // Gets become constants, then fold reduces 10+10→20
+  assert(src.includes('i32.const 20'), 'should propagate and fold to 20')
+  assert(!src.includes('local.set $x'), 'should eliminate local')
 })
 
 // ==================== FUNCTION INLINING ====================
@@ -354,7 +352,7 @@ test('inline: with params', () => {
     (func $add1 (param $x i32) (result i32) (i32.add (local.get $x) (i32.const 1)))
     (func (export "f") (result i32) (call $add1 (i32.const 5)))
   )`)
-  const opt = optimize(ast, 'inline')
+  const opt = optimize(ast, 'inline fold')
   const src = print(opt)
   assert(!src.includes('call $add1'), 'should inline parameterized call')
 })
@@ -488,7 +486,7 @@ test('optimize: chained optimizations', () => {
     (local.set $x (i32.const 0))
     (i32.add (local.get $x) (i32.const 5))
   ))`)
-  const opt = optimize(ast)
+  const opt = optimize(ast, 'all')
   const src = print(opt)
   // propagate: local.get $x → i32.const 0
   // fold: i32.add 0 5 → i32.const 5
@@ -504,7 +502,7 @@ test('optimize: compile and run complex', () => {
       (call $double (local.get $a))
     )
   )`)
-  const opt = optimize(ast)
+  const opt = optimize(ast, 'all')
   const binary = compile(opt)
   const mod = new WebAssembly.Module(binary)
   const { test: fn } = new WebAssembly.Instance(mod).exports
@@ -625,10 +623,11 @@ test('propagate: constant propagates to many uses', () => {
     (local.set $c (i32.const 3))
     (i32.add (local.get $c) (local.get $c))
   ))`)
-  const opt = optimize(ast, 'propagate')
+  const opt = optimize(ast, 'propagate fold')
   const src = print(opt)
-  const matches = src.match(/i32\.const 3/g)
-  assert(matches && matches.length >= 2, 'should propagate constant to all uses')
+  // Propagate + fold: local eliminated, 3+3→6
+  assert(src.includes('i32.const 6'), 'should propagate and fold to 6')
+  assert(!src.includes('local.set $c'), 'should eliminate local')
 })
 
 test('propagate: does not remove param-related sets', () => {
@@ -646,7 +645,7 @@ test('propagate: compile and run single-use elimination', () => {
     (local.set $tmp (i32.add (local.get $a) (i32.const 10)))
     (i32.mul (local.get $tmp) (i32.const 3))
   ))`)
-  const opt = optimize(ast)
+  const opt = optimize(ast, 'propagate')
   const binary = compile(opt)
   const mod = new WebAssembly.Module(binary)
   const { f } = new WebAssembly.Instance(mod).exports
@@ -928,7 +927,7 @@ test('inline: up to 4 params', () => {
     )
     (func (export "f") (result i32) (call $add4 (i32.const 1) (i32.const 2) (i32.const 3) (i32.const 4)))
   )`)
-  const opt = optimize(ast, 'inline')
+  const opt = optimize(ast, 'inline fold')
   const src = print(opt)
   assert(!src.includes('call $add4'), 'should inline 4-param function')
 })
@@ -940,7 +939,7 @@ test('inline: multi-instruction body up to 3 instrs', () => {
     )
     (func (export "f") (result i32) (call $triple (i32.const 5)))
   )`)
-  const opt = optimize(ast, 'inline')
+  const opt = optimize(ast, 'inline fold')
   const src = print(opt)
   assert(!src.includes('call $triple'), 'should inline multi-instr function')
 })
@@ -985,7 +984,7 @@ test('convergence: chained optimizations across rounds', () => {
     (i32.add (local.get $x) (i32.const 5))
     (drop)
   ))`)
-  const opt = optimize(ast)
+  const opt = optimize(ast, 'all')
   const src = print(opt)
   // propagate → fold → vacuum chain across rounds
   assert(!src.includes('local.set'), 'should eliminate local')
@@ -1149,7 +1148,7 @@ test('dedupe: preserves different functions', () => {
     (func $b (i32.const 2) drop)
     (func (export "f") (call $b))
   )`)
-  const opt = optimize(ast, 'dedupe')
+  const opt = optimize(ast, { dedupe: true, treeshake: false, vacuum: false })
   const src = print(opt)
   assert(src.includes('$a'), 'should keep a')
   assert(src.includes('$b'), 'should keep b')
@@ -1190,7 +1189,7 @@ test('reorder: preserves module structure', () => {
     (func $f (i32.const 1) drop)
     (export "f" (func $f))
   )`)
-  const opt = optimize(ast, 'reorder')
+  const opt = optimize(ast, { reorder: true, treeshake: false })
   const src = print(opt)
   assert(src.includes('global $g'), 'should preserve globals')
   assert(src.includes('export "f"'), 'should preserve exports')
@@ -1253,7 +1252,7 @@ test('dedupe: updates elem segment references', () => {
     (func $b (i32.const 1) drop)
     (elem (i32.const 0) $b)
   )`)
-  const opt = optimize(ast, 'dedupe')
+  const opt = optimize(ast, { dedupe: true, treeshake: false })
   const src = print(opt)
   assert(src.includes('$a'), 'should redirect elem to canonical')
 })
@@ -1364,7 +1363,7 @@ test('integration: dedupe then treeshake removes orphan', () => {
     (func $b (i32.const 1) drop)
     (func (export "f") (call $a))
   )`)
-  const opt = optimize(ast)
+  const opt = optimize(ast, 'all')
   const src = print(opt)
   assert(!src.includes('$b'), 'should remove deduped+treeshaken function')
 })
@@ -1413,9 +1412,123 @@ test('integration: compile and run after all opts', () => {
       (i32.add (local.get $a) (global.get $g))
     )
   )`)
-  const opt = optimize(ast)
+  const opt = optimize(ast, 'all')
   const binary = compile(opt)
   const mod = new WebAssembly.Module(binary)
   const { test: fn } = new WebAssembly.Instance(mod).exports
   assert.equal(fn(), 20, 'integration: 5*2 + 10 = 20')
+})
+
+// ==================== SIZE REGRESSION GUARDS ====================
+
+test('size: fast passes never inflate', () => {
+  // All fast passes must be size-neutral or reductive.
+  const src = `(module
+    (global $g (mut i32) (i32.const 3))
+    (global $h i32 (i32.const 7))
+    (memory 1)
+    (func $dead (unreachable) (i32.const 99) drop)
+    (func (export "f") (result i32)
+      (local $unused i32)
+      (block $b
+        (if (local.get $c)
+          (then (br $b))
+        )
+        (i32.const 1)
+        (return)
+      )
+      (i32.const 0)
+    )
+  )`
+  const ast = parse(src)
+  const before = count(ast)
+  const opt = optimize(ast)
+  const after = count(opt)
+  assert(after <= before, `fast passes should not inflate (${before} → ${after})`)
+})
+
+test('size: heavy passes with guard', () => {
+  // Even with 'all', the size guard should prevent catastrophic inflation.
+  const src = `(module
+    (func $id (param $x i32) (result i32) (local.get $x))
+    (func (export "f") (result i32)
+      (call $id (i32.const 42))
+    )
+  )`
+  const ast = parse(src)
+  const before = count(ast)
+  const opt = optimize(ast, 'all')
+  const after = count(opt)
+  // inline should replace call+id with const, not balloon
+  assert(after <= before + 2, `size should not balloon (${before} → ${after})`)
+})
+
+test('size: default is fast-only', () => {
+  const src = `(module (func (export "f") (result i32)
+    (local $x i32)
+    (local.set $x (i32.const 42))
+    (local.get $x)
+  ))`
+  const optDef = optimize(parse(src))
+  const optAll = optimize(parse(src), 'all')
+  const defSrc = print(optDef)
+  const allSrc = print(optAll)
+  assert(defSrc.includes('local.set'), 'default should not propagate')
+  assert(!allSrc.includes('local.set'), '"all" should propagate')
+})
+
+test('size: empty module not inflated', () => {
+  const ast = parse('(module)')
+  const before = count(ast)
+  const opt = optimize(ast)
+  const after = count(opt)
+  assert.equal(after, before, 'empty module size unchanged')
+})
+
+test('size: binary size measurement', () => {
+  const src = `(module
+    (func (export "f") (result i32) (i32.const 42))
+  )`
+  const ast = parse(src)
+  const before = binarySize(ast)
+  const opt = optimize(ast)
+  const after = binarySize(opt)
+  assert(after <= before, `optimize should not increase binary size (${before} → ${after})`)
+})
+
+test('size: treeshake reduces size', () => {
+  const src = `(module
+    (func $used (export "f") (result i32) (i32.const 1))
+    (func $unused1 (result i32) (i32.const 2))
+    (func $unused2 (result i32) (i32.const 3))
+    (func $unused3 (result i32) (i32.const 4))
+  )`
+  const ast = parse(src)
+  const before = count(ast)
+  const opt = optimize(ast)
+  const after = count(opt)
+  assert(after < before, 'treeshake reduces node count')
+  assert(!print(opt).includes('$unused1'), 'unused funcs removed')
+})
+
+test('size: fast tier not slower than baseline', async () => {
+  const src = `(module
+    (memory 1)
+    (func $a (export "a") (result i32) (i32.const 1))
+    (func $b (export "b") (result i64) (i64.const 2))
+    (func $c (export "c") (result f32) (f32.const 3))
+    (func $d (export "d") (result f64) (f64.const 4))
+  )`
+  const ast = parse(src)
+
+  // Warmup
+  for (let i = 0; i < 10; i++) optimize(ast)
+
+  const N = 100
+  const start = performance.now()
+  for (let i = 0; i < N; i++) optimize(ast)
+  const elapsed = performance.now() - start
+
+  // 100 ops should complete in under 500ms (5ms per op on slow hardware)
+  assert(elapsed < 500, `fast optimize should be fast (${elapsed.toFixed(0)}ms for ${N} runs)`)
 })

@@ -1,6 +1,5 @@
 import t, { is, ok, same, throws } from 'tst'
-import compile from '../src/compile.js'
-import parse from '../src/parse.js'
+import { compile, parse } from './runner.js'
 import { v128 } from '../src/encode.js'
 import {inline, file, wat2wasm, save} from './util.js'
 

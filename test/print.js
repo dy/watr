@@ -1,7 +1,5 @@
 import t, { is, ok, same } from 'tst'
-import print from '../src/print.js'
-import parse from '../src/parse.js'
-import compile from '../src/compile.js'
+import { print, parse, compile } from './runner.js'
 
 t('print: basics', () => {
   const tree = [

@@ -1,5 +1,5 @@
 import t, { ok } from 'tst'
-import compile from '../src/compile.js'
+import { compile } from './runner.js'
 
 t('rounding: f32.ceil', () => {
   ok(compile(`(module (func (export "f") (param f32) (result f32) (f32.ceil (local.get 0))))`).length)

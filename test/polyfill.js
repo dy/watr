@@ -1,8 +1,6 @@
 import t, { is, ok, same } from 'tst'
 import polyfill, { detect, normalize, FEATURES } from '../src/polyfill.js'
-import parse from '../src/parse.js'
-import compile from '../src/compile.js'
-import print from '../src/print.js'
+import { parse, compile, print } from './runner.js'
 
 t('polyfill: normalize options', () => {
   // true → all features

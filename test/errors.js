@@ -1,5 +1,5 @@
 import t, { is, ok } from 'tst'
-import { compile } from '../watr.js'
+import { compile } from './runner.js'
 
 // Position tracking tests
 t('error: position tracking - unknown instruction', () => {

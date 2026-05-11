@@ -185,10 +185,10 @@
   * [x] multi-value (extra returns via globals) - partial
   * [x] struct/array (bump allocator + type tags)
   * [x] ref.test/ref.cast (runtime type tag check)
-  * [ ] ~~SIMD~~ too slow
-  * [ ] ~~threads~~ needs host
-  * [ ] ~~memory64~~ can't emulate
-  * [ ] ~~exceptions~~ complex control flow
+  * [x] ~~SIMD~~ too slow
+  * [x] ~~threads~~ needs host
+  * [x] ~~memory64~~ can't emulate
+  * [x] ~~exceptions~~ complex control flow
 
 * [x] optimize
   * high value
@@ -203,10 +203,10 @@
   * lower priority
     * [x] constant propagation (track const values through locals)
     * [x] function inlining (inline tiny functions)
-    * [ ] ~~common subexpression~~ (cache repeated expressions) (complex, needs extra locals)
-    * [ ] ~~loop invariant hoisting~~ (move const ops out of loops) (complex, risky transforms)
+    * [x] ~~common subexpression~~ (cache repeated expressions) (complex, needs extra locals)
+    * [x] ~~loop invariant hoisting~~ (move const ops out of loops) (complex, risky transforms)
 
-* [ ] ~~compile wasm component~~ -> low ROI
+* [x] ~~compile wasm component~~ -> low ROI
 
 ## Future
 

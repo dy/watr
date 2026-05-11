@@ -6,8 +6,10 @@
  */
 
 import parse from './parse.js'
+import compile from './compile.js'
 
-/** Optimizations that can be applied */
+/** Optimizations that can be applied.
+ *  Passes defaulting to false can bloat output or are expensive — opt-in only. */
 const OPTS = {
   treeshake: true,    // remove unused funcs/globals/types/tables
   fold: true,         // constant folding
@@ -16,8 +18,8 @@ const OPTS = {
   identity: true,     // remove identity ops (x + 0 → x)
   strength: true,     // strength reduction (x * 2 → x << 1)
   branch: true,       // simplify constant branches
-  propagate: true,    // constant propagation through locals
-  inline: true,       // inline tiny functions
+  propagate: false,   // constant propagation — can duplicate expressions
+  inline: false,      // inline tiny functions — can duplicate bodies
   vacuum: true,       // remove nops, drop-of-pure, empty branches
   peephole: true,     // x-x→0, x&0→0, etc.
   globals: true,      // propagate immutable global constants
@@ -25,11 +27,9 @@ const OPTS = {
   unbranch: true,     // remove redundant br at end of own block
   stripmut: true,     // strip mut from never-written globals
   brif: true,         // if-then-br → br_if
-  foldarms: true,     // merge identical trailing if arms
-  // minify: true,    // NOTE: disabled — renaming $ids has no binary-size effect
-                       // without a names section, and risks local-name collisions.
+  foldarms: false,    // merge identical trailing if arms — can add block wrapper
   dedupe: true,       // eliminate duplicate functions
-  reorder: true,      // put hot functions first for smaller LEBs
+  reorder: false,     // put hot functions first — no AST reduction
   dedupTypes: true,   // merge identical type definitions
   packData: true,     // trim trailing zeros, merge adjacent data segments
   minifyImports: false, // shorten import names — enable only when you control the host
@@ -37,6 +37,27 @@ const OPTS = {
 
 /** All optimization names */
 const ALL = Object.keys(OPTS)
+
+/**
+ * Recursively count AST nodes — fast size heuristic without compiling.
+ * @param {any} node
+ * @returns {number}
+ */
+const count = (node) => {
+  if (!Array.isArray(node)) return 1
+  let n = 1
+  for (let i = 0; i < node.length; i++) n += count(node[i])
+  return n
+}
+
+/**
+ * Compile AST and measure binary size in bytes.
+ * @param {Array} ast
+ * @returns {number}
+ */
+const binarySize = (ast) => {
+  try { return compile(ast).length } catch { return Infinity }
+}
 
 /**
  * Fast structural equality of two AST nodes.
@@ -62,12 +83,9 @@ const normalize = (opts) => {
   if (opts === false) return {}
   if (typeof opts === 'string') {
     const set = new Set(opts.split(/\s+/).filter(Boolean))
-    // Special case: a single explicit pass name (e.g. 'fold') enables only that pass,
-    // rather than treating it as a sparse map where everything else is disabled.
-    if (set.size === 1 && ALL.includes([...set][0])) {
-      return Object.fromEntries(ALL.map(f => [f, set.has(f)]))
-    }
-    return Object.fromEntries(ALL.map(f => [f, set.has(f) || set.has('all')]))
+    if (set.has('all')) return Object.fromEntries(ALL.map(f => [f, true]))
+    // Explicit pass names enable ONLY those passes (not the full default set).
+    return Object.fromEntries(ALL.map(f => [f, set.has(f)]))
   }
   return { ...OPTS, ...opts }
 }
@@ -440,7 +458,7 @@ const makeConst = (type, value) => {
  * @returns {Array}
  */
 const fold = (ast) => {
-  return walkPost(clone(ast), (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
     const entry = FOLDABLE[node[0]]
     if (!entry) return
@@ -526,7 +544,7 @@ const IDENTITIES = {
  * @returns {Array}
  */
 const identity = (ast) => {
-  return walkPost(clone(ast), (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node) || node.length !== 3) return
     const fn = IDENTITIES[node[0]]
     if (!fn) return
@@ -544,7 +562,7 @@ const identity = (ast) => {
  * @returns {Array}
  */
 const strength = (ast) => {
-  return walkPost(clone(ast), (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node) || node.length !== 3) return
     const [op, a, b] = node
 
@@ -614,7 +632,7 @@ const strength = (ast) => {
  * @returns {Array}
  */
 const branch = (ast) => {
-  return walkPost(clone(ast), (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
 
@@ -665,10 +683,8 @@ const TERMINATORS = new Set(['unreachable', 'return', 'br', 'br_table'])
  * @returns {Array}
  */
 const deadcode = (ast) => {
-  const result = clone(ast)
-
   // Process each function body
-  walk(result, (node) => {
+  walk(ast, (node) => {
     if (!Array.isArray(node)) return
     const kind = node[0]
 
@@ -686,7 +702,7 @@ const deadcode = (ast) => {
     }
   })
 
-  return result
+  return ast
 }
 
 /**
@@ -741,9 +757,7 @@ const eliminateDeadInBlock = (block) => {
  * @returns {Array}
  */
 const localReuse = (ast) => {
-  const result = clone(ast)
-
-  walk(result, (node) => {
+  walk(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'func') return
 
     // Collect local declarations and their types
@@ -792,7 +806,7 @@ const localReuse = (ast) => {
     }
   })
 
-  return result
+  return ast
 }
 
 // ==================== PROPAGATION & LOCAL ELIMINATION ====================
@@ -870,8 +884,9 @@ const forwardPropagate = (funcNode, params, useCounts) => {
 
     if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') continue
 
-    // Track local.set values
-    if (op === 'local.set' && instr.length === 3 && typeof instr[1] === 'string') {
+    // Track local.set / local.tee values (tee writes too — its result also leaves
+    // the value on the stack but the local is updated identically to set).
+    if ((op === 'local.set' || op === 'local.tee') && instr.length === 3 && typeof instr[1] === 'string') {
       substGets(instr[2], known) // substitute known values in RHS
       const uses = getUseCount(instr[1])
       known.set(instr[1], {
@@ -902,6 +917,14 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       const prev = clone(instr)
       substGets(instr, known)
       if (!equal(prev, instr)) changed = true
+      // Invalidate tracking for any names written by a nested set/tee — those
+      // writes happened mid-expression and the substGets above used the
+      // pre-write tracked value (correct), but later reads must see the new
+      // (untracked) value, not the stale constant.
+      walk(instr, n => {
+        if (Array.isArray(n) && (n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string')
+          known.delete(n[1])
+      })
     }
   }
 
@@ -1002,9 +1025,7 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
  * Multi-pass with batch counting for convergence.
  */
 const propagate = (ast) => {
-  const result = clone(ast)
-
-  walk(result, (funcNode) => {
+  walk(ast, (funcNode) => {
     if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
 
     const params = new Set()
@@ -1024,7 +1045,7 @@ const propagate = (ast) => {
     }
   })
 
-  return result
+  return ast
 }
 
 // ==================== FUNCTION INLINING ====================
@@ -1036,12 +1057,11 @@ const propagate = (ast) => {
  */
 const inline = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
-  const result = clone(ast)
 
   // Collect inlinable functions
   const inlinable = new Map() // $name → { body, params }
 
-  for (const node of result.slice(1)) {
+  for (const node of ast.slice(1)) {
     if (!Array.isArray(node) || node[0] !== 'func') continue
 
     const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
@@ -1102,9 +1122,9 @@ const inline = (ast) => {
   }
 
   // Replace calls with inlined body
-  if (inlinable.size === 0) return result
+  if (inlinable.size === 0) return ast
 
-  walkPost(result, (node) => {
+  walkPost(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'call') return
     const fname = node[1]
     if (!inlinable.has(fname)) return
@@ -1131,7 +1151,7 @@ const inline = (ast) => {
     return substituted
   })
 
-  return result
+  return ast
 }
 
 // ==================== VACUUM ====================
@@ -1143,7 +1163,7 @@ const inline = (ast) => {
  * @returns {Array}
  */
 const vacuum = (ast) => {
-  return walkPost(clone(ast), (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
 
@@ -1269,7 +1289,7 @@ const PEEPHOLE = {
  * @returns {Array}
  */
 const peephole = (ast) => {
-  return walkPost(clone(ast), (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node) || node.length !== 3) return
     const fn = PEEPHOLE[node[0]]
     if (!fn) return
@@ -1287,13 +1307,12 @@ const peephole = (ast) => {
  */
 const globals = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
-  const result = clone(ast)
 
   // Find immutable globals with const init
   const constGlobals = new Map() // name → const node
   const mutableGlobals = new Set()
 
-  for (const node of result.slice(1)) {
+  for (const node of ast.slice(1)) {
     if (!Array.isArray(node) || node[0] !== 'global') continue
     const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
     if (!name) continue
@@ -1311,7 +1330,7 @@ const globals = (ast) => {
   }
 
   // Also mark any global that is ever written as mutable
-  walk(result, (n) => {
+  walk(ast, (n) => {
     if (!Array.isArray(n) || n[0] !== 'global.set') return
     const ref = n[1]
     if (typeof ref === 'string' && ref[0] === '$') mutableGlobals.add(ref)
@@ -1319,10 +1338,10 @@ const globals = (ast) => {
 
   // Remove mutable ones from propagation set
   for (const name of mutableGlobals) constGlobals.delete(name)
-  if (constGlobals.size === 0) return result
+  if (constGlobals.size === 0) return ast
 
   // Substitute global.get with const
-  return walkPost(result, (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'global.get' || node.length !== 2) return
     const ref = node[1]
     if (constGlobals.has(ref)) return clone(constGlobals.get(ref))
@@ -1333,7 +1352,7 @@ const globals = (ast) => {
 
 /** Match (type.load/store (i32.add ptr (type.const N))) and fold offset */
 const offset = (ast) => {
-  return walkPost(clone(ast), (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
     if (typeof op !== 'string' || (!op.endsWith('load') && !op.endsWith('store'))) return
@@ -1406,9 +1425,7 @@ const offset = (ast) => {
  * @returns {Array}
  */
 const unbranch = (ast) => {
-  const result = clone(ast)
-
-  walk(result, (node) => {
+  walk(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
     // Loops: `br $loop_label` jumps BACK to loop top (continue), not out.
@@ -1445,7 +1462,7 @@ const unbranch = (ast) => {
     }
   })
 
-  return result
+  return ast
 }
 
 // ==================== STRIP MUT FROM GLOBALS ====================
@@ -1458,14 +1475,13 @@ const unbranch = (ast) => {
  */
 const stripmut = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
-  const result = clone(ast)
 
   const written = new Set()
-  walk(result, (n) => {
+  walk(ast, (n) => {
     if (Array.isArray(n) && n[0] === 'global.set' && typeof n[1] === 'string') written.add(n[1])
   })
 
-  return walkPost(result, (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'global') return
     const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
     if (!name || written.has(name)) return
@@ -1490,7 +1506,7 @@ const stripmut = (ast) => {
  * @returns {Array}
  */
 const brif = (ast) => {
-  return walkPost(clone(ast), (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'if') return
     const { cond, thenBranch, elseBranch } = parseIf(node)
     const thenEmpty = !thenBranch || thenBranch.length <= 1
@@ -1519,7 +1535,7 @@ const brif = (ast) => {
  * @returns {Array}
  */
 const foldarms = (ast) => {
-  return walkPost(clone(ast), (node) => {
+  return walkPost(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'if') return
     const { thenBranch, elseBranch } = parseIf(node)
     if (!thenBranch || !elseBranch) return
@@ -1611,13 +1627,12 @@ const hashFunc = (node, localNames) => {
  */
 const dedupe = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
-  const result = clone(ast)
 
   // Hash function bodies (normalize local/param names to avoid false negatives)
   const signatures = new Map() // hash → canonical $name
   const redirects = new Map()  // duplicate $name → canonical $name
 
-  for (const node of result.slice(1)) {
+  for (const node of ast.slice(1)) {
     if (!Array.isArray(node) || node[0] !== 'func') continue
     const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
     if (!name) continue
@@ -1645,10 +1660,10 @@ const dedupe = (ast) => {
     }
   }
 
-  if (redirects.size === 0) return result
+  if (redirects.size === 0) return ast
 
   // Rewrite all references: calls, ref.func, elem segments, call_indirect type
-  walkPost(result, (node) => {
+  walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
     if ((op === 'call' || op === 'return_call') && redirects.has(node[1])) {
@@ -1671,7 +1686,7 @@ const dedupe = (ast) => {
     }
   })
 
-  return result
+  return ast
 }
 
 // ==================== TYPE DEDUPLICATION ====================
@@ -1684,12 +1699,11 @@ const dedupe = (ast) => {
  */
 const dedupTypes = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
-  const result = clone(ast)
 
   const signatures = new Map() // hash → canonical $name
   const redirects = new Map()  // duplicate $name → canonical $name
 
-  for (const node of result.slice(1)) {
+  for (const node of ast.slice(1)) {
     if (!Array.isArray(node) || node[0] !== 'type') continue
     const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
     if (!name) continue
@@ -1704,18 +1718,18 @@ const dedupTypes = (ast) => {
     }
   }
 
-  if (redirects.size === 0) return result
+  if (redirects.size === 0) return ast
 
   // Remove duplicate type nodes
-  for (let i = result.length - 1; i >= 0; i--) {
-    const node = result[i]
+  for (let i = ast.length - 1; i >= 0; i--) {
+    const node = ast[i]
     if (Array.isArray(node) && node[0] === 'type') {
       const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
-      if (name && redirects.has(name)) result.splice(i, 1)
+      if (name && redirects.has(name)) ast.splice(i, 1)
     }
   }
 
-  walkPost(result, (node) => {
+  walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
 
@@ -1755,7 +1769,7 @@ const dedupTypes = (ast) => {
     }
   })
 
-  return result
+  return ast
 }
 
 // ==================== DATA SEGMENT PACKING ====================
@@ -1895,10 +1909,9 @@ const mergeDataSegments = (a, b) => {
  */
 const packData = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
-  let result = clone(ast)
 
   // Trim trailing zeros
-  for (const node of result) {
+  for (const node of ast) {
     if (!Array.isArray(node) || node[0] !== 'data') continue
     let contentStart = 1
     if (typeof node[1] === 'string' && node[1][0] === '$') contentStart = 2
@@ -1917,8 +1930,8 @@ const packData = (ast) => {
 
   // Merge adjacent active segments with same memory and consecutive offsets
   const dataNodes = []
-  for (let i = 0; i < result.length; i++) {
-    const node = result[i]
+  for (let i = 0; i < ast.length; i++) {
+    const node = ast[i]
     if (Array.isArray(node) && node[0] === 'data') {
       const info = getDataOffset(node)
       if (info) {
@@ -1947,10 +1960,10 @@ const packData = (ast) => {
   }
 
   if (toRemove.size > 0) {
-    result = result.filter((_, i) => !toRemove.has(i))
+    ast = ast.filter((_, i) => !toRemove.has(i))
   }
 
-  return result
+  return ast
 }
 
 // ==================== IMPORT FIELD MINIFICATION ====================
@@ -1980,11 +1993,10 @@ const makeShortener = () => {
  */
 const minifyImports = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
-  const result = clone(ast)
   const shortMod = makeShortener()
   const shortField = makeShortener()
 
-  for (const node of result) {
+  for (const node of ast) {
     if (!Array.isArray(node) || node[0] !== 'import') continue
     if (typeof node[1] === 'string' && node[1][0] === '"') {
       node[1] = '"' + shortMod(node[1].slice(1, -1)) + '"'
@@ -1994,7 +2006,7 @@ const minifyImports = (ast) => {
     }
   }
 
-  return result
+  return ast
 }
 
 // ==================== REORDER FUNCTIONS ====================
@@ -2033,10 +2045,9 @@ const reorder = (ast) => {
   // Sorting changes the function index space. Skip if any reference is numeric,
   // since we'd silently retarget unnamed callers/start/elem entries.
   if (!reorderSafe(ast)) return ast
-  const result = clone(ast)
 
   const callCounts = new Map()
-  walk(result, (n) => {
+  walk(ast, (n) => {
     if (!Array.isArray(n)) return
     if (n[0] === 'call' || n[0] === 'return_call') {
       callCounts.set(n[1], (callCounts.get(n[1]) || 0) + 1)
@@ -2045,7 +2056,7 @@ const reorder = (ast) => {
 
   // Imports must precede defined funcs (compile.js assigns indices in AST order).
   const imports = [], funcs = [], others = []
-  for (const node of result.slice(1)) {
+  for (const node of ast.slice(1)) {
     if (!Array.isArray(node)) { others.push(node); continue }
     if (node[0] === 'import') imports.push(node)
     else if (node[0] === 'func') funcs.push(node)
@@ -2072,14 +2083,18 @@ const reorder = (ast) => {
  */
 export default function optimize(ast, opts = true) {
   if (typeof ast === 'string') ast = parse(ast)
-  ast = clone(ast)
+  const strictGuard = opts === true  // default: zero tolerance for bloat
   opts = normalize(opts)
 
-  // Each pass clones its input before mutating, so the original `before`
-  // reference stays untouched and can be used for the convergence check
-  // without an extra deep clone.
-  for (let round = 0; round < 6; round++) {
-    const before = ast
+  const log = opts.log ? (msg, delta) => opts.log(msg, delta) : () => {}
+  const verbose = opts.verbose || opts.log
+
+  ast = clone(ast)
+  let beforeRound = null
+
+  for (let round = 0; round < 3; round++) {
+    beforeRound = clone(ast)
+    const sizeBefore = count(ast)
 
     if (opts.stripmut) ast = stripmut(ast)
     if (opts.globals) ast = globals(ast)
@@ -2103,10 +2118,29 @@ export default function optimize(ast, opts = true) {
     if (opts.reorder) ast = reorder(ast)
     if (opts.treeshake) ast = treeshake(ast)
     if (opts.minifyImports) ast = minifyImports(ast)
-    if (equal(before, ast)) break
+
+    const sizeAfter = count(ast)
+    const delta = sizeAfter - sizeBefore
+
+    if (verbose || delta !== 0) {
+      log(`  round ${round + 1}: ${delta > 0 ? '+' : ''}${delta} nodes`, delta)
+    }
+
+    // Size guard: default optimize must never inflate. Explicit passes
+    // get leniency (+5 nodes) so inline/propagate/foldarms can chain.
+    const tolerance = strictGuard ? 0 : 5
+    if (delta > tolerance) {
+      if (verbose) log(`  ⚠ round ${round + 1} inflated by ${delta}, reverting`, delta)
+      ast = beforeRound
+      break
+    }
+
+    if (equal(beforeRound, ast)) break
   }
 
   return ast
 }
 
+/** Count AST nodes (fast size heuristic). */
+export { count as size, count, binarySize }
 export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports }

@@ -1,5 +1,5 @@
 import t, { ok } from 'tst'
-import compile from '../src/compile.js'
+import { compile } from './runner.js'
 
 t('stringref: string.const', () => {
   ok(compile(`(module (func (export "f") (result stringref) (string.const "hello")))`).length)

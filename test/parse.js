@@ -1,5 +1,5 @@
 import t, { is, ok, same, throws } from 'tst'
-import parse from '../src/parse.js'
+import { parse } from './runner.js'
 
 t('parser: s-expr', () => {
   const tree = parse('(module)')

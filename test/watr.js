@@ -1,5 +1,5 @@
 import t, { is, ok, same, throws } from 'tst'
-import watr, { compile } from '../watr.js'
+import watr, { compile } from './runner.js'
 
 // Basic functionality
 t('watr: basic export', () => {
