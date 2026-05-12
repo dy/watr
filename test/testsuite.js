@@ -174,7 +174,7 @@ t.mute('/test/official/imports2.wast', async function () { await file(this.name,
 t.mute('/test/official/imports3.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/imports4.wast', async function () { await file(this.name, { spectest: { ...spectest, memory: new WebAssembly.Memory({ initial: 1, maximum: 2 }) } }) })
 t.mute('/test/official/inline-module.wast', async function () { await file(this.name, { spectest }) })
-t.mute('/test/official/instance.wast', async function () { await file(this.name, { spectest }) })
+ifExn('/test/official/instance.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/int_exprs.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/int_literals.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/labels.wast', async function () { await file(this.name, { spectest }) })
