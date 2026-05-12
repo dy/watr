@@ -207,10 +207,10 @@
     * [x] ~~loop invariant hoisting~~ (move const ops out of loops) (complex, risky transforms)
 
 * [x] ~~compile wasm component~~ -> low ROI
+* [x] ~~wat-based wat-compiler~~ -> done, but no direct interop value.
 
 ## Future
 
 * [ ] VSCode formatter plugin
 * [ ] twgl with collection of wasm-rendered webgl tweets
 * [ ] jz-based watr
-* [ ] wat-based wat-compiler
