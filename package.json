@@ -14,6 +14,7 @@
     },
     "./dist": "./dist/watr.js",
     "./dist/watr.min.js": "./dist/watr.min.js",
+    "./dist/watr.wasm": "./dist/watr.wasm",
     "./parse": {
       "types": "./types/src/parse.d.ts",
       "default": "./src/parse.js"
@@ -42,11 +43,14 @@
   },
   "type": "module",
   "scripts": {
-    "build": "esbuild watr.js --bundle --format=esm --outfile=dist/watr.js && esbuild watr.js --bundle --format=esm --minify --outfile=dist/watr.min.js",
+    "build": "npm run build:js && npm run build:wasm",
+    "build:js": "esbuild watr.js --bundle --format=esm --outfile=dist/watr.js && esbuild watr.js --bundle --format=esm --minify --outfile=dist/watr.min.js",
+    "build:wasm": "npx jz watr.js -O2 -o dist/watr.wasm",
     "test": "node test",
+    "test:wasm": "WATR_WASM=1 node test",
     "test:repl": "npx playwright test",
     "types": "npx tsc src/*.js watr.js --allowJs --declaration --emitDeclarationOnly --declarationMap --outDir types",
-    "prepublishOnly": "npm test && npm run build && npm run types",
+    "prepublishOnly": "npm test && npm run test:wasm && npm run build && npm run types",
     "prepare": "git submodule update --init --recursive 2>/dev/null || true"
   },
   "repository": {
@@ -89,6 +93,7 @@
   "devDependencies": {
     "@playwright/test": "^1.57.0",
     "esbuild": "^0.24.2",
+    "jz": "^0.3.1",
     "tst": "^9.0.0"
   }
 }
