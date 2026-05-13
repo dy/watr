@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v4.6.0
+
+### Added
+
+- **`optimize`: `inlineOnce` pass** (on by default) — inlines functions called
+  from exactly one place into their lone caller, then deletes them. Never
+  duplicates code and never inflates (drops a func entry, a `call`, and often a type
+  entry, paying back only a `block`/`local.set` wrapper); collapses helper chains to
+  a fixpoint. Renames the callee's params/locals/labels to avoid shadowing.
+- **`optimize`: `mergeBlocks` pass** (on by default) — unwraps untyped
+  `(block $L …)` whose label is never branched to, splicing the body into its
+  enclosing scope. Tracks label shadowing so an inner `block $L` doesn't mask the
+  outer one's use, and skips blocks with `(param …)`/`(result …)`/`(type …)` since
+  those imply a real stack signature.
+- **`optimize`: `coalesceLocals` pass** (on by default) — shares local slots
+  between same-type locals whose live ranges don't overlap. Live ranges are
+  computed by a single execution-order walk (children of `local.set`/`local.tee`
+  are visited before the set, so a read-then-write inside a set-rhs is correctly
+  flagged) and extended to cover any enclosing `loop`. Locals whose first
+  reference is a `local.get`, or whose first reference is inside an `if`/`else`
+  branch, are never coalesced *into* an existing slot — they would otherwise
+  observe the previous occupant's residue instead of the implicit zero / their
+  own set on the alternate path.
+
+### Changed
+
+- **`optimize`: `propagate` is now on by default and can no longer inflate.** It
+  used to be opt-in because copying a constant to many use sites could *grow* the
+  module; now it only ever substitutes (a) a pure single-use local (always shrinks —
+  drops the `set`, the lone `get` and the `local` decl) or (b) a constant narrow
+  enough that inlining it is byte-neutral at worst. It also descends into nested
+  `block`/`loop`/`then`/`else` scopes (so the `(block (result …) (local.set $p arg) …
+  (local.get $p))` wrappers `inlineOnce` leaves behind get collapsed), runs a second
+  sweep right after the inliners within each round, and correctly drops a tracked
+  value once a local it reads is rewritten.
+- **`optimize`: round size guard now measures encoded bytes, not AST node count.**
+  Passes like `globals` / `inlineOnce` are node-count-neutral yet move real bytes,
+  so the old `count()` guard couldn't see them. Each round is now kept only if
+  `compile(ast).length` didn't grow (past a small tolerance in non-strict mode); a
+  round that produces invalid wat (compile throws) also reverts instead of escaping.
+- **`optimize`: `globals` pass is now size-aware.** It used to inline *every*
+  immutable global constant unconditionally — turning many cheap `global.get`s
+  (~2 B) into fat immediates (`i32.const` up to 4 B, `f64.const` 9 B) and *growing*
+  large modules. Now a global is only propagated when `reads·constSize ≤ reads·2 +
+  declSize`, and a global whose every read was replaced has its now-dead decl
+  removed here too.
+
+### Fixed
+
+- `optimize`: `unbranch` no longer drops the value operand of a trailing
+  `(br $L v…)` it removes when the block carries a `(result …)`.
+
 ## v4.0.0
 
 ### Breaking Changes

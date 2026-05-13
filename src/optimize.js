@@ -18,9 +18,12 @@ const OPTS = {
   identity: true,     // remove identity ops (x + 0 → x)
   strength: true,     // strength reduction (x * 2 → x << 1)
   branch: true,       // simplify constant branches
-  propagate: false,   // constant propagation — can duplicate expressions
+  propagate: true,    // forward-propagate single-use locals & tiny consts (never inflates)
   inline: false,      // inline tiny functions — can duplicate bodies
+  inlineOnce: true,   // inline single-call functions into their lone caller (never duplicates)
   vacuum: true,       // remove nops, drop-of-pure, empty branches
+  mergeBlocks: true,  // unwrap `(block $L …)` whose label is never targeted
+  coalesce: true,     // share local slots between same-type non-overlapping locals
   peephole: true,     // x-x→0, x&0→0, etc.
   globals: true,      // propagate immutable global constants
   offset: true,       // fold add+const into load/store offset
@@ -855,8 +858,33 @@ const countLocalUses = (node) => {
   return counts
 }
 
-/** Can this tracked value be substituted for a local.get? */
-const canSubst = (k) => getConst(k.val) || (k.pure && k.singleUse)
+/** A constant whose inlined form (opcode + immediate) is no wider than the ~2 B
+ *  `local.get` it would replace — so propagating it to every use is byte-neutral
+ *  at worst, and still drops the `local.set` + the `local` decl. f32/f64 consts
+ *  (5/9 B) lose on reuse, so only narrow i32/i64 literals qualify. */
+const isTinyConst = (node) => {
+  const c = getConst(node)
+  if (!c) return false
+  if (c.type === 'i32') { const v = c.value | 0; return v >= -64 && v <= 63 }
+  if (c.type === 'i64') { const v = typeof c.value === 'bigint' ? c.value : BigInt(c.value); return v >= -64n && v <= 63n }
+  return false
+}
+
+/** Can this tracked value be substituted for a local.get?
+ *  - single use of a pure value: always shrinks (drops the set, the lone get, the decl);
+ *  - any use of a tiny constant: byte-neutral at worst, still drops the set + decl.
+ *  Anything else (a wide constant reused many times, an impure expr) could inflate
+ *  or reorder side effects, so it's left alone. */
+const canSubst = (k) => (k.pure && k.singleUse) || isTinyConst(k.val)
+
+/** Drop tracked values that read `$name`: rewriting `$name` makes them stale. */
+const purgeRefs = (known, name) => {
+  for (const [key, tracked] of known) {
+    let refs = false
+    walk(tracked.val, n => { if (Array.isArray(n) && (n[0] === 'local.get' || n[0] === 'local.tee') && n[1] === name) refs = true })
+    if (refs) known.delete(key)
+  }
+}
 
 /** Try substitute local.get nodes with known values */
 const substGets = (node, known) => walkPost(node, n => {
@@ -889,6 +917,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     if ((op === 'local.set' || op === 'local.tee') && instr.length === 3 && typeof instr[1] === 'string') {
       substGets(instr[2], known) // substitute known values in RHS
       const uses = getUseCount(instr[1])
+      purgeRefs(known, instr[1]) // entries that read this local just went stale
       known.set(instr[1], {
         val: instr[2], pure: isPure(instr[2]),
         singleUse: uses.gets <= 1 && uses.sets <= 1 && uses.tees === 0
@@ -923,7 +952,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       // (untracked) value, not the stale constant.
       walk(instr, n => {
         if (Array.isArray(n) && (n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string')
-          known.delete(n[1])
+          { known.delete(n[1]); purgeRefs(known, n[1]) }
       })
     }
   }
@@ -1024,6 +1053,10 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
  * Constants propagate to all uses; pure single-use exprs inline into get site.
  * Multi-pass with batch counting for convergence.
  */
+/** Block-like nodes whose body is a straight-line instruction list (after any header). */
+const isScopeNode = (n) => Array.isArray(n) &&
+  (n[0] === 'func' || n[0] === 'block' || n[0] === 'loop' || n[0] === 'then' || n[0] === 'else')
+
 const propagate = (ast) => {
   walk(ast, (funcNode) => {
     if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
@@ -1032,16 +1065,30 @@ const propagate = (ast) => {
     for (const sub of funcNode)
       if (Array.isArray(sub) && sub[0] === 'param' && typeof sub[1] === 'string') params.add(sub[1])
 
-    // useCounts must be refreshed before every sub-pass: each mutation
-    // (substitution, set/get pair removal, tee creation, dead-store removal)
-    // changes the gets/sets/tees totals that downstream sub-passes rely on.
-    for (let pass = 0; pass < 4; pass++) {
-      let changed = false
-      if (forwardPropagate(funcNode, params, countLocalUses(funcNode))) changed = true
-      if (eliminateSetGetPairs(funcNode, params, countLocalUses(funcNode))) changed = true
-      if (createLocalTees(funcNode, params, countLocalUses(funcNode))) changed = true
-      if (eliminateDeadStores(funcNode, params, countLocalUses(funcNode))) changed = true
-      if (!changed) break
+    // Propagation runs per straight-line scope: the function body and every nested
+    // `block`/`loop`/`then`/`else` (including ones embedded in an expression, e.g. the
+    // `(block (result i32) …)` an inlined call leaves behind). Collect scopes deepest-
+    // first so inner simplifications shrink the use-counts the outer scopes see.
+    // Use-counts are always whole-function — a set/get pair or dead store is only
+    // touched when it's globally the sole occurrence, so per-scope work stays sound.
+    const scopes = []
+    walkPost(funcNode, n => { if (isScopeNode(n)) scopes.push(n) })
+
+    // One use-count per round, shared by every scope: substitutions only ever
+    // *drop* gets, so a stale count can only make a sub-pass act more cautiously
+    // (skip a not-yet-provably-dead store, decline a not-yet-provably-single use) —
+    // never wrongly. The next round re-counts and mops up. (Recounting per sub-pass
+    // per scope is O(scopes·funcSize) and crippling on big modules.)
+    for (let round = 0; round < 6; round++) {
+      const useCounts = countLocalUses(funcNode)
+      let progressed = false
+      for (const scope of scopes) {
+        if (forwardPropagate(scope, params, useCounts)) progressed = true
+        if (eliminateSetGetPairs(scope, params, useCounts)) progressed = true
+        if (createLocalTees(scope, params, useCounts)) progressed = true
+        if (eliminateDeadStores(scope, params, useCounts)) progressed = true
+      }
+      if (!progressed) break
     }
   })
 
@@ -1151,6 +1198,373 @@ const inline = (ast) => {
     return substituted
   })
 
+  return ast
+}
+
+// ==================== INLINE-ONCE ====================
+
+let inlineUid = 0
+
+/**
+ * Inline functions that are called from exactly one place into their lone caller,
+ * then delete them. Unlike {@link inline} (which duplicates tiny stateless bodies),
+ * this never duplicates code and never inflates: each inlined function drops a
+ * function-section entry, a type-section entry (if now unused), and a `call`
+ * instruction, paying back only a `block`/`local.set` wrapper. This is what
+ * `wasm-opt -Oz` does — collapsing helper chains down to a couple of functions —
+ * and it's the bulk of the gap between hand-tuned WASM and naive codegen.
+ *
+ * A function `$f` qualifies when it is, all of:
+ *  • named, with named params and locals (numeric indices can't be safely renamed);
+ *  • referenced exactly once across the whole module, by a plain `call` (no
+ *    `return_call`, `ref.func`, `elem`, `export`, or `start` reference, and not
+ *    recursive);
+ *  • single-result or void (a multi-value result can't be modeled as `(block (result …))`);
+ *  • free of numeric (depth-relative) branch labels — those would shift under the
+ *    extra block nesting — and of `return_call*` in its body.
+ *
+ * `(call $f a0 a1 …)` becomes
+ *   (block $__inlN (result T)?
+ *     (local.set $__inlN_p0 a0) (local.set $__inlN_p1 a1) …   ;; args evaluated once, in order
+ *     …body, params/locals renamed to $__inlN_*, `return X` → `br $__inlN X`…)
+ * and the renamed params+locals are appended to the caller's `local` decls; the
+ * body's own block/loop/if labels are renamed too so they can't shadow the caller's.
+ * Runs to a fixpoint so helper chains fully collapse.
+ *
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const inlineOnce = (ast) => {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+
+  const HEAD = new Set(['export', 'type', 'param', 'result', 'local'])
+  const bodyStart = (fn) => {
+    let i = 2
+    while (i < fn.length && (typeof fn[i] === 'string' || (Array.isArray(fn[i]) && HEAD.has(fn[i][0])))) i++
+    return i
+  }
+  const isBranch = op => op === 'br' || op === 'br_if' || op === 'br_table'
+  // A subtree we can't lift into a (block …): depth-relative branch labels (shift
+  // under added nesting) or tail calls (would escape the wrapping block).
+  const unsafe = (n) => {
+    if (!Array.isArray(n)) return false
+    const op = n[0]
+    if (op === 'return_call' || op === 'return_call_indirect' || op === 'return_call_ref') return true
+    if (op === 'try' || op === 'try_table' || op === 'delegate' || op === 'rethrow') return true  // exception labels — not handled by the relabeler below
+    if (isBranch(op)) for (let i = 1; i < n.length; i++) if (typeof n[i] === 'number' || (typeof n[i] === 'string' && /^\d+$/.test(n[i]))) return true
+    for (let i = 1; i < n.length; i++) if (unsafe(n[i])) return true
+    return false
+  }
+  const callsSelf = (n, name) => {
+    if (!Array.isArray(n)) return false
+    if ((n[0] === 'call' || n[0] === 'return_call') && n[1] === name) return true
+    for (let i = 1; i < n.length; i++) if (callsSelf(n[i], name)) return true
+    return false
+  }
+
+  // Module-level references that pin a function (can't be removed/inlined-away).
+  const collectPinned = (n, pinned) => {
+    if (!Array.isArray(n)) return
+    const op = n[0]
+    if (op === 'export' && Array.isArray(n[2]) && n[2][0] === 'func' && typeof n[2][1] === 'string') pinned.add(n[2][1])
+    else if (op === 'start' && typeof n[1] === 'string') pinned.add(n[1])
+    else if (op === 'ref.func' && typeof n[1] === 'string') pinned.add(n[1])
+    else if (op === 'elem') for (const c of n) if (typeof c === 'string' && c[0] === '$') pinned.add(c)
+    for (const c of n) collectPinned(c, pinned)
+  }
+
+  for (let round = 0; round < 16; round++) {
+    const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
+    const funcByName = new Map()
+    for (const n of funcs) if (typeof n[1] === 'string') funcByName.set(n[1], n)
+
+    // Count plain-call references across the WHOLE module (anonymous exported funcs
+    // call helpers too); flag any non-call reference (return_call etc.).
+    const callRefs = new Map(), otherRef = new Set()
+    const countRefs = (n) => {
+      if (!Array.isArray(n)) return
+      const op = n[0]
+      if (op === 'call' && typeof n[1] === 'string') callRefs.set(n[1], (callRefs.get(n[1]) || 0) + 1)
+      else if (op === 'return_call' && typeof n[1] === 'string') otherRef.add(n[1])
+      for (let i = 1; i < n.length; i++) countRefs(n[i])
+    }
+    countRefs(ast)
+    const pinned = new Set()
+    for (const n of ast) if (!Array.isArray(n) || n[0] !== 'func') collectPinned(n, pinned)
+    // a func may carry its own (export "name") — the signature scan below rejects those too
+
+    // Pick a callee.
+    let calleeName = null
+    for (const [name, fn] of funcByName) {
+      if (pinned.has(name) || otherRef.has(name)) continue
+      if (callRefs.get(name) !== 1) continue
+      if (callsSelf(fn, name)) continue
+      // named params/locals only; collect signature
+      let ok = true, nResult = 0
+      for (let i = 2; i < fn.length; i++) {
+        const c = fn[i]
+        if (typeof c === 'string') continue
+        if (!Array.isArray(c)) { ok = false; break }
+        if (c[0] === 'param' || c[0] === 'local') { if (typeof c[1] !== 'string' || c[1][0] !== '$') { ok = false; break } }
+        else if (c[0] === 'result') nResult += c.length - 1
+        else if (c[0] === 'export') { ok = false; break }
+        else if (c[0] === 'type') continue
+        else break
+      }
+      if (!ok || nResult > 1) continue
+      let bad = false
+      for (let i = bodyStart(fn); i < fn.length; i++) if (unsafe(fn[i])) { bad = true; break }
+      if (bad) continue
+      calleeName = name; break
+    }
+    if (!calleeName) break
+
+    const callee = funcByName.get(calleeName)
+    const params = [], locals = []
+    let resultType = null
+    for (let i = 2; i < callee.length; i++) {
+      const c = callee[i]
+      if (typeof c === 'string' || !Array.isArray(c)) continue
+      if (c[0] === 'param') params.push({ name: c[1], type: c[2] })
+      else if (c[0] === 'result') { if (c.length > 1) resultType = c[1] }
+      else if (c[0] === 'local') locals.push({ name: c[1], type: c[2] })
+      else if (c[0] === 'export' || c[0] === 'type') continue
+      else break
+    }
+    const cBody = callee.slice(bodyStart(callee))
+
+    const uid = ++inlineUid
+    const exit = `$__inl${uid}`
+    const rename = new Map()
+    for (const p of params) rename.set(p.name, `$__inl${uid}_${p.name.slice(1)}`)
+    for (const l of locals) rename.set(l.name, `$__inl${uid}_${l.name.slice(1)}`)
+    // The callee's own block/loop/if labels would shadow same-named labels in the
+    // caller after nesting (and break depth resolution) — give them fresh names too.
+    const isBlockLabel = op => op === 'block' || op === 'loop' || op === 'if'
+    const labelRename = new Map()
+    const collectLabels = (n) => {
+      if (!Array.isArray(n)) return
+      if (isBlockLabel(n[0]) && typeof n[1] === 'string' && n[1][0] === '$' && !labelRename.has(n[1]))
+        labelRename.set(n[1], `$__inl${uid}L_${n[1].slice(1)}`)
+      for (let i = 1; i < n.length; i++) collectLabels(n[i])
+    }
+    for (const n of cBody) collectLabels(n)
+    const sub = (n) => {
+      if (!Array.isArray(n)) return n
+      const op = n[0]
+      if ((op === 'local.get' || op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string' && rename.has(n[1]))
+        return [op, rename.get(n[1]), ...n.slice(2).map(sub)]
+      if (op === 'return') return ['br', exit, ...n.slice(1).map(sub)]
+      if (isBlockLabel(op) && typeof n[1] === 'string' && labelRename.has(n[1]))
+        return [op, labelRename.get(n[1]), ...n.slice(2).map(sub)]
+      if (isBranch(op)) return [op, ...n.slice(1).map(c => (typeof c === 'string' && labelRename.has(c)) ? labelRename.get(c) : sub(c))]
+      return n.map((c, i) => i === 0 ? c : sub(c))
+    }
+
+    // Splice into the (unique) caller (which may be an anonymous exported func).
+    let done = false
+    for (const fn of funcs) {
+      if (fn === callee || done) continue
+      const start = bodyStart(fn)
+      for (let i = start; i < fn.length; i++) {
+        const replaced = walkPost(fn[i], (n) => {
+          if (done || !Array.isArray(n) || n[0] !== 'call' || n[1] !== calleeName) return
+          const args = n.slice(2)
+          if (args.length !== params.length) return  // arity mismatch — leave it
+          const setup = params.map((p, k) => ['local.set', rename.get(p.name), args[k]])
+          const inner = cBody.map(sub)
+          done = true
+          return resultType
+            ? ['block', exit, ['result', resultType], ...setup, ...inner]
+            : ['block', exit, ...setup, ...inner]
+        })
+        if (replaced !== fn[i]) fn[i] = replaced
+        if (done) {
+          const decls = [...params, ...locals].map(p => ['local', rename.get(p.name), p.type])
+          if (decls.length) fn.splice(bodyStart(fn), 0, ...decls)
+          break
+        }
+      }
+      if (done) break
+    }
+    if (!done) break  // call site not found inside a func body — give up
+
+    const idx = ast.indexOf(callee)
+    if (idx >= 0) ast.splice(idx, 1)
+  }
+
+  return ast
+}
+
+// ==================== MERGE BLOCKS ====================
+
+/**
+ * Does `body` contain a branch instruction targeting `label`, ignoring inner
+ * blocks/loops that re-bind the same label?
+ */
+const targetsLabel = (body, label) => {
+  let found = false
+  const search = (n, shadowed) => {
+    if (found || !Array.isArray(n)) return
+    const op = n[0]
+    let inner = shadowed
+    if ((op === 'block' || op === 'loop') && typeof n[1] === 'string' && n[1] === label) inner = true
+    if (!shadowed) {
+      if (op === 'br' || op === 'br_if' || op === 'br_on_null' || op === 'br_on_non_null' ||
+          op === 'br_on_cast' || op === 'br_on_cast_fail') {
+        if (n[1] === label) { found = true; return }
+      } else if (op === 'br_table') {
+        for (let j = 1; j < n.length; j++) {
+          if (typeof n[j] === 'string') { if (n[j] === label) { found = true; return } }
+          else break
+        }
+      }
+    }
+    for (let i = 1; i < n.length; i++) search(n[i], inner)
+  }
+  for (const node of body) search(node, false)
+  return found
+}
+
+/**
+ * Unwrap redundant `(block $L body)` whose label is never targeted, splicing
+ * the body into the surrounding scope. Skips blocks with `param`/`result`/`type`
+ * annotations (their stack effect would change). Each unwrap drops the
+ * `block`+`end` framing bytes; iterates by walk so chained blocks collapse.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const mergeBlocks = (ast) => {
+  walk(ast, (node) => {
+    if (!isScopeNode(node)) return
+    let i = 1
+    while (i < node.length) {
+      const child = node[i]
+      if (!Array.isArray(child) || child[0] !== 'block') { i++; continue }
+      let bi = 1, label = null
+      if (typeof child[1] === 'string' && child[1][0] === '$') { label = child[1]; bi = 2 }
+      let typed = false
+      for (let j = bi; j < child.length; j++) {
+        const c = child[j]
+        if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'result' || c[0] === 'type')) { typed = true; break }
+      }
+      if (typed) { i++; continue }
+      const body = child.slice(bi)
+      if (label && targetsLabel(body, label)) { i++; continue }
+      node.splice(i, 1, ...body)
+      i += body.length
+    }
+  })
+  return ast
+}
+
+// ==================== COALESCE LOCALS ====================
+
+/**
+ * Share local slots between same-type locals with non-overlapping live ranges.
+ * Live range = [first pos, last pos] of any local.get/set/tee, extended over
+ * any loop containing a reference (so a value read across loop iterations stays
+ * intact). Greedy slot assignment by start position. Params and unnamed/numeric
+ * references are left alone; `localReuse` later removes the renamed-away decls.
+ *
+ * Soundness: WASM zero-initializes locals at function entry, so a local whose
+ * first reference (in walk order) is a `local.get` *relies* on that implicit
+ * zero — coalescing it into a slot whose previous user left a non-zero residue
+ * would silently change behavior (e.g. a `for (let i=0; …)` loop counter
+ * inheriting `N*4` from a sibling temp). Such "read-first" locals can still
+ * serve as a slot's *primary* (the slot then keeps the function's zero start),
+ * but can never be a donor merged into an existing slot.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const coalesceLocals = (ast) => {
+  walk(ast, (funcNode) => {
+    if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
+
+    const decls = new Map()
+    for (const sub of funcNode) {
+      if (Array.isArray(sub) && sub[0] === 'local' &&
+          typeof sub[1] === 'string' && sub[1][0] === '$' && typeof sub[2] === 'string') {
+        decls.set(sub[1], sub[2])
+      }
+    }
+    if (decls.size < 2) return
+
+    const uses = new Map()
+    const loopStack = []
+    let pos = 0, abort = false, condDepth = 0
+
+    const visit = (n) => {
+      if (abort || !Array.isArray(n)) return
+      const op = n[0]
+      const isLoop = op === 'loop'
+      if (isLoop) loopStack.push({ start: pos, end: pos })
+      const isSet = op === 'local.set' || op === 'local.tee'
+
+      if (isSet || op === 'local.get') {
+        const name = n[1]
+        if (typeof name !== 'string' || name[0] !== '$') { abort = true; return }
+        // Execution order: evaluate set/tee value BEFORE recording the write,
+        // so a `(local.set $x (… (local.get $x) …))` is correctly seen as a
+        // read-then-write of $x (firstOp = local.get).
+        if (isSet) for (let i = 2; i < n.length; i++) visit(n[i])
+        const here = pos++
+        if (decls.has(name)) {
+          let u = uses.get(name)
+          if (!u) { u = { start: here, end: here, firstOp: op, firstCond: condDepth > 0, loops: new Set() }; uses.set(name, u) }
+          if (here > u.end) u.end = here
+          for (const ls of loopStack) u.loops.add(ls)
+        }
+      } else {
+        pos++
+        const isIf = op === 'if'
+        for (let i = 1; i < n.length; i++) {
+          const c = n[i]
+          const cond = isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')
+          if (cond) condDepth++
+          visit(c)
+          if (cond) condDepth--
+        }
+      }
+
+      if (isLoop) { const ls = loopStack.pop(); ls.end = pos }
+    }
+    visit(funcNode)
+    if (abort) return
+
+    // A use inside a loop must stay live for the whole loop — the next
+    // iteration could read what this iteration wrote.
+    for (const u of uses.values()) {
+      for (const ls of u.loops) {
+        if (ls.start < u.start) u.start = ls.start
+        if (ls.end > u.end) u.end = ls.end
+      }
+    }
+
+    const ordered = [...uses.entries()].sort((a, b) => a[1].start - b[1].start)
+    const rename = new Map()
+    const slots = []
+    for (const [name, range] of ordered) {
+      // Read-first locals depend on the implicit zero; locals first seen inside
+      // an if/else branch may be skipped on the alternate path — either way
+      // they'd observe a prior slot's residue if reused. They may *start* a
+      // fresh slot (the function's zero init), but never *join* one.
+      const readsZero = range.firstOp === 'local.get' || range.firstCond
+      const type = decls.get(name)
+      const slot = readsZero ? null : slots.find(s => s.type === type && s.end < range.start)
+      if (slot) { rename.set(name, slot.primary); if (range.end > slot.end) slot.end = range.end }
+      else slots.push({ primary: name, type, end: range.end })
+    }
+    if (rename.size === 0) return
+
+    walk(funcNode, (n) => {
+      if (Array.isArray(n) &&
+          (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee') &&
+          rename.has(n[1])) {
+        n[1] = rename.get(n[1])
+      }
+    })
+  })
   return ast
 }
 
@@ -1300,52 +1714,99 @@ const peephole = (ast) => {
 
 // ==================== GLOBAL CONSTANT PROPAGATION ====================
 
+/** Bytes a signed-LEB128 integer encodes to. */
+const slebSize = (v) => {
+  let x = typeof v === 'bigint' ? v : BigInt(Math.trunc(Number(v) || 0))
+  let n = 1
+  while (true) {
+    const b = x & 0x7fn
+    x >>= 7n
+    if ((x === 0n && (b & 0x40n) === 0n) || (x === -1n && (b & 0x40n) !== 0n)) return n
+    n++
+  }
+}
+/** Encoded byte size of a constant init instruction (opcode + immediate). */
+const constInstrSize = (node) => {
+  if (!Array.isArray(node)) return 4
+  switch (node[0]) {
+    case 'i32.const': case 'i64.const': return 1 + slebSize(node[1])
+    case 'f32.const': return 5
+    case 'f64.const': return 9
+    case 'v128.const': return 18
+    default: return 4 // ref.null/ref.func/global.get — conservative
+  }
+}
+const GLOBAL_GET_SIZE = 2 // 0x23 opcode + 1-byte globalidx (typical)
+
 /**
- * Replace global.get of immutable globals with their constant init values.
+ * Replace `global.get` of an immutable, const-initialised global with the
+ * constant — but only when it doesn't grow the module. A `global.get` costs
+ * ~2 B; an `i32.const 12345` costs 4 B; an `f64.const` costs 9 B. Naively
+ * inlining a big constant read from many sites trades a few cheap reads + one
+ * global decl for many fat immediates — pure bloat (and the node-count size
+ * guard can't see it: same number of AST nodes). So we only propagate a global
+ * when `refs·constSize ≤ refs·2 + declSize`; when every read is replaced and
+ * the global isn't exported, its now-dead decl is dropped here too.
  * @param {Array} ast
  * @returns {Array}
  */
 const globals = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
-  // Find immutable globals with const init
-  const constGlobals = new Map() // name → const node
-  const mutableGlobals = new Set()
+  // Immutable globals with a constant init: name → init node.
+  const constGlobals = new Map()
+  const exported = new Set() // globals pinned by an export — keep the decl
 
   for (const node of ast.slice(1)) {
-    if (!Array.isArray(node) || node[0] !== 'global') continue
+    if (!Array.isArray(node)) continue
+    if (node[0] === 'export' && Array.isArray(node[2]) && node[2][0] === 'global' && typeof node[2][1] === 'string') { exported.add(node[2][1]); continue }
+    if (node[0] !== 'global') continue
     const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
     if (!name) continue
-
-    // Check mutability: (global $g (mut i32) init) vs (global $g i32 init)
-    const hasName = typeof node[1] === 'string' && node[1][0] === '$'
-    const initIdx = hasName ? 3 : 2
-
-    // Skip mutable globals
-    const typeSlot = hasName ? node[2] : node[1]
-    if (Array.isArray(typeSlot) && typeSlot[0] === 'mut') continue
-
-    const init = node[initIdx]
+    // (global $g (export "x") …) inline export → pinned
+    if (node.some(c => Array.isArray(c) && c[0] === 'export')) exported.add(name)
+    const typeSlot = node[2]
+    if (Array.isArray(typeSlot) && typeSlot[0] === 'mut') continue       // mutable
+    if (Array.isArray(typeSlot) && typeSlot[0] === 'import') continue    // imported
+    const init = node[3]
     if (getConst(init)) constGlobals.set(name, init)
   }
-
-  // Also mark any global that is ever written as mutable
-  walk(ast, (n) => {
-    if (!Array.isArray(n) || n[0] !== 'global.set') return
-    const ref = n[1]
-    if (typeof ref === 'string' && ref[0] === '$') mutableGlobals.add(ref)
-  })
-
-  // Remove mutable ones from propagation set
-  for (const name of mutableGlobals) constGlobals.delete(name)
   if (constGlobals.size === 0) return ast
 
-  // Substitute global.get with const
-  return walkPost(ast, (node) => {
-    if (!Array.isArray(node) || node[0] !== 'global.get' || node.length !== 2) return
-    const ref = node[1]
-    if (constGlobals.has(ref)) return clone(constGlobals.get(ref))
+  // Drop any global that is ever written (defensive — an immutable global can't
+  // be, but a malformed module might) and tally read counts.
+  const reads = new Map()
+  walk(ast, (n) => {
+    if (!Array.isArray(n)) return
+    const ref = n[1]
+    if (typeof ref !== 'string' || ref[0] !== '$') return
+    if (n[0] === 'global.set') constGlobals.delete(ref)
+    else if (n[0] === 'global.get') reads.set(ref, (reads.get(ref) || 0) + 1)
   })
+
+  // Keep only globals where propagation is size-neutral or better.
+  const propagate = new Set()
+  for (const [name, init] of constGlobals) {
+    const r = reads.get(name) || 0
+    if (r === 0) continue // dead anyway — leave to treeshake
+    const cs = constInstrSize(init)
+    const declSize = cs + 2 // valtype + mutability byte + init expr + `end`
+    const before = r * GLOBAL_GET_SIZE + declSize
+    const after = r * cs + (exported.has(name) ? declSize : 0)
+    if (after <= before) propagate.add(name)
+  }
+  if (propagate.size === 0) return ast
+
+  walkPost(ast, (node) => {
+    if (!Array.isArray(node) || node[0] !== 'global.get' || node.length !== 2) return
+    if (propagate.has(node[1])) return clone(constGlobals.get(node[1]))
+  })
+  // Their reads are all gone now — remove the decls we're free to remove.
+  for (let i = ast.length - 1; i >= 1; i--) {
+    const n = ast[i]
+    if (Array.isArray(n) && n[0] === 'global' && typeof n[1] === 'string' && propagate.has(n[1]) && !exported.has(n[1])) ast.splice(i, 1)
+  }
+  return ast
 }
 
 // ==================== LOAD/STORE OFFSET FOLDING ====================
@@ -1458,7 +1919,9 @@ const unbranch = (ast) => {
 
     const last = node[lastIdx]
     if (Array.isArray(last) && last[0] === 'br' && last[1] === label) {
-      node.splice(lastIdx, 1)
+      // `(br $L v…)` as a block's last instruction just leaves v… as the block's
+      // result — splice the value operand(s) in its place (none → plain removal).
+      node.splice(lastIdx, 1, ...last.slice(2))
     }
   })
 
@@ -2092,9 +2555,15 @@ export default function optimize(ast, opts = true) {
   ast = clone(ast)
   let beforeRound = null
 
+  // Size guard works on encoded bytes, not AST node count: passes like
+  // `globals` / `inlineOnce` are node-count-neutral yet move real bytes
+  // (a `global.get` ↔ a fat `f64.const`; a `call` ↔ an inlined body), so a
+  // node-count guard can't tell when a round bloated — or shrank. `binarySize`
+  // also returns Infinity if a round produced invalid wat, so a broken round
+  // reverts instead of escaping.
   for (let round = 0; round < 3; round++) {
     beforeRound = clone(ast)
-    const sizeBefore = count(ast)
+    const sizeBefore = binarySize(ast)
 
     if (opts.stripmut) ast = stripmut(ast)
     if (opts.globals) ast = globals(ast)
@@ -2104,6 +2573,7 @@ export default function optimize(ast, opts = true) {
     if (opts.strength) ast = strength(ast)
     if (opts.branch) ast = branch(ast)
     if (opts.propagate) ast = propagate(ast)
+    if (opts.inlineOnce) ast = inlineOnce(ast)
     if (opts.inline) ast = inline(ast)
     if (opts.offset) ast = offset(ast)
     if (opts.unbranch) ast = unbranch(ast)
@@ -2111,6 +2581,8 @@ export default function optimize(ast, opts = true) {
     if (opts.foldarms) ast = foldarms(ast)
     if (opts.deadcode) ast = deadcode(ast)
     if (opts.vacuum) ast = vacuum(ast)
+    if (opts.mergeBlocks) ast = mergeBlocks(ast)
+    if (opts.coalesce) ast = coalesceLocals(ast)
     if (opts.locals) ast = localReuse(ast)
     if (opts.dedupe) ast = dedupe(ast)
     if (opts.dedupTypes) ast = dedupTypes(ast)
@@ -2118,19 +2590,25 @@ export default function optimize(ast, opts = true) {
     if (opts.reorder) ast = reorder(ast)
     if (opts.treeshake) ast = treeshake(ast)
     if (opts.minifyImports) ast = minifyImports(ast)
+    // Second propagate sweep: `inlineOnce`/`inline` (above) leave fresh
+    // `(local.set $p arg) … (local.get $p)` wrappers around each inlined call;
+    // re-running propagation collapses them within this same round, so the size
+    // guard scores the cleaned result instead of waiting a round (which it may
+    // never get if `equal()` declares a fixpoint first).
+    if (opts.propagate && (opts.inlineOnce || opts.inline)) ast = propagate(ast)
 
-    const sizeAfter = count(ast)
+    const sizeAfter = binarySize(ast)
     const delta = sizeAfter - sizeBefore
 
     if (verbose || delta !== 0) {
-      log(`  round ${round + 1}: ${delta > 0 ? '+' : ''}${delta} nodes`, delta)
+      log(`  round ${round + 1}: ${delta > 0 ? '+' : ''}${delta} bytes`, delta)
     }
 
-    // Size guard: default optimize must never inflate. Explicit passes
-    // get leniency (+5 nodes) so inline/propagate/foldarms can chain.
-    const tolerance = strictGuard ? 0 : 5
+    // Size guard: default optimize must never inflate. Explicit passes get a
+    // little leniency (a round may grow a few bytes setting up a bigger win).
+    const tolerance = strictGuard ? 0 : 16
     if (delta > tolerance) {
-      if (verbose) log(`  ⚠ round ${round + 1} inflated by ${delta}, reverting`, delta)
+      if (verbose) log(`  ⚠ round ${round + 1} inflated by ${delta} bytes, reverting`, delta)
       ast = beforeRound
       break
     }
@@ -2143,4 +2621,4 @@ export default function optimize(ast, opts = true) {
 
 /** Count AST nodes (fast size heuristic). */
 export { count as size, count, binarySize }
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, inlineOnce, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }

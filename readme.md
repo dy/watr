@@ -50,7 +50,7 @@ npx watr input.wat              # → input.wasm
 npx watr input.wat -o out.wasm  # custom output
 npx watr input.wat --print      # pretty-print
 npx watr input.wat --minify     # minify
-npx watr input.wat --optimize   # fold, treeshake, deadcode
+npx watr input.wat --optimize   # fold, treeshake, inline, coalesce, …
 npx watr input.wat --polyfill   # newer features → MVP
 ```
 

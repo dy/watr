@@ -396,6 +396,110 @@ test('inline: callee with return_call is NOT inlined into different-typed caller
   assert.doesNotThrow(() => new WebAssembly.Module(compile(opt)), 'inlined module must validate')
 })
 
+// ==================== INLINE-ONCE ====================
+
+test('inlineOnce: single-call function is inlined and removed', () => {
+  const ast = parse(`(module
+    (func $helper (param $x i32) (result i32) (i32.add (local.get $x) (i32.const 1)))
+    (func (export "f") (param $a i32) (result i32) (call $helper (local.get $a)))
+  )`)
+  const opt = optimize(ast, 'inlineOnce')
+  const src = print(opt)
+  assert(!src.includes('call $helper'), 'call should be inlined')
+  assert(!src.includes('$helper'), 'callee should be removed')
+  assert.doesNotThrow(() => new WebAssembly.Module(compile(opt)), 'must validate')
+})
+
+test('inlineOnce: leaves multi-call functions alone', () => {
+  const ast = parse(`(module
+    (func $h (result i32) (i32.const 7))
+    (func (export "f") (result i32) (i32.add (call $h) (call $h)))
+  )`)
+  const opt = optimize(ast, 'inlineOnce')
+  assert(print(opt).includes('call $h'), 'should not inline a function called twice')
+})
+
+test('inlineOnce: leaves exported / table / start functions alone', () => {
+  const ast = parse(`(module
+    (table 1 funcref) (elem (i32.const 0) $t)
+    (func $e (export "e") (result i32) (i32.const 1))
+    (func $t (result i32) (i32.const 2))
+    (func $s)
+    (start $s)
+    (func (export "f") (result i32) (i32.add (call $e) (call $t)))
+  )`)
+  const opt = optimize(ast, 'inlineOnce')
+  const src = print(opt)
+  assert(src.includes('$e') && src.includes('$t') && src.includes('$s'), 'pinned funcs survive')
+})
+
+test('inlineOnce: renames callee labels to avoid shadowing the caller', () => {
+  // Both functions use the label name `$l`. Naive inlining would nest two `$l`
+  // blocks, and `br $l` inside the inlined body would resolve to the wrong depth.
+  const ast = parse(`(module
+    (func $inner (param $n i32) (result i32)
+      (local $i i32) (local $acc i32)
+      (block $l (loop $loop
+        (br_if $l (i32.ge_s (local.get $i) (local.get $n)))
+        (local.set $acc (i32.add (local.get $acc) (local.get $i)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+      (local.get $acc))
+    (func (export "f") (param $m i32) (result i32)
+      (local $r i32)
+      (block $l (loop $loop
+        (br_if $l (i32.ge_s (local.get $r) (i32.const 1)))
+        (local.set $r (call $inner (local.get $m)))
+        (br $loop)))
+      (local.get $r))
+  )`)
+  const opt = optimize(ast, 'inlineOnce')
+  assert(!print(opt).includes('call $inner'), 'inlined')
+  const mod = new WebAssembly.Module(compile(opt))
+  const { exports } = new WebAssembly.Instance(mod)
+  assert.equal(exports.f(5), 10, '0+1+2+3+4 = 10')
+})
+
+test('inlineOnce: chains collapse to a fixpoint', () => {
+  const ast = parse(`(module
+    (func $c (param $x i32) (result i32) (i32.mul (local.get $x) (i32.const 2)))
+    (func $b (param $x i32) (result i32) (call $c (i32.add (local.get $x) (i32.const 1))))
+    (func $a (param $x i32) (result i32) (call $b (local.get $x)))
+    (func (export "f") (param $x i32) (result i32) (call $a (local.get $x)))
+  )`)
+  const opt = optimize(ast, 'inlineOnce')
+  const src = print(opt)
+  assert(!/call \$[abc]\b/.test(src), 'all helpers inlined away')
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+  assert.equal(exports.f(3), 8, '(3+1)*2')
+})
+
+test('inlineOnce: void callee with early return', () => {
+  const ast = parse(`(module
+    (global $g (mut i32) (i32.const 0))
+    (func $set (param $v i32)
+      (if (i32.eqz (local.get $v)) (then (return)))
+      (global.set $g (local.get $v)))
+    (func (export "f") (param $v i32) (result i32)
+      (call $set (local.get $v)) (global.get $g))
+  )`)
+  const opt = optimize(ast, 'inlineOnce')
+  assert(!print(opt).includes('call $set'), 'inlined')
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+  assert.equal(exports.f(0), 0)
+  assert.equal(exports.f(42), 42)
+})
+
+test('inlineOnce: skips callees with numeric branch labels', () => {
+  // Depth-relative labels shift under the added block nesting — must be left alone.
+  const ast = parse(`(module
+    (func $h (result i32) (block (result i32) (br 0 (i32.const 5))))
+    (func (export "f") (result i32) (call $h))
+  )`)
+  const opt = optimize(ast, 'inlineOnce')
+  assert(print(opt).includes('call $h'), 'numeric-label callee left intact')
+})
+
 // ==================== COMBINED ====================
 
 test('all optimizations together', () => {
@@ -668,6 +772,57 @@ test('propagate: constants survive across calls', () => {
   assert(!src.includes('local.get'), 'should propagate constant past call')
 })
 
+test('propagate: descends into nested block/loop scopes', () => {
+  // Single-use locals living entirely inside a block (the shape `inlineOnce` leaves)
+  // collapse just like top-level ones.
+  const ast = parse(`(module (func (export "f") (param $p i32) (result i32)
+    (local $a i32) (local $b i32) (local $c i32)
+    (block $x (result i32)
+      (local.set $a (i32.const 10))
+      (local.set $b (i32.const 20))
+      (local.set $c (local.get $p))
+      (i32.add (i32.add (local.get $a) (local.get $b)) (local.get $c))
+    )
+  ))`)
+  const src = print(optimize(ast, 'propagate'))
+  assert(!src.includes('local.set'), 'nested-scope single-use locals eliminated')
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(`(module (func (export "f") (param $p i32) (result i32)
+    (local $a i32) (local $c i32)
+    (block (result i32)
+      (local.set $a (i32.const 10))
+      (local.set $c (i32.add (local.get $p) (i32.const 1)))
+      (i32.add (local.get $a) (local.get $c)))))`), 'propagate')))).exports
+  assert.equal(f(5), 16, 'still correct after nested propagation')
+})
+
+test('propagate: keeps a value stale-safe when a referenced local is rewritten', () => {
+  // $x = $y; $y = 99; use $x  →  $x must still read the OLD $y (here 1), not 99.
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $x i32) (local $y i32)
+    (local.set $y (i32.const 1))
+    (local.set $x (local.get $y))
+    (local.set $y (i32.const 99))
+    (local.get $x)
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports
+  assert.equal(f(), 1, 'must not propagate the now-stale (local.get $y)')
+})
+
+test('propagate: never inflates a wide constant reused many times', () => {
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $k i32)
+    (local.set $k (i32.const 1000000))
+    (i32.add (i32.add (local.get $k) (local.get $k)) (i32.add (local.get $k) (local.get $k)))
+  ))`)
+  const before = binarySize(parse(`(module (func (export "f") (result i32)
+    (local $k i32)
+    (local.set $k (i32.const 1000000))
+    (i32.add (i32.add (local.get $k) (local.get $k)) (i32.add (local.get $k) (local.get $k)))
+  ))`))
+  assert(binarySize(optimize(ast, 'propagate')) <= before, 'wide reused const not blown up')
+})
+
 // ==================== FOLD: f32/f64.nearest (roundTiesToEven) ====================
 
 test('fold: f64.nearest rounds half to even (bankers rounding)', () => {
@@ -902,6 +1057,155 @@ test('unbranch: keeps meaningful br', () => {
   const opt = optimize(ast, 'unbranch')
   const src = print(opt)
   assert(src.includes('br $l'), 'should keep non-terminal br')
+})
+
+// ==================== MERGE BLOCKS ====================
+
+test('mergeBlocks: unwraps unbranched labeled block', () => {
+  const ast = parse('(module (func (block $l (i32.const 1) drop)))')
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  assert(!src.includes('block'), 'should unwrap untargeted block')
+})
+
+test('mergeBlocks: keeps branched block', () => {
+  const ast = parse('(module (func (block $l (br $l) (i32.const 1) drop)))')
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  assert(src.includes('block'), 'should keep block whose label is targeted')
+})
+
+test('mergeBlocks: skips block with result type', () => {
+  // Stack effect would change if we spliced the body up.
+  const ast = parse('(module (func (result i32) (block $l (result i32) (i32.const 7))))')
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  assert(src.includes('block'), 'block with (result …) annotation must stay')
+})
+
+test('mergeBlocks: respects label shadowing', () => {
+  // Inner block re-binds $l, so the inner `br $l` doesn't target the outer.
+  // Outer is unwrappable; inner stays because its own label is targeted.
+  const ast = parse('(module (func (block $l (block $l (br $l) (i32.const 1) drop))))')
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  // After unwrapping the outer, exactly one `block $l` remains.
+  assert.equal((src.match(/block \$l/g) || []).length, 1, 'one block survives')
+})
+
+test('mergeBlocks: nested unwrap', () => {
+  const ast = parse('(module (func (block $a (block $b (i32.const 1) drop))))')
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  assert(!src.includes('block'), 'both untargeted blocks unwrap')
+})
+
+// ==================== COALESCE LOCALS ====================
+
+test('coalesce: shares slot between non-overlapping same-type locals', () => {
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $a i32) (local $b i32)
+    (local.set $a (i32.const 1))
+    (drop (local.get $a))
+    (local.set $b (i32.const 2))
+    (local.get $b)
+  ))`)
+  const opt = optimize(ast, 'coalesce locals')
+  const src = print(opt)
+  // $b's references should rename to $a; the $b decl then becomes dead.
+  assert(!src.includes('$b'), 'second local merged into first')
+})
+
+test('coalesce: keeps overlapping locals separate', () => {
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $a i32) (local $b i32)
+    (local.set $a (i32.const 1))
+    (local.set $b (i32.const 2))
+    (i32.add (local.get $a) (local.get $b))
+  ))`)
+  const opt = optimize(ast, 'coalesce locals')
+  const src = print(opt)
+  assert(src.includes('$a') && src.includes('$b'), 'overlapping locals not coalesced')
+})
+
+test('coalesce: keeps different-type locals separate', () => {
+  const ast = parse(`(module (func (export "f") (result i64)
+    (local $a i32) (local $b i64)
+    (local.set $a (i32.const 1))
+    (drop (local.get $a))
+    (local.set $b (i64.const 2))
+    (local.get $b)
+  ))`)
+  const opt = optimize(ast, 'coalesce locals')
+  const src = print(opt)
+  assert(src.includes('$a') && src.includes('$b'), 'different-type locals not coalesced')
+})
+
+test('coalesce: extends live range over loops', () => {
+  // $a is set before the loop and read inside it → its live range spans the loop;
+  // $b is set/read inside the loop → ranges overlap → must NOT coalesce.
+  const src = `(module (func (export "f") (result i32)
+    (local $a i32) (local $b i32)
+    (local.set $a (i32.const 1))
+    (loop $l
+      (drop (local.get $a))
+      (local.set $b (i32.const 2))
+      (drop (local.get $b))
+    )
+    (local.get $a)
+  ))`
+  const before = parse(src)
+  const opt = optimize(before, 'coalesce locals')
+  const out = print(opt)
+  assert(out.includes('$a') && out.includes('$b'), 'loop-crossing locals stay separate')
+})
+
+test('coalesce: preserves execution semantics', () => {
+  // Run the optimized code and check the result is unchanged.
+  const src = `(module (func (export "f") (result i32)
+    (local $a i32) (local $b i32) (local $c i32)
+    (local.set $a (i32.const 10))
+    (local.set $b (i32.add (local.get $a) (i32.const 5)))
+    (local.set $c (i32.mul (local.get $b) (i32.const 2)))
+    (local.get $c)
+  ))`
+  const ast = parse(src)
+  const opt = optimize(ast)
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+  assert.equal(exports.f(), 30, 'coalesced module still returns 30')
+})
+
+test('coalesce: read-in-set-rhs is recognized as read-first', () => {
+  // $h is read on the rhs of its own set: the read happens BEFORE the write
+  // in execution order, so $h relies on the implicit zero on the first pass
+  // and MUST NOT be coalesced into $tmp's slot (which holds a residue of 7).
+  const src = `(module (func (export "f") (result i32)
+    (local $tmp i32) (local $h i32)
+    (local.set $tmp (i32.const 7))
+    (local.set $tmp (i32.add (local.get $tmp) (i32.const 1)))
+    (local.set $h (i32.xor (local.get $h) (i32.const 1)))
+    (local.get $h)
+  ))`
+  const ast = parse(src)
+  const opt = optimize(ast)
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+  assert.equal(exports.f(), 1, 'read-first local must not inherit prior slot residue')
+})
+
+test('coalesce: skips locals first referenced inside if/else', () => {
+  // $b is first set inside the `then` arm — the `else` path would observe $a's
+  // residue (=42) if they shared a slot, which would corrupt the implicit zero.
+  const src = `(module (func (export "f") (param $c i32) (result i32)
+    (local $a i32) (local $b i32)
+    (local.set $a (i32.const 42))
+    (if (local.get $c) (then (local.set $b (i32.const 5))))
+    (local.get $b)
+  ))`
+  const ast = parse(src)
+  const opt = optimize(ast)
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+  assert.equal(exports.f(0), 0, 'else-path local read still returns implicit zero')
+  assert.equal(exports.f(1), 5, 'then-path local read returns explicit value')
 })
 
 // ==================== TYPE TREESHAKE ====================
@@ -1148,7 +1452,7 @@ test('dedupe: preserves different functions', () => {
     (func $b (i32.const 2) drop)
     (func (export "f") (call $b))
   )`)
-  const opt = optimize(ast, { dedupe: true, treeshake: false, vacuum: false })
+  const opt = optimize(ast, { dedupe: true, treeshake: false, vacuum: false, inlineOnce: false })
   const src = print(opt)
   assert(src.includes('$a'), 'should keep a')
   assert(src.includes('$b'), 'should keep b')
@@ -1463,18 +1767,22 @@ test('size: heavy passes with guard', () => {
   assert(after <= before + 2, `size should not balloon (${before} → ${after})`)
 })
 
-test('size: default is fast-only', () => {
+test('size: default propagates single-use locals & tiny consts', () => {
+  // (local.set $x small-const) (local.get $x) → just the const: strictly smaller,
+  // so the default (size-guarded) pipeline takes it.
   const src = `(module (func (export "f") (result i32)
     (local $x i32)
     (local.set $x (i32.const 42))
     (local.get $x)
   ))`
-  const optDef = optimize(parse(src))
-  const optAll = optimize(parse(src), 'all')
-  const defSrc = print(optDef)
-  const allSrc = print(optAll)
-  assert(defSrc.includes('local.set'), 'default should not propagate')
-  assert(!allSrc.includes('local.set'), '"all" should propagate')
+  assert(!print(optimize(parse(src))).includes('local.set'), 'default should propagate the single-use local')
+  // A wide constant reused many times would inflate — left in its local by default.
+  const reuse = `(module (func (export "g") (result i32)
+    (local $k i32)
+    (local.set $k (i32.const 1000000))
+    (i32.add (i32.add (local.get $k) (local.get $k)) (i32.add (local.get $k) (local.get $k)))
+  ))`
+  assert(print(optimize(parse(reuse))).includes('local.set'), 'wide reused const stays in a local')
 })
 
 test('size: empty module not inflated', () => {

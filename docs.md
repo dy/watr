@@ -163,32 +163,40 @@ print(optimize('(func (i32.add (i32.const 1) (i32.const 2)))'))
 // (func (i32.const 3))
 ```
 
-**Available optimizations:**
+`optimize(ast)` runs every default-on pass below, up to 3 rounds, until a fixpoint
+or a round would inflate the encoded `compile(ast)` byte size (the round is then
+reverted). Passes that can grow output, change observable behavior, or only make
+sense when you control the host are **opt-in** (marked ◌); the rest are on by default.
 
 | Optimization | Description | Example |
 |--------------|-------------|---------|
+| `treeshake` | Remove unused definitions | Functions/globals/types/tables not exported or reachable |
 | `fold` | Constant folding | `(i32.add (i32.const 1) (i32.const 2))` → `(i32.const 3)` |
 | `deadcode` | Remove unreachable code | Code after `unreachable`, `br`, `return` |
-| `locals` | Remove unused locals | Locals never read/written |
-| `treeshake` | Remove unused definitions | Functions/globals/types/tables not exported or called |
+| `locals` | Remove unused locals | Locals never read or only-written |
 | `identity` | Remove identity ops | `(i32.add x (i32.const 0))` → `x` |
 | `strength` | Strength reduction | `(i32.mul x (i32.const 2))` → `(i32.shl x (i32.const 1))` |
 | `branch` | Simplify constant branches | `(if (i32.const 1) A B)` → `A` |
-| `propagate` | Constant propagation through locals | `(local.set $x (i32.const 1)) (local.get $x)` → const |
-| `inline` | Inline tiny functions | Single-expression functions without locals |
+| `propagate` | Forward single-use locals & tiny consts | `(local.set $x (i32.const 1)) … (local.get $x)` → `(i32.const 1)` |
+| `inline` ◌ | Inline tiny functions | Single-expression functions without locals — may duplicate bodies |
+| `inlineOnce` | Inline functions called from exactly one site | Drops the callee and its `call` site; never duplicates |
 | `vacuum` | Remove no-ops | Nops, drop-of-pure, empty branches |
+| `mergeBlocks` | Unwrap blocks whose label is never targeted | `(block $L body)` with no `br $L` inside → `body` (saves `block`/`end` framing) |
+| `coalesce` | Share local slots between non-overlapping same-type locals | Two `i32` locals with disjoint live ranges → one local |
 | `peephole` | Algebraic identities | `x - x` → `0`, `x & 0` → `0` |
-| `globals` | Propagate immutable global constants | `global.get` of never-written global → const |
+| `globals` | Propagate immutable global constants | `global.get` of never-written global → its constant (size-aware) |
 | `offset` | Fold offsets into load/store | `(i32.load (i32.add ptr (i32.const 4)))` → `(i32.load offset=4 ptr)` |
 | `unbranch` | Remove redundant trailing `br` | `br $label` at end of its own block |
-| `stripmut` | Strip mut from unwritten globals | Enables further global propagation |
+| `stripmut` | Strip `mut` from never-written globals | Enables further `globals` propagation |
 | `brif` | Convert if-then-br to br_if | `(if cond (then (br $l)))` → `(br_if $l cond)` |
-| `foldarms` | Merge identical trailing if arms | `(if C (then A X) (else B X))` → `(if C (then A) (else B)) X` |
+| `foldarms` ◌ | Merge identical trailing if arms | `(if C (then A X) (else B X))` → `(if C (then A) (else B)) X` |
 | `dedupe` | Eliminate duplicate functions | Replace duplicates with a single canonical function |
-| `reorder` | Reorder functions by call frequency | Hot functions first for smaller LEB indices |
-| `dedupTypes` | Merge identical type definitions | Remove structurally duplicate `(type ...)` nodes |
-| `packData` | Pack data segments | Trim trailing zeros, merge adjacent segments |
-| `minifyImports` | Shorten import module/field names | `a`, `b`, `aa`… — disabled by default |
+| `reorder` ◌ | Reorder functions by call frequency | Hot functions first for smaller LEB indices |
+| `dedupTypes` | Merge identical type definitions | Remove structurally duplicate `(type …)` nodes |
+| `packData` | Pack data segments | Trim trailing zeros, merge adjacent constant-offset segments |
+| `minifyImports` ◌ | Shorten import module/field names | `a`, `b`, `aa`… — only safe when you control the host |
+
+◌ = opt-in (`optimize(ast, 'foldarms')` or `optimize(ast, { foldarms: true })`).
 
 ### `parse(source, options?)`
 
