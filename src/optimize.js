@@ -1462,7 +1462,7 @@ const targetsLabel = (body, label) => {
  * effect is determined entirely by its body, so removing the `block`/`end`
  * framing is sound as long as no `br` reaches into the block from inside.
  *
- * Two complementary patterns:
+ * Three complementary patterns:
  *
  * 1. **Block at scope level** (sibling in `func`/`block`/`loop`/`then`/`else`):
  *    splice body into the parent scope. Works for untyped, `(result T)`-typed,
@@ -1473,8 +1473,14 @@ const targetsLabel = (body, label) => {
  *    single value expression. Catches the wrappers jz codegen leaves around
  *    arena allocations once `propagate` has folded the intermediate
  *    set/get pairs to a single call.
+ * 3. **Result-typed block as the sole operand of a void consumer** at scope:
+ *    `(local.set $x (block (result T) stmt* expr))` → splice `stmt*` into
+ *    the parent scope and rewrite the consumer to `(local.set $x expr)`.
+ *    Same shape for `global.set` and `drop`. Cleans up the multi-stmt
+ *    wrappers `inlineOnce` leaves when inlining helpers whose return value
+ *    is fed into a single set/drop.
  *
- * Pattern 2 runs first (post-order) so pattern 1 sees the cleaned-up parents.
+ * Pattern 2 runs first (post-order) so patterns 1+3 see cleaned-up parents.
  * @param {Array} ast
  * @returns {Array}
  */
@@ -1504,7 +1510,45 @@ const mergeBlocks = (ast) => {
     let i = 1
     while (i < node.length) {
       const child = node[i]
-      if (!Array.isArray(child) || child[0] !== 'block') { i++; continue }
+      if (!Array.isArray(child)) { i++; continue }
+
+      // Pattern 3: void-consumer wrapping a result-typed block at scope level.
+      //   (local.set $x (block $L (result T) stmt* expr))   →   stmt* (local.set $x expr)
+      // Same logic for `global.set` and `drop`. The block's body produces a
+      // single value at the end; the leading stmts run for side-effect and
+      // can move into the parent scope unchanged. Label must be unreferenced
+      // (an inner `br $L value` would skip later stmts after splicing).
+      // Catches the (block (result T) … (local.get $tmp)) wrappers inlineOnce
+      // leaves around inlined helper bodies.
+      {
+        const cop = child[0]
+        const oi = (cop === 'local.set' || cop === 'global.set') ? 2
+                 : cop === 'drop' ? 1 : -1
+        if (oi >= 0 && child.length === oi + 1) {
+          const operand = child[oi]
+          if (Array.isArray(operand) && operand[0] === 'block') {
+            let bi = 1, label = null
+            if (typeof operand[1] === 'string' && operand[1][0] === '$') { label = operand[1]; bi = 2 }
+            let hasResult = false
+            while (bi < operand.length) {
+              const c = operand[bi]
+              if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'type')) { bi++; continue }
+              if (Array.isArray(c) && c[0] === 'result') { hasResult = true; bi++; continue }
+              break
+            }
+            const body = hasResult ? operand.slice(bi) : null
+            if (body && body.length >= 2 && !(label && targetsLabel(body, label))) {
+              const expr = body[body.length - 1]
+              const setup = body.slice(0, -1)
+              child[oi] = expr
+              node.splice(i, 1, ...setup, child)
+              continue  // re-examine position i (now setup[0]) — may itself be a splice candidate
+            }
+          }
+        }
+      }
+
+      if (child[0] !== 'block') { i++; continue }
       let bi = 1, label = null
       if (typeof child[1] === 'string' && child[1][0] === '$') { label = child[1]; bi = 2 }
       // Skip leading typing annotations; they describe the block's stack effect,

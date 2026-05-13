@@ -1118,6 +1118,52 @@ test('mergeBlocks: nested unwrap', () => {
   assert(!src.includes('block'), 'both untargeted blocks unwrap')
 })
 
+test('mergeBlocks: splices block out of (local.set X (block (result T) stmt* expr))', () => {
+  // The inlineOnce pass leaves wrappers like this around inlined helper bodies
+  // whose return value feeds a single consumer. Splicing flattens them into the
+  // parent scope so the surrounding optimizer can see through them.
+  const ast = parse(`(module (memory 1) (func (result i32)
+    (local $x i32) (local $tmp i32)
+    (local.set $x
+      (block $L (result i32)
+        (i32.store (i32.const 0) (i32.const 1))
+        (local.set $tmp (i32.const 42))
+        (local.get $tmp)))
+    (local.get $x)))`)
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  assert(!src.includes('block'), 'wrapper block unwraps')
+  assert(src.includes('i32.store'), 'setup store stays')
+  assert(src.includes('local.set $tmp'), 'setup local.set stays')
+})
+
+test('mergeBlocks: splices block out of (drop (block (result T) stmt* expr))', () => {
+  const ast = parse(`(module (memory 1) (func
+    (drop
+      (block (result i32)
+        (i32.store (i32.const 0) (i32.const 1))
+        (i32.const 5)))))`)
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  assert(!src.includes('block'), 'drop-wrapper block unwraps')
+  assert(src.includes('i32.store'), 'setup stays')
+})
+
+test('mergeBlocks: keeps wrapper if block label is targeted', () => {
+  // Early br $L escapes with a value — splicing would change semantics by
+  // skipping later setup stmts.
+  const ast = parse(`(module (func (result i32)
+    (local $x i32)
+    (local.set $x
+      (block $L (result i32)
+        (br $L (i32.const 1))
+        (i32.const 2)))
+    (local.get $x)))`)
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  assert(src.includes('block $L'), 'branched block must stay')
+})
+
 // ==================== LOOPIFY ====================
 
 test('loopify: collapses while-idiom into loop+if', () => {
