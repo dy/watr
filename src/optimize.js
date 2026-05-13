@@ -28,6 +28,7 @@ const OPTS = {
   globals: true,      // propagate immutable global constants
   offset: true,       // fold add+const into load/store offset
   unbranch: true,     // remove redundant br at end of own block
+  loopify: true,      // collapse block+loop+brif while-idiom into loop+if
   stripmut: true,     // strip mut from never-written globals
   brif: true,         // if-then-br → br_if
   foldarms: false,    // merge identical trailing if arms — can add block wrapper
@@ -321,6 +322,18 @@ const treeshake = (ast) => {
 /** IEEE 754 roundTiesToEven (bankers' rounding) */
 const roundEven = (x) => x - Math.floor(x) !== 0.5 ? Math.round(x) : 2 * Math.round(x / 2)
 
+// Bit-exact reinterpret helpers (preserve NaN payloads).
+const _rb8 = new ArrayBuffer(8)
+const _rf64 = new Float64Array(_rb8)
+const _ri64 = new BigInt64Array(_rb8)
+const _rb4 = new ArrayBuffer(4)
+const _rf32 = new Float32Array(_rb4)
+const _ri32 = new Int32Array(_rb4)
+const i64FromF64 = (x) => { _rf64[0] = x; return _ri64[0] }
+const f64FromI64 = (x) => { _ri64[0] = BigInt.asIntN(64, x); return _rf64[0] }
+const i32FromF32 = (x) => { _rf32[0] = x; return _ri32[0] }
+const f32FromI32 = (x) => { _ri32[0] = x | 0; return _rf32[0] }
+
 /** Build i32 comparison folder: returns 1/0 */
 const i32c = (fn) => (a, b) => fn(a, b) ? 1 : 0
 /** Build unsigned i32 comparison folder */
@@ -424,6 +437,24 @@ const FOLDABLE = {
   'f64.floor': [Math.floor, 'f64'],
   'f64.trunc': [Math.trunc, 'f64'],
   'f64.nearest': [roundEven, 'f64'],
+
+  // Bit-exact reinterprets (preserve NaN payloads)
+  'i32.reinterpret_f32': [i32FromF32, 'i32'],
+  'f32.reinterpret_i32': [f32FromI32, 'f32'],
+  'i64.reinterpret_f64': [i64FromF64, 'i64'],
+  'f64.reinterpret_i64': [f64FromI64, 'f64'],
+
+  // Numeric conversions (value-preserving where representable)
+  'f32.convert_i32_s': [(a) => Math.fround(a | 0), 'f32'],
+  'f32.convert_i32_u': [(a) => Math.fround(a >>> 0), 'f32'],
+  'f32.convert_i64_s': [(a) => Math.fround(Number(BigInt.asIntN(64, a))), 'f32'],
+  'f32.convert_i64_u': [(a) => Math.fround(Number(BigInt.asUintN(64, a))), 'f32'],
+  'f64.convert_i32_s': [(a) => (a | 0), 'f64'],
+  'f64.convert_i32_u': [(a) => (a >>> 0), 'f64'],
+  'f64.convert_i64_s': [(a) => Number(BigInt.asIntN(64, a)), 'f64'],
+  'f64.convert_i64_u': [(a) => Number(BigInt.asUintN(64, a)), 'f64'],
+  'f32.demote_f64':    [(a) => Math.fround(a), 'f32'],
+  'f64.promote_f32':   [(a) => Math.fround(a), 'f64'],
 }
 
 /**
@@ -1427,14 +1458,47 @@ const targetsLabel = (body, label) => {
 }
 
 /**
- * Unwrap redundant `(block $L body)` whose label is never targeted, splicing
- * the body into the surrounding scope. Skips blocks with `param`/`result`/`type`
- * annotations (their stack effect would change). Each unwrap drops the
- * `block`+`end` framing bytes; iterates by walk so chained blocks collapse.
+ * Unwrap redundant blocks whose label is never targeted. The block's stack
+ * effect is determined entirely by its body, so removing the `block`/`end`
+ * framing is sound as long as no `br` reaches into the block from inside.
+ *
+ * Two complementary patterns:
+ *
+ * 1. **Block at scope level** (sibling in `func`/`block`/`loop`/`then`/`else`):
+ *    splice body into the parent scope. Works for untyped, `(result T)`-typed,
+ *    or even `(param …)`-typed blocks — in all cases the body produces the
+ *    same net stack effect as the framed block did, at the same position.
+ * 2. **Result-typed block in expression position** (`(block (result T) expr)`
+ *    as the value of some operand): collapse to `expr` if the body is a
+ *    single value expression. Catches the wrappers jz codegen leaves around
+ *    arena allocations once `propagate` has folded the intermediate
+ *    set/get pairs to a single call.
+ *
+ * Pattern 2 runs first (post-order) so pattern 1 sees the cleaned-up parents.
  * @param {Array} ast
  * @returns {Array}
  */
 const mergeBlocks = (ast) => {
+  walkPost(ast, (node) => {
+    if (!Array.isArray(node) || node[0] !== 'block') return
+    let bi = 1, label = null
+    if (typeof node[1] === 'string' && node[1][0] === '$') { label = node[1]; bi = 2 }
+    let hasResult = false
+    while (bi < node.length) {
+      const c = node[bi]
+      if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'type')) { bi++; continue }
+      if (Array.isArray(c) && c[0] === 'result') { hasResult = true; bi++; continue }
+      break
+    }
+    const body = node.slice(bi)
+    if (!hasResult || body.length !== 1) return
+    const only = body[0]
+    if (!Array.isArray(only)) return
+    if (label && targetsLabel(body, label)) return
+    node.length = 0
+    for (const tok of only) node.push(tok)
+  })
+
   walk(ast, (node) => {
     if (!isScopeNode(node)) return
     let i = 1
@@ -1443,12 +1507,13 @@ const mergeBlocks = (ast) => {
       if (!Array.isArray(child) || child[0] !== 'block') { i++; continue }
       let bi = 1, label = null
       if (typeof child[1] === 'string' && child[1][0] === '$') { label = child[1]; bi = 2 }
-      let typed = false
-      for (let j = bi; j < child.length; j++) {
-        const c = child[j]
-        if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'result' || c[0] === 'type')) { typed = true; break }
+      // Skip leading typing annotations; they describe the block's stack effect,
+      // which the body already produces verbatim, so they're discarded on splice.
+      while (bi < child.length) {
+        const c = child[bi]
+        if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'result' || c[0] === 'type')) { bi++; continue }
+        break
       }
-      if (typed) { i++; continue }
       const body = child.slice(bi)
       if (label && targetsLabel(body, label)) { i++; continue }
       node.splice(i, 1, ...body)
@@ -1925,6 +1990,83 @@ const unbranch = (ast) => {
     }
   })
 
+  return ast
+}
+
+// ==================== WHILE-LOOP CANONICALIZATION ====================
+
+/**
+ * Collapse the `while`-emit idiom into a single loop.
+ *
+ *   (block $A
+ *     (loop $B
+ *       (br_if $A (i32.eqz cond))   ;; exit when cond is false
+ *       …body…
+ *       (br $B)                      ;; continue
+ *     ))
+ *
+ * becomes
+ *
+ *   (loop $B
+ *     (if cond (then …body… (br $B))))
+ *
+ * Saves ~3 B per while-loop (drop the outer block framing + the `i32.eqz`,
+ * trade `br_if`→`if`). Safe only when:
+ *  - the block contains nothing but the loop (plus optional `type` slot),
+ *  - block / loop are void (no result),
+ *  - $A is never targeted from within body (only the head `br_if` uses it).
+ *
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const loopify = (ast) => {
+  walk(ast, (node) => {
+    if (!Array.isArray(node) || node[0] !== 'block') return
+    let bi = 1, label = null
+    if (typeof node[1] === 'string' && node[1][0] === '$') { label = node[1]; bi = 2 }
+    if (!label) return
+    while (bi < node.length) {
+      const c = node[bi]
+      if (Array.isArray(c) && c[0] === 'type') { bi++; continue }
+      if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'result')) return // typed → skip
+      break
+    }
+    if (node.length - bi !== 1) return
+    const loop = node[bi]
+    if (!Array.isArray(loop) || loop[0] !== 'loop') return
+    let li = 1, loopLabel = null
+    if (typeof loop[1] === 'string' && loop[1][0] === '$') { loopLabel = loop[1]; li = 2 }
+    const loopHeader = []
+    while (li < loop.length) {
+      const c = loop[li]
+      if (Array.isArray(c) && c[0] === 'type') { loopHeader.push(c); li++; continue }
+      if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'result')) return // typed → skip
+      break
+    }
+    const body = loop.slice(li)
+    if (body.length < 2) return
+    const head = body[0]
+    const tail = body[body.length - 1]
+    if (!Array.isArray(head) || head[0] !== 'br_if' || head[1] !== label || head.length !== 3) return
+    if (!Array.isArray(tail) || tail[0] !== 'br' || tail[1] !== loopLabel || tail.length !== 2) return
+    const inner = body.slice(1, -1)
+    if (targetsLabel(inner, label)) return
+
+    // br_if exits when `cond` is non-zero — `if`'s then-arm runs when its
+    // condition is non-zero. So the if-condition is the negation. Strip a
+    // wrapping `i32.eqz` if present; otherwise wrap.
+    let cond = head[2]
+    if (Array.isArray(cond) && cond[0] === 'i32.eqz' && cond.length === 2) cond = cond[1]
+    else cond = ['i32.eqz', cond]
+
+    const newLoop = ['loop']
+    if (loopLabel) newLoop.push(loopLabel)
+    for (const h of loopHeader) newLoop.push(h)
+    newLoop.push(['if', cond, ['then', ...inner, tail]])
+
+    node.length = 0
+    for (const tok of newLoop) node.push(tok)
+  })
   return ast
 }
 
@@ -2577,6 +2719,7 @@ export default function optimize(ast, opts = true) {
     if (opts.inline) ast = inline(ast)
     if (opts.offset) ast = offset(ast)
     if (opts.unbranch) ast = unbranch(ast)
+    if (opts.loopify) ast = loopify(ast)
     if (opts.brif) ast = brif(ast)
     if (opts.foldarms) ast = foldarms(ast)
     if (opts.deadcode) ast = deadcode(ast)
@@ -2621,4 +2764,4 @@ export default function optimize(ast, opts = true) {
 
 /** Count AST nodes (fast size heuristic). */
 export { count as size, count, binarySize }
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, inlineOnce, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, inlineOnce, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }

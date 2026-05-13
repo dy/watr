@@ -171,7 +171,7 @@ sense when you control the host are **opt-in** (marked ◌); the rest are on by 
 | Optimization | Description | Example |
 |--------------|-------------|---------|
 | `treeshake` | Remove unused definitions | Functions/globals/types/tables not exported or reachable |
-| `fold` | Constant folding | `(i32.add (i32.const 1) (i32.const 2))` → `(i32.const 3)` |
+| `fold` | Constant folding (incl. reinterpret/convert) | `(i32.add (i32.const 1) (i32.const 2))` → `(i32.const 3)`; `(i64.reinterpret_f64 (f64.const 256))` → `(i64.const 4643211215818981376)` |
 | `deadcode` | Remove unreachable code | Code after `unreachable`, `br`, `return` |
 | `locals` | Remove unused locals | Locals never read or only-written |
 | `identity` | Remove identity ops | `(i32.add x (i32.const 0))` → `x` |
@@ -187,6 +187,7 @@ sense when you control the host are **opt-in** (marked ◌); the rest are on by 
 | `globals` | Propagate immutable global constants | `global.get` of never-written global → its constant (size-aware) |
 | `offset` | Fold offsets into load/store | `(i32.load (i32.add ptr (i32.const 4)))` → `(i32.load offset=4 ptr)` |
 | `unbranch` | Remove redundant trailing `br` | `br $label` at end of its own block |
+| `loopify` | Collapse `block`+`loop`+`br_if` while-idiom | `(block $A (loop $B (br_if $A (i32.eqz cond)) … (br $B)))` → `(loop $B (if cond (then … (br $B))))` |
 | `stripmut` | Strip `mut` from never-written globals | Enables further `globals` propagation |
 | `brif` | Convert if-then-br to br_if | `(if cond (then (br $l)))` → `(br_if $l cond)` |
 | `foldarms` ◌ | Merge identical trailing if arms | `(if C (then A X) (else B X))` → `(if C (then A) (else B)) X` |

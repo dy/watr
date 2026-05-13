@@ -1075,12 +1075,30 @@ test('mergeBlocks: keeps branched block', () => {
   assert(src.includes('block'), 'should keep block whose label is targeted')
 })
 
-test('mergeBlocks: skips block with result type', () => {
-  // Stack effect would change if we spliced the body up.
+test('mergeBlocks: unwraps single-expr result-typed block', () => {
+  // `(block (result i32) expr)` with no label use is equivalent to just `expr`.
   const ast = parse('(module (func (result i32) (block $l (result i32) (i32.const 7))))')
   const opt = optimize(ast, 'mergeBlocks')
   const src = print(opt)
-  assert(src.includes('block'), 'block with (result …) annotation must stay')
+  assert(!src.includes('block'), 'pointless single-expr block wrapper removed')
+  assert(src.includes('i32.const 7'), 'inner expression preserved')
+})
+
+test('mergeBlocks: unwraps multi-stmt result-typed block at scope level', () => {
+  // Splicing is sound: body's net stack effect equals the block's declared type.
+  const ast = parse('(module (memory 1) (func (result i32) (block (result i32) (i32.store (i32.const 0) (i32.const 1)) (i32.const 7))))')
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  assert(!src.includes('block'), 'multi-stmt result-typed block unwraps when label unused')
+  assert(src.includes('i32.store'), 'store stays')
+  assert(src.includes('i32.const 7'), 'result expression stays')
+})
+
+test('mergeBlocks: keeps single-expr result-typed block when label targeted', () => {
+  const ast = parse('(module (func (result i32) (block $l (result i32) (br $l (i32.const 7)))))')
+  const opt = optimize(ast, 'mergeBlocks')
+  const src = print(opt)
+  assert(src.includes('block'), 'block whose label is branched to must stay')
 })
 
 test('mergeBlocks: respects label shadowing', () => {
@@ -1098,6 +1116,80 @@ test('mergeBlocks: nested unwrap', () => {
   const opt = optimize(ast, 'mergeBlocks')
   const src = print(opt)
   assert(!src.includes('block'), 'both untargeted blocks unwrap')
+})
+
+// ==================== LOOPIFY ====================
+
+test('loopify: collapses while-idiom into loop+if', () => {
+  const wat = `(module (func (param i32)
+    (block $exit (loop $continue
+      (br_if $exit (i32.eqz (local.get 0)))
+      (local.set 0 (i32.sub (local.get 0) (i32.const 1)))
+      (br $continue))) ))`
+  const opt = optimize(parse(wat), 'loopify')
+  const src = print(opt)
+  assert(!src.includes('block'), 'outer block removed')
+  assert(!src.includes('br_if'), 'head br_if replaced by if')
+  assert(!src.includes('i32.eqz'), 'cond eqz stripped (becomes if condition)')
+  assert(src.includes('loop'), 'loop kept')
+  assert(src.includes('if'), 'if introduced')
+})
+
+test('loopify: wraps non-eqz cond with eqz', () => {
+  // br_if exits when cond≠0 — if-then runs when cond≠0, so we must negate.
+  const wat = `(module (func (param i32)
+    (block $exit (loop $continue
+      (br_if $exit (local.get 0))
+      (br $continue))) ))`
+  const opt = optimize(parse(wat), 'loopify')
+  const src = print(opt)
+  assert(src.includes('i32.eqz'), 'bare cond wrapped in eqz on conversion')
+})
+
+test('loopify: keeps loop when block label re-used inside body', () => {
+  const wat = `(module (func (param i32)
+    (block $exit (loop $continue
+      (br_if $exit (i32.eqz (local.get 0)))
+      (br_if $exit (i32.const 1))
+      (br $continue))) ))`
+  const opt = optimize(parse(wat), 'loopify')
+  const src = print(opt)
+  assert(src.includes('block'), 'inner br_if to $exit blocks loopify')
+})
+
+test('loopify: skips when block contains more than the loop', () => {
+  const wat = `(module (func (param i32)
+    (block $exit
+      (loop $continue (br_if $exit (i32.eqz (local.get 0))) (br $continue))
+      (drop (i32.const 1)))) )`
+  const opt = optimize(parse(wat), 'loopify')
+  assert(print(opt).includes('block'), 'block stays — second child present')
+})
+
+test('loopify: skips typed block/loop', () => {
+  const wat = `(module (func (result i32)
+    (block $exit (result i32)
+      (loop $continue
+        (br_if $exit (i32.const 1))
+        (br $continue))
+      (i32.const 0))))`
+  const opt = optimize(parse(wat), 'loopify')
+  assert(print(opt).includes('block'), 'typed block stays')
+})
+
+test('loopify: round-trip compiles & runs', () => {
+  const wat = `(module (func (export "f") (param $n i32) (result i32)
+    (local $i i32)
+    (block $exit (loop $continue
+      (br_if $exit (i32.eqz (local.get $n)))
+      (local.set $i (i32.add (local.get $i) (local.get $n)))
+      (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+      (br $continue)))
+    (local.get $i)))`
+  const opt = optimize(parse(wat))
+  const mod = new WebAssembly.Module(compile(opt))
+  const inst = new WebAssembly.Instance(mod, {})
+  assert.equal(inst.exports.f(5), 15, '5+4+3+2+1=15')
 })
 
 // ==================== COALESCE LOCALS ====================
@@ -1520,6 +1612,41 @@ test('fold: i64.extend8_s', () => {
   const opt = optimize(ast, 'fold')
   const src = print(opt)
   assert(src.includes('i64.const -1'), 'should fold i64 extend8_s(255) to -1')
+})
+
+test('fold: i64.reinterpret_f64 of constant', () => {
+  // 256.0 has IEEE 754 bit pattern 0x4070000000000000 = 4643211215818981376
+  const ast = parse('(module (func (result i64) (i64.reinterpret_f64 (f64.const 256))))')
+  const src = print(optimize(ast, 'fold'))
+  assert(src.includes('i64.const 4643211215818981376'), 'reinterpret f64→i64 folded')
+  assert(!src.includes('reinterpret'), 'reinterpret op gone')
+})
+
+test('fold: f64.reinterpret_i64 round-trip', () => {
+  const ast = parse('(module (func (result f64) (f64.reinterpret_i64 (i64.const 4643211215818981376))))')
+  const src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const'), 'reinterpret i64→f64 folded to f64.const')
+  assert(!src.includes('reinterpret'), 'reinterpret op gone')
+})
+
+test('fold: f64.convert_i32_s', () => {
+  const ast = parse('(module (func (result f64) (f64.convert_i32_s (i32.const 65536))))')
+  const src = print(optimize(ast, 'fold'))
+  assert(src.includes('f64.const 65536'), 'convert i32→f64 folded')
+})
+
+test('fold: chained convert + reinterpret', () => {
+  // 65536 as f64 bit pattern: 0x40F0000000000000 = 4679240012837945344
+  const ast = parse('(module (func (result i64) (i64.reinterpret_f64 (f64.convert_i32_s (i32.const 65536)))))')
+  const src = print(optimize(ast, 'fold'))
+  assert(src.includes('i64.const 4679240012837945344'), 'chained fold')
+})
+
+test('fold: i32.reinterpret_f32 of constant', () => {
+  // 1.0 f32 bit pattern: 0x3F800000 = 1065353216
+  const ast = parse('(module (func (result i32) (i32.reinterpret_f32 (f32.const 1))))')
+  const src = print(optimize(ast, 'fold'))
+  assert(src.includes('i32.const 1065353216'), 'reinterpret f32→i32 folded')
 })
 
 // ==================== VACUUM: EMPTY ELSE REMOVAL ====================

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v4.7.0
+
+### Added
+
+- **`optimize`: `loopify` pass** (on by default) — collapses the canonical
+  `while`-loop encoding
+  ```
+  (block $A (loop $B (br_if $A (i32.eqz cond)) …body… (br $B)))
+  ```
+  into `(loop $B (if cond (then …body… (br $B))))`. Drops the outer block
+  framing, the `br_if`, and a leading `i32.eqz`; trades them for an `if`/`end`.
+  Saves ~3 B per while-loop. Only fires when the outer block / loop are both
+  void and $A is never targeted from within the body. Skip for typed
+  block/loop pairs (preserves a real stack signature).
+- **`optimize`: `fold` covers reinterprets and numeric conversions.**
+  `(i64.reinterpret_f64 (f64.const …))`, `(f64.convert_i32_s (i32.const …))`
+  and friends now fold at compile time — bit-exact (including NaN payloads)
+  via `ArrayBuffer`-backed views, so `Math.fround` semantics for f32 are
+  preserved. Common in numeric kernels that serialize f64 values through an
+  i64 channel (e.g. tagged-pointer schemes).
+
 ## v4.6.0
 
 ### Added
