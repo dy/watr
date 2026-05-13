@@ -917,12 +917,40 @@ const purgeRefs = (known, name) => {
   }
 }
 
-/** Try substitute local.get nodes with known values */
-const substGets = (node, known) => walkPost(node, n => {
-  if (!Array.isArray(n) || n[0] !== 'local.get' || n.length !== 2) return
-  const k = typeof n[1] === 'string' && known.get(n[1])
-  if (k && canSubst(k)) return clone(k.val)
-})
+/** Try substitute local.get nodes with known values.
+ *  When entering a nested scope (block/loop/if), drop tracking for any local
+ *  that's re-assigned inside the subtree — the outer-tracked value is stale
+ *  there. Without this, an outer `(local.set $x C)` would clobber an inner
+ *  `(local.set $x V) (local.get $x)` (the inner get rewritten to `C` instead
+ *  of `V`). Mostly latent until something — typically coalesceLocals — reuses
+ *  one slot for the outer and inner roles, after which it surfaces as silent
+ *  memory corruption. */
+const substGets = (node, known) => {
+  if (!Array.isArray(node)) return node
+  const op = node[0]
+  if (op === 'local.get' && node.length === 2) {
+    const k = typeof node[1] === 'string' && known.get(node[1])
+    if (k && canSubst(k)) return clone(k.val)
+    return node
+  }
+  let inner = known
+  if (op === 'block' || op === 'loop' || op === 'if') {
+    let cloned = null
+    walk(node, n => {
+      if (!Array.isArray(n)) return
+      if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string' && known.has(n[1])) {
+        if (!cloned) cloned = new Map(known)
+        cloned.delete(n[1])
+      }
+    })
+    if (cloned) inner = cloned
+  }
+  for (let i = 1; i < node.length; i++) {
+    const r = substGets(node[i], inner)
+    if (r !== node[i]) node[i] = r
+  }
+  return node
+}
 
 /**
  * Forward propagation pass: track local.set values and substitute local.gets.

@@ -708,6 +708,52 @@ test('propagate: invalidates at if boundary', () => {
   assert(src.includes('if'), 'if structure preserved')
 })
 
+test('propagate: does not propagate past inner re-write nested in non-scope op', () => {
+  // Regression: substGets used to walkPost across nested blocks, so an outer
+  // `(local.set $x C)` would clobber an inner `(local.set $x V) (local.get $x)`
+  // when reached through a non-scope wrapper (e.g. `drop`/`f64.reinterpret_i64`).
+  // The inner re-write must win; the outer tracking must not leak in.
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $x i32)
+    (local.set $x (i32.const 1))
+    (drop (block (result i32)
+      (local.set $x (i32.const 99))
+      (local.get $x)))
+    (local.get $x)
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const inst = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)), {})
+  // The function returns the last value of $x. Inner block writes 99 then reads
+  // and drops it. The trailing `local.get $x` returns 99 (the latest write).
+  assert.strictEqual(inst.exports.f(), 99)
+})
+
+test('propagate+coalesce+inlineOnce+mergeBlocks: combined passes preserve semantics', () => {
+  // Regression for the cascade that surfaced when mergeBlocks pattern-3 enabled
+  // coalesce to alias an outer arena-cap local with an inner inlined-helper local.
+  // Once aliased, propagate substGets used to leak the outer constant into the
+  // inner-scope reads, producing memory access out of bounds at runtime.
+  const ast = parse(`(module
+    (memory (export "mem") 1)
+    (func $h (param $p i32) (result i32)
+      (local $t i32)
+      (local.set $t (i32.load (local.get $p)))
+      (if (i32.eq (local.get $t) (i32.const 99)) (then (i32.store (local.get $p) (i32.const 0))))
+      (local.get $t))
+    (func (export "f") (result i32)
+      (local $cap i32)
+      (local.set $cap (i32.const 4))
+      (i32.store (i32.const 0) (i32.const 7))
+      (i32.store (i32.const 4) (i32.const 99))
+      (drop (call $h (i32.const 0)))
+      (call $h (i32.const 4))
+    )
+  )`)
+  const opt = optimize(ast, 'propagate inlineOnce mergeBlocks coalesce')
+  const inst = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)), {})
+  assert.strictEqual(inst.exports.f(), 99)
+})
+
 test('propagate: multi-use local not inlined as non-const', () => {
   // local read twice → can't inline non-const expr (would duplicate side-effect-free work)
   const ast = parse(`(module (func (export "f") (param $a i32) (result i32)
