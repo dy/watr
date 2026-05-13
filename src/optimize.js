@@ -1002,6 +1002,22 @@ const substGets = (node, known) => {
   for (let i = 1; i < node.length; i++) {
     const r = substGets(node[i], inner)
     if (r !== node[i]) node[i] = r
+    // WASM evaluates operands left-to-right. A `local.set`/`local.tee` in this
+    // child updates the local before the next sibling reads it — drop tracked
+    // entries that are now stale, else a pre-tee constant leaks into the next
+    // sibling's `local.get` (visible after `coalesceLocals` aliases the tee'd
+    // local with a sibling-read local, e.g. `alloc($x<<3, $x)` collapsing to
+    // `alloc(BIG, SMALL)`).
+    if (i + 1 < node.length && Array.isArray(node[i])) {
+      walk(node[i], n => {
+        if (!Array.isArray(n)) return
+        if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string') {
+          if (inner === known) inner = new Map(known)
+          inner.delete(n[1])
+          purgeRefs(inner, n[1])
+        }
+      })
+    }
   }
   return node
 }
@@ -1028,7 +1044,11 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     // Track local.set / local.tee values (tee writes too — its result also leaves
     // the value on the stack but the local is updated identically to set).
     if ((op === 'local.set' || op === 'local.tee') && instr.length === 3 && typeof instr[1] === 'string') {
-      substGets(instr[2], known) // substitute known values in RHS
+      // substGets returns its argument unchanged unless the whole subtree
+      // resolves to a substitution (bare `(local.get $x)` root case) — assign
+      // back so the bare-RHS pattern actually propagates.
+      const sr = substGets(instr[2], known)
+      if (sr !== instr[2]) { instr[2] = sr; changed = true }
       const uses = getUseCount(instr[1])
       purgeRefs(known, instr[1]) // entries that read this local just went stale
       // Any tracked value whose RHS reads memory must be invalidated by the
@@ -1390,6 +1410,61 @@ const inlineOnce = (ast) => {
     for (let i = 1; i < n.length; i++) if (callsSelf(n[i], name)) return true
     return false
   }
+  // Locals must be re-zeroed each time the inlined block is entered IF the
+  // callee body actually relies on zero-init — i.e. some path reads the local
+  // before any unconditional write. In the original callee they got fresh
+  // zero-init per call; after inlining they're outer-func locals, zeroed only
+  // at outer entry, so a caller-loop that re-enters the inlined block reads
+  // stale values otherwise. Returns null for any type we can't safely
+  // zero-init here (skip inlining such callees).
+  const zeroFor = (t) => {
+    if (t === 'i32') return ['i32.const', 0]
+    if (t === 'i64') return ['i64.const', 0n]
+    if (t === 'f32') return ['f32.const', 0]
+    if (t === 'f64') return ['f64.const', 0]
+    if (t === 'v128') return ['v128.const', 'i64x2', 0n, 0n]
+    // Nullable ref types (`(ref null …)`, `funcref`, `externref`, `anyref`, etc.)
+    // zero-init to `ref.null …` per call; emitting that here would need the exact
+    // heap-type. Non-nullable refs aren't zero-init at all (codegen must seed
+    // them). Either way, skip — let the call survive.
+    return null
+  }
+
+  // Locals whose first observed use is a read — or whose first write is inside
+  // a conditional branch, where the alternate path bypasses it — depend on
+  // zero-init and need a reset when inlined into a caller-loop. Locals that
+  // are unconditionally written before any read (the common scratch pattern,
+  // e.g. `(local.set $bits (local.get $ptr))` opening a helper) don't, and
+  // emitting a spurious reset would only inflate that local's set-count and
+  // block downstream propagation/coalescing. Mirrors `coalesceLocals`'
+  // `readsZero` heuristic.
+  const needsReset = (body, name) => {
+    let seen = false, conditional = false, depth = 0
+    const visit = (n) => {
+      if (seen || !Array.isArray(n)) return
+      const op = n[0]
+      const isSet = op === 'local.set' || op === 'local.tee'
+      if ((isSet || op === 'local.get') && n[1] === name) {
+        if (isSet) for (let i = 2; i < n.length && !seen; i++) visit(n[i])
+        if (seen) return
+        seen = true
+        if (op === 'local.get' || depth > 0) conditional = true
+        return
+      }
+      const isIf = op === 'if'
+      for (let i = 1; i < n.length && !seen; i++) {
+        const c = n[i]
+        const cond = isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')
+        if (cond) depth++
+        visit(c)
+        if (cond) depth--
+      }
+    }
+    for (const n of body) { if (seen) break; visit(n) }
+    // If the local is never used (dead), no reset; the dead decl will be pruned.
+    if (!seen) return false
+    return conditional
+  }
 
   // Module-level references that pin a function (can't be removed/inlined-away).
   const collectPinned = (n, pinned) => {
@@ -1428,13 +1503,17 @@ const inlineOnce = (ast) => {
       if (pinned.has(name) || otherRef.has(name)) continue
       if (callRefs.get(name) !== 1) continue
       if (callsSelf(fn, name)) continue
-      // named params/locals only; collect signature
+      // named params/locals only (we'll rename them); reject locals with types
+      // we can't zero-init on block re-entry.
       let ok = true, nResult = 0
       for (let i = 2; i < fn.length; i++) {
         const c = fn[i]
         if (typeof c === 'string') continue
         if (!Array.isArray(c)) { ok = false; break }
-        if (c[0] === 'param' || c[0] === 'local') { if (typeof c[1] !== 'string' || c[1][0] !== '$') { ok = false; break } }
+        if (c[0] === 'param' || c[0] === 'local') {
+          if (typeof c[1] !== 'string' || c[1][0] !== '$') { ok = false; break }
+          if (c[0] === 'local' && !zeroFor(c[2])) { ok = false; break }
+        }
         else if (c[0] === 'result') nResult += c.length - 1
         else if (c[0] === 'export') { ok = false; break }
         else if (c[0] === 'type') continue
@@ -1501,11 +1580,19 @@ const inlineOnce = (ast) => {
           const args = n.slice(2)
           if (args.length !== params.length) return  // arity mismatch — leave it
           const setup = params.map((p, k) => ['local.set', rename.get(p.name), args[k]])
+          // Re-zero only the callee locals that actually depend on the per-call
+          // zero-init (read-before-write, or first-write inside a conditional
+          // branch). Unconditionally-written-before-read scratch locals don't
+          // need a reset, and emitting one inflates their set-count enough to
+          // break propagation/coalescing of the helper that follows.
+          const resets = locals
+            .filter(l => needsReset(cBody, l.name))
+            .map(l => ['local.set', rename.get(l.name), zeroFor(l.type)])
           const inner = cBody.map(sub)
           done = true
           return resultType
-            ? ['block', exit, ['result', resultType], ...setup, ...inner]
-            : ['block', exit, ...setup, ...inner]
+            ? ['block', exit, ['result', resultType], ...setup, ...resets, ...inner]
+            : ['block', exit, ...setup, ...resets, ...inner]
         })
         if (replaced !== fn[i]) fn[i] = replaced
         if (done) {

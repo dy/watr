@@ -755,6 +755,31 @@ test('propagate: load-then-store swap idiom not collapsed across intervening sto
   assert.strictEqual(mem[1], 2.0)
 })
 
+test('propagate: tiny-const not leaked across sibling local.tee', () => {
+  // Regression: substGets walked operand siblings with the *same* `known` map,
+  // so a `(local.tee $x …)` in arg1 would update `$x` at runtime but propagate's
+  // tracking still saw the pre-tee constant. arg2's `(local.get $x)` then got
+  // substituted to the stale constant — diverging from arg1's tee result.
+  //
+  // Surfaces after `coalesceLocals` aliases an init-const local with a sibling
+  // read role: e.g. `(call $alloc (local.tee $x (i32.shl $x 3)) (local.get $x))`
+  // collapses to `(call $alloc 320 40)` instead of `(call $alloc 320 320)`,
+  // since `$x` was tracked as the tiny init constant `40` and got substituted
+  // into arg2 instead of seeing the tee'd `320`.
+  const ast = parse(`(module (func (export "f") (result i32)
+    (local $x i32)
+    (local.set $x (i32.const 40))
+    (i32.add
+      (local.tee $x (i32.shl (local.get $x) (i32.const 3)))
+      (local.get $x))
+  ))`)
+  const opt = optimize(ast, 'propagate')
+  const inst = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)), {})
+  // arg1 evaluates to 40<<3=320 and tees $x=320; arg2 reads tee'd $x=320.
+  // Result must be 320+320=640. A leak gives 320+40=360.
+  assert.strictEqual(inst.exports.f(), 640)
+})
+
 test('propagate+coalesce+inlineOnce+mergeBlocks: combined passes preserve semantics', () => {
   // Regression for the cascade that surfaced when mergeBlocks pattern-3 enabled
   // coalesce to alias an outer arena-cap local with an inner inlined-helper local.
