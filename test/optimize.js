@@ -728,6 +728,33 @@ test('propagate: does not propagate past inner re-write nested in non-scope op',
   assert.strictEqual(inst.exports.f(), 99)
 })
 
+test('propagate: load-then-store swap idiom not collapsed across intervening store', () => {
+  // Regression: the swap-via-temp pattern
+  //   (local.set $t (f64.load $p)) (f64.store $p (f64.load $q)) (f64.store $q (local.get $t))
+  // must not be folded to two stores that round-trip the same value. `$t` reads
+  // memory at `$p`; the first f64.store then overwrites `$p`, so propagating
+  // `(f64.load $p)` into the second store reads the NEW value and the swap
+  // becomes `a[p] = a[q]; a[q] = a[p]` — silent data loss. Caught by jz's
+  // heap-sort bench (Float64Array swap inside the sift-down loop).
+  const ast = parse(`(module
+    (memory (export "mem") 1)
+    (func (export "swap")
+      (local $t f64)
+      (f64.store (i32.const 0) (f64.const 2))             ;; a[0] = 2.0
+      (f64.store (i32.const 8) (f64.const 3))             ;; a[1] = 3.0
+      (local.set $t (f64.load (i32.const 0)))             ;; t = a[0] = 2.0
+      (f64.store (i32.const 0) (f64.load (i32.const 8)))  ;; a[0] = a[1] = 3.0
+      (f64.store (i32.const 8) (local.get $t))            ;; a[1] = t = 2.0
+    )
+  )`)
+  const opt = optimize(ast, 'propagate mergeBlocks')
+  const inst = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)), {})
+  inst.exports.swap()
+  const mem = new Float64Array(inst.exports.mem.buffer, 0, 2)
+  assert.strictEqual(mem[0], 3.0)
+  assert.strictEqual(mem[1], 2.0)
+})
+
 test('propagate+coalesce+inlineOnce+mergeBlocks: combined passes preserve semantics', () => {
   // Regression for the cascade that surfaced when mergeBlocks pattern-3 enabled
   // coalesce to alias an outer arena-cap local with an inner inlined-helper local.
@@ -1739,6 +1766,28 @@ test('fold: i32.reinterpret_f32 of constant', () => {
   const ast = parse('(module (func (result i32) (i32.reinterpret_f32 (f32.const 1))))')
   const src = print(optimize(ast, 'fold'))
   assert(src.includes('i32.const 1065353216'), 'reinterpret f32→i32 folded')
+})
+
+// Regression: `Number('nan:0xPAYLOAD')` is NaN, which collapses to canonical
+// NaN bits when stored. NaN-boxing schemes (jz, etc.) encode pointer/sentinel
+// bits in the payload — folding `(i64.reinterpret_f64 (f64.const nan:0x…))`
+// must preserve them. getConst now parses nan literals bit-exactly via the
+// shared buffer used for the reinterpret helpers.
+test('fold: i64.reinterpret_f64 preserves NaN payload', () => {
+  // 0x7FFA400300636261 is a jz NaN-boxed STRING pointer for "abc" — has both
+  // tag bits (0x7FFA) and SSO payload (0x40030000_00636261). Canonical NaN is
+  // 0x7FF8000000000000, so any collapse to canonical loses everything.
+  // 0x7FFA400300636261 == 9221753568630104673
+  const ast = parse('(module (func (result i64) (i64.reinterpret_f64 (f64.const nan:0x7FFA400300636261))))')
+  const src = print(optimize(ast, 'fold'))
+  assert(src.includes('i64.const 9221753568630104673'), 'should preserve nan:0x7FFA400300636261 payload, got: ' + src)
+})
+
+test('fold: i32.reinterpret_f32 preserves NaN payload', () => {
+  // 0x7FC12345: arithmetic NaN with payload 0x412345 → bits 2143363909
+  const ast = parse('(module (func (result i32) (i32.reinterpret_f32 (f32.const nan:0x412345))))')
+  const src = print(optimize(ast, 'fold'))
+  assert(src.includes('i32.const 2143363909'), 'should preserve f32 nan payload, got: ' + src)
 })
 
 // ==================== VACUUM: EMPTY ELSE REMOVAL ====================

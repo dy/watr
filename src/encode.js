@@ -151,10 +151,13 @@ const F32_SIGN = 0x80000000, F32_NAN = 0x7f800000, F32_QUIET = 0x400000
 export function f32(input, value, idx) {
   // Plain `nan` / `-nan` (with optional `:0xPAYLOAD`) — set the bit pattern explicitly.
   if (typeof input === 'string' && (idx = input.indexOf('nan')) >= 0) {
-    value = input[idx + 3] === ':' ? i32.parse(input.slice(idx + 4)) : F32_QUIET
-    value |= F32_NAN
-    if (input[0] === '-') value |= F32_SIGN
-    _i32[0] = value
+    if (input[idx + 3] === ':') {
+      const tail = input.slice(idx + 4)
+      value = (tail === 'canonical' || tail === 'arithmetic') ? F32_QUIET : i32.parse(tail)
+    } else value = F32_QUIET
+    value = (value | F32_NAN) >>> 0
+    if (input[0] === '-') value = (value | F32_SIGN) >>> 0
+    _i32[0] = value | 0
   }
   else {
     value = typeof input === 'string' ? f32.parse(input) : input
@@ -168,7 +171,10 @@ const F64_SIGN = 0x8000000000000000n, F64_NAN = 0x7ff0000000000000n, F64_QUIET =
 export function f64(input, value, idx) {
   // Plain `nan` / `-nan` (with optional `:0xPAYLOAD`) — set the bit pattern explicitly.
   if (typeof input === 'string' && (idx = input.indexOf('nan')) >= 0) {
-    value = input[idx + 3] === ':' ? i64.parse(input.slice(idx + 4)) : F64_QUIET
+    if (input[idx + 3] === ':') {
+      const tail = input.slice(idx + 4)
+      value = (tail === 'canonical' || tail === 'arithmetic') ? F64_QUIET : i64.parse(tail)
+    } else value = F64_QUIET
     value |= F64_NAN
     if (input[0] === '-') value |= F64_SIGN
     _i64[0] = value

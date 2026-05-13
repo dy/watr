@@ -458,6 +458,28 @@ const FOLDABLE = {
 }
 
 /**
+ * Parse a WAT `nan` / `nan:canonical` / `nan:arithmetic` / `nan:0xPAYLOAD`
+ * literal to a JS number with the exact bit pattern. `Number('nan:0x…')`
+ * collapses to canonical NaN, destroying the payload that NaN-boxing schemes
+ * (jz, etc.) encode their pointer/sentinel bits into. Returns null if `s` is
+ * not a NaN literal so callers can fall through to plain Number parsing.
+ */
+const _parseNanF64 = (s, i = s?.indexOf?.('nan')) => {
+  if (i < 0 || i == null) return null
+  let tail = s.slice(i + 4).replaceAll('_', ''),
+      bits = (s[i + 3] === ':' && tail !== 'canonical' && tail !== 'arithmetic' ? BigInt(tail) : 0x8000000000000n)
+  _ri64[0] = BigInt.asIntN(64, bits | 0x7ff0000000000000n | (s[0] === '-' ? 1n << 63n : 0n))
+  return _rf64[0]
+}
+const _parseNanF32 = (s, i = s?.indexOf?.('nan')) => {
+  if (i < 0 || i == null) return null
+  let tail = s.slice(i + 4).replaceAll('_', ''),
+      bits = (s[i + 3] === ':' && tail !== 'canonical' && tail !== 'arithmetic' ? parseInt(tail) : 0x400000)
+  _ri32[0] = (bits | 0x7f800000 | (s[0] === '-' ? 0x80000000 : 0)) | 0
+  return _rf32[0]
+}
+
+/**
  * Extract constant value from node.
  * @param {any} node
  * @returns {{type: string, value: number|bigint}|null}
@@ -467,8 +489,14 @@ const getConst = (node) => {
   const [op, val] = node
   if (op === 'i32.const') return { type: 'i32', value: Number(val) | 0 }
   if (op === 'i64.const') return { type: 'i64', value: BigInt(val) }
-  if (op === 'f32.const') return { type: 'f32', value: Math.fround(Number(val)) }
-  if (op === 'f64.const') return { type: 'f64', value: Number(val) }
+  if (op === 'f32.const') {
+    const n = _parseNanF32(val)
+    return { type: 'f32', value: n !== null ? n : Math.fround(Number(val)) }
+  }
+  if (op === 'f64.const') {
+    const n = _parseNanF64(val)
+    return { type: 'f64', value: n !== null ? n : Number(val) }
+  }
   return null
 }
 
@@ -917,6 +945,32 @@ const purgeRefs = (known, name) => {
   }
 }
 
+/** True if `node` recursively contains an op that may read linear memory.
+ *  Tracked values whose RHS reads memory go stale after any intervening
+ *  memory-mutating op (`*.store`, `memory.copy/fill/init`, atomic stores/rmw). */
+const readsMemory = (node) => {
+  if (!Array.isArray(node)) return false
+  const op = node[0]
+  if (typeof op === 'string') {
+    if (op.includes('.load') || op === 'memory.copy' || op === 'memory.size') return true
+  }
+  for (let i = 1; i < node.length; i++) if (readsMemory(node[i])) return true
+  return false
+}
+
+/** True if `node` recursively contains an op that may write linear memory. */
+const writesMemory = (node) => {
+  if (!Array.isArray(node)) return false
+  const op = node[0]
+  if (typeof op === 'string') {
+    if (op.endsWith('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init') return true
+    // Atomic RMW / store / notify all mutate memory; `.atomic.load` doesn't.
+    if (op.includes('.atomic.') && !op.endsWith('.load')) return true
+  }
+  for (let i = 1; i < node.length; i++) if (writesMemory(node[i])) return true
+  return false
+}
+
 /** Try substitute local.get nodes with known values.
  *  When entering a nested scope (block/loop/if), drop tracking for any local
  *  that's re-assigned inside the subtree — the outer-tracked value is stale
@@ -977,8 +1031,15 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       substGets(instr[2], known) // substitute known values in RHS
       const uses = getUseCount(instr[1])
       purgeRefs(known, instr[1]) // entries that read this local just went stale
+      // Any tracked value whose RHS reads memory must be invalidated by the
+      // RHS itself if it writes memory (rare — only via nested store/copy/etc.,
+      // which would also pass through the post-statement purge below).
+      if (writesMemory(instr[2])) {
+        for (const [key, tracked] of known) if (tracked.readsMem) known.delete(key)
+      }
       known.set(instr[1], {
         val: instr[2], pure: isPure(instr[2]),
+        readsMem: readsMemory(instr[2]),
         singleUse: uses.gets <= 1 && uses.sets <= 1 && uses.tees === 0
       })
       continue
@@ -1013,6 +1074,15 @@ const forwardPropagate = (funcNode, params, useCounts) => {
         if (Array.isArray(n) && (n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string')
           { known.delete(n[1]); purgeRefs(known, n[1]) }
       })
+      // Memory write in this statement (any nested store / memory.copy / etc.)
+      // invalidates every tracked value whose RHS reads memory: inlining one
+      // later would substitute a now-stale load. Without this, a swap idiom
+      //   (local.set $t (f64.load $p)) (f64.store $p (f64.load $q)) (f64.store $q (local.get $t))
+      // collapses to two stores that round-trip the same value:
+      //   (f64.store $p (f64.load $q)) (f64.store $q (f64.load $p))   ;; bug
+      if (writesMemory(instr)) {
+        for (const [key, tracked] of known) if (tracked.readsMem) known.delete(key)
+      }
     }
   }
 
