@@ -77,3 +77,4 @@ typings/
 .DS_Store
 dist/
 types/
+/test-results

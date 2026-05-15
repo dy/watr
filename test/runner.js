@@ -23,12 +23,11 @@ const isWasm = !!(
 let compile, parse, print, optimize, polyfill, watr
 
 if (isWasm) {
-  const { instantiate } = await import('../../jz/src/host.js')
+  const { instantiate } = await import('../../jz/interop.js')
   const wasmPath = new URL('../dist/watr.wasm', import.meta.url)
   const wasmBytes = readFileSync(wasmPath)
 
-  const fakeCompile = () => wasmBytes
-  const result = instantiate(fakeCompile, '', { memory: 4096 })
+  const result = instantiate(wasmBytes, { memory: 4096 })
 
   const _wasmCompile = result.exports.compile
   parse = result.exports.parse
