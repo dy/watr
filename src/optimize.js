@@ -1184,9 +1184,19 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
     const name = typeof sub[1] === 'string' ? sub[1] : null
     if (!name || params.has(name)) continue
     const uses = getPostUseCount(name)
-    // Dead store: set but never read, pure RHS
-    if (sub[0] === 'local.set' && uses.gets === 0 && uses.tees === 0 && isPure(sub[2])) {
-      funcNode.splice(i, 1); changed = true
+    // Dead store: set but never read.
+    if (sub[0] === 'local.set' && uses.gets === 0 && uses.tees === 0) {
+      // `(local.set $x VALUE)` — drop the store with its value, but only when
+      // VALUE is pure (its side effects would otherwise still need to run).
+      if (sub.length === 3) {
+        if (isPure(sub[2])) { funcNode.splice(i, 1); changed = true }
+      }
+      // Bare `(local.set $x)` — the value is implicit on the stack (e.g. an
+      // exception payload landing from a `try_table` catch). Demote to `drop`
+      // so the dead store goes away without unbalancing the stack.
+      else if (sub.length === 2) {
+        funcNode[i] = ['drop']; changed = true
+      }
     }
     // Unused local declaration
     else if (sub[0] === 'local' && name[0] === '$' && uses.gets === 0 && uses.sets === 0 && uses.tees === 0) {
@@ -1634,6 +1644,13 @@ const targetsLabel = (body, label) => {
           if (typeof n[j] === 'string') { if (n[j] === label) { found = true; return } }
           else break
         }
+      } else if (op === 'catch' || op === 'catch_ref') {
+        // `try_table` catch clause `(catch $tag $label)` / `(catch_ref $tag $label)`
+        // branches to an enclosing block label just like `br` does.
+        if (n[2] === label) { found = true; return }
+      } else if (op === 'catch_all' || op === 'catch_all_ref') {
+        // `(catch_all $label)` / `(catch_all_ref $label)`
+        if (n[1] === label) { found = true; return }
       }
     }
     for (let i = 1; i < n.length; i++) search(n[i], inner)

@@ -1262,6 +1262,25 @@ test('mergeBlocks: keeps wrapper if block label is targeted', () => {
   assert(src.includes('block $L'), 'branched block must stay')
 })
 
+test('mergeBlocks: keeps block targeted by try_table catch clause', () => {
+  // The block label is referenced only by a `try_table` catch clause. That is
+  // still a branch target — unwrapping the block would orphan the clause.
+  const ast = parse(`(module (tag $e (param f64)) (func (result f64)
+    (block $catch (result f64)
+      (try_table (catch $e $catch) (f64.const 1) drop)
+      (f64.const 0))))`)
+  const opt = optimize(ast, 'mergeBlocks')
+  assert(print(opt).includes('block $catch'), 'catch-target block must stay')
+})
+
+test('mergeBlocks: keeps block targeted by try_table catch_all clause', () => {
+  const ast = parse(`(module (func
+    (block $h
+      (try_table (catch_all $h) (nop)))))`)
+  const opt = optimize(ast, 'mergeBlocks')
+  assert(print(opt).includes('block $h'), 'catch_all-target block must stay')
+})
+
 // ==================== LOOPIFY ====================
 
 test('loopify: collapses while-idiom into loop+if', () => {
