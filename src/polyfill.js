@@ -6,117 +6,7 @@
  */
 
 import parse from './parse.js'
-
-/** Features that can be polyfilled */
-const FEATURES = {
-  funcref: ['ref.func', 'call_ref', 'return_call_ref'],
-  sign_ext: ['i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s'],
-  nontrapping: ['i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
-    'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u'],
-  bulk_memory: ['memory.copy', 'memory.fill'],
-  return_call: ['return_call', 'return_call_indirect'],
-  i31ref: ['ref.i31', 'i31.get_s', 'i31.get_u'],
-  extended_const: ['global.get'], // in const context - detected specially
-  multi_value: [], // detected by result count
-  gc: ['struct.new', 'struct.get', 'struct.set', 'array.new', 'array.get', 'array.set', 'array.len',
-    'struct.new_default', 'array.new_default', 'array.new_fixed', 'array.copy'],
-  ref_cast: ['ref.test', 'ref.cast', 'br_on_cast', 'br_on_cast_fail'],
-}
-
-/** All feature names */
-const ALL = Object.keys(FEATURES)
-
-/**
- * Normalize polyfill options to { feature: bool } map.
- * @param {boolean|string|Object} opts
- * @returns {Object} Normalized options
- */
-const normalize = (opts) => {
-  if (opts === true) return Object.fromEntries(ALL.map(f => [f, true]))
-  if (opts === false) return {}
-  if (typeof opts === 'string') {
-    const set = new Set(opts.split(/\s+/).filter(Boolean))
-    return Object.fromEntries(ALL.map(f => [f, set.has(f) || set.has('all')]))
-  }
-  return { ...opts }
-}
-
-/**
- * Walk AST depth-first (pre-order), call fn on each node.
- * @param {any} node
- * @param {Function} fn - (node, parent, idx) => void
- * @param {any} [parent]
- * @param {number} [idx]
- */
-const walk = (node, fn, parent, idx) => {
-  fn(node, parent, idx)
-  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walk(node[i], fn, node, i)
-}
-
-/**
- * Walk AST depth-first (post-order), transform children before parent.
- * @param {any} node
- * @param {Function} fn - (node, parent, idx) => void
- * @param {any} [parent]
- * @param {number} [idx]
- */
-const walkPost = (node, fn, parent, idx) => {
-  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walkPost(node[i], fn, node, i)
-  fn(node, parent, idx)
-}
-
-/**
- * Detect which polyfillable features are used in AST.
- * @param {Array} ast
- * @returns {Set<string>} Set of feature names
- */
-const detect = (ast) => {
-  const used = new Set()
-
-  // Standard op detection
-  walk(ast, node => {
-    if (typeof node !== 'string') return
-    for (const [feat, ops] of Object.entries(FEATURES)) {
-      if (ops.some(op => node === op || node.startsWith(op + ' '))) used.add(feat)
-    }
-  })
-
-  // Special: extended_const - global.get in global initializer with arithmetic
-  walk(ast, node => {
-    if (!Array.isArray(node) || node[0] !== 'global') return
-    for (const init of node) {
-      if (!Array.isArray(init)) continue
-      if (init[0] === 'i32.add' || init[0] === 'i32.sub' || init[0] === 'i32.mul' ||
-          init[0] === 'i64.add' || init[0] === 'i64.sub' || init[0] === 'i64.mul') {
-        // Check if it contains global.get
-        walk(init, inner => {
-          if (Array.isArray(inner) && inner[0] === 'global.get') used.add('extended_const')
-        })
-      }
-    }
-  })
-
-  // Special: multi_value - functions with >1 result
-  walk(ast, node => {
-    if (!Array.isArray(node) || node[0] !== 'func') return
-    let resultCount = 0
-    for (const part of node) {
-      if (Array.isArray(part) && part[0] === 'result') {
-        resultCount += part.length - 1
-      }
-    }
-    if (resultCount > 1) used.add('multi_value')
-  })
-
-  return used
-}
-
-/**
- * Deep clone AST to avoid mutating original.
- * @param {any} node
- * @returns {any}
- */
-const clone = (node) => Array.isArray(node) ? node.map(clone) : node
+import { walk, walkPost, clone } from './util.js'
 
 /**
  * Find module-level nodes by kind (func, table, etc).
@@ -228,9 +118,6 @@ const funcref = (ast, ctx) => {
   return ast
 }
 
-/** Feature transforms */
-const transforms = { funcref }
-
 // ============================================================================
 // SIGN EXTENSION POLYFILL
 // Transforms sign extension ops to shift pairs (shift left then arithmetic shift right).
@@ -264,8 +151,6 @@ const sign_ext = (ast, ctx) => {
   })
   return ast
 }
-
-transforms.sign_ext = sign_ext
 
 // ============================================================================
 // NON-TRAPPING CONVERSIONS POLYFILL
@@ -343,8 +228,6 @@ const nontrapping = (ast, ctx) => {
 
   return ast
 }
-
-transforms.nontrapping = nontrapping
 
 // ============================================================================
 // BULK MEMORY POLYFILL
@@ -451,8 +334,6 @@ const bulk_memory = (ast, ctx) => {
   return ast
 }
 
-transforms.bulk_memory = bulk_memory
-
 // ============================================================================
 // TAIL CALL POLYFILL
 // Transforms return_call/return_call_indirect to trampoline pattern.
@@ -490,8 +371,6 @@ const return_call_transform = (ast, ctx) => {
   return ast
 }
 
-transforms.return_call = return_call_transform
-
 // ============================================================================
 // I31REF POLYFILL
 // Transforms i31ref to i32 with masking.
@@ -525,8 +404,6 @@ const i31ref = (ast, ctx) => {
 
   return ast
 }
-
-transforms.i31ref = i31ref
 
 // ============================================================================
 // EXTENDED CONST POLYFILL
@@ -619,8 +496,6 @@ const extended_const = (ast, ctx) => {
   return ast
 }
 
-transforms.extended_const = extended_const
-
 // ============================================================================
 // MULTI-VALUE POLYFILL
 // Transforms multi-value returns to single value + memory/global storage.
@@ -694,8 +569,6 @@ const multi_value = (ast, ctx) => {
 
   return ast
 }
-
-transforms.multi_value = multi_value
 
 // ============================================================================
 // GC (STRUCT/ARRAY) POLYFILL
@@ -1017,8 +890,6 @@ const gc = (ast, ctx) => {
   return ast
 }
 
-transforms.gc = gc
-
 // ============================================================================
 // REF.TEST / REF.CAST POLYFILL
 // Runtime type checking using type tags stored at offset 0.
@@ -1174,7 +1045,93 @@ const ref_cast = (ast, ctx) => {
   return ast
 }
 
-transforms.ref_cast = ref_cast
+/**
+ * Polyfillable features, in the order their transforms apply. Each entry is
+ * `[name, triggerOps, transform]` — the single source of truth for detection,
+ * the public `FEATURES` catalogue, and the dispatch loop below.
+ *   - name       — feature key callers toggle (`polyfill: 'funcref gc'`)
+ *   - triggerOps — instruction names whose presence means the feature is used
+ *   - transform  — the lowering pass, `(ast, ctx) => ast`
+ */
+const POLYFILLS = [
+  ['funcref',        ['ref.func', 'call_ref', 'return_call_ref'], funcref],
+  ['sign_ext',       ['i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s'], sign_ext],
+  ['nontrapping',    ['i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
+                      'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u'], nontrapping],
+  ['bulk_memory',    ['memory.copy', 'memory.fill'], bulk_memory],
+  ['return_call',    ['return_call', 'return_call_indirect'], return_call_transform],
+  ['i31ref',         ['ref.i31', 'i31.get_s', 'i31.get_u'], i31ref],
+  ['extended_const', ['global.get'], extended_const],  // global.get in a const initializer — also detected specially
+  ['multi_value',    [], multi_value],                 // functions with >1 result — detected by result count
+  ['gc',             ['struct.new', 'struct.get', 'struct.set', 'array.new', 'array.get', 'array.set', 'array.len',
+                      'struct.new_default', 'array.new_default', 'array.new_fixed', 'array.copy'], gc],
+  ['ref_cast',       ['ref.test', 'ref.cast', 'br_on_cast', 'br_on_cast_fail'], ref_cast],
+]
+
+/** Feature name → trigger-op list — the public catalogue of polyfillable features. */
+const FEATURES = Object.fromEntries(POLYFILLS.map(p => [p[0], p[1]]))
+
+/**
+ * Normalize polyfill options to a { feature: bool } map. `true` enables every
+ * feature, a string enables only the named ones (or all via `'all'`), and an
+ * explicit object is passed through untouched.
+ *
+ * @param {boolean|string|Object} opts
+ * @returns {Object} Normalized options
+ */
+const normalize = (opts) => {
+  if (opts === false) return {}
+  if (opts !== true && typeof opts !== 'string') return { ...opts }
+  const set = typeof opts === 'string' ? new Set(opts.split(/\s+/).filter(Boolean)) : null
+  const m = {}
+  for (const p of POLYFILLS) m[p[0]] = set ? (set.has('all') || set.has(p[0])) : true
+  return m
+}
+
+/**
+ * Detect which polyfillable features an AST uses.
+ *
+ * @param {Array} ast
+ * @returns {Set<string>} Set of feature names
+ */
+const detect = (ast) => {
+  const used = new Set()
+
+  // Standard op detection: a trigger op anywhere means its feature is used.
+  walk(ast, node => {
+    if (typeof node !== 'string') return
+    for (const p of POLYFILLS) {
+      const ops = p[1]
+      if (ops.some(op => node === op || node.startsWith(op + ' '))) used.add(p[0])
+    }
+  })
+
+  // Special: extended_const — global.get in a global initializer with arithmetic
+  walk(ast, node => {
+    if (!Array.isArray(node) || node[0] !== 'global') return
+    for (const init of node) {
+      if (!Array.isArray(init)) continue
+      if (init[0] === 'i32.add' || init[0] === 'i32.sub' || init[0] === 'i32.mul' ||
+          init[0] === 'i64.add' || init[0] === 'i64.sub' || init[0] === 'i64.mul') {
+        walk(init, inner => {
+          if (Array.isArray(inner) && inner[0] === 'global.get') used.add('extended_const')
+        })
+      }
+    }
+  })
+
+  // Special: multi_value — functions with >1 result
+  walk(ast, node => {
+    if (!Array.isArray(node) || node[0] !== 'func') return
+    let resultCount = 0
+    for (const part of node) {
+      if (Array.isArray(part) && part[0] === 'result') resultCount += part.length - 1
+    }
+    if (resultCount > 1) used.add('multi_value')
+  })
+
+  return used
+}
 
 /**
  * Apply polyfill transforms to AST.
@@ -1199,10 +1156,9 @@ export default function polyfill(ast, opts = true) {
   const used = detect(ast)
   const ctx = { uid: 0 }
 
-  for (const feat of ALL) {
-    if (used.has(feat) && opts[feat] !== false && transforms[feat]) {
-      ast = transforms[feat](ast, ctx)
-    }
+  for (const p of POLYFILLS) {
+    const fn = p[2]
+    if (used.has(p[0]) && opts[p[0]] !== false) ast = fn(ast, ctx)
   }
 
   return ast

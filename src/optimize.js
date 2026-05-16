@@ -7,40 +7,8 @@
 
 import parse from './parse.js'
 import compile from './compile.js'
-
-/** Optimizations that can be applied.
- *  Passes defaulting to false can bloat output or are expensive — opt-in only. */
-const OPTS = {
-  treeshake: true,    // remove unused funcs/globals/types/tables
-  fold: true,         // constant folding
-  deadcode: true,     // eliminate dead code after unreachable/br/return
-  locals: true,       // remove unused locals
-  identity: true,     // remove identity ops (x + 0 → x)
-  strength: true,     // strength reduction (x * 2 → x << 1)
-  branch: true,       // simplify constant branches
-  propagate: true,    // forward-propagate single-use locals & tiny consts (never inflates)
-  inline: false,      // inline tiny functions — can duplicate bodies
-  inlineOnce: true,   // inline single-call functions into their lone caller (never duplicates)
-  vacuum: true,       // remove nops, drop-of-pure, empty branches
-  mergeBlocks: true,  // unwrap `(block $L …)` whose label is never targeted
-  coalesce: true,     // share local slots between same-type non-overlapping locals
-  peephole: true,     // x-x→0, x&0→0, etc.
-  globals: true,      // propagate immutable global constants
-  offset: true,       // fold add+const into load/store offset
-  unbranch: true,     // remove redundant br at end of own block
-  loopify: true,      // collapse block+loop+brif while-idiom into loop+if
-  stripmut: true,     // strip mut from never-written globals
-  brif: true,         // if-then-br → br_if
-  foldarms: false,    // merge identical trailing if arms — can add block wrapper
-  dedupe: true,       // eliminate duplicate functions
-  reorder: false,     // put hot functions first — no AST reduction
-  dedupTypes: true,   // merge identical type definitions
-  packData: true,     // trim trailing zeros, merge adjacent data segments
-  minifyImports: false, // shorten import names — enable only when you control the host
-}
-
-/** All optimization names */
-const ALL = Object.keys(OPTS)
+import { walk, walkPost, clone } from './util.js'
+import { resultType } from './const.js'
 
 /**
  * Recursively count AST nodes — fast size heuristic without compiling.
@@ -75,64 +43,6 @@ const equal = (a, b) => {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) if (!equal(a[i], b[i])) return false
   return true
-}
-
-/**
- * Normalize options to { opt: bool } map.
- * @param {boolean|string|Object} opts
- * @returns {Object}
- */
-const normalize = (opts) => {
-  if (opts === true) return { ...OPTS }
-  if (opts === false) return {}
-  if (typeof opts === 'string') {
-    const set = new Set(opts.split(/\s+/).filter(Boolean))
-    if (set.has('all')) return Object.fromEntries(ALL.map(f => [f, true]))
-    // Explicit pass names enable ONLY those passes (not the full default set).
-    return Object.fromEntries(ALL.map(f => [f, set.has(f)]))
-  }
-  return { ...OPTS, ...opts }
-}
-/**
- * Deep clone AST.
- * @param {any} node
- * @returns {any}
- */
-const clone = (node) => {
-  if (!Array.isArray(node)) return node
-  return node.map(clone)
-}
-
-/**
- * Walk AST depth-first (pre-order).
- * @param {any} node
- * @param {Function} fn - (node, parent, idx) => void
- * @param {any} [parent]
- * @param {number} [idx]
- */
-const walk = (node, fn, parent, idx) => {
-  fn(node, parent, idx)
-  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walk(node[i], fn, node, i)
-}
-
-/**
- * Walk AST depth-first (post-order), transform children before parent.
- * Returns the (potentially replaced) node.
- * @param {any} node
- * @param {Function} fn - (node, parent, idx) => newNode|undefined
- * @param {any} [parent]
- * @param {number} [idx]
- * @returns {any}
- */
-const walkPost = (node, fn, parent, idx) => {
-  if (Array.isArray(node)) {
-    for (let i = 0; i < node.length; i++) {
-      const result = walkPost(node[i], fn, node, i)
-      if (result !== undefined) node[i] = result
-    }
-  }
-  const result = fn(node, parent, idx)
-  return result !== undefined ? result : node
 }
 
 /**
@@ -344,117 +254,117 @@ const i64c = (fn) => (a, b) => fn(a, b) ? 1 : 0
 const u64c = (fn) => (a, b) => fn(BigInt.asUintN(64, a), BigInt.asUintN(64, b)) ? 1 : 0
 
 /**
- * Constant folders, keyed by op. Each entry is [fn, resultType].
- * Comparisons return i32, conversions return their named output type.
+ * Constant folders, keyed by op. Each entry is the fold function; the result
+ * value-type is derived once via `resultType` (see `fold`).
  */
 const FOLDABLE = {
   // i32 arithmetic
-  'i32.add': [(a, b) => (a + b) | 0, 'i32'],
-  'i32.sub': [(a, b) => (a - b) | 0, 'i32'],
-  'i32.mul': [(a, b) => Math.imul(a, b), 'i32'],
-  'i32.div_s': [(a, b) => b !== 0 ? (a / b) | 0 : null, 'i32'],
-  'i32.div_u': [(a, b) => b !== 0 ? ((a >>> 0) / (b >>> 0)) | 0 : null, 'i32'],
-  'i32.rem_s': [(a, b) => b !== 0 ? (a % b) | 0 : null, 'i32'],
-  'i32.rem_u': [(a, b) => b !== 0 ? ((a >>> 0) % (b >>> 0)) | 0 : null, 'i32'],
-  'i32.and': [(a, b) => a & b, 'i32'],
-  'i32.or':  [(a, b) => a | b, 'i32'],
-  'i32.xor': [(a, b) => a ^ b, 'i32'],
-  'i32.shl':   [(a, b) => a << (b & 31), 'i32'],
-  'i32.shr_s': [(a, b) => a >> (b & 31), 'i32'],
-  'i32.shr_u': [(a, b) => a >>> (b & 31), 'i32'],
-  'i32.rotl': [(a, b) => { b &= 31; return ((a << b) | (a >>> (32 - b))) | 0 }, 'i32'],
-  'i32.rotr': [(a, b) => { b &= 31; return ((a >>> b) | (a << (32 - b))) | 0 }, 'i32'],
-  'i32.eq':   [i32c((a, b) => a === b), 'i32'],
-  'i32.ne':   [i32c((a, b) => a !== b), 'i32'],
-  'i32.lt_s': [i32c((a, b) => a < b),  'i32'],
-  'i32.lt_u': [u32c((a, b) => a < b),  'i32'],
-  'i32.gt_s': [i32c((a, b) => a > b),  'i32'],
-  'i32.gt_u': [u32c((a, b) => a > b),  'i32'],
-  'i32.le_s': [i32c((a, b) => a <= b), 'i32'],
-  'i32.le_u': [u32c((a, b) => a <= b), 'i32'],
-  'i32.ge_s': [i32c((a, b) => a >= b), 'i32'],
-  'i32.ge_u': [u32c((a, b) => a >= b), 'i32'],
-  'i32.eqz':   [(a) => a === 0 ? 1 : 0, 'i32'],
-  'i32.clz':   [(a) => Math.clz32(a), 'i32'],
-  'i32.ctz':   [(a) => a === 0 ? 32 : 31 - Math.clz32(a & -a), 'i32'],
-  'i32.popcnt': [(a) => { let c = 0; while (a) { c += a & 1; a >>>= 1 } return c }, 'i32'],
-  'i32.wrap_i64':   [(a) => Number(BigInt.asIntN(32, a)), 'i32'],
-  'i32.extend8_s':  [(a) => (a << 24) >> 24, 'i32'],
-  'i32.extend16_s': [(a) => (a << 16) >> 16, 'i32'],
+  'i32.add': (a, b) => (a + b) | 0,
+  'i32.sub': (a, b) => (a - b) | 0,
+  'i32.mul': (a, b) => Math.imul(a, b),
+  'i32.div_s': (a, b) => b !== 0 ? (a / b) | 0 : null,
+  'i32.div_u': (a, b) => b !== 0 ? ((a >>> 0) / (b >>> 0)) | 0 : null,
+  'i32.rem_s': (a, b) => b !== 0 ? (a % b) | 0 : null,
+  'i32.rem_u': (a, b) => b !== 0 ? ((a >>> 0) % (b >>> 0)) | 0 : null,
+  'i32.and': (a, b) => a & b,
+  'i32.or':  (a, b) => a | b,
+  'i32.xor': (a, b) => a ^ b,
+  'i32.shl':   (a, b) => a << (b & 31),
+  'i32.shr_s': (a, b) => a >> (b & 31),
+  'i32.shr_u': (a, b) => a >>> (b & 31),
+  'i32.rotl': (a, b) => { b &= 31; return ((a << b) | (a >>> (32 - b))) | 0 },
+  'i32.rotr': (a, b) => { b &= 31; return ((a >>> b) | (a << (32 - b))) | 0 },
+  'i32.eq':   i32c((a, b) => a === b),
+  'i32.ne':   i32c((a, b) => a !== b),
+  'i32.lt_s': i32c((a, b) => a < b),
+  'i32.lt_u': u32c((a, b) => a < b),
+  'i32.gt_s': i32c((a, b) => a > b),
+  'i32.gt_u': u32c((a, b) => a > b),
+  'i32.le_s': i32c((a, b) => a <= b),
+  'i32.le_u': u32c((a, b) => a <= b),
+  'i32.ge_s': i32c((a, b) => a >= b),
+  'i32.ge_u': u32c((a, b) => a >= b),
+  'i32.eqz':   (a) => a === 0 ? 1 : 0,
+  'i32.clz':   (a) => Math.clz32(a),
+  'i32.ctz':   (a) => a === 0 ? 32 : 31 - Math.clz32(a & -a),
+  'i32.popcnt': (a) => { let c = 0; while (a) { c += a & 1; a >>>= 1 } return c },
+  'i32.wrap_i64':   (a) => Number(BigInt.asIntN(32, a)),
+  'i32.extend8_s':  (a) => (a << 24) >> 24,
+  'i32.extend16_s': (a) => (a << 16) >> 16,
 
   // i64 (using BigInt)
-  'i64.add': [(a, b) => BigInt.asIntN(64, a + b), 'i64'],
-  'i64.sub': [(a, b) => BigInt.asIntN(64, a - b), 'i64'],
-  'i64.mul': [(a, b) => BigInt.asIntN(64, a * b), 'i64'],
-  'i64.div_s': [(a, b) => b !== 0n ? BigInt.asIntN(64, a / b) : null, 'i64'],
-  'i64.div_u': [(a, b) => b !== 0n ? BigInt.asUintN(64, BigInt.asUintN(64, a) / BigInt.asUintN(64, b)) : null, 'i64'],
-  'i64.rem_s': [(a, b) => b !== 0n ? BigInt.asIntN(64, a % b) : null, 'i64'],
-  'i64.rem_u': [(a, b) => b !== 0n ? BigInt.asUintN(64, BigInt.asUintN(64, a) % BigInt.asUintN(64, b)) : null, 'i64'],
-  'i64.and': [(a, b) => BigInt.asIntN(64, a & b), 'i64'],
-  'i64.or':  [(a, b) => BigInt.asIntN(64, a | b), 'i64'],
-  'i64.xor': [(a, b) => BigInt.asIntN(64, a ^ b), 'i64'],
-  'i64.shl':   [(a, b) => BigInt.asIntN(64, a << (b & 63n)), 'i64'],
-  'i64.shr_s': [(a, b) => BigInt.asIntN(64, a >> (b & 63n)), 'i64'],
-  'i64.shr_u': [(a, b) => BigInt.asUintN(64, BigInt.asUintN(64, a) >> (b & 63n)), 'i64'],
-  'i64.eq':   [i64c((a, b) => a === b), 'i32'],
-  'i64.ne':   [i64c((a, b) => a !== b), 'i32'],
-  'i64.lt_s': [i64c((a, b) => a < b),   'i32'],
-  'i64.lt_u': [u64c((a, b) => a < b),   'i32'],
-  'i64.gt_s': [i64c((a, b) => a > b),   'i32'],
-  'i64.gt_u': [u64c((a, b) => a > b),   'i32'],
-  'i64.le_s': [i64c((a, b) => a <= b),  'i32'],
-  'i64.le_u': [u64c((a, b) => a <= b),  'i32'],
-  'i64.ge_s': [i64c((a, b) => a >= b),  'i32'],
-  'i64.ge_u': [u64c((a, b) => a >= b),  'i32'],
-  'i64.eqz': [(a) => a === 0n ? 1 : 0, 'i32'],
-  'i64.extend_i32_s': [(a) => BigInt(a), 'i64'],
-  'i64.extend_i32_u': [(a) => BigInt(a >>> 0), 'i64'],
-  'i64.extend8_s':    [(a) => BigInt.asIntN(64, BigInt.asIntN(8, a)),  'i64'],
-  'i64.extend16_s':   [(a) => BigInt.asIntN(64, BigInt.asIntN(16, a)), 'i64'],
-  'i64.extend32_s':   [(a) => BigInt.asIntN(64, BigInt.asIntN(32, a)), 'i64'],
+  'i64.add': (a, b) => BigInt.asIntN(64, a + b),
+  'i64.sub': (a, b) => BigInt.asIntN(64, a - b),
+  'i64.mul': (a, b) => BigInt.asIntN(64, a * b),
+  'i64.div_s': (a, b) => b !== 0n ? BigInt.asIntN(64, a / b) : null,
+  'i64.div_u': (a, b) => b !== 0n ? BigInt.asUintN(64, BigInt.asUintN(64, a) / BigInt.asUintN(64, b)) : null,
+  'i64.rem_s': (a, b) => b !== 0n ? BigInt.asIntN(64, a % b) : null,
+  'i64.rem_u': (a, b) => b !== 0n ? BigInt.asUintN(64, BigInt.asUintN(64, a) % BigInt.asUintN(64, b)) : null,
+  'i64.and': (a, b) => BigInt.asIntN(64, a & b),
+  'i64.or':  (a, b) => BigInt.asIntN(64, a | b),
+  'i64.xor': (a, b) => BigInt.asIntN(64, a ^ b),
+  'i64.shl':   (a, b) => BigInt.asIntN(64, a << (b & 63n)),
+  'i64.shr_s': (a, b) => BigInt.asIntN(64, a >> (b & 63n)),
+  'i64.shr_u': (a, b) => BigInt.asUintN(64, BigInt.asUintN(64, a) >> (b & 63n)),
+  'i64.eq':   i64c((a, b) => a === b),
+  'i64.ne':   i64c((a, b) => a !== b),
+  'i64.lt_s': i64c((a, b) => a < b),
+  'i64.lt_u': u64c((a, b) => a < b),
+  'i64.gt_s': i64c((a, b) => a > b),
+  'i64.gt_u': u64c((a, b) => a > b),
+  'i64.le_s': i64c((a, b) => a <= b),
+  'i64.le_u': u64c((a, b) => a <= b),
+  'i64.ge_s': i64c((a, b) => a >= b),
+  'i64.ge_u': u64c((a, b) => a >= b),
+  'i64.eqz': (a) => a === 0n ? 1 : 0,
+  'i64.extend_i32_s': (a) => BigInt(a),
+  'i64.extend_i32_u': (a) => BigInt(a >>> 0),
+  'i64.extend8_s':    (a) => BigInt.asIntN(64, BigInt.asIntN(8, a)),
+  'i64.extend16_s':   (a) => BigInt.asIntN(64, BigInt.asIntN(16, a)),
+  'i64.extend32_s':   (a) => BigInt.asIntN(64, BigInt.asIntN(32, a)),
 
   // f32/f64 (NaN/precision-aware via Math.fround)
-  'f32.add': [(a, b) => Math.fround(a + b), 'f32'],
-  'f32.sub': [(a, b) => Math.fround(a - b), 'f32'],
-  'f32.mul': [(a, b) => Math.fround(a * b), 'f32'],
-  'f32.div': [(a, b) => Math.fround(a / b), 'f32'],
-  'f32.neg':   [(a) => Math.fround(-a), 'f32'],
-  'f32.abs':   [(a) => Math.fround(Math.abs(a)), 'f32'],
-  'f32.sqrt':  [(a) => Math.fround(Math.sqrt(a)), 'f32'],
-  'f32.ceil':  [(a) => Math.fround(Math.ceil(a)), 'f32'],
-  'f32.floor': [(a) => Math.fround(Math.floor(a)), 'f32'],
-  'f32.trunc': [(a) => Math.fround(Math.trunc(a)), 'f32'],
-  'f32.nearest': [(a) => Math.fround(roundEven(a)), 'f32'],
+  'f32.add': (a, b) => Math.fround(a + b),
+  'f32.sub': (a, b) => Math.fround(a - b),
+  'f32.mul': (a, b) => Math.fround(a * b),
+  'f32.div': (a, b) => Math.fround(a / b),
+  'f32.neg':   (a) => Math.fround(-a),
+  'f32.abs':   (a) => Math.fround(Math.abs(a)),
+  'f32.sqrt':  (a) => Math.fround(Math.sqrt(a)),
+  'f32.ceil':  (a) => Math.fround(Math.ceil(a)),
+  'f32.floor': (a) => Math.fround(Math.floor(a)),
+  'f32.trunc': (a) => Math.fround(Math.trunc(a)),
+  'f32.nearest': (a) => Math.fround(roundEven(a)),
 
-  'f64.add': [(a, b) => a + b, 'f64'],
-  'f64.sub': [(a, b) => a - b, 'f64'],
-  'f64.mul': [(a, b) => a * b, 'f64'],
-  'f64.div': [(a, b) => a / b, 'f64'],
-  'f64.neg':   [(a) => -a, 'f64'],
-  'f64.abs':   [Math.abs, 'f64'],
-  'f64.sqrt':  [Math.sqrt, 'f64'],
-  'f64.ceil':  [Math.ceil, 'f64'],
-  'f64.floor': [Math.floor, 'f64'],
-  'f64.trunc': [Math.trunc, 'f64'],
-  'f64.nearest': [roundEven, 'f64'],
+  'f64.add': (a, b) => a + b,
+  'f64.sub': (a, b) => a - b,
+  'f64.mul': (a, b) => a * b,
+  'f64.div': (a, b) => a / b,
+  'f64.neg':   (a) => -a,
+  'f64.abs':   Math.abs,
+  'f64.sqrt':  Math.sqrt,
+  'f64.ceil':  Math.ceil,
+  'f64.floor': Math.floor,
+  'f64.trunc': Math.trunc,
+  'f64.nearest': roundEven,
 
   // Bit-exact reinterprets (preserve NaN payloads)
-  'i32.reinterpret_f32': [i32FromF32, 'i32'],
-  'f32.reinterpret_i32': [f32FromI32, 'f32'],
-  'i64.reinterpret_f64': [i64FromF64, 'i64'],
-  'f64.reinterpret_i64': [f64FromI64, 'f64'],
+  'i32.reinterpret_f32': i32FromF32,
+  'f32.reinterpret_i32': f32FromI32,
+  'i64.reinterpret_f64': i64FromF64,
+  'f64.reinterpret_i64': f64FromI64,
 
   // Numeric conversions (value-preserving where representable)
-  'f32.convert_i32_s': [(a) => Math.fround(a | 0), 'f32'],
-  'f32.convert_i32_u': [(a) => Math.fround(a >>> 0), 'f32'],
-  'f32.convert_i64_s': [(a) => Math.fround(Number(BigInt.asIntN(64, a))), 'f32'],
-  'f32.convert_i64_u': [(a) => Math.fround(Number(BigInt.asUintN(64, a))), 'f32'],
-  'f64.convert_i32_s': [(a) => (a | 0), 'f64'],
-  'f64.convert_i32_u': [(a) => (a >>> 0), 'f64'],
-  'f64.convert_i64_s': [(a) => Number(BigInt.asIntN(64, a)), 'f64'],
-  'f64.convert_i64_u': [(a) => Number(BigInt.asUintN(64, a)), 'f64'],
-  'f32.demote_f64':    [(a) => Math.fround(a), 'f32'],
-  'f64.promote_f32':   [(a) => Math.fround(a), 'f64'],
+  'f32.convert_i32_s': (a) => Math.fround(a | 0),
+  'f32.convert_i32_u': (a) => Math.fround(a >>> 0),
+  'f32.convert_i64_s': (a) => Math.fround(Number(BigInt.asIntN(64, a))),
+  'f32.convert_i64_u': (a) => Math.fround(Number(BigInt.asUintN(64, a))),
+  'f64.convert_i32_s': (a) => (a | 0),
+  'f64.convert_i32_u': (a) => (a >>> 0),
+  'f64.convert_i64_s': (a) => Number(BigInt.asIntN(64, a)),
+  'f64.convert_i64_u': (a) => Number(BigInt.asUintN(64, a)),
+  'f32.demote_f64':    (a) => Math.fround(a),
+  'f64.promote_f32':   (a) => Math.fround(a),
 }
 
 /**
@@ -522,9 +432,8 @@ const makeConst = (type, value) => {
 const fold = (ast) => {
   return walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
-    const entry = FOLDABLE[node[0]]
-    if (!entry) return
-    const [fn, t] = entry
+    const fn = FOLDABLE[node[0]]
+    if (!fn) return
 
     // Unary
     if (fn.length === 1 && node.length === 2) {
@@ -532,7 +441,7 @@ const fold = (ast) => {
       if (!a) return
       const r = fn(a.value)
       if (r === null) return
-      return makeConst(t, r)
+      return makeConst(resultType(node[0]), r)
     }
     // Binary
     if (fn.length === 2 && node.length === 3) {
@@ -540,7 +449,7 @@ const fold = (ast) => {
       if (!a || !b) return
       const r = fn(a.value, b.value)
       if (r === null) return
-      return makeConst(t, r)
+      return makeConst(resultType(node[0]), r)
     }
   })
 }
@@ -1539,12 +1448,12 @@ const inlineOnce = (ast) => {
 
     const callee = funcByName.get(calleeName)
     const params = [], locals = []
-    let resultType = null
+    let inlResult = null
     for (let i = 2; i < callee.length; i++) {
       const c = callee[i]
       if (typeof c === 'string' || !Array.isArray(c)) continue
       if (c[0] === 'param') params.push({ name: c[1], type: c[2] })
-      else if (c[0] === 'result') { if (c.length > 1) resultType = c[1] }
+      else if (c[0] === 'result') { if (c.length > 1) inlResult = c[1] }
       else if (c[0] === 'local') locals.push({ name: c[1], type: c[2] })
       else if (c[0] === 'export' || c[0] === 'type') continue
       else break
@@ -1600,8 +1509,8 @@ const inlineOnce = (ast) => {
             .map(l => ['local.set', rename.get(l.name), zeroFor(l.type)])
           const inner = cBody.map(sub)
           done = true
-          return resultType
-            ? ['block', exit, ['result', resultType], ...setup, ...resets, ...inner]
+          return inlResult
+            ? ['block', exit, ['result', inlResult], ...setup, ...resets, ...inner]
             : ['block', exit, ...setup, ...resets, ...inner]
         })
         if (replaced !== fn[i]) fn[i] = replaced
@@ -2921,6 +2830,66 @@ const reorder = (ast) => {
 // ==================== MAIN ====================
 
 /**
+ * Optimization passes, in the order they run within each round. Each entry is
+ * `[optionKey, fn, defaultOn, doc]` — the single source of truth that the
+ * dispatch loop, the `OPTS` catalogue, and `normalize` all derive from.
+ * Passes that are off by default can bloat output or are expensive — opt-in.
+ */
+const PASSES = [
+  ['stripmut',      stripmut,       true,  'strip mut from never-written globals'],
+  ['globals',       globals,        true,  'propagate immutable global constants'],
+  ['fold',          fold,           true,  'constant folding'],
+  ['identity',      identity,       true,  'remove identity ops (x + 0 → x)'],
+  ['peephole',      peephole,       true,  'x-x→0, x&0→0, etc.'],
+  ['strength',      strength,       true,  'strength reduction (x * 2 → x << 1)'],
+  ['branch',        branch,         true,  'simplify constant branches'],
+  ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
+  ['inlineOnce',    inlineOnce,     true,  'inline single-call functions into their lone caller (never duplicates)'],
+  ['inline',        inline,         false, 'inline tiny functions — can duplicate bodies'],
+  ['offset',        offset,         true,  'fold add+const into load/store offset'],
+  ['unbranch',      unbranch,       true,  'remove redundant br at end of own block'],
+  ['loopify',       loopify,        true,  'collapse block+loop+brif while-idiom into loop+if'],
+  ['brif',          brif,           true,  'if-then-br → br_if'],
+  ['foldarms',      foldarms,       false, 'merge identical trailing if arms — can add block wrapper'],
+  ['deadcode',      deadcode,       true,  'eliminate dead code after unreachable/br/return'],
+  ['vacuum',        vacuum,         true,  'remove nops, drop-of-pure, empty branches'],
+  ['mergeBlocks',   mergeBlocks,    true,  'unwrap `(block $L …)` whose label is never targeted'],
+  ['coalesce',      coalesceLocals, true,  'share local slots between same-type non-overlapping locals'],
+  ['locals',        localReuse,     true,  'remove unused locals'],
+  ['dedupe',        dedupe,         true,  'eliminate duplicate functions'],
+  ['dedupTypes',    dedupTypes,     true,  'merge identical type definitions'],
+  ['packData',      packData,       true,  'trim trailing zeros, merge adjacent data segments'],
+  ['reorder',       reorder,        false, 'put hot functions first — no AST reduction'],
+  ['treeshake',     treeshake,      true,  'remove unused funcs/globals/types/tables'],
+  ['minifyImports', minifyImports,  false, 'shorten import names — enable only when you control the host'],
+]
+
+/** Option name → default-on map — the public catalogue of passes. */
+const OPTS = Object.fromEntries(PASSES.map(p => [p[0], p[2]]))
+
+/**
+ * Normalize options to a { passName: bool } map. An explicit object is kept
+ * as-is (preserving `log`/`verbose`), with any unmentioned pass filled to its
+ * default; `true` selects the defaults; a string selects only the named
+ * passes (or all of them via `'all'`).
+ *
+ * @param {boolean|string|Object} opts
+ * @returns {Object}
+ */
+const normalize = (opts) => {
+  if (opts === false) return {}
+  if (opts !== true && typeof opts !== 'string') {
+    const m = { ...opts }
+    for (const p of PASSES) if (m[p[0]] === undefined) m[p[0]] = p[2]
+    return m
+  }
+  const set = typeof opts === 'string' ? new Set(opts.split(/\s+/).filter(Boolean)) : null
+  const m = {}
+  for (const p of PASSES) m[p[0]] = set ? (set.has('all') || set.has(p[0])) : p[2]
+  return m
+}
+
+/**
  * Optimize AST.
  *
  * @param {Array|string} ast - AST or WAT source
@@ -2953,32 +2922,7 @@ export default function optimize(ast, opts = true) {
     beforeRound = clone(ast)
     const sizeBefore = binarySize(ast)
 
-    if (opts.stripmut) ast = stripmut(ast)
-    if (opts.globals) ast = globals(ast)
-    if (opts.fold) ast = fold(ast)
-    if (opts.identity) ast = identity(ast)
-    if (opts.peephole) ast = peephole(ast)
-    if (opts.strength) ast = strength(ast)
-    if (opts.branch) ast = branch(ast)
-    if (opts.propagate) ast = propagate(ast)
-    if (opts.inlineOnce) ast = inlineOnce(ast)
-    if (opts.inline) ast = inline(ast)
-    if (opts.offset) ast = offset(ast)
-    if (opts.unbranch) ast = unbranch(ast)
-    if (opts.loopify) ast = loopify(ast)
-    if (opts.brif) ast = brif(ast)
-    if (opts.foldarms) ast = foldarms(ast)
-    if (opts.deadcode) ast = deadcode(ast)
-    if (opts.vacuum) ast = vacuum(ast)
-    if (opts.mergeBlocks) ast = mergeBlocks(ast)
-    if (opts.coalesce) ast = coalesceLocals(ast)
-    if (opts.locals) ast = localReuse(ast)
-    if (opts.dedupe) ast = dedupe(ast)
-    if (opts.dedupTypes) ast = dedupTypes(ast)
-    if (opts.packData) ast = packData(ast)
-    if (opts.reorder) ast = reorder(ast)
-    if (opts.treeshake) ast = treeshake(ast)
-    if (opts.minifyImports) ast = minifyImports(ast)
+    for (const [key, fn] of PASSES) if (opts[key]) ast = fn(ast)
     // Second propagate sweep: `inlineOnce`/`inline` (above) leave fresh
     // `(local.set $p arg) … (local.get $p)` wrappers around each inlined call;
     // re-running propagation collapses them within this same round, so the size

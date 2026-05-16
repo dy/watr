@@ -19,13 +19,6 @@ export const err = (text, pos=err.loc) => {
   throw Error(text)
 }
 
-/**
- * Deep clone an array tree structure.
- * @param {Array} items - Array to clone
- * @returns {Array} Cloned array
- */
-export const clone = items => items.map(item => Array.isArray(item) ? clone(item) : item)
-
 /** Regex to detect invalid underscore placement in numbers */
 export const sepRE = /^_|_$|[^\da-f]_|_[^\da-f]/i
 
@@ -84,3 +77,46 @@ export const str = s => {
  * @returns {string} Unescaped string without quotes, e.g. 'hello\nworld'
  */
 export const unescape = s => tdec.decode(new Uint8Array(str(s)))
+
+
+// AST traversal — every watr AST node is an s-expression array `[head, ...args]`.
+
+/**
+ * Deep clone an AST node.
+ * @param {any} node
+ * @returns {any}
+ */
+export const clone = (node) => Array.isArray(node) ? node.map(clone) : node
+
+/**
+ * Walk AST depth-first (pre-order), call fn on each node. Read-only.
+ * @param {any} node
+ * @param {Function} fn - (node, parent, idx) => void
+ * @param {any} [parent]
+ * @param {number} [idx]
+ */
+export const walk = (node, fn, parent, idx) => {
+  fn(node, parent, idx)
+  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walk(node[i], fn, node, i)
+}
+
+/**
+ * Walk AST depth-first (post-order): children are visited before their parent.
+ *
+ * A node is replaced either way a callback chooses to express it:
+ *   - return a new node — walkPost writes it into `parent[idx]`
+ *   - mutate `parent[idx]` in place and return undefined — walkPost leaves it
+ * so both the transforming (optimize) and mutating (polyfill) styles compose.
+ *
+ * @param {any} node
+ * @param {Function} fn - (node, parent, idx) => newNode | undefined
+ * @param {any} [parent]
+ * @param {number} [idx]
+ * @returns {any} The (possibly replaced) node
+ */
+export const walkPost = (node, fn, parent, idx) => {
+  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walkPost(node[i], fn, node, i)
+  const result = fn(node, parent, idx)
+  if (result !== undefined && parent) parent[idx] = result
+  return result !== undefined ? result : node
+}

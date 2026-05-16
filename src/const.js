@@ -174,6 +174,29 @@ export const INSTR = [
   ]
 ]
 
+/**
+ * Result value-type of an instruction, inferred from its name — the single
+ * source of truth for both constant folding and import type-inference.
+ * Comparisons and `eqz` on scalar int/float collapse to `i32`; otherwise the
+ * type is the name prefix (`i32.add`→`i32`, `f64.sqrt`→`f64`). Returns null
+ * when the type can't be inferred from the name alone.
+ *
+ * @param {string} op - Instruction name
+ * @returns {string|null}
+ */
+export const resultType = (op) => {
+  if (typeof op !== 'string') return null
+  const dot = op.indexOf('.')
+  if (dot < 0) return null
+  const prefix = op.slice(0, dot)
+  const scalar = prefix === 'i32' || prefix === 'i64' || prefix === 'f32' || prefix === 'f64'
+  // comparisons & eqz on scalar types yield i32 regardless of operand type
+  if (scalar && /^(eqz?|ne|[lg][te])(_[su])?$/.test(op.slice(dot + 1))) return 'i32'
+  if (scalar || prefix === 'v128') return prefix
+  if (op === 'memory.size' || op === 'memory.grow') return 'i32'
+  return null
+}
+
 // Binary section type codes
 export const SECTION = { custom: 0, type: 1, import: 2, func: 3, table: 4, memory: 5, tag: 13, strings: 14, global: 6, export: 7, start: 8, elem: 9, datacount: 12, code: 10, data: 11 }
 
