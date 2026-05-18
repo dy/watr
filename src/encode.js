@@ -129,7 +129,7 @@ const _u8 = new Uint8Array(_buf), _i32 = new Int32Array(_buf), _f32 = new Float3
 i64.parse = n => {
   n = cleanInt(n)
   const neg = n[0] === '-'
-  const body = neg ? n.slice(1) : n
+  const body = neg || n[0] === '+' ? n.slice(1) : n
   // Range check on the literal string before BigInt conversion (lexicographic compare on clean digits).
   let max
   if (body[0] === '0' && (body[1] === 'x' || body[1] === 'X')) {

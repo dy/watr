@@ -7,6 +7,7 @@
 
 import parse from './parse.js'
 import compile from './compile.js'
+import { i32, i64 } from './encode.js'
 import { walk, walkPost, clone } from './util.js'
 import { resultType } from './const.js'
 
@@ -397,8 +398,8 @@ const _parseNanF32 = (s, i = s?.indexOf?.('nan')) => {
 const getConst = (node) => {
   if (!Array.isArray(node) || node.length !== 2) return null
   const [op, val] = node
-  if (op === 'i32.const') return { type: 'i32', value: Number(val) | 0 }
-  if (op === 'i64.const') return { type: 'i64', value: BigInt(val) }
+  if (op === 'i32.const') return { type: 'i32', value: (typeof val === 'string' ? i32.parse(val) : val) | 0 }
+  if (op === 'i64.const') return { type: 'i64', value: typeof val === 'string' ? i64.parse(val) : BigInt(val) }
   if (op === 'f32.const') {
     const n = _parseNanF32(val)
     return { type: 'f32', value: n !== null ? n : Math.fround(Number(val)) }
@@ -1253,8 +1254,7 @@ const inline = (ast) => {
     }
 
     // Substitute params with args
-    const substituted = clone(body)
-    walkPost(substituted, (n) => {
+    const substituted = walkPost(clone(body), (n) => {
       if (!Array.isArray(n) || n[0] !== 'local.get') return
       const local = n[1]
       const paramIdx = params.findIndex(p => p.name === local)
@@ -1855,10 +1855,6 @@ const PEEPHOLE = {
   'i64.sub': (a, b) => equal(a, b) ? ['i64.const', 0n] : null,
   'i32.xor': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
   'i64.xor': (a, b) => equal(a, b) ? ['i64.const', 0n] : null,
-  'i32.and': (a, b) => equal(a, b) ? a : null,
-  'i64.and': (a, b) => equal(a, b) ? a : null,
-  'i32.or':  (a, b) => equal(a, b) ? a : null,
-  'i64.or':  (a, b) => equal(a, b) ? a : null,
   'i32.eq':  (a, b) => equal(a, b) ? ['i32.const', 1] : null,
   'i64.eq':  (a, b) => equal(a, b) ? ['i32.const', 1] : null,
   'i32.ne':  (a, b) => equal(a, b) ? ['i32.const', 0] : null,
@@ -1892,22 +1888,25 @@ const PEEPHOLE = {
     return null
   },
   'i32.and': (a, b) => {
+    if (equal(a, b)) return a
     const ca = getConst(a), cb = getConst(b)
     if (ca?.value === 0 || cb?.value === 0) return ['i32.const', 0]
-    // x & x → x handled above in self-operands, but null here lets that win
     return null
   },
   'i64.and': (a, b) => {
+    if (equal(a, b)) return a
     const ca = getConst(a), cb = getConst(b)
     if (ca?.value === 0n || cb?.value === 0n) return ['i64.const', 0n]
     return null
   },
   'i32.or': (a, b) => {
+    if (equal(a, b)) return a
     const ca = getConst(a), cb = getConst(b)
     if (ca?.value === -1 || cb?.value === -1) return ['i32.const', -1]
     return null
   },
   'i64.or': (a, b) => {
+    if (equal(a, b)) return a
     const ca = getConst(a), cb = getConst(b)
     if (ca?.value === -1n || cb?.value === -1n) return ['i64.const', -1n]
     return null

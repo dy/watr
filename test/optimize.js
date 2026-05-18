@@ -26,6 +26,17 @@ test('fold: i64 arithmetic', () => {
   assert(src.includes('i64.const 300'), 'should fold i64 100+200 to 300')
 })
 
+test('fold: signed hex integer literals', () => {
+  for (const [type, expr, expect] of [
+    ['i32', '(i32.add (i32.const -0x1) (i32.const 2))', 'i32.const 1'],
+    ['i64', '(i64.add (i64.const -0x1) (i64.const 1))', 'i64.const 0'],
+    ['i64', '(i64.add (i64.const +0x2) (i64.const 3))', 'i64.const 5'],
+  ]) {
+    const ast = parse(`(module (func (result ${type}) ${expr}))`)
+    assert(print(optimize(ast, 'fold')).includes(expect), `should fold ${expr}`)
+  }
+})
+
 test('fold: comparison', () => {
   const ast = parse('(module (func (result i32) (i32.lt_s (i32.const 1) (i32.const 2))))')
   const opt = optimize(ast, 'fold')
@@ -355,6 +366,17 @@ test('inline: with params', () => {
   const opt = optimize(ast, 'inline fold')
   const src = print(opt)
   assert(!src.includes('call $add1'), 'should inline parameterized call')
+})
+
+test('inline: bare param body substitutes at root', () => {
+  const ast = parse(`(module
+    (func $id (param $x i32) (result i32) (local.get $x))
+    (func (export "main") (result i32) (call $id (i32.const 42)))
+  )`)
+  const opt = optimize(ast, 'inline')
+  assert(!print(opt).includes('call $id'), 'call should be inlined')
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+  assert.equal(exports.main(), 42)
 })
 
 test('inline: preserves exports', () => {
@@ -1051,6 +1073,16 @@ test('peephole: x ^ x → 0', () => {
   const opt = optimize(ast, 'peephole')
   const src = print(opt)
   assert(src.includes('i32.const 0'), 'should fold x^x to 0')
+})
+
+test('peephole: idempotent bitwise ops', () => {
+  for (const [type, op] of [['i32', 'and'], ['i32', 'or'], ['i64', 'and'], ['i64', 'or']]) {
+    const instr = `${type}.${op}`
+    const ast = parse(`(module (func (param $x ${type}) (result ${type}) (${instr} (local.get $x) (local.get $x))))`)
+    const src = print(optimize(ast, 'peephole'))
+    assert(!src.includes(instr), `should remove ${instr} x x`)
+    assert(src.includes('local.get $x'), 'should keep the value')
+  }
 })
 
 test('peephole: x & 0 → 0', () => {
