@@ -35,6 +35,13 @@ test('fold: signed hex integer literals', () => {
     const ast = parse(`(module (func (result ${type}) ${expr}))`)
     assert(print(optimize(ast, 'fold')).includes(expect), `should fold ${expr}`)
   }
+  // Round-trip: a bare `-0x1` must survive parse → optimize → compile and
+  // evaluate to -1 at runtime. Guards getConst's negative-hex parse path so
+  // downstream emitters don't need the unsigned-hex workaround.
+  const ast = parse('(module (func (export "f") (result i64) (i64.const -0x1)))')
+  const opt = optimize(ast, 'fold propagate treeshake')
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+  assert.equal(exports.f(), -1n, '(i64.const -0x1) round-trips to -1')
 })
 
 test('fold: comparison', () => {
@@ -369,12 +376,17 @@ test('inline: with params', () => {
 })
 
 test('inline: bare param body substitutes at root', () => {
+  // The body is a single `(local.get $x)` — the root itself is what must be
+  // substituted with the const arg. If the inner walk drops the root replacement,
+  // the call site keeps an orphan `(local.get $x)` referencing a vanished param.
   const ast = parse(`(module
     (func $id (param $x i32) (result i32) (local.get $x))
     (func (export "main") (result i32) (call $id (i32.const 42)))
   )`)
-  const opt = optimize(ast, 'inline')
-  assert(!print(opt).includes('call $id'), 'call should be inlined')
+  const opt = optimize(ast, 'inline treeshake')
+  const src = print(opt)
+  assert(!src.includes('call $id'), 'call should be inlined')
+  assert(!src.includes('local.get $x'), 'no orphan param read left at the call site')
   const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
   assert.equal(exports.main(), 42)
 })
@@ -1477,6 +1489,24 @@ test('coalesce: read-in-set-rhs is recognized as read-first', () => {
   const opt = optimize(ast)
   const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
   assert.equal(exports.f(), 1, 'read-first local must not inherit prior slot residue')
+})
+
+test('inlineOnce+coalesce: zero-dependent callee local not merged into residue slot', () => {
+  // inlineOnce hoists the callee's `$accum` into the caller's frame. Because
+  // the body opens with a read of `$accum`, it depends on the per-call implicit
+  // zero — coalesceLocals must not share its slot with `$tmp` (residue = 99),
+  // or the inlined read sees 99 instead of 0 and returns 100 instead of 1.
+  const src = `(module
+    (func $helper (param $arg i32) (result i32) (local $accum i32)
+      (local.set $accum (i32.add (local.get $accum) (local.get $arg)))
+      (local.get $accum))
+    (func (export "f") (result i32) (local $tmp i32)
+      (local.set $tmp (i32.const 99))
+      (drop (local.get $tmp))
+      (call $helper (i32.const 1))))`
+  const opt = optimize(parse(src), { inlineOnce: true, coalesce: true, propagate: false, treeshake: true })
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+  assert.equal(exports.f(), 1, 'hoisted callee local must keep its zero init')
 })
 
 test('coalesce: skips locals first referenced inside if/else', () => {
