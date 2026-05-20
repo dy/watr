@@ -13,20 +13,28 @@ import { err, unescape, str } from './util.js'
  * @param {Array} [result] - Internal accumulator
  * @returns {any} Cleaned node
  */
-const cleanup = (node, result) => !Array.isArray(node) ? (
-  typeof node !== 'string' ? node :
-  // skip comments: ;; ... or (; ... ;)
-  node[0] === ';' || node[1] === ';' ? null :
-  // normalize quoted ids: $"name" -> $name (if no escapes), else $unescaped
-  node[0] === '$' && node[1] === '"' ? (node.includes('\\') ? '$' + unescape(node.slice(1)) : '$' + node.slice(2, -1)) :
-  // convert string literals to byte arrays with valueOf
-  node[0] === '"' ? str(node) :
-  node
-) :
-  // remove annotations like (@name ...) except @custom and @metadata.code.*
-  node[0]?.[0] === '@' && node[0] !== '@custom' && !node[0]?.startsWith?.('@metadata.code.') ? null :
-  // unwrap single-element array containing module (after removing comments), preserve .loc
-  (result = node.map(cleanup).filter(n => n != null), result.loc = node.loc, result.length === 1 && result[0]?.[0] === 'module' ? result[0] : result)
+// Comments (;; … or (; … ;)) and non-custom (@…) annotations carry no semantic
+// load past parse — strip them. Predicate stays separate from `cleanup` so
+// neither has to invent a "drop me" sentinel and risk colliding with a
+// legitimate `null`/`undefined` immediate in the AST.
+const isDroppable = (n) =>
+  (typeof n === 'string' && (n[0] === ';' || n[1] === ';')) ||
+  (Array.isArray(n) && n[0]?.[0] === '@' && n[0] !== '@custom' && !n[0]?.startsWith?.('@metadata.code.'))
+
+const cleanup = (node, result) => {
+  if (typeof node === 'string') return (
+    // normalize quoted ids: $"name" -> $name (if no escapes), else $unescaped
+    node[0] === '$' && node[1] === '"' ? (node.includes('\\') ? '$' + unescape(node.slice(1)) : '$' + node.slice(2, -1)) :
+    // convert string literals to byte arrays with valueOf
+    node[0] === '"' ? str(node) :
+    node
+  )
+  if (!Array.isArray(node)) return node
+  result = node.filter(c => !isDroppable(c)).map(cleanup)
+  result.loc = node.loc
+  // unwrap single-element array containing module (after dropping comments), preserve .loc
+  return result.length === 1 && result[0]?.[0] === 'module' ? result[0] : result
+}
 
 
 /**
@@ -41,7 +49,7 @@ export default function compile(nodes) {
   else err.src = '' // clear source if AST passed directly
   err.loc = 0
 
-  nodes = cleanup(nodes) || []
+  nodes = isDroppable(nodes) ? [] : (cleanup(nodes) ?? [])
 
   let idx = 0
 

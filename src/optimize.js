@@ -868,6 +868,23 @@ const readsMemory = (node) => {
   return false
 }
 
+/** True if `node` references state a `call` could mutate.
+ *  Calls cannot touch caller locals (those live in the function frame), so
+ *  pure expressions over locals + constants survive any intervening call; only
+ *  memory loads, global reads, and table reads (or further calls) can be stale
+ *  after one. */
+const readsCallableState = (node) => {
+  if (!Array.isArray(node)) return false
+  const op = node[0]
+  if (typeof op === 'string') {
+    if (op === 'global.get' || op === 'table.get' || op === 'table.size') return true
+    if (op === 'call' || op === 'call_indirect' || op === 'return_call' || op === 'return_call_indirect') return true
+    if (op.includes('.load') || op === 'memory.copy' || op === 'memory.size') return true
+  }
+  for (let i = 1; i < node.length; i++) if (readsCallableState(node[i])) return true
+  return false
+}
+
 /** True if `node` recursively contains an op that may write linear memory. */
 const writesMemory = (node) => {
   if (!Array.isArray(node)) return false
@@ -959,6 +976,15 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       // back so the bare-RHS pattern actually propagates.
       const sr = substGets(instr[2], known)
       if (sr !== instr[2]) { instr[2] = sr; changed = true }
+      // Nested `local.set`/`local.tee` inside the RHS already ran when the next
+      // statement begins — drop tracked values that read those locals, else a
+      // later `local.get` substitutes a stale expression (e.g. `$ptr`'s
+      // `(local.get $ai0)` after a nested `(local.tee $ai0 …)` overwrites it).
+      walk(instr[2], n => {
+        if (!Array.isArray(n)) return
+        if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string')
+          { known.delete(n[1]); purgeRefs(known, n[1]) }
+      })
       const uses = getUseCount(instr[1])
       purgeRefs(known, instr[1]) // entries that read this local just went stale
       // Any tracked value whose RHS reads memory must be invalidated by the
@@ -977,9 +1003,11 @@ const forwardPropagate = (funcNode, params, useCounts) => {
 
     // Invalidate at control-flow boundaries
     if (op === 'block' || op === 'loop' || op === 'if') known.clear()
-    // Calls only invalidate non-constant tracked values
+    // Calls invalidate tracked values that read state a callee can mutate
+    // (memory, globals, tables, nested calls). Pure expressions over locals
+    // and constants survive — callees can't reach caller locals.
     if (op === 'call' || op === 'call_indirect' || op === 'return_call' || op === 'return_call_indirect')
-      for (const [key, tracked] of known) if (!getConst(tracked.val)) known.delete(key)
+      for (const [key, tracked] of known) if (readsCallableState(tracked.val)) known.delete(key)
 
     // Substitute: standalone local.get (walkPost can't replace root)
     if (op === 'local.get' && instr.length === 2 && typeof instr[1] === 'string') {

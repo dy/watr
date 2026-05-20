@@ -663,6 +663,25 @@ test('propagate: inlines pure single-use local', () => {
   assert(src.includes('i32.mul'), 'should keep the mul')
 })
 
+test('propagate: local.get tracked value survives an intervening call', () => {
+  // `(local.set $copy (local.get $x))` followed by a call should still let
+  // $copy propagate — callees can't touch caller locals, so the tracked
+  // (local.get $x) is still valid after the call.
+  const ast = parse(`(module
+    (func $noop)
+    (func (export "f") (result i32)
+      (local $x i32) (local $copy i32)
+      (local.set $x (i32.const 42))
+      (local.set $copy (local.get $x))
+      (call $noop)
+      (local.get $copy)))`)
+  const opt = optimize(ast, 'propagate treeshake')
+  const src = print(opt)
+  assert(!src.includes('$copy'), 'single-use $copy should be propagated through the call')
+  const inst = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)), {})
+  assert.strictEqual(inst.exports.f(), 42)
+})
+
 test('propagate: does not inline impure single-use', () => {
   // call is impure → must not inline
   const ast = parse(`(module
@@ -812,6 +831,28 @@ test('propagate: tiny-const not leaked across sibling local.tee', () => {
   // arg1 evaluates to 40<<3=320 and tees $x=320; arg2 reads tee'd $x=320.
   // Result must be 320+320=640. A leak gives 320+40=360.
   assert.strictEqual(inst.exports.f(), 640)
+})
+
+test('propagate: tracked value invalidated by nested local.tee in next statement RHS', () => {
+  // Forward propagation tracks `$ptr`'s value `(i64.reinterpret_f64 (local.get $ai0))`.
+  // The next statement's RHS contains a nested `(local.tee $ai0 …)` that overwrites
+  // `$ai0` before producing its result. Without invalidating tracked values that
+  // read `$ai0`, propagate would later inline `$ptr`'s stale expression at its use
+  // site — substituting the now-overwritten `$ai0`, yielding a wrong address (the
+  // jz bytebeat "FM Arpeggio" miscompile: OOB at runtime).
+  const ast = parse(`(module
+    (memory (export "memory") 1)
+    (func (export "f") (result i64)
+      (local $ai0 f64) (local $ptr i64) (local $idx i32)
+      (local.set $ai0 (f64.const nan:0x7FF8800000000048))
+      (local.set $ptr (i64.reinterpret_f64 (local.get $ai0)))
+      (local.set $idx (i32.wrap_i64 (i64.trunc_sat_f64_s
+        (local.tee $ai0 (f64.const 1.5)))))
+      (local.get $ptr)))`)
+  const opt = optimize(ast, 'propagate')
+  const inst = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)), {})
+  assert.strictEqual(inst.exports.f(), 0x7FF8800000000048n,
+    '$ptr must keep the sentinel bits captured before the nested tee overwrote $ai0')
 })
 
 test('propagate+coalesce+inlineOnce+mergeBlocks: combined passes preserve semantics', () => {

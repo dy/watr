@@ -58,7 +58,7 @@ export default function print(tree, options = {}) {
     let curIndent = indent.repeat(level + 1)
 
     for (let i = 1; i < node.length; i++) {
-      const sub = node[i].valueOf() // "\00abc\ff" strings are stored as arrays but have ._ with original value
+      const sub = node[i]?.valueOf?.() ?? node[i] // "\00abc\ff" strings are stored as arrays but have ._ with original value
 
       // comments - skip if not enabled
       if (typeof sub === 'string' && sub[1] === ';') {
