@@ -2945,9 +2945,14 @@ export default function optimize(ast, opts = true) {
   // node-count guard can't tell when a round bloated — or shrank. `binarySize`
   // also returns Infinity if a round produced invalid wat, so a broken round
   // reverts instead of escaping.
+  //
+  // A round's starting size always equals the previous round's ending size —
+  // the AST is untouched between iterations — so carry it forward and compile
+  // once per round instead of twice. `binarySize` is a full compile and by far
+  // the hottest thing in this loop, so halving the count of them matters.
+  let sizeBefore = binarySize(ast)
   for (let round = 0; round < 3; round++) {
     beforeRound = clone(ast)
-    const sizeBefore = binarySize(ast)
 
     for (const [key, fn] of PASSES) if (opts[key]) ast = fn(ast)
     // Second propagate sweep: `inlineOnce`/`inline` (above) leave fresh
@@ -2956,6 +2961,11 @@ export default function optimize(ast, opts = true) {
     // guard scores the cleaned result instead of waiting a round (which it may
     // never get if `equal()` declares a fixpoint first).
     if (opts.propagate && (opts.inlineOnce || opts.inline)) ast = propagate(ast)
+
+    // A round that changed nothing can't have inflated, so the convergence
+    // check goes before the compile — the final, fixpoint-confirming round
+    // (the common exit) then costs zero compiles instead of one.
+    if (equal(beforeRound, ast)) break
 
     const sizeAfter = binarySize(ast)
     const delta = sizeAfter - sizeBefore
@@ -2973,7 +2983,7 @@ export default function optimize(ast, opts = true) {
       break
     }
 
-    if (equal(beforeRound, ast)) break
+    sizeBefore = sizeAfter // this round's result is next round's baseline
   }
 
   return ast
