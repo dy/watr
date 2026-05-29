@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v4.7.0
 
+### Fixed
+
+- **`optimize`: `branch` preserves the block type when folding a constant
+  `if`.** Collapsing `(if (result T) <const-cond> (then …) (else …))` to the
+  taken branch dropped the `(result T)` (and any `(param …)`), so a branch that
+  leaves a value on the stack became a void `(block …)` — the value then dangled
+  past the block, producing invalid wasm (`expected 0 elements on the stack for
+  fallthru, found 1`). The folded branch now keeps the `if`'s block type. Surfaces
+  on a typed `if` whose taken arm yields a value, e.g. a `Math.min`-style
+  `(block (result f64) … (select …))` under an always-true condition.
+
 ### Added
 
 - **`optimize`: `loopify` pass** (on by default) — collapses the canonical
