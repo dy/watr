@@ -1995,7 +1995,7 @@ const devirt = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
   // Module facts: elem slot → func name (constant offsets only), type defs,
   // named funcs. Bail on dynamic elem offsets or table mutation anywhere.
-  const slots = new Map(), typeDefs = new Map(), funcsByName = new Map()
+  const slots = new Map(), typeDefs = new Map(), funcsByName = new Map(), allFuncs = []
   let tableMutated = false
   walk(ast, n => {
     if (Array.isArray(n) && typeof n[0] === 'string' &&
@@ -2013,7 +2013,7 @@ const devirt = (ast) => {
         if (typeof node[i] === 'string' && node[i][0] === '$') slots.set(base++, node[i])
     }
     else if (node[0] === 'type' && typeof node[1] === 'string') typeDefs.set(node[1], node[2])
-    else if (node[0] === 'func' && typeof node[1] === 'string') funcsByName.set(node[1], node)
+    else if (node[0] === 'func') { allFuncs.push(node); if (typeof node[1] === 'string') funcsByName.set(node[1], node) }
   }
   if (!slots.size) return ast
 
@@ -2148,7 +2148,7 @@ const devirt = (ast) => {
     return ps.join(',') + '->' + rs.join(',')
   }
 
-  for (const fn of funcsByName.values()) {
+  for (const fn of allFuncs) {   // rewrite call_indirect in EVERY func, named or not
     // Candidate sets: local → Map<bits, constNode>, or null once poisoned.
     // Params are poisoned (incoming value unknown).
     const cands = new Map()
@@ -3744,14 +3744,14 @@ const reorder = (ast) => {
 const PASSES = [
   ['stripmut',      stripmut,       true,  'strip mut from never-written globals'],
   ['globals',       globals,        true,  'propagate immutable global constants'],
-  ['guardRefine',   guardRefine,    true,  'fold NaN-box tag reads under dominating tag guards'],
+  ['guardRefine',   guardRefine,    false, 'fold NaN-box tag reads under dominating tag guards (jz NaN-box-specific; opt-in)'],
   ['fold',          fold,           true,  'constant folding'],
   ['identity',      identity,       true,  'remove identity ops (x + 0 → x)'],
   ['peephole',      peephole,       true,  'x-x→0, x&0→0, etc.'],
   ['strength',      strength,       true,  'strength reduction (x * 2 → x << 1)'],
   ['branch',        branch,         true,  'simplify constant branches'],
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
-  ['devirt',        devirt,         false, 'call_indirect with known closure constants → guarded direct calls — grows bytes for speed'],
+  ['devirt',        devirt,         false, 'call_indirect with a constant or known closure-const index → direct/guarded calls — grows bytes for speed'],
   ['inlineOnce',    inlineOnce,     true,  'inline single-call functions into their lone caller (never duplicates)'],
   ['inline',        inline,         false, 'inline tiny functions — can duplicate bodies'],
   ['offset',        offset,         true,  'fold add+const into load/store offset'],

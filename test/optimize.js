@@ -2313,3 +2313,42 @@ test('optimize never inflates the binary (default size contract)', () => {
     assert(after <= before, `optimize inflated ${before}→${after} bytes for: ${m.replace(/\s+/g, ' ').slice(0, 60)}…`)
   }
 })
+
+// ── devirt: general constant-index call_indirect → direct call ───────────────
+test('devirt: constant-index call_indirect becomes a direct call', () => {
+  const src = `(module
+    (type $bin (func (param i32 i32) (result i32)))
+    (table 2 funcref)
+    (elem (i32.const 0) $add $sub)
+    (func $add (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))
+    (func $sub (param i32 i32) (result i32) (i32.sub (local.get 0) (local.get 1)))
+    (func (export "f") (result i32) (call_indirect (type $bin) (i32.const 10) (i32.const 3) (i32.const 0)))
+    (func (export "g") (result i32) (call_indirect (type $bin) (i32.const 10) (i32.const 3) (i32.const 1))))`
+  const opt = optimize(parse(src), 'devirt')
+  const out = print(opt)
+  assert(!out.includes('call_indirect'), 'both constant-index calls devirtualized')
+  assert(out.includes('(call $add'), 'slot 0 → direct $add')
+  assert(out.includes('(call $sub'), 'slot 1 → direct $sub')
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+  assert.equal(exports.f(), 13, 'add(10,3)')
+  assert.equal(exports.g(), 7, 'sub(10,3)')
+})
+
+test('devirt: leaves dynamic and signature-mismatched indices alone (sound)', () => {
+  // Non-constant index → must stay a call_indirect.
+  const dyn = `(module
+    (type $un (func (param i32) (result i32)))
+    (table 1 funcref) (elem (i32.const 0) $id)
+    (func $id (param i32) (result i32) (local.get 0))
+    (func (export "f") (param i32) (result i32) (call_indirect (type $un) (i32.const 5) (local.get 0))))`
+  assert(print(optimize(parse(dyn), 'devirt')).includes('call_indirect'), 'dynamic index not devirtualized')
+  // Constant index but the type at the call site disagrees with the target's sig
+  // → must NOT rewrite (would be unsound / wrong call).
+  const mism = `(module
+    (type $bin (func (param i32 i32) (result i32)))
+    (type $un (func (param i32) (result i32)))
+    (table 1 funcref) (elem (i32.const 0) $bin2)
+    (func $bin2 (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))
+    (func (export "f") (param i32) (result i32) (call_indirect (type $un) (local.get 0) (i32.const 0))))`
+  assert(print(optimize(parse(mism), 'devirt')).includes('call_indirect'), 'signature-mismatched index not devirtualized')
+})
