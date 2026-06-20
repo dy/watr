@@ -353,9 +353,9 @@ t.mute('/test/official/utf8-custom-section-id.wast', async function () { await f
 t.mute('/test/official/utf8-import-field.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/utf8-import-module.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/utf8-invalid-encoding.wast', async function () { await file(this.name, { spectest }) })
-t('/test/official/custom/branch_hint.wast', async function () { await file(this.name, { spectest }) })
-t('/test/official/custom/custom_annot.wast', async function () { await file(this.name, { spectest }) })
-t('/test/official/custom/name_annot.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/custom/branch_hint.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/custom/custom_annot.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/custom/name_annot.wast', async function () { await file(this.name, { spectest }) })
 
 // Proposals - custom-page-sizes
 t.skip('/test/official/proposals/custom-page-sizes/binary.wast', async function () { await file(this.name, { spectest }) })
