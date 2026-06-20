@@ -1,15 +1,54 @@
 /**
- * AST optimizations for WebAssembly modules.
- * Reduces code size and improves runtime performance.
+ * WAT AST optimizer — size/runtime passes over watr's s-expression IR.
  *
- * @module watr/optimize
+ * jz owns its optimizer; watr is used *only* as the WAT→binary encoder.
+ * Pairs with src/optimize/ (jz-IR-level) — folder context disambiguates.
+ *
+ * @module wat/optimize
  */
 
-import parse from './parse.js'
 import compile from './compile.js'
-import { i32, i64 } from './encode.js'
-import { walk, walkPost, clone } from './util.js'
-import { resultType } from './const.js'
+import parse from './parse.js'
+
+// Fixpoint round caps — empirical convergence bounds, not correctness limits.
+// Each pass only makes monotonic progress, so hitting a cap merely leaves a few
+// residual simplifications for the next compile rather than producing wrong output.
+const MAX_PROP_ROUNDS = 6     // forward-prop / set-get / tee fixpoint per scope
+const MAX_INLINE_ROUNDS = 16  // single-caller inline-chain depth (deep generated stdlib)
+
+// === WAT optimizer passes ===
+
+// — AST helpers (formerly watr/util.js) — every node is an s-expression
+// array `[head, ...args]`; non-arrays are immediates.
+const clone = (node) => Array.isArray(node) ? node.map(clone) : node
+
+/** Walk depth-first pre-order, read-only. fn(node, parent, idx). */
+const walk = (node, fn, parent, idx) => {
+  fn(node, parent, idx)
+  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walk(node[i], fn, node, i)
+}
+
+/** Walk depth-first post-order. fn may return a replacement node or mutate in place. */
+const walkPost = (node, fn, parent, idx) => {
+  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walkPost(node[i], fn, node, i)
+  const result = fn(node, parent, idx)
+  if (result !== undefined && parent) parent[idx] = result
+  return result !== undefined ? result : node
+}
+
+/** Result value type of an op from its name prefix (formerly watr/const.js).
+ *  Comparisons/eqz on scalar int/float collapse to i32; else the name prefix. */
+const resultType = (op) => {
+  if (typeof op !== 'string') return null
+  const dot = op.indexOf('.')
+  if (dot < 0) return null
+  const prefix = op.slice(0, dot)
+  const scalar = prefix === 'i32' || prefix === 'i64' || prefix === 'f32' || prefix === 'f64'
+  if (scalar && /^(eqz?|ne|[lg][te])(_[su])?$/.test(op.slice(dot + 1))) return 'i32'
+  if (scalar || prefix === 'v128') return prefix
+  if (op === 'memory.size' || op === 'memory.grow') return 'i32'
+  return null
+}
 
 /**
  * Recursively count AST nodes — fast size heuristic without compiling.
@@ -234,14 +273,86 @@ const treeshake = (ast) => {
 const roundEven = (x) => x - Math.floor(x) !== 0.5 ? Math.round(x) : 2 * Math.round(x / 2)
 
 // Bit-exact reinterpret helpers (preserve NaN payloads).
+//
+// SELF-HOST CONTRACT: this file runs inside the jz kernel, whose BigInt is a
+// raw mod-2^64 i64 carrier — BigInt64Array views are a legacy f64-value shim
+// (reads return the FLOAT, not the bits), decimal stringification of >2^53
+// values and asIntN/asUintN are unfaithful, and adding 2^64 wraps to +0.
+// Everything here therefore sticks to the verified-faithful surface:
+// Uint32Array aliasing, hex toString(16)/parseInt(,16)/padStart, BigInt('0x…')
+// construction, BigInt ===/< comparison, and string arithmetic for two's
+// complement. The signed canonicalization `v > MAX_I64 → v − 2^64` is exact
+// natively AND a no-op in-kernel (2^64 ≡ 0 there) — correct in both worlds.
 const _rb8 = new ArrayBuffer(8)
 const _rf64 = new Float64Array(_rb8)
-const _ri64 = new BigInt64Array(_rb8)
+const _ru32 = new Uint32Array(_rb8)   // LE halves: [0]=lo, [1]=hi
 const _rb4 = new ArrayBuffer(4)
 const _rf32 = new Float32Array(_rb4)
 const _ri32 = new Int32Array(_rb4)
-const i64FromF64 = (x) => { _rf64[0] = x; return _ri64[0] }
-const f64FromI64 = (x) => { _ri64[0] = BigInt.asIntN(64, x); return _rf64[0] }
+const _hex8 = (u) => (u >>> 0).toString(16).padStart(8, '0')
+/** Two's complement of a 16-digit hex magnitude — pure string math. */
+const _twosComp16 = (mag) => {
+  let out = '', carry = 1
+  for (let i = 15; i >= 0; i--) {
+    const d = (15 - parseInt(mag[i], 16)) + carry
+    out = (d & 15).toString(16) + out
+    carry = d >> 4
+  }
+  return out
+}
+/** Bits of an i64 BigInt (any sign) as a 16-digit hex string. Takes BigInt,
+ *  returns STRING — safe to call across kernel function boundaries (strings
+ *  are tagged; raw BigInts lose their kind at returns/polymorphic slots). */
+const _i64Hex16 = (v) => {
+  const h = v.toString(16)
+  return h[0] === '-' ? _twosComp16(h.slice(1).padStart(16, '0')) : h.padStart(16, '0')
+}
+// ============================== i64 VALUE CONTRACT ==========================
+// Within this optimizer an i64 const VALUE is the canonical STRING
+// '0x' + 16 lowercase hex digits (the raw bits). Strings survive every kernel
+// boundary; a BigInt held in a polymorphic slot ({type,value}), an untyped
+// param, or a return value is kind-erased in-kernel and every subsequent
+// BigInt op on it misdispatches. BigInt math is constructed AND consumed
+// inside single folder bodies only; folders return hex strings (or null).
+const ZERO64 = '0x0000000000000000', ONE64 = '0x0000000000000001', NEG164 = '0xffffffffffffffff'
+/** Canonicalize any i64.const node value (number | decimal/hex string | bigint).
+ *  EVERY _i64Hex16 argument here is a freshly-constructed BigInt: passing the
+ *  raw polymorphic `val` through would poison _i64Hex16's param kind for ALL
+ *  callers in-kernel (param types are per-function — one kind-erased call site
+ *  degrades v.toString(16) to dynamic dispatch on raw bits everywhere). */
+const _i64Canon = (val) => {
+  if (typeof val === 'string') {
+    const s = val.replaceAll('_', '')
+    if (s.length === 18 && s[1] === 'x') return '0x' + s.slice(2).toLowerCase()
+    // BigInt() rejects signed-hex ('-0x1' / '+0x2'); split the sign off the magnitude.
+    const neg = s[0] === '-', mag = (s[0] === '-' || s[0] === '+') ? s.slice(1) : s
+    return '0x' + _i64Hex16(neg ? -BigInt(mag) : BigInt(mag))
+  }
+  // bigint stragglers (native-only defensive) route through String → fresh BigInt.
+  if (typeof val === 'bigint') return '0x' + _i64Hex16(BigInt(String(val)))
+  return '0x' + _i64Hex16(BigInt(Math.trunc(val) || 0))
+}
+/** Signed-order key: flip the sign bit, then equal-length hex compares
+ *  lexicographically in signed order. Pure strings — kernel-safe. */
+const _sb = (h) => (parseInt(h[2], 16) ^ 8).toString(16) + h.slice(3)
+/** Hex-string i64 ops used by several folders — all pure string/number math. */
+const _i64Lo = (h) => parseInt(h.slice(10), 16) | 0
+const _i64HiU = (h) => parseInt(h.slice(2, 10), 16) >>> 0
+/** Hex-encode an i64 fold result (BigInt, any sign/world — see folder note). */
+const _i64Arith = (r) => r == null ? null : '0x' + _i64Hex16(r)
+/** SIGNED i64 BigInt from canon hex — exact natively; the subtract arm is
+ *  dead in-kernel, where BigInt('0x…') already arrives as the signed carrier. */
+const _sgn = (h) => {
+  let v = BigInt(h)
+  if (v > 0x7fffffffffffffffn) v = v - 0x8000000000000000n - 0x8000000000000000n
+  return v
+}
+const i64FromF64 = (x) => { _rf64[0] = x; return '0x' + _hex8(_ru32[1]) + _hex8(_ru32[0]) }
+const f64FromI64 = (h) => {
+  _ru32[1] = parseInt(h.slice(2, 10), 16)
+  _ru32[0] = parseInt(h.slice(10), 16)
+  return _rf64[0]
+}
 const i32FromF32 = (x) => { _rf32[0] = x; return _ri32[0] }
 const f32FromI32 = (x) => { _ri32[0] = x | 0; return _rf32[0] }
 
@@ -249,10 +360,10 @@ const f32FromI32 = (x) => { _ri32[0] = x | 0; return _rf32[0] }
 const i32c = (fn) => (a, b) => fn(a, b) ? 1 : 0
 /** Build unsigned i32 comparison folder */
 const u32c = (fn) => (a, b) => fn(a >>> 0, b >>> 0) ? 1 : 0
-/** Build i64 comparison folder */
-const i64c = (fn) => (a, b) => fn(a, b) ? 1 : 0
-/** Build unsigned i64 comparison folder */
-const u64c = (fn) => (a, b) => fn(BigInt.asUintN(64, a), BigInt.asUintN(64, b)) ? 1 : 0
+/** Signed i64 comparison folder — biased-hex lexicographic (kernel-safe). */
+const i64c = (fn) => (a, b) => fn(_sb(a), _sb(b)) ? 1 : 0
+/** Unsigned i64 comparison folder — canonical hex compares lexicographically. */
+const u64c = (fn) => (a, b) => fn(a, b) ? 1 : 0
 
 /**
  * Constant folders, keyed by op. Each entry is the fold function; the result
@@ -289,26 +400,48 @@ const FOLDABLE = {
   'i32.clz':   (a) => Math.clz32(a),
   'i32.ctz':   (a) => a === 0 ? 32 : 31 - Math.clz32(a & -a),
   'i32.popcnt': (a) => { let c = 0; while (a) { c += a & 1; a >>>= 1 } return c },
-  'i32.wrap_i64':   (a) => Number(BigInt.asIntN(32, a)),
+  'i32.wrap_i64':   (a) => _i64Lo(a),
   'i32.extend8_s':  (a) => (a << 24) >> 24,
   'i32.extend16_s': (a) => (a << 16) >> 16,
 
-  // i64 (using BigInt)
-  'i64.add': (a, b) => BigInt.asIntN(64, a + b),
-  'i64.sub': (a, b) => BigInt.asIntN(64, a - b),
-  'i64.mul': (a, b) => BigInt.asIntN(64, a * b),
-  'i64.div_s': (a, b) => b !== 0n ? BigInt.asIntN(64, a / b) : null,
-  'i64.div_u': (a, b) => b !== 0n ? BigInt.asUintN(64, BigInt.asUintN(64, a) / BigInt.asUintN(64, b)) : null,
-  'i64.rem_s': (a, b) => b !== 0n ? BigInt.asIntN(64, a % b) : null,
-  'i64.rem_u': (a, b) => b !== 0n ? BigInt.asUintN(64, BigInt.asUintN(64, a) % BigInt.asUintN(64, b)) : null,
-  'i64.and': (a, b) => BigInt.asIntN(64, a & b),
-  'i64.or':  (a, b) => BigInt.asIntN(64, a | b),
-  'i64.xor': (a, b) => BigInt.asIntN(64, a ^ b),
-  'i64.shl':   (a, b) => BigInt.asIntN(64, a << (b & 63n)),
-  'i64.shr_s': (a, b) => BigInt.asIntN(64, a >> (b & 63n)),
-  'i64.shr_u': (a, b) => BigInt.asUintN(64, BigInt.asUintN(64, a) >> (b & 63n)),
-  'i64.eq':   i64c((a, b) => a === b),
-  'i64.ne':   i64c((a, b) => a !== b),
+  // i64 — hex-string in, hex-string out, BOTH-WORLDS-EXACT arithmetic.
+  // BigInts construct locally (in-expression — kernel kind erasure never
+  // applies), but two further kernel facts shape every folder:
+  //   (1) the kernel's BigInt is the mod-2^64 i64 CARRIER: BigInt('0xffff…')
+  //       arrives NEGATIVE there, so sign-sensitive ops (>>, /, %, unsigned
+  //       division) diverge unless the value is sign-canonicalized first;
+  //   (2) BigInt.asIntN/asUintN are unfaithful in-kernel — never used.
+  // Ring ops {+,−,×,&,|,^,<<} are mod-2^64-compatible: compute then mask with
+  // `& 0xffffffffffffffffn` (native: the wrap; kernel: AND with −1 ≡ no-op).
+  // `_sgn` yields the SIGNED value in both worlds (the subtract arm is dead
+  // in-kernel — same dead-arm trick as slebSize). shr_u is pure u32-half
+  // number math. div_u/rem_u fold only below 2^63 (signed==unsigned there);
+  // above, they skip — sound degradation, never a wrong constant.
+  'i64.add': (a, b) => _i64Arith((BigInt(a) + BigInt(b)) & 0xffffffffffffffffn),
+  'i64.sub': (a, b) => _i64Arith((BigInt(a) - BigInt(b)) & 0xffffffffffffffffn),
+  'i64.mul': (a, b) => _i64Arith((BigInt(a) * BigInt(b)) & 0xffffffffffffffffn),
+  'i64.div_s': (a, b) => b !== ZERO64 && !(a === '0x8000000000000000' && b === NEG164)
+    ? _i64Arith((_sgn(a) / _sgn(b)) & 0xffffffffffffffffn) : null,
+  'i64.div_u': (a, b) => b !== ZERO64 && !(_i64HiU(a) >>> 31) && !(_i64HiU(b) >>> 31)
+    ? _i64Arith(BigInt(a) / BigInt(b)) : null,
+  'i64.rem_s': (a, b) => b !== ZERO64
+    ? _i64Arith((_sgn(a) % _sgn(b)) & 0xffffffffffffffffn) : null,
+  'i64.rem_u': (a, b) => b !== ZERO64 && !(_i64HiU(a) >>> 31) && !(_i64HiU(b) >>> 31)
+    ? _i64Arith(BigInt(a) % BigInt(b)) : null,
+  'i64.and': (a, b) => _i64Arith(BigInt(a) & BigInt(b) & 0xffffffffffffffffn),
+  'i64.or':  (a, b) => _i64Arith((BigInt(a) | BigInt(b)) & 0xffffffffffffffffn),
+  'i64.xor': (a, b) => _i64Arith((BigInt(a) ^ BigInt(b)) & 0xffffffffffffffffn),
+  'i64.shl':   (a, b) => _i64Arith((BigInt(a) << (BigInt(b) & 63n)) & 0xffffffffffffffffn),
+  'i64.shr_s': (a, b) => _i64Arith((_sgn(a) >> (BigInt(b) & 63n)) & 0xffffffffffffffffn),
+  'i64.shr_u': (a, b) => {
+    const s = parseInt(b.slice(10), 16) & 63
+    const hi = _i64HiU(a), lo = parseInt(a.slice(10), 16) >>> 0
+    const rh = s >= 32 ? 0 : hi >>> s
+    const rl = s === 0 ? lo : s >= 32 ? hi >>> (s - 32) : ((lo >>> s) | (hi << (32 - s))) >>> 0
+    return '0x' + _hex8(rh) + _hex8(rl)
+  },
+  'i64.eq':   (a, b) => a === b ? 1 : 0,
+  'i64.ne':   (a, b) => a !== b ? 1 : 0,
   'i64.lt_s': i64c((a, b) => a < b),
   'i64.lt_u': u64c((a, b) => a < b),
   'i64.gt_s': i64c((a, b) => a > b),
@@ -317,12 +450,12 @@ const FOLDABLE = {
   'i64.le_u': u64c((a, b) => a <= b),
   'i64.ge_s': i64c((a, b) => a >= b),
   'i64.ge_u': u64c((a, b) => a >= b),
-  'i64.eqz': (a) => a === 0n ? 1 : 0,
-  'i64.extend_i32_s': (a) => BigInt(a),
-  'i64.extend_i32_u': (a) => BigInt(a >>> 0),
-  'i64.extend8_s':    (a) => BigInt.asIntN(64, BigInt.asIntN(8, a)),
-  'i64.extend16_s':   (a) => BigInt.asIntN(64, BigInt.asIntN(16, a)),
-  'i64.extend32_s':   (a) => BigInt.asIntN(64, BigInt.asIntN(32, a)),
+  'i64.eqz': (a) => a === ZERO64 ? 1 : 0,
+  'i64.extend_i32_s': (a) => '0x' + _hex8(a >> 31) + _hex8(a),
+  'i64.extend_i32_u': (a) => '0x00000000' + _hex8(a),
+  'i64.extend8_s':  (a) => { const v = (_i64Lo(a) << 24) >> 24; return '0x' + _hex8(v >> 31) + _hex8(v) },
+  'i64.extend16_s': (a) => { const v = (_i64Lo(a) << 16) >> 16; return '0x' + _hex8(v >> 31) + _hex8(v) },
+  'i64.extend32_s': (a) => { const v = _i64Lo(a); return '0x' + _hex8(v >> 31) + _hex8(v) },
 
   // f32/f64 (NaN/precision-aware via Math.fround)
   'f32.add': (a, b) => Math.fround(a + b),
@@ -358,12 +491,14 @@ const FOLDABLE = {
   // Numeric conversions (value-preserving where representable)
   'f32.convert_i32_s': (a) => Math.fround(a | 0),
   'f32.convert_i32_u': (a) => Math.fround(a >>> 0),
-  'f32.convert_i64_s': (a) => Math.fround(Number(BigInt.asIntN(64, a))),
-  'f32.convert_i64_u': (a) => Math.fround(Number(BigInt.asUintN(64, a))),
+  // (hi|0)·2^32 + lo is the exact signed value with ONE rounding at the add —
+  // correct f64 conversion semantics, pure number math (kernel-safe).
+  'f32.convert_i64_s': (a) => Math.fround((_i64HiU(a) | 0) * 4294967296 + parseInt(a.slice(10), 16)),
+  'f32.convert_i64_u': (a) => Math.fround(_i64HiU(a) * 4294967296 + parseInt(a.slice(10), 16)),
   'f64.convert_i32_s': (a) => (a | 0),
   'f64.convert_i32_u': (a) => (a >>> 0),
-  'f64.convert_i64_s': (a) => Number(BigInt.asIntN(64, a)),
-  'f64.convert_i64_u': (a) => Number(BigInt.asUintN(64, a)),
+  'f64.convert_i64_s': (a) => (_i64HiU(a) | 0) * 4294967296 + parseInt(a.slice(10), 16),
+  'f64.convert_i64_u': (a) => _i64HiU(a) * 4294967296 + parseInt(a.slice(10), 16),
   'f32.demote_f64':    (a) => Math.fround(a),
   'f64.promote_f32':   (a) => Math.fround(a),
 }
@@ -375,11 +510,29 @@ const FOLDABLE = {
  * (jz, etc.) encode their pointer/sentinel bits into. Returns null if `s` is
  * not a NaN literal so callers can fall through to plain Number parsing.
  */
+/** Full 64-bit hex of a WAT f64 NaN literal — pure string/number math, the
+ *  payload double is NEVER materialized. In the self-host kernel a NaN-box bit
+ *  pattern held as a raw f64 VALUE is indistinguishable from a live pointer
+ *  (String / property reads misread it), so reinterpret folding must move the
+ *  bits as TEXT. Returns '0x…' (16 digits) or null when `s` isn't a NaN literal. */
+const _nanBitsHex = (s) => {
+  const i = s?.indexOf?.('nan')
+  if (i < 0 || i == null) return null
+  const tail = s.slice(i + 4).replaceAll('_', '')
+  const payload = (s[i + 3] === ':' && tail !== 'canonical' && tail !== 'arithmetic' ? BigInt(tail) : 0x8000000000000n)
+  const h = payload.toString(16).padStart(16, '0')
+  const hi = (parseInt(h.slice(0, 8), 16) | 0x7ff00000 | (s[0] === '-' ? 0x80000000 : 0)) >>> 0
+  return '0x' + _hex8(hi) + h.slice(8)
+}
+
 const _parseNanF64 = (s, i = s?.indexOf?.('nan')) => {
   if (i < 0 || i == null) return null
-  let tail = s.slice(i + 4).replaceAll('_', ''),
-      bits = (s[i + 3] === ':' && tail !== 'canonical' && tail !== 'arithmetic' ? BigInt(tail) : 0x8000000000000n)
-  _ri64[0] = BigInt.asIntN(64, bits | 0x7ff0000000000000n | (s[0] === '-' ? 1n << 63n : 0n))
+  const tail = s.slice(i + 4).replaceAll('_', '')
+  const payload = (s[i + 3] === ':' && tail !== 'canonical' && tail !== 'arithmetic' ? BigInt(tail) : 0x8000000000000n)
+  // Assemble exponent/sign on the u32 halves — kernel-safe (BigInt <</| are not).
+  const h = payload.toString(16).padStart(16, '0')
+  _ru32[1] = (parseInt(h.slice(0, 8), 16) | 0x7ff00000 | (s[0] === '-' ? 0x80000000 : 0)) >>> 0
+  _ru32[0] = parseInt(h.slice(8), 16)
   return _rf64[0]
 }
 const _parseNanF32 = (s, i = s?.indexOf?.('nan')) => {
@@ -398,15 +551,25 @@ const _parseNanF32 = (s, i = s?.indexOf?.('nan')) => {
 const getConst = (node) => {
   if (!Array.isArray(node) || node.length !== 2) return null
   const [op, val] = node
-  if (op === 'i32.const') return { type: 'i32', value: (typeof val === 'string' ? i32.parse(val) : val) | 0 }
-  if (op === 'i64.const') return { type: 'i64', value: typeof val === 'string' ? i64.parse(val) : BigInt(val) }
+  if (op === 'i32.const') return { type: 'i32', value: (typeof val === 'string' ? parseInt(val.replaceAll('_', '')) : val) | 0 }
+  if (op === 'i64.const') return { type: 'i64', value: _i64Canon(val) }
   if (op === 'f32.const') {
     const n = _parseNanF32(val)
     return { type: 'f32', value: n !== null ? n : Math.fround(Number(val)) }
   }
   if (op === 'f64.const') {
     const n = _parseNanF64(val)
-    return { type: 'f64', value: n !== null ? n : Number(val) }
+    const v = n !== null ? n : Number(val)
+    // Normalize ANY NaN to the literal NaN — Number.isNaN, NOT `v !== v`:
+    // in-kernel `!==` routes through __eq's bit-equality, where a sign-set
+    // qNaN (what x64 wasm arithmetic produces) compares EQUAL to itself (the
+    // arm that keeps negative i64-carrier BigInts working), so the !== guard
+    // misses it. Number.isNaN unboxes to f64 and uses f64.ne — catches every
+    // payload. The literal-NaN assignment rewrites the carrier to the
+    // canonical atom, so the value can ride kind-erased slots safely (the
+    // linux-x64-only selfhost OOB; arm64 arithmetic NaNs are already
+    // canonical). Native no-op.
+    return { type: 'f64', value: Number.isNaN(v) ? NaN : v }
   }
   return null
 }
@@ -419,9 +582,14 @@ const getConst = (node) => {
  */
 const makeConst = (type, value) => {
   if (type === 'i32') return ['i32.const', value | 0]
-  if (type === 'i64') return ['i64.const', value]
-  if (type === 'f32') return ['f32.const', Math.fround(value)]
-  if (type === 'f64') return ['f64.const', value]
+  if (type === 'i64') return ['i64.const', typeof value === 'number' ? value : _i64Canon(value)]   // canonical hex: kernel-safe print, exact round-trip
+  // NaN travels as the `nan` TOKEN, never a raw number: the canonical-NaN bit
+  // pattern (0x7FF8…) IS the NaN-box ATOM prefix, so a raw NaN node value
+  // inside the self-host kernel reads as a pointer and dereferences OOB
+  // (same contract as emitNum — folding Math.sqrt(-1) used to trap the
+  // kernel's L2 compile). ±Infinity is outside the box space — safe raw.
+  if (type === 'f32') { const v = Math.fround(value); return ['f32.const', Number.isNaN(v) ? 'nan' : v] }
+  if (type === 'f64') return ['f64.const', Number.isNaN(value) ? 'nan' : value]
   return null
 }
 
@@ -436,20 +604,47 @@ const fold = (ast) => {
     const fn = FOLDABLE[node[0]]
     if (!fn) return
 
+    // Arity comes from the NODE — every WAT op is fixed-arity, so node.length
+    // fully determines unary vs binary. NEVER from Function.length: the
+    // self-host kernel's closures don't carry a faithful `.length`, and the
+    // old `fn.length === 1/2` checks silently disabled ALL folding in-kernel
+    // (the L2 self-host divergence — unfolded consts fed the vectorizer
+    // shapes native never produces).
     // Unary
-    if (fn.length === 1 && node.length === 2) {
+    if (node.length === 2) {
+      // NaN-payload reinterprets fold at the TEXT level — the payload double
+      // must never ride as a raw f64 value (see _nanBitsHex). Applies in both
+      // directions: nan: literal → i64 bits, and NaN-pattern i64 → nan: literal.
+      if (node[0] === 'i64.reinterpret_f64') {
+        const inner = node[1]
+        if (Array.isArray(inner) && inner.length === 2 && inner[0] === 'f64.const' && typeof inner[1] === 'string') {
+          const bits = _nanBitsHex(inner[1])
+          if (bits) return ['i64.const', bits]
+        }
+      }
+      if (node[0] === 'f64.reinterpret_i64') {
+        const c = getConst(node[1])
+        if (c && c.type === 'i64') {
+          const h = c.value.slice(2)
+          const hi = parseInt(h.slice(0, 8), 16) >>> 0
+          const lo = parseInt(h.slice(8), 16) >>> 0
+          const isNaN64 = (hi & 0x7ff00000) === 0x7ff00000 && ((hi & 0xfffff) !== 0 || lo !== 0)
+          if (isNaN64) return ['f64.const',
+            ((hi & 0x80000000) !== 0 ? '-' : '') + 'nan:0x' + (hi & 0xfffff).toString(16).padStart(5, '0') + h.slice(8)]
+        }
+      }
       const a = getConst(node[1])
       if (!a) return
       const r = fn(a.value)
-      if (r === null) return
+      if (r === null || r === undefined) return
       return makeConst(resultType(node[0]), r)
     }
     // Binary
-    if (fn.length === 2 && node.length === 3) {
+    if (node.length === 3) {
       const a = getConst(node[1]), b = getConst(node[2])
       if (!a || !b) return
       const r = fn(a.value, b.value)
-      if (r === null) return
+      if (r === null || r === undefined) return
       return makeConst(resultType(node[0]), r)
     }
   })
@@ -478,34 +673,34 @@ const rightIdentity = (neutral) => (a, b) => getConst(b)?.value === neutral ? a 
 const IDENTITIES = {
   // x + 0 → x, 0 + x → x
   'i32.add': commutativeIdentity(0),
-  'i64.add': commutativeIdentity(0n),
+  'i64.add': commutativeIdentity(ZERO64),
   // x - 0 → x
   'i32.sub': rightIdentity(0),
-  'i64.sub': rightIdentity(0n),
+  'i64.sub': rightIdentity(ZERO64),
   // x * 1 → x, 1 * x → x
   'i32.mul': commutativeIdentity(1),
-  'i64.mul': commutativeIdentity(1n),
+  'i64.mul': commutativeIdentity(ONE64),
   // x / 1 → x
   'i32.div_s': rightIdentity(1),
   'i32.div_u': rightIdentity(1),
-  'i64.div_s': rightIdentity(1n),
-  'i64.div_u': rightIdentity(1n),
+  'i64.div_s': rightIdentity(ONE64),
+  'i64.div_u': rightIdentity(ONE64),
   // x & -1 → x, -1 & x → x (all bits set)
   'i32.and': commutativeIdentity(-1),
-  'i64.and': commutativeIdentity(-1n),
+  'i64.and': commutativeIdentity(NEG164),
   // x | 0 → x, 0 | x → x
   'i32.or': commutativeIdentity(0),
-  'i64.or': commutativeIdentity(0n),
+  'i64.or': commutativeIdentity(ZERO64),
   // x ^ 0 → x, 0 ^ x → x
   'i32.xor': commutativeIdentity(0),
-  'i64.xor': commutativeIdentity(0n),
+  'i64.xor': commutativeIdentity(ZERO64),
   // x << 0 → x, x >> 0 → x
   'i32.shl': rightIdentity(0),
   'i32.shr_s': rightIdentity(0),
   'i32.shr_u': rightIdentity(0),
-  'i64.shl': rightIdentity(0n),
-  'i64.shr_s': rightIdentity(0n),
-  'i64.shr_u': rightIdentity(0n),
+  'i64.shl': rightIdentity(ZERO64),
+  'i64.shr_s': rightIdentity(ZERO64),
+  'i64.shr_u': rightIdentity(ZERO64),
   // f + 0 → x (careful with -0.0, skip for floats)
   // f * 1 → x (careful with NaN, skip for floats)
 }
@@ -552,16 +747,14 @@ const strength = (ast) => {
       }
     }
     if (op === 'i64.mul') {
-      const cb = getConst(b)
-      if (cb && cb.value > 0n && (cb.value & (cb.value - 1n)) === 0n) {
-        const shift = BigInt(cb.value.toString(2).length - 1)
-        return ['i64.shl', a, ['i64.const', shift]]
-      }
-      const ca = getConst(a)
-      if (ca && ca.value > 0n && (ca.value & (ca.value - 1n)) === 0n) {
-        const shift = BigInt(ca.value.toString(2).length - 1)
-        return ['i64.shl', b, ['i64.const', shift]]
-      }
+      // hex value → LOCAL BigInt (in-expression construction is kernel-safe);
+      // shift counts emit as plain numbers.
+      const cb = getConst(b), vb = cb ? BigInt(cb.value) : null
+      if (vb != null && vb > 0n && (vb & (vb - 1n)) === 0n)
+        return ['i64.shl', a, ['i64.const', vb.toString(2).length - 1]]
+      const ca = getConst(a), va = ca ? BigInt(ca.value) : null
+      if (va != null && va > 0n && (va & (va - 1n)) === 0n)
+        return ['i64.shl', b, ['i64.const', va.toString(2).length - 1]]
     }
 
     // x / 2^n → x >> n (unsigned only, signed division is more complex)
@@ -573,11 +766,9 @@ const strength = (ast) => {
       }
     }
     if (op === 'i64.div_u') {
-      const cb = getConst(b)
-      if (cb && cb.value > 0n && (cb.value & (cb.value - 1n)) === 0n) {
-        const shift = BigInt(cb.value.toString(2).length - 1)
-        return ['i64.shr_u', a, ['i64.const', shift]]
-      }
+      const cb = getConst(b), vb = cb ? BigInt(cb.value) : null
+      if (vb != null && vb > 0n && (vb & (vb - 1n)) === 0n)
+        return ['i64.shr_u', a, ['i64.const', vb.toString(2).length - 1]]
     }
 
     // x % 2^n → x & (2^n - 1) (unsigned only)
@@ -588,10 +779,9 @@ const strength = (ast) => {
       }
     }
     if (op === 'i64.rem_u') {
-      const cb = getConst(b)
-      if (cb && cb.value > 0n && (cb.value & (cb.value - 1n)) === 0n) {
-        return ['i64.and', a, ['i64.const', cb.value - 1n]]
-      }
+      const cb = getConst(b), vb = cb ? BigInt(cb.value) : null
+      if (vb != null && vb > 0n && (vb & (vb - 1n)) === 0n)
+        return ['i64.and', a, ['i64.const', '0x' + _i64Hex16(vb - 1n)]]
     }
   })
 }
@@ -614,7 +804,7 @@ const branch = (ast) => {
       const { condIdx, cond, thenBranch, elseBranch } = parseIf(node)
       const c = getConst(cond)
       if (!c) return
-      const taken = c.value !== 0 && c.value !== 0n ? thenBranch : elseBranch
+      const taken = c.value !== 0 && c.value !== ZERO64 ? thenBranch : elseBranch
       if (taken && taken.length > 1) {
         const contents = taken.slice(1)
         // Preserve the if's block type (result/param). A typed `if` leaves a value
@@ -634,7 +824,7 @@ const branch = (ast) => {
       const cond = node[node.length - 1]
       const c = getConst(cond)
       if (!c) return
-      if (c.value === 0 || c.value === 0n) return ['nop']
+      if (c.value === 0 || c.value === ZERO64) return ['nop']
       return ['br', node[1]]
     }
 
@@ -644,10 +834,207 @@ const branch = (ast) => {
       const cond = node[node.length - 1]
       const c = getConst(cond)
       if (!c) return
-      if (c.value === 0 || c.value === 0n) return node[2] // b
+      if (c.value === 0 || c.value === ZERO64) return node[2] // b
       return node[1] // a
     }
   })
+}
+
+// ==================== GUARD-AWARE TAG REFINEMENT ====================
+
+/**
+ * Fold NaN-box tag reads under dominating tag guards (jz-domain knowledge).
+ *
+ * jz reads a value's 4-bit NaN-box tag in three equivalent forms:
+ *   A. (i32.and (i32.wrap_i64 (i64.shr_u PTR (i64.const 47))) (i32.const 15))
+ *   B. (i32.wrap_i64 (i64.and (i64.shr_u PTR (i64.const 47)) (i64.const 15)))
+ *   C. (call $__ptr_type PTR)
+ * where PTR is (i64.reinterpret_f64 (local.get $X)) or an i64 local copy of it.
+ *
+ * After `inlineOnce` splices a generic helper (e.g. $__len's 5-way tag
+ * dispatch) into an arm already guarded by `tag(X) == K`, the recomputed tag
+ * is a known constant — but no structural pass can see it: forms A and B
+ * differ shape-wise, and the value flows through reinterpret/copy locals.
+ * This pass tracks tag-of-X facts through if-arms and folds tag reads to
+ * constants; the regular fold/branch/vacuum passes then delete the dead
+ * dispatch arms. This is the single biggest source of wasm-opt's remaining
+ * slack on jz output (~10% on typed-array modules).
+ *
+ * Soundness model — facts and aliases are keyed by the f64 SOURCE local $X
+ * (tags live in the value's bits, so only local writes can invalidate, never
+ * calls/stores):
+ *   - any local.set/tee of $X kills its fact and every alias derived from it
+ *   - leaving a block kills facts/aliases for locals written inside it
+ *     (a br may have skipped the write)
+ *   - entering a loop kills facts for locals written anywhere in it
+ *     (the back edge re-enters after the write)
+ *   - then/else facts are layered over a snapshot and restored on exit;
+ *     writes inside either arm kill outer facts afterward
+ *   - within straight-line code, sequential registration is exact: wasm has
+ *     no goto, so execution between branch points is linear
+ */
+const guardRefine = (ast) => {
+  if (Array.isArray(ast)) for (const node of ast) if (Array.isArray(node) && node[0] === 'func') refineGuards(node)
+  return ast
+}
+
+const EMPTY_SET = new Set()
+
+const refineGuards = (fn) => {
+  const ptrAlias = new Map()  // i64 local → f64 source local (reinterpret copy)
+  const tagAlias = new Map()  // i32 local → f64 source local (holds tag(X))
+  const eqFact = new Map()    // f64 local → known tag K
+  const neFact = new Map()    // f64 local → Set of excluded tags
+
+  const intVal = (n) => {
+    if (!Array.isArray(n) || n.length !== 2 || (n[0] !== 'i32.const' && n[0] !== 'i64.const')) return null
+    const v = typeof n[1] === 'string' ? Number(n[1].replaceAll('_', '')) : Number(n[1])
+    return Number.isFinite(v) ? v : null
+  }
+  const i32Val = (n) => Array.isArray(n) && n[0] === 'i32.const' ? intVal(n) : null
+
+  // PTR node → f64 source local, or null.
+  const ptrSrc = (n) => {
+    if (!Array.isArray(n)) return null
+    if (n[0] === 'i64.reinterpret_f64' && Array.isArray(n[1]) && n[1][0] === 'local.get' && typeof n[1][1] === 'string') return n[1][1]
+    if (n[0] === 'local.get' && typeof n[1] === 'string') return ptrAlias.get(n[1]) ?? null
+    return null
+  }
+  // tag-of-X node (forms A/B/C or a tag-alias local read) → X, or null.
+  const tagSrc = (n) => {
+    if (!Array.isArray(n)) return null
+    const op = n[0]
+    if (op === 'local.get' && typeof n[1] === 'string') return tagAlias.get(n[1]) ?? null
+    if (op === 'call' && n[1] === '$__ptr_type' && n.length === 3) return ptrSrc(n[2])
+    const shifted = (m) => Array.isArray(m) && m[0] === 'i64.shr_u' && intVal(m[2]) === 47 ? ptrSrc(m[1]) : null
+    if (op === 'i32.and' && n.length === 3) {  // form A (mask either side)
+      const [a, b] = i32Val(n[2]) === 15 ? [n[1], null] : i32Val(n[1]) === 15 ? [n[2], null] : [null, null]
+      if (a && Array.isArray(a) && a[0] === 'i32.wrap_i64') return shifted(a[1])
+    }
+    if (op === 'i32.wrap_i64' && Array.isArray(n[1]) && n[1][0] === 'i64.and') {  // form B
+      const m = n[1]
+      if (intVal(m[2]) === 15) return shifted(m[1])
+      if (intVal(m[1]) === 15) return shifted(m[2])
+    }
+    return null
+  }
+
+  const killLocal = (name) => {
+    ptrAlias.delete(name); tagAlias.delete(name); eqFact.delete(name); neFact.delete(name)
+    for (const [p, x] of ptrAlias) if (x === name) ptrAlias.delete(p)
+    for (const [t, x] of tagAlias) if (x === name) tagAlias.delete(t)
+  }
+  // Write-sets are queried per if/loop/block; memoize bottom-up so each node is
+  // visited once per function, not once per enclosing construct. Keyed by node
+  // identity — sound because walkSeq only ever *replaces* whole subtrees
+  // (parent[idx] = const), never adds writes to an existing one.
+  const writesMemo = new Map()
+  const writesOf = (n) => {
+    if (!Array.isArray(n)) return EMPTY_SET
+    let s = writesMemo.get(n)
+    if (s) return s
+    s = new Set()
+    if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string') s.add(n[1])
+    for (let i = 1; i < n.length; i++) for (const w of writesOf(n[i])) s.add(w)
+    writesMemo.set(n, s)
+    return s
+  }
+  const snap = () => [new Map(eqFact), new Map([...neFact].map(([k, s]) => [k, new Set(s)])), new Map(ptrAlias), new Map(tagAlias)]
+  const reset = (m, src) => { m.clear(); for (const [k, v] of src) m.set(k, v) }
+  const restore = ([e, n, p, t]) => { reset(eqFact, e); reset(neFact, n); reset(ptrAlias, p); reset(tagAlias, t) }
+
+  // Facts implied by `cond` being truthy (sense=true) / falsy (sense=false).
+  const condFacts = (cond, sense, out) => {
+    if (!Array.isArray(cond)) return out
+    const op = cond[0]
+    if (op === 'i32.eqz') return condFacts(cond[1], !sense, out)
+    if (op === 'i32.and' && sense && cond.length === 3) { condFacts(cond[1], true, out); condFacts(cond[2], true, out); return out }
+    if (op === 'i32.or' && !sense && cond.length === 3) { condFacts(cond[1], false, out); condFacts(cond[2], false, out); return out }
+    if ((op === 'i32.eq' || op === 'i32.ne') && cond.length === 3) {
+      let x = tagSrc(cond[1]), k = i32Val(cond[2])
+      if (x == null || k == null) { x = tagSrc(cond[2]); k = i32Val(cond[1]) }
+      if (x != null && k != null) out.push({ x, k, eq: (op === 'i32.eq') === sense })
+      return out
+    }
+    const x = tagSrc(cond)  // bare tag as condition: truthy ⇒ tag≠0, falsy ⇒ tag==0
+    if (x != null) out.push({ x, k: 0, eq: !sense })
+    return out
+  }
+  const addFacts = (fs) => {
+    for (const { x, k, eq } of fs) {
+      if (eq) eqFact.set(x, k)
+      else { let s = neFact.get(x); if (!s) neFact.set(x, s = new Set()); s.add(k) }
+    }
+  }
+
+  const walkSeq = (node, parent, idx) => {
+    if (!Array.isArray(node)) return
+    const op = node[0]
+
+    if (op === 'local.set' || op === 'local.tee') {
+      if (Array.isArray(node[2])) walkSeq(node[2], node, 2)
+      const name = node[1]
+      if (typeof name !== 'string') return
+      killLocal(name)
+      const v = node[2]
+      if (Array.isArray(v)) {
+        if (v[0] === 'i64.reinterpret_f64' && Array.isArray(v[1]) && v[1][0] === 'local.get' && typeof v[1][1] === 'string') ptrAlias.set(name, v[1][1])
+        else if (v[0] === 'local.get' && typeof v[1] === 'string' && ptrAlias.has(v[1])) ptrAlias.set(name, ptrAlias.get(v[1]))
+        else { const tx = tagSrc(v); if (tx != null) tagAlias.set(name, tx) }
+      }
+      return
+    }
+
+    if (op === 'if') {
+      const { condIdx } = parseIf(node)
+      if (Array.isArray(node[condIdx])) walkSeq(node[condIdx], node, condIdx)
+      const cond = node[condIdx]  // re-read: the walk may have folded it
+      const { thenBranch, elseBranch } = parseIf(node)
+      const writes = writesOf(node)
+      const pre = snap()
+      addFacts(condFacts(cond, true, []))
+      if (thenBranch) for (let i = 1; i < thenBranch.length; i++) walkSeq(thenBranch[i], thenBranch, i)
+      restore(pre)
+      addFacts(condFacts(cond, false, []))
+      if (elseBranch) for (let i = 1; i < elseBranch.length; i++) walkSeq(elseBranch[i], elseBranch, i)
+      restore(pre)
+      for (const w of writes) killLocal(w)
+      return
+    }
+
+    if (op === 'loop') {
+      const writes = writesOf(node)
+      for (const w of writes) killLocal(w)
+      for (let i = 1; i < node.length; i++) walkSeq(node[i], node, i)
+      for (const w of writes) killLocal(w)
+      return
+    }
+
+    if (op === 'block') {
+      for (let i = 1; i < node.length; i++) walkSeq(node[i], node, i)
+      for (const w of writesOf(node)) killLocal(w)
+      return
+    }
+
+    // Whole-node tag read under an equality fact → constant.
+    const tx = tagSrc(node)
+    if (tx != null && eqFact.has(tx) && parent) { parent[idx] = ['i32.const', eqFact.get(tx)]; return }
+
+    // eq/ne against a constant under a ne-fact (eq-facts are covered by the
+    // tag-read fold above plus the regular `fold` pass).
+    if ((op === 'i32.eq' || op === 'i32.ne') && node.length === 3) {
+      let x = tagSrc(node[1]), k = i32Val(node[2])
+      if (x == null || k == null) { x = tagSrc(node[2]); k = i32Val(node[1]) }
+      if (x != null && k != null && neFact.get(x)?.has(k) && parent) {
+        parent[idx] = ['i32.const', op === 'i32.eq' ? 0 : 1]
+        return
+      }
+    }
+
+    for (let i = 1; i < node.length; i++) walkSeq(node[i], node, i)
+  }
+
+  for (let i = 1; i < fn.length; i++) walkSeq(fn[i], fn, i)
 }
 
 // ==================== DEAD CODE ELIMINATION ====================
@@ -820,6 +1207,38 @@ const isPure = (node) => {
   return true
 }
 
+// Structured / control-flow forms: they do NOT evaluate all children eagerly
+// (an `if` runs one arm; a `block`/`loop` scopes branches), so their side effects
+// can't be flattened to the children's — they stay whole under a drop. (`br*`,
+// `try_table` are already in IMPURE_OPS.)
+const STRUCTURED_OPS = new Set(['if', 'then', 'else', 'block', 'loop', 'try'])
+
+// `op` is an EAGER value operation: it evaluates every operand unconditionally
+// and only computes a result (arithmetic, compare, convert, select, load) — so
+// discarding its value leaves just the operands' side effects. Excludes impure
+// ops and the structured forms above.
+const isEagerValueOp = (op) => typeof op === 'string' && !IMPURE_OPS.has(op) &&
+  !STRUCTURED_OPS.has(op) && !IMPURE_SUBSTRINGS.some(s => op.includes(s))
+
+// Statements that preserve `node`'s side effects when its VALUE is discarded.
+// A fully-pure value contributes nothing; an eager value op contributes only its
+// operands' effects (the op result is dead); a `local.tee` keeps the store as a
+// `local.set`; anything else (call, store-expr, structured form) stays under a drop.
+// This turns `drop(i32.sub(tee X V, 1))` — the post-increment's dropped old value
+// — into the bare `local.set X V`, eliminating dead arithmetic the plain
+// `drop(PURE)→nop` rule can't (the tee makes the whole subtree impure).
+const dropEffects = (node) => {
+  if (!Array.isArray(node) || isPure(node)) return []
+  const op = node[0]
+  if (op === 'local.tee' && node.length === 3) return [['local.set', node[1], node[2]]]
+  if (isEagerValueOp(op)) {
+    const eff = []
+    for (let i = 1; i < node.length; i++) eff.push(...dropEffects(node[i]))
+    return eff
+  }
+  return [['drop', node]]
+}
+
 /** Count all local.get/set/tee occurrences in one walk */
 const countLocalUses = (node) => {
   const counts = new Map()
@@ -841,22 +1260,49 @@ const isTinyConst = (node) => {
   const c = getConst(node)
   if (!c) return false
   if (c.type === 'i32') { const v = c.value | 0; return v >= -64 && v <= 63 }
-  if (c.type === 'i64') { const v = typeof c.value === 'bigint' ? c.value : BigInt(c.value); return v >= -64n && v <= 63n }
+  if (c.type === 'i64') { const v = BigInt(c.value); return v <= 63n || v >= 0xffffffffffffffc0n }   // unsigned bits: [0,63] or two's-comp [−64,−1]
   return false
 }
 
+/** A pure local→local copy value `(local.get $src)`, with $src ≠ the local being set.
+ *  Substituting it for a `(local.get $dst)` is byte-neutral (local.get for local.get),
+ *  so — unlike a reused wide constant — it can never grow an instruction, and it turns
+ *  the copy `$dst = $src` into a dead store the next pass drops. Self-copies are
+ *  excluded: they're no-ops that would re-trigger `changed` every round. (Propagating a
+ *  copy lengthens $src's live range, which can rarely cost coalesceLocals a slot — a
+ *  few bytes — but net-shrinks across the corpus, e.g. −1.7 KB on the watr self-host.) */
+const isLocalCopy = (val, dest) =>
+  Array.isArray(val) && val[0] === 'local.get' && val.length === 2 &&
+  typeof val[1] === 'string' && val[1] !== dest
+
 /** Can this tracked value be substituted for a local.get?
  *  - single use of a pure value: always shrinks (drops the set, the lone get, the decl);
- *  - any use of a tiny constant: byte-neutral at worst, still drops the set + decl.
+ *  - any use of a tiny constant: byte-neutral at worst, still drops the set + decl;
+ *  - any use of a pure local copy: byte-neutral, frees the copy as a dead store.
  *  Anything else (a wide constant reused many times, an impure expr) could inflate
- *  or reorder side effects, so it's left alone. */
-const canSubst = (k) => (k.pure && k.singleUse) || isTinyConst(k.val)
+ *  or reorder side effects, so it's left alone. Copy validity (the source not being
+ *  reassigned between copy and use) is enforced by the same purgeRefs/branch-clear
+ *  machinery that guards every tracked value. */
+const canSubst = (k) => (k.pure && k.singleUse) || isTinyConst(k.val) || k.copy
 
 /** Drop tracked values that read `$name`: rewriting `$name` makes them stale. */
 const purgeRefs = (known, name) => {
   for (const [key, tracked] of known) {
     let refs = false
     walk(tracked.val, n => { if (Array.isArray(n) && (n[0] === 'local.get' || n[0] === 'local.tee') && n[1] === name) refs = true })
+    if (refs) known.delete(key)
+  }
+}
+
+/** Drop tracked values that read global `$name`: a `global.set $name` makes them stale.
+ *  The local-only {@link purgeRefs} misses this — so a value captured from a global
+ *  (`let s = f`, where `f` is a reassignable module-level binding) would survive an
+ *  intervening `f = …` and substitute the NEW global. That silently breaks the canonical
+ *  pointer swap `let s = f; f = g; g = s` (g would read post-swap f, i.e. itself). */
+const purgeGlobalRefs = (known, name) => {
+  for (const [key, tracked] of known) {
+    let refs = false
+    walk(tracked.val, n => { if (Array.isArray(n) && n[0] === 'global.get' && n[1] === name) refs = true })
     if (refs) known.delete(key)
   }
 }
@@ -921,7 +1367,7 @@ const substGets = (node, known) => {
     return node
   }
   let inner = known
-  if (op === 'block' || op === 'loop' || op === 'if') {
+  if (isBranchScope(op)) {
     let cloned = null
     walk(node, n => {
       if (!Array.isArray(n)) return
@@ -948,6 +1394,9 @@ const substGets = (node, known) => {
           if (inner === known) inner = new Map(known)
           inner.delete(n[1])
           purgeRefs(inner, n[1])
+        } else if (n[0] === 'global.set' && typeof n[1] === 'string') {   // same staleness as a local write — a sibling operand's
+          if (inner === known) inner = new Map(known)                     // global write invalidates a later operand's global-sourced copy
+          purgeGlobalRefs(inner, n[1])
         }
       })
     }
@@ -990,6 +1439,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
         if (!Array.isArray(n)) return
         if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string')
           { known.delete(n[1]); purgeRefs(known, n[1]) }
+        else if (n[0] === 'global.set' && typeof n[1] === 'string') purgeGlobalRefs(known, n[1])
       })
       const uses = getUseCount(instr[1])
       purgeRefs(known, instr[1]) // entries that read this local just went stale
@@ -1002,13 +1452,14 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       known.set(instr[1], {
         val: instr[2], pure: isPure(instr[2]),
         readsMem: readsMemory(instr[2]),
-        singleUse: uses.gets <= 1 && uses.sets <= 1 && uses.tees === 0
+        singleUse: uses.gets <= 1 && uses.sets <= 1 && uses.tees === 0,
+        copy: isLocalCopy(instr[2], instr[1])
       })
       continue
     }
 
     // Invalidate at control-flow boundaries
-    if (op === 'block' || op === 'loop' || op === 'if') known.clear()
+    if (isBranchScope(op)) known.clear()
     // Calls invalidate tracked values that read state a callee can mutate
     // (memory, globals, tables, nested calls). Pure expressions over locals
     // and constants survive — callees can't reach caller locals.
@@ -1035,8 +1486,10 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       // pre-write tracked value (correct), but later reads must see the new
       // (untracked) value, not the stale constant.
       walk(instr, n => {
-        if (Array.isArray(n) && (n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string')
+        if (!Array.isArray(n)) return
+        if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string')
           { known.delete(n[1]); purgeRefs(known, n[1]) }
+        else if (n[0] === 'global.set' && typeof n[1] === 'string') purgeGlobalRefs(known, n[1])
       })
       // Memory write in this statement (any nested store / memory.copy / etc.)
       // invalidates every tracked value whose RHS reads memory: inlining one
@@ -1152,6 +1605,35 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
 }
 
 /**
+ * Drop `(local.set $x A)` when the very next statement re-sets $x without reading it
+ * first (A pure). The two writes are adjacent, so A's value is overwritten before any
+ * observation — it's dead. The whole-function {@link eliminateDeadStores} misses this:
+ * it only fires when $x is read NOWHERE, whereas here $x is live later, just not
+ * between these two writes. Pairs with copy-propagation, which rewrites
+ * `$x=$y; $x=f($x)` to `$x=$y; $x=f($y)` — an adjacent dead store this removes,
+ * collapsing the round-trip jz's value-model lowering leaves behind.
+ * @param {Array} funcNode  a straight-line scope (body / block / loop / then / else)
+ * @param {Set<string>} params
+ */
+const eliminateAdjacentDeadStores = (funcNode, params) => {
+  let changed = false
+  for (let i = 1; i < funcNode.length - 1; i++) {
+    const a = funcNode[i], b = funcNode[i + 1]
+    // `a` must be a plain set (a tee leaves its value on the stack — not removable);
+    // `b` may be a set OR a tee (both overwrite the local before `a`'s value is read).
+    if (!Array.isArray(a) || a[0] !== 'local.set' || a.length !== 3) continue
+    if (!Array.isArray(b) || (b[0] !== 'local.set' && b[0] !== 'local.tee') || b.length !== 3 || b[1] !== a[1]) continue
+    if (params.has(a[1]) || !isPure(a[2])) continue
+    // Dead only if b's value doesn't read $x before overwriting it.
+    let reads = false
+    walk(b[2], n => { if (Array.isArray(n) && (n[0] === 'local.get' || n[0] === 'local.tee') && n[1] === a[1]) reads = true })
+    if (reads) continue
+    funcNode.splice(i, 1); changed = true; i--
+  }
+  return changed
+}
+
+/**
  * Propagate values through locals and eliminate single-use/dead locals.
  * Constants propagate to all uses; pure single-use exprs inline into get site.
  * Multi-pass with batch counting for convergence.
@@ -1159,6 +1641,9 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
 /** Block-like nodes whose body is a straight-line instruction list (after any header). */
 const isScopeNode = (n) => Array.isArray(n) &&
   (n[0] === 'func' || n[0] === 'block' || n[0] === 'loop' || n[0] === 'then' || n[0] === 'else')
+
+/** Branch-target scopes: ops that carry an optional label/result header and can be jumped to via br/br_if. */
+const isBranchScope = (op) => op === 'block' || op === 'loop' || op === 'if'
 
 const propagate = (ast) => {
   walk(ast, (funcNode) => {
@@ -1182,7 +1667,7 @@ const propagate = (ast) => {
     // (skip a not-yet-provably-dead store, decline a not-yet-provably-single use) —
     // never wrongly. The next round re-counts and mops up. (Recounting per sub-pass
     // per scope is O(scopes·funcSize) and crippling on big modules.)
-    for (let round = 0; round < 6; round++) {
+    for (let round = 0; round < MAX_PROP_ROUNDS; round++) {
       const useCounts = countLocalUses(funcNode)
       let progressed = false
       for (const scope of scopes) {
@@ -1190,6 +1675,7 @@ const propagate = (ast) => {
         if (eliminateSetGetPairs(scope, params, useCounts)) progressed = true
         if (createLocalTees(scope, params, useCounts)) progressed = true
         if (eliminateDeadStores(scope, params, useCounts)) progressed = true
+        if (eliminateAdjacentDeadStores(scope, params)) progressed = true
       }
       if (!progressed) break
     }
@@ -1200,112 +1686,544 @@ const propagate = (ast) => {
 
 // ==================== FUNCTION INLINING ====================
 
-/**
- * Inline tiny functions (single expression, no locals, no params or simple params).
- * @param {Array} ast
- * @returns {Array}
- */
-const inline = (ast) => {
-  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+// Shared inliner primitives, used by BOTH passes below: `inline` (duplicates tiny
+// multi-caller bodies — size-for-speed) and `inlineOnce` (splices single-caller
+// bodies, never duplicates). The lift technique is identical — rename the callee's
+// params/locals/labels to fresh `$__inlN_*` names, evaluate args once into the
+// renamed param locals, turn `return X` into `br $__inlN X`, wrap the body in a
+// `(block $__inlN (result T)? …)`. Only the SELECTION policy differs (one caller vs
+// every caller of a small body), so the lift lives here once.
 
-  // Collect inlinable functions
-  const inlinable = new Map() // $name → { body, params }
-
-  for (const node of ast.slice(1)) {
-    if (!Array.isArray(node) || node[0] !== 'func') continue
-
-    const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
-    if (!name) continue
-
-    // Check if function is small enough to inline
-    let params = []
-    let body = []
-    let hasLocals = false
-    let hasExport = false
-
-    for (let i = 1; i < node.length; i++) {
-      const sub = node[i]
-      if (!Array.isArray(sub)) continue
-      if (sub[0] === 'param') {
-        // Collect param names and types
-        if (typeof sub[1] === 'string' && sub[1][0] === '$') {
-          params.push({ name: sub[1], type: sub[2] })
-        } else {
-          // Unnamed params - harder to inline
-          params = null
-          break
-        }
-      } else if (sub[0] === 'local') {
-        hasLocals = true
-      } else if (sub[0] === 'export') {
-        hasExport = true
-      } else if (sub[0] !== 'result' && sub[0] !== 'type') {
-        body.push(sub)
-      }
+let inlineUid = 0
+const INL_HEAD = new Set(['export', 'type', 'param', 'result', 'local'])
+const inlBodyStart = (fn) => {
+  let i = 2
+  while (i < fn.length && (typeof fn[i] === 'string' || (Array.isArray(fn[i]) && INL_HEAD.has(fn[i][0])))) i++
+  return i
+}
+const inlIsBranch = op => op === 'br' || op === 'br_if' || op === 'br_table'
+// A subtree we can't lift into a (block …): depth-relative branch labels (which would
+// shift under the added nesting) or tail calls (which would escape the wrapping block).
+const inlUnsafe = (n) => {
+  if (!Array.isArray(n)) return false
+  const op = n[0]
+  if (op === 'return_call' || op === 'return_call_indirect' || op === 'return_call_ref') return true
+  if (op === 'try' || op === 'try_table' || op === 'delegate' || op === 'rethrow') return true  // exception labels — not handled by the relabeler below
+  if (inlIsBranch(op)) for (let i = 1; i < n.length; i++) if (typeof n[i] === 'number' || (typeof n[i] === 'string' && /^\d+$/.test(n[i]))) return true
+  for (let i = 1; i < n.length; i++) if (inlUnsafe(n[i])) return true
+  return false
+}
+const inlCallsSelf = (n, name) => {
+  if (!Array.isArray(n)) return false
+  if ((n[0] === 'call' || n[0] === 'return_call') && n[1] === name) return true
+  for (let i = 1; i < n.length; i++) if (inlCallsSelf(n[i], name)) return true
+  return false
+}
+// Per-call zero-init constant for a callee local re-entered from a caller loop.
+// null ⇒ a type we can't safely zero here (skip inlining such a callee).
+const inlZeroFor = (t) => {
+  if (t === 'i32') return ['i32.const', 0]
+  if (t === 'i64') return ['i64.const', 0]
+  if (t === 'f32') return ['f32.const', 0]
+  if (t === 'f64') return ['f64.const', 0]
+  if (t === 'v128') return ['v128.const', 'i64x2', '0', '0']  // STRING lanes — watr's v128 encoder calls .replaceAll
+  return null
+}
+// A callee local needs a per-entry reset only if some path reads it before any
+// unconditional write (so it relied on the callee's fresh zero-init). Mirrors
+// coalesceLocals' readsZero heuristic; unconditionally-written scratch needs none.
+const inlNeedsReset = (body, name) => {
+  let seen = false, conditional = false, depth = 0
+  const visit = (n) => {
+    if (seen || !Array.isArray(n)) return
+    const op = n[0]
+    const isSet = op === 'local.set' || op === 'local.tee'
+    if ((isSet || op === 'local.get') && n[1] === name) {
+      if (isSet) for (let i = 2; i < n.length && !seen; i++) visit(n[i])
+      if (seen) return
+      seen = true
+      if (op === 'local.get' || depth > 0) conditional = true
+      return
     }
-
-    // Inline: no locals, <= 4 params, single expression body, not exported
-    if (params && !hasLocals && !hasExport && params.length <= 4 && body.length === 1) {
-      // Check if function mutates any of its params (local.set/tee on param),
-      // or contains a control-transfer op (`return`, `return_call`,
-      // `return_call_indirect`). Inlining such bodies into a different-typed
-      // caller would propagate the transfer to the caller, returning from the
-      // wrong function with the wrong type. Lifting the body into a
-      // `(block $exit ...)` and rewriting returns to `(br $exit X)` would
-      // unlock these — left for a future pass.
-      const paramNames = new Set(params.map(p => p.name))
-      let mutatesParam = false
-      let hasReturn = false
-      walk(body[0], (n) => {
-        if (!Array.isArray(n)) return
-        if ((n[0] === 'local.set' || n[0] === 'local.tee') && paramNames.has(n[1])) {
-          mutatesParam = true
-        }
-        if (n[0] === 'return' || n[0] === 'return_call' || n[0] === 'return_call_indirect') {
-          hasReturn = true
-        }
-      })
-      if (!mutatesParam && !hasReturn) {
-        inlinable.set(name, { body: body[0], params })
-      }
+    const isIf = op === 'if'
+    for (let i = 1; i < n.length && !seen; i++) {
+      const c = n[i]
+      const cond = isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')
+      if (cond) depth++
+      visit(c)
+      if (cond) depth--
     }
   }
+  for (const n of body) { if (seen) break; visit(n) }
+  if (!seen) return false
+  return conditional
+}
+// Module-level references that pin a function (can't be inlined-away/removed).
+const inlCollectPinned = (n, pinned) => {
+  if (!Array.isArray(n)) return
+  const op = n[0]
+  if (op === 'export' && Array.isArray(n[2]) && n[2][0] === 'func' && typeof n[2][1] === 'string') pinned.add(n[2][1])
+  else if (op === 'start' && typeof n[1] === 'string') pinned.add(n[1])
+  else if (op === 'ref.func' && typeof n[1] === 'string') pinned.add(n[1])
+  else if (op === 'elem') for (const c of n) if (typeof c === 'string' && c[0] === '$') pinned.add(c)
+  for (const c of n) inlCollectPinned(c, pinned)
+}
 
-  // Replace calls with inlined body
-  if (inlinable.size === 0) return ast
+/** Pinned function names (export/start/ref.func/elem targets) across the module's
+ *  non-func nodes — a Set the inliner must never dissolve.
+ *
+ *  KEEP THIS EXTRACTED — do not inline back into inlineOnce. The self-host kernel
+ *  (jz compiling jz) mis-compiles this `new Set()` + scan when it lives inside the
+ *  oversized inlineOnce scope: the `pinned` value's pointer is zeroed, so the first
+ *  `pinned.add` traps in `__set_add` ("memory access out of bounds") on every L2
+ *  compile of a program with an inlinable helper. Building it in this small scope
+ *  keeps the local count under the threshold that triggers the miscompile. Pinned by
+ *  test/selfhost.js "level-2 inliner is sound". (Underlying large-function self-host
+ *  codegen bug is tracked separately; this is the surgical dodge.) */
+const inlBuildPinned = (ast) => {
+  const pinned = new Set()
+  for (const n of ast) if (!Array.isArray(n) || n[0] !== 'func') inlCollectPinned(n, pinned)
+  return pinned
+}
 
-  walkPost(ast, (node) => {
-    if (!Array.isArray(node) || node[0] !== 'call') return
-    const fname = node[1]
-    if (!inlinable.has(fname)) return
+// Parse a func node into { params, locals, inlResult } once, enforcing the
+// liftability contract (named params/locals, zero-init-able local types, ≤1
+// result, no inline export). Returns null if the func can't be lifted.
+const inlParse = (fn) => {
+  const params = [], locals = []
+  let inlResult = null, ok = true, nResult = 0
+  for (let i = 2; i < fn.length; i++) {
+    const c = fn[i]
+    if (typeof c === 'string') continue
+    if (!Array.isArray(c)) { ok = false; break }
+    if (c[0] === 'param') { if (typeof c[1] !== 'string' || c[1][0] !== '$') { ok = false; break } params.push({ name: c[1], type: c[2] }) }
+    else if (c[0] === 'local') { if (typeof c[1] !== 'string' || c[1][0] !== '$' || !inlZeroFor(c[2])) { ok = false; break } locals.push({ name: c[1], type: c[2] }) }
+    else if (c[0] === 'result') { nResult += c.length - 1; if (c.length > 1) inlResult = c[1] }
+    else if (c[0] === 'export') { ok = false; break }
+    else if (c[0] === 'type') continue
+    else break
+  }
+  if (nResult > 1) ok = false
+  return ok ? { params, locals, inlResult } : null
+}
 
-    const { body, params } = inlinable.get(fname)
-    const args = node.slice(2)
+// IR-node count of a callee body — the cheap size proxy gating multi-caller inline.
+const inlBodySize = (fn) => {
+  let n = 0
+  const count = (x) => { if (!Array.isArray(x)) return; n++; for (let i = 1; i < x.length; i++) count(x[i]) }
+  for (let i = inlBodyStart(fn); i < fn.length; i++) count(fn[i])
+  return n
+}
 
-    // Simple case: no params
-    if (params.length === 0) {
-      return clone(body)
+/**
+ * Lift one callee into ONE `(call …)` node. Returns `{ block, decls }` — `block`
+ * replaces the call; `decls` are the renamed param+local declarations to splice into
+ * the caller's local list. A fresh uid per invocation keeps every inlined copy's
+ * locals/labels unique, so the same body can be lifted into many sites.
+ *
+ *   (call $f a0 a1 …) → (block $__inlN (result T)?
+ *     (local.set $__inlN_p0 a0) …            ;; args evaluated once, in order
+ *     (local.set $__inlN_l reset) …          ;; only locals that rely on zero-init
+ *     …body, renamed, `return X` → `br $__inlN X`…)
+ */
+const buildInline = (params, locals, inlResult, cBody, args) => {
+  const uid = ++inlineUid
+  const exit = `$__inl${uid}`
+  const rename = new Map()
+  for (const p of params) rename.set(p.name, `$__inl${uid}_${p.name.slice(1)}`)
+  for (const l of locals) rename.set(l.name, `$__inl${uid}_${l.name.slice(1)}`)
+  // The callee's own block/loop/if labels would shadow same-named caller labels (and
+  // break depth resolution) under the added nesting — give them fresh names too.
+  const labelRename = new Map()
+  const collectLabels = (n) => {
+    if (!Array.isArray(n)) return
+    if (isBranchScope(n[0]) && typeof n[1] === 'string' && n[1][0] === '$' && !labelRename.has(n[1]))
+      labelRename.set(n[1], `$__inl${uid}L_${n[1].slice(1)}`)
+    for (let i = 1; i < n.length; i++) collectLabels(n[i])
+  }
+  for (const n of cBody) collectLabels(n)
+  const sub = (n) => {
+    if (!Array.isArray(n)) return n
+    const op = n[0]
+    if ((op === 'local.get' || op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string' && rename.has(n[1]))
+      return [op, rename.get(n[1]), ...n.slice(2).map(sub)]
+    if (op === 'return') return ['br', exit, ...n.slice(1).map(sub)]
+    if (isBranchScope(op) && typeof n[1] === 'string' && labelRename.has(n[1]))
+      return [op, labelRename.get(n[1]), ...n.slice(2).map(sub)]
+    if (inlIsBranch(op)) return [op, ...n.slice(1).map(c => (typeof c === 'string' && labelRename.has(c)) ? labelRename.get(c) : sub(c))]
+    return n.map((c, i) => i === 0 ? c : sub(c))
+  }
+  const setup = params.map((p, k) => ['local.set', rename.get(p.name), args[k]])
+  const resets = locals.filter(l => inlNeedsReset(cBody, l.name)).map(l => ['local.set', rename.get(l.name), inlZeroFor(l.type)])
+  const inner = cBody.map(sub)
+  const block = inlResult
+    ? ['block', exit, ['result', inlResult], ...setup, ...resets, ...inner]
+    : ['block', exit, ...setup, ...resets, ...inner]
+  const decls = [...params, ...locals].map(p => ['local', rename.get(p.name), p.type])
+  return { block, decls }
+}
+
+/**
+ * Inline SMALL functions into every caller, then delete them — the multi-caller
+ * complement to {@link inlineOnce}. inlineOnce only fires for a lone caller (so it
+ * never duplicates); this duplicates a tiny body across ALL its sites, trading a
+ * bounded amount of size to remove call overhead from hot inner loops (e.g. a
+ * raymarcher's per-step SDF, evaluated 4-wide but still paying a wasm call each
+ * march step). Size-for-speed — opt-in, on at the 'speed' level only.
+ *
+ * A callee qualifies when it is small (≤ INLINE_MAX_NODES IR nodes), named with
+ * named params/locals, single-result-or-void, non-recursive, not pinned
+ * (export/start/elem/ref.func), not a SIMD_PROTECTED transcendental, and free of
+ * depth-relative branches / tail calls (the inlParse + inlUnsafe liftability
+ * contract). Runs to a fixpoint so small-helper chains (sdf → sdRep) collapse.
+ *
+ * `simdOnly` (the speed-level default) restricts inlining to pure SIMD helpers —
+ * every param and the result are `v128`. That targets the case this exists for —
+ * a hand-vectorized hot loop's per-step helper (a raymarcher's SDF), where the call
+ * overhead is paid every iteration and V8's wasm JIT won't inline it — while leaving
+ * SCALAR helpers untouched: those are where jz's codegen-shape/size tuning and the
+ * auto-vectorizer's call-lifting (plasma's fbm → sin2) live, and duplicating them
+ * both bloats and perturbs that machinery for no gain (V8's JIT inlines scalar
+ * helpers itself). The unrestricted form stays available as `watr: { inline: true }`.
+ *
+ * @param {Array} ast
+ * @param {{simdOnly?: boolean}} [opts]
+ * @returns {Array}
+ */
+const INLINE_MAX_NODES = 90
+const isV128SimdHelper = (params, inlResult) =>
+  inlResult === 'v128' && params.length > 0 && params.every(p => p.type === 'v128')
+const inline = (ast, { simdOnly = false } = {}) => {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+
+  const skip = new Set()  // callees with a non-inlinable site (arity mismatch) — don't re-pick
+  for (let round = 0; round < MAX_INLINE_ROUNDS; round++) {
+    const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
+    const funcByName = new Map()
+    for (const n of funcs) if (typeof n[1] === 'string') funcByName.set(n[1], n)
+
+    const callRefs = new Map(), otherRef = new Set()
+    const countRefs = (n) => {
+      if (!Array.isArray(n)) return
+      const op = n[0]
+      if (op === 'call' && typeof n[1] === 'string') callRefs.set(n[1], (callRefs.get(n[1]) || 0) + 1)
+      else if (op === 'return_call' && typeof n[1] === 'string') otherRef.add(n[1])
+      for (let i = 1; i < n.length; i++) countRefs(n[i])
+    }
+    countRefs(ast)
+    const pinned = new Set()
+    for (const n of ast) if (!Array.isArray(n) || n[0] !== 'func') inlCollectPinned(n, pinned)
+
+    // Pick a small, liftable, non-recursive callee with ≥1 plain-call site.
+    let calleeName = null, parsed = null
+    for (const [name, fn] of funcByName) {
+      if (skip.has(name) || pinned.has(name) || otherRef.has(name) || SIMD_PROTECTED.has(name)) continue
+      if (!(callRefs.get(name) >= 1)) continue
+      if (inlBodySize(fn) > INLINE_MAX_NODES) continue
+      if (inlCallsSelf(fn, name)) continue
+      const p = inlParse(fn)
+      if (!p) continue
+      if (simdOnly && !isV128SimdHelper(p.params, p.inlResult)) continue
+      let bad = false
+      for (let i = inlBodyStart(fn); i < fn.length; i++) if (inlUnsafe(fn[i])) { bad = true; break }
+      if (bad) continue
+      calleeName = name; parsed = p; break
+    }
+    if (!calleeName) break
+
+    const callee = funcByName.get(calleeName)
+    const { params, locals, inlResult } = parsed
+    const cBody = callee.slice(inlBodyStart(callee))
+    const expected = callRefs.get(calleeName) || 0  // callee is non-recursive ⇒ all sites are in other funcs
+    let replaced = 0
+
+    // Splice into EVERY caller. A body that itself still calls an as-yet-uninlined
+    // helper is fine — later rounds collapse it (or it stays a call).
+    for (const fn of funcs) {
+      if (fn === callee) continue
+      const addDecls = []
+      for (let i = inlBodyStart(fn); i < fn.length; i++) {
+        fn[i] = walkPost(fn[i], (n) => {
+          if (!Array.isArray(n) || n[0] !== 'call' || n[1] !== calleeName) return
+          const args = n.slice(2)
+          if (args.length !== params.length) return  // arity mismatch — leave the call
+          const { block, decls } = buildInline(params, locals, inlResult, cBody, args)
+          addDecls.push(...decls)
+          replaced++
+          return block
+        })
+      }
+      if (addDecls.length) fn.splice(inlBodyStart(fn), 0, ...addDecls)
     }
 
-    // Substitute params with args
-    const substituted = walkPost(clone(body), (n) => {
-      if (!Array.isArray(n) || n[0] !== 'local.get') return
-      const local = n[1]
-      const paramIdx = params.findIndex(p => p.name === local)
-      if (paramIdx !== -1 && args[paramIdx]) {
-        return clone(args[paramIdx])
-      }
-    })
-
-    return substituted
-  })
+    // Drop the callee only if every site inlined; else keep it and stop re-picking it.
+    if (replaced === expected) { const idx = ast.indexOf(callee); if (idx >= 0) ast.splice(idx, 1) }
+    else skip.add(calleeName)
+  }
 
   return ast
 }
 
 // ==================== INLINE-ONCE ====================
 
-let inlineUid = 0
+/**
+ * Devirtualize `call_indirect` through NaN-boxed closure values with a statically
+ * known candidate set. `let f = c ? a : b; … f(x)` emits a select of two i64
+ * closure constants into an f64 local; every call site then derives the table
+ * slot from that local's bits:
+ *   (i32.wrap_i64 (i64.and (i64.shr_u (i64.reinterpret_f64 (local.get $f))
+ *                                     (i64.const 32)) (i64.const 32767)))
+ * When EVERY write to $f in the function is such a constant set (≤2 candidates),
+ * each call site becomes a guarded direct call —
+ *   (if (result …) (i64.eq (i64.reinterpret_f64 (local.get $f)) (i64.const C1))
+ *     (then (call $tramp1 …args)) (else <next guard | original call_indirect>))
+ * — with the ORIGINAL call_indirect kept as the final arm, so unknown flows
+ * (zero-init paths the analysis can't see) behave exactly as before: the rewrite
+ * is a pure branch-predicted fast path, ~25% on callback loops, and the direct
+ * calls participate in inlining. A trivially-constant slot ((i32.const N) after
+ * fold) becomes a bare direct call with no guard.
+ *
+ * Soundness: the guard compares the SAME bits the slot extraction reads, so
+ * whichever constant flows to the call dispatches identically in both forms;
+ * candidates that don't resolve to an elem entry (or whose target's signature
+ * differs from the call's type — would-be runtime trap) disable the site. Any
+ * table mutation op in the module disables the pass entirely. The function
+ * table is exported for host-side closure invocation (reads); host mutation of
+ * it is outside the ABI contract, same as the closure-constant model itself.
+ */
+const devirt = (ast) => {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  // Module facts: elem slot → func name (constant offsets only), type defs,
+  // named funcs. Bail on dynamic elem offsets or table mutation anywhere.
+  const slots = new Map(), typeDefs = new Map(), funcsByName = new Map()
+  let tableMutated = false
+  walk(ast, n => {
+    if (Array.isArray(n) && typeof n[0] === 'string' &&
+        (n[0] === 'table.set' || n[0] === 'table.grow' || n[0] === 'table.init' ||
+         n[0] === 'table.copy' || n[0] === 'table.fill')) tableMutated = true
+  })
+  if (tableMutated) return ast
+  for (const node of ast.slice(1)) {
+    if (!Array.isArray(node)) continue
+    if (node[0] === 'elem') {
+      const off = node[1]
+      if (!Array.isArray(off) || off[0] !== 'i32.const') return ast
+      let base = Number(off[1])
+      for (let i = 2; i < node.length; i++)
+        if (typeof node[i] === 'string' && node[i][0] === '$') slots.set(base++, node[i])
+    }
+    else if (node[0] === 'type' && typeof node[1] === 'string') typeDefs.set(node[1], node[2])
+    else if (node[0] === 'func' && typeof node[1] === 'string') funcsByName.set(node[1], node)
+  }
+  if (!slots.size) return ast
+
+  // Closure-valued GLOBALS: multiProp function-property slots dissolve into
+  // f64 module globals (plan/scope.js flattenFuncNamespaces) — the subscript
+  // hook pattern (`parse.space = fn`, overridden per feature at module init).
+  // Every observed `global.set $G <closure-const>` contributes a candidate;
+  // a non-const store poisons the global. The guard ladder stays SOUND even
+  // with an incomplete set — unknown values take the original call_indirect
+  // fallback arm — so candidates only need to cover the hot value.
+  const globalCands = new Map()
+
+  // All i64 const handling is canonical-hex STRING math (see the i64 VALUE
+  // CONTRACT above): a helper RETURNING a BigInt is kind-erased in-kernel and
+  // every op on it misdispatches — devirt silently no-ops.
+  const isC64 = (n, hex) => Array.isArray(n) && n[0] === 'i64.const' && _i64Canon(n[1]) === hex
+  const MASK15 = '0x0000000000007fff', SHIFT32 = '0x0000000000000020'
+  // Collect the i64 constants reachable through reinterpret/select arms.
+  const boxConsts = (v, out) => {
+    if (!Array.isArray(v)) return false
+    if (v[0] === 'i64.const') { out.push(v); return true }
+    // f64-carrier closure const (`f64.const nan:0xHEX`) — the form module-init
+    // global.set stores for hook slots; normalize to its i64 bits.
+    if (v[0] === 'f64.const' && typeof v[1] === 'string' && v[1].startsWith('nan:')) {
+      out.push(['i64.const', _i64Canon(v[1].slice(4))])
+      return true
+    }
+    if (v[0] === 'f64.reinterpret_i64' && v.length === 2) return boxConsts(v[1], out)
+    if (v[0] === 'select' && v.length === 4) return boxConsts(v[1], out) && boxConsts(v[2], out)
+    return false
+  }
+  // Per-global write VALUES collected first; candidates resolved by fixpoint so
+  // the hook-alias pattern works: `baseSpace = parse.space ?? default` stores a
+  // select/if whose arms are a GLOBAL READ of another const slot plus a const —
+  // candidates = union through the alias edge. Soundness is unchanged (the
+  // guard ladder keeps the original indirect fallback for unknown values); the
+  // fixpoint only widens the candidate set. `if (result f64)` arms and
+  // `__is_nullish`-style guard CONDITIONS are skipped — only VALUE positions
+  // contribute. A write that contains anything else poisons the global.
+  const globalWrites = new Map()
+  walk(ast, n => {
+    if (!Array.isArray(n) || n[0] !== 'global.set' || typeof n[1] !== 'string') return
+    if (!globalWrites.has(n[1])) globalWrites.set(n[1], [])
+    globalWrites.get(n[1]).push(n[2])
+  })
+  // Value-position scan: consts and global.get leaves, through reinterprets,
+  // select arms and if/result arms. Returns false (poison) on anything else.
+  const candLeaves = (v, consts, reads) => {
+    if (!Array.isArray(v)) return false
+    if (v[0] === 'i64.const') { consts.push(v); return true }
+    if (v[0] === 'f64.const' && typeof v[1] === 'string' && v[1].startsWith('nan:')) {
+      consts.push(['i64.const', _i64Canon(v[1].slice(4))]); return true
+    }
+    if ((v[0] === 'f64.reinterpret_i64' || v[0] === 'i64.reinterpret_f64') && v.length === 2)
+      return candLeaves(v[1], consts, reads)
+    if (v[0] === 'global.get' && typeof v[1] === 'string') { reads.push(v[1]); return true }
+    if (v[0] === 'local.get' || v[0] === 'local.tee') {
+      // a tee'd copy of one of the above — the tee VALUE was already scanned
+      // where it was written; the bare read alone proves nothing → poison
+      return v[0] === 'local.tee' && v.length === 3 ? candLeaves(v[2], consts, reads) : false
+    }
+    if (v[0] === 'select' && v.length === 4)
+      return candLeaves(v[1], consts, reads) && candLeaves(v[2], consts, reads)
+    if (v[0] === 'if') {
+      // (if (result T) COND (then A) (else B)) — arms are value positions
+      let ok = true, seenArm = false
+      for (let i = 1; i < v.length; i++) {
+        const p = v[i]
+        if (!Array.isArray(p)) continue
+        if (p[0] === 'then' || p[0] === 'else') {
+          seenArm = true
+          if (p.length !== 2 || !candLeaves(p[1], consts, reads)) ok = false
+        }
+      }
+      return ok && seenArm
+    }
+    return false
+  }
+  const writeFacts = new Map()   // global → { consts: [...], reads: [...] } | null
+  for (const [g, ws] of globalWrites) {
+    let consts = [], reads = [], ok = true
+    for (const w of ws) if (!candLeaves(w, consts, reads)) { ok = false; break }
+    writeFacts.set(g, ok ? { consts, reads } : null)
+  }
+  // Fixpoint: a global's candidates = its const writes ∪ candidates of every
+  // global it reads in value position. A poisoned alias poisons the reader.
+  let changed = true
+  const resolved = new Map()
+  while (changed) {
+    changed = false
+    for (const [g, f] of writeFacts) {
+      if (resolved.get(g) === null) continue
+      if (f === null) { if (resolved.get(g) !== null) { resolved.set(g, null); changed = true } continue }
+      const m = resolved.get(g) || new Map()
+      const before = m.size
+      let poisoned = false
+      for (const c of f.consts) m.set(_i64Canon(c[1]), c)
+      for (const r of f.reads) {
+        if (writeFacts.get(r) === null || resolved.get(r) === null) { poisoned = true; break }
+        const rm = resolved.get(r)
+        if (rm) for (const [hex, c] of rm) m.set(hex, c)
+      }
+      if (poisoned) { resolved.set(g, null); changed = true; continue }
+      if (!resolved.has(g) || m.size !== before) { resolved.set(g, m); changed = true }
+    }
+  }
+  for (const [g, m] of resolved) globalCands.set(g, m)
+
+  // The slot-extraction idiom — returns the source local name or null.
+  const matchSlotOfLocal = (e) => {
+    if (!Array.isArray(e) || e[0] !== 'i32.wrap_i64') return null
+    const a = e[1]
+    if (!Array.isArray(a) || a[0] !== 'i64.and') return null
+    let sh = a[1], mk = a[2]
+    if (!isC64(mk, MASK15)) { sh = a[2]; mk = a[1] }
+    if (!isC64(mk, MASK15) || !Array.isArray(sh) || sh[0] !== 'i64.shr_u' || !isC64(sh[2], SHIFT32)) return null
+    const ri = sh[1]
+    if (!Array.isArray(ri) || ri[0] !== 'i64.reinterpret_f64') return null
+    const leaf = ri[1]
+    if (Array.isArray(leaf) && leaf[0] === 'local.get' && typeof leaf[1] === 'string') return { local: leaf[1] }
+    if (Array.isArray(leaf) && leaf[0] === 'global.get' && typeof leaf[1] === 'string') return { global: leaf[1] }
+    return null
+  }
+  // Canonical "params -> results" token string for signature comparison.
+  const tokSig = (parts) => {
+    const ps = [], rs = []
+    for (const p of parts) {
+      if (!Array.isArray(p)) continue
+      if (p[0] === 'param') { for (const t of p.slice(1)) if (typeof t === 'string' && t[0] !== '$') ps.push(t) }
+      else if (p[0] === 'result') rs.push(...p.slice(1))
+    }
+    return ps.join(',') + '->' + rs.join(',')
+  }
+
+  for (const fn of funcsByName.values()) {
+    // Candidate sets: local → Map<bits, constNode>, or null once poisoned.
+    // Params are poisoned (incoming value unknown).
+    const cands = new Map()
+    for (const part of fn)
+      if (Array.isArray(part) && part[0] === 'param' && typeof part[1] === 'string') cands.set(part[1], null)
+    walk(fn, n => {
+      if (!Array.isArray(n) || (n[0] !== 'local.set' && n[0] !== 'local.tee') || typeof n[1] !== 'string') return
+      if (cands.get(n[1]) === null) return
+      const out = []
+      if (boxConsts(n[2], out)) {
+        const m = cands.get(n[1]) || new Map()
+        for (const c of out) m.set(_i64Canon(c[1]), c)
+        cands.set(n[1], m)
+      } else if (Array.isArray(n[2]) && n[2][0] === 'global.get' && typeof n[2][1] === 'string'
+          && globalCands.get(n[2][1])) {
+        // promoteGlobals snapshot (`$_pg = global.get $G`) — inherit G's set
+        const g = globalCands.get(n[2][1])
+        const m = cands.get(n[1]) || new Map()
+        for (const [hex, c] of g) m.set(hex, c)
+        cands.set(n[1], m)
+      } else cands.set(n[1], null)
+    })
+
+    walkPost(fn, (n, parent) => {
+      if (!Array.isArray(n) || n[0] !== 'call_indirect') return
+      // A call_indirect sitting directly under an `else` is (or looks exactly
+      // like) the fallback arm of an existing guard — never re-wrap it, so the
+      // pass is idempotent across repeated optimize() runs.
+      if (parent && parent[0] === 'else') return
+      const typeUse = Array.isArray(n[1]) && n[1][0] === 'type' ? n[1] : null
+      if (!typeUse) return
+      const sig = typeDefs.get(typeUse[1])
+      const callSig = Array.isArray(sig) ? tokSig(sig.slice(1)) : null
+      if (callSig == null) return
+      const results = []
+      for (const s of sig.slice(1)) if (Array.isArray(s) && s[0] === 'result') results.push(...s.slice(1))
+      const args = n.slice(2, -1)
+      const idx = n[n.length - 1]
+      const sigOk = (name) => {
+        const target = funcsByName.get(name)
+        if (!target) return false
+        const tu = target.find(p => Array.isArray(p) && p[0] === 'type')
+        if (tu) return tu[1] === typeUse[1] ||
+          (typeDefs.get(tu[1]) && tokSig(typeDefs.get(tu[1]).slice(1)) === callSig)
+        return tokSig(target.slice(2)) === callSig
+      }
+      // Constant slot → bare direct call.
+      if (Array.isArray(idx) && idx[0] === 'i32.const') {
+        const name = slots.get(Number(idx[1]))
+        return name && sigOk(name) ? ['call', name, ...args] : undefined
+      }
+      const f = matchSlotOfLocal(idx)
+      if (!f) return
+      const m = f.local != null ? cands.get(f.local) : globalCands.get(f.global)
+      if (!m || m.size === 0 || m.size > 4) return
+      const arms = []
+      for (const cNode of m.values()) {
+        const name = slots.get(_i64HiU(_i64Canon(cNode[1])) & 32767)
+        if (!name || !sigOk(name)) return
+        arms.push([cNode, name])
+      }
+      const readBack = f.local != null ? ['local.get', f.local] : ['global.get', f.global]
+      let out = n
+      for (let i = arms.length - 1; i >= 0; i--) {
+        const [cNode, name] = arms[i]
+        out = ['if', ...(results.length ? [['result', ...results]] : []),
+          ['i64.eq', ['i64.reinterpret_f64', clone(readBack)], clone(cNode)],
+          ['then', ['call', name, ...args.map(clone)]],
+          ['else', out]]
+      }
+      return out
+    })
+  }
+  return ast
+}
 
 /**
  * Inline functions that are called from exactly one place into their lone caller,
@@ -1336,101 +2254,20 @@ let inlineUid = 0
  * @param {Array} ast
  * @returns {Array}
  */
+// Scalar transcendental helpers the auto-vectorizer rewrites to f64x2 mirrors (PPC_CALL2 in
+// src/optimize/vectorize.js). inlineOnce must NOT dissolve their call nodes when single-caller —
+// the post-phase lift needs the call to rewrite it. Keep in sync with PPC_CALL2's keys.
+const SIMD_PROTECTED = new Set(['$math.sin_core', '$math.cos_core', '$math.sin', '$math.cos', '$math.pow', '$math.atan2', '$math.hypot', '$math.log'])
+
 const inlineOnce = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
-  const HEAD = new Set(['export', 'type', 'param', 'result', 'local'])
-  const bodyStart = (fn) => {
-    let i = 2
-    while (i < fn.length && (typeof fn[i] === 'string' || (Array.isArray(fn[i]) && HEAD.has(fn[i][0])))) i++
-    return i
-  }
-  const isBranch = op => op === 'br' || op === 'br_if' || op === 'br_table'
-  // A subtree we can't lift into a (block …): depth-relative branch labels (shift
-  // under added nesting) or tail calls (would escape the wrapping block).
-  const unsafe = (n) => {
-    if (!Array.isArray(n)) return false
-    const op = n[0]
-    if (op === 'return_call' || op === 'return_call_indirect' || op === 'return_call_ref') return true
-    if (op === 'try' || op === 'try_table' || op === 'delegate' || op === 'rethrow') return true  // exception labels — not handled by the relabeler below
-    if (isBranch(op)) for (let i = 1; i < n.length; i++) if (typeof n[i] === 'number' || (typeof n[i] === 'string' && /^\d+$/.test(n[i]))) return true
-    for (let i = 1; i < n.length; i++) if (unsafe(n[i])) return true
-    return false
-  }
-  const callsSelf = (n, name) => {
-    if (!Array.isArray(n)) return false
-    if ((n[0] === 'call' || n[0] === 'return_call') && n[1] === name) return true
-    for (let i = 1; i < n.length; i++) if (callsSelf(n[i], name)) return true
-    return false
-  }
-  // Locals must be re-zeroed each time the inlined block is entered IF the
-  // callee body actually relies on zero-init — i.e. some path reads the local
-  // before any unconditional write. In the original callee they got fresh
-  // zero-init per call; after inlining they're outer-func locals, zeroed only
-  // at outer entry, so a caller-loop that re-enters the inlined block reads
-  // stale values otherwise. Returns null for any type we can't safely
-  // zero-init here (skip inlining such callees).
-  const zeroFor = (t) => {
-    if (t === 'i32') return ['i32.const', 0]
-    if (t === 'i64') return ['i64.const', 0n]
-    if (t === 'f32') return ['f32.const', 0]
-    if (t === 'f64') return ['f64.const', 0]
-    if (t === 'v128') return ['v128.const', 'i64x2', 0n, 0n]
-    // Nullable ref types (`(ref null …)`, `funcref`, `externref`, `anyref`, etc.)
-    // zero-init to `ref.null …` per call; emitting that here would need the exact
-    // heap-type. Non-nullable refs aren't zero-init at all (codegen must seed
-    // them). Either way, skip — let the call survive.
-    return null
-  }
+  // Lift primitives are shared with `inline` (defined once above buildInline). inlineOnce
+  // splices into a SINGLE caller (never duplicating); `inline` duplicates into every caller.
+  const bodyStart = inlBodyStart, callsSelf = inlCallsSelf, unsafe = inlUnsafe, isBranch = inlIsBranch
+  const zeroFor = inlZeroFor, needsReset = inlNeedsReset
 
-  // Locals whose first observed use is a read — or whose first write is inside
-  // a conditional branch, where the alternate path bypasses it — depend on
-  // zero-init and need a reset when inlined into a caller-loop. Locals that
-  // are unconditionally written before any read (the common scratch pattern,
-  // e.g. `(local.set $bits (local.get $ptr))` opening a helper) don't, and
-  // emitting a spurious reset would only inflate that local's set-count and
-  // block downstream propagation/coalescing. Mirrors `coalesceLocals`'
-  // `readsZero` heuristic.
-  const needsReset = (body, name) => {
-    let seen = false, conditional = false, depth = 0
-    const visit = (n) => {
-      if (seen || !Array.isArray(n)) return
-      const op = n[0]
-      const isSet = op === 'local.set' || op === 'local.tee'
-      if ((isSet || op === 'local.get') && n[1] === name) {
-        if (isSet) for (let i = 2; i < n.length && !seen; i++) visit(n[i])
-        if (seen) return
-        seen = true
-        if (op === 'local.get' || depth > 0) conditional = true
-        return
-      }
-      const isIf = op === 'if'
-      for (let i = 1; i < n.length && !seen; i++) {
-        const c = n[i]
-        const cond = isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')
-        if (cond) depth++
-        visit(c)
-        if (cond) depth--
-      }
-    }
-    for (const n of body) { if (seen) break; visit(n) }
-    // If the local is never used (dead), no reset; the dead decl will be pruned.
-    if (!seen) return false
-    return conditional
-  }
-
-  // Module-level references that pin a function (can't be removed/inlined-away).
-  const collectPinned = (n, pinned) => {
-    if (!Array.isArray(n)) return
-    const op = n[0]
-    if (op === 'export' && Array.isArray(n[2]) && n[2][0] === 'func' && typeof n[2][1] === 'string') pinned.add(n[2][1])
-    else if (op === 'start' && typeof n[1] === 'string') pinned.add(n[1])
-    else if (op === 'ref.func' && typeof n[1] === 'string') pinned.add(n[1])
-    else if (op === 'elem') for (const c of n) if (typeof c === 'string' && c[0] === '$') pinned.add(c)
-    for (const c of n) collectPinned(c, pinned)
-  }
-
-  for (let round = 0; round < 16; round++) {
+  for (let round = 0; round < MAX_INLINE_ROUNDS; round++) {
     const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
     const funcByName = new Map()
     for (const n of funcs) if (typeof n[1] === 'string') funcByName.set(n[1], n)
@@ -1446,8 +2283,7 @@ const inlineOnce = (ast) => {
       for (let i = 1; i < n.length; i++) countRefs(n[i])
     }
     countRefs(ast)
-    const pinned = new Set()
-    for (const n of ast) if (!Array.isArray(n) || n[0] !== 'func') collectPinned(n, pinned)
+    const pinned = inlBuildPinned(ast)
     // a func may carry its own (export "name") — the signature scan below rejects those too
 
     // Pick a callee.
@@ -1455,6 +2291,11 @@ const inlineOnce = (ast) => {
     for (const [name, fn] of funcByName) {
       if (pinned.has(name) || otherRef.has(name)) continue
       if (callRefs.get(name) !== 1) continue
+      // Keep the scalar transcendentals that the auto-vectorizer maps to f64x2 mirrors (PPC_CALL2 in
+      // src/optimize/vectorize.js): inlining a single-caller $math.atan2/hypot/log would dissolve the
+      // call node before the post-phase lift can rewrite it to $math.atan2_2/hypot_2/log_v. Keep in
+      // sync with PPC_CALL2's keys.
+      if (SIMD_PROTECTED.has(name)) continue
       if (callsSelf(fn, name)) continue
       // named params/locals only (we'll rename them); reject locals with types
       // we can't zero-init on block re-entry.
@@ -1501,11 +2342,10 @@ const inlineOnce = (ast) => {
     for (const l of locals) rename.set(l.name, `$__inl${uid}_${l.name.slice(1)}`)
     // The callee's own block/loop/if labels would shadow same-named labels in the
     // caller after nesting (and break depth resolution) — give them fresh names too.
-    const isBlockLabel = op => op === 'block' || op === 'loop' || op === 'if'
     const labelRename = new Map()
     const collectLabels = (n) => {
       if (!Array.isArray(n)) return
-      if (isBlockLabel(n[0]) && typeof n[1] === 'string' && n[1][0] === '$' && !labelRename.has(n[1]))
+      if (isBranchScope(n[0]) && typeof n[1] === 'string' && n[1][0] === '$' && !labelRename.has(n[1]))
         labelRename.set(n[1], `$__inl${uid}L_${n[1].slice(1)}`)
       for (let i = 1; i < n.length; i++) collectLabels(n[i])
     }
@@ -1516,7 +2356,7 @@ const inlineOnce = (ast) => {
       if ((op === 'local.get' || op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string' && rename.has(n[1]))
         return [op, rename.get(n[1]), ...n.slice(2).map(sub)]
       if (op === 'return') return ['br', exit, ...n.slice(1).map(sub)]
-      if (isBlockLabel(op) && typeof n[1] === 'string' && labelRename.has(n[1]))
+      if (isBranchScope(op) && typeof n[1] === 'string' && labelRename.has(n[1]))
         return [op, labelRename.get(n[1]), ...n.slice(2).map(sub)]
       if (isBranch(op)) return [op, ...n.slice(1).map(c => (typeof c === 'string' && labelRename.has(c)) ? labelRename.get(c) : sub(c))]
       return n.map((c, i) => i === 0 ? c : sub(c))
@@ -1838,13 +2678,20 @@ const vacuum = (ast) => {
     // Remove nop entirely (return array marker; parent or post-pass cleans it)
     if (op === 'nop') return ['nop']
 
-    // (drop PURE) → nop
-    if (op === 'drop' && node.length === 2 && isPure(node[1])) {
-      return ['nop']
+    // (drop V) → just V's side effects. Pure V vanishes (→ nop); a pure op over
+    // a `local.tee` collapses to the bare store (kills the post-increment's dead
+    // old-value arithmetic); impure V is kept under a drop.
+    if (op === 'drop' && node.length === 2) {
+      const eff = dropEffects(node[1])
+      if (eff.length === 0) return ['nop']
+      if (eff.length === 1) return eff[0]
+      return ['block', ...eff]
     }
 
-    // (select x x cond) → x
-    if (op === 'select' && node.length >= 4 && equal(node[1], node[2])) return node[1]
+    // (select x x cond) → x — only when cond is PURE. An impure cond may set a
+    // local that a later op reads (e.g. an address `local.tee` the matching store
+    // reuses); dropping it would leave that local stale. Keep the select otherwise.
+    if (op === 'select' && node.length >= 4 && equal(node[1], node[2]) && isPure(node[3])) return node[1]
 
     if (op === 'if') {
       const { cond, thenBranch, elseBranch } = parseIf(node)
@@ -1861,16 +2708,23 @@ const vacuum = (ast) => {
     }
 
     // Clean out nops, drop-of-pure sequences, and empty annotations from blocks
-    if (op === 'func' || op === 'block' || op === 'loop' || op === 'then' || op === 'else') {
+    if (isScopeNode(node)) {
       const cleaned = [op]
       for (let i = 1; i < node.length; i++) {
         const child = node[i]
         if (child === 'nop' || (Array.isArray(child) && child[0] === 'nop')) continue
-        // Pure expression followed by standalone drop → remove both
+        // Stack-form `EXPR drop`: a pure EXPR drops out entirely; a bare
+        // `tee X V drop` keeps just the store (`set X V`) — the dropped value
+        // was the only reason it was a tee.
         const next = node[i + 1]
         const isDrop = next === 'drop' || (Array.isArray(next) && next[0] === 'drop' && next.length === 1)
-        if (Array.isArray(child) && isPure(child) && isDrop) {
+        if (Array.isArray(child) && isDrop && isPure(child)) {
           i++ // skip the drop too
+          continue
+        }
+        if (Array.isArray(child) && isDrop && child[0] === 'local.tee' && child.length === 3) {
+          cleaned.push(['local.set', child[1], child[2]])
+          i++ // skip the drop
           continue
         }
         cleaned.push(child)
@@ -1882,67 +2736,74 @@ const vacuum = (ast) => {
 
 // ==================== PEEPHOLE ====================
 
-/** Peephole optimizations: simple algebraic identities */
+/** Peephole optimizations: simple algebraic identities.
+ *  Every rule that DROPS an operand guards on isPure: an impure operand must still
+ *  be evaluated for its side effects. The load-bearing case is a typed-array element
+ *  store, whose address is a `local.tee` inside the value expression (the element's
+ *  own read); dropping that operand (e.g. `(a[i] op a[i]) & 0`) would strand the
+ *  store with a stale address — a silent miscompile. When impure, keep the op (it
+ *  still yields the same value AND runs the operand). */
+const selfFold = (val) => (a, b) => equal(a, b) && isPure(a) ? val : null
 const PEEPHOLE = {
-  // Self-cancelling / tautological binary ops
-  'i32.sub': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i64.sub': (a, b) => equal(a, b) ? ['i64.const', 0n] : null,
-  'i32.xor': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i64.xor': (a, b) => equal(a, b) ? ['i64.const', 0n] : null,
-  'i32.eq':  (a, b) => equal(a, b) ? ['i32.const', 1] : null,
-  'i64.eq':  (a, b) => equal(a, b) ? ['i32.const', 1] : null,
-  'i32.ne':  (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i64.ne':  (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i32.lt_s': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i32.lt_u': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i32.gt_s': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i32.gt_u': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i32.le_s': (a, b) => equal(a, b) ? ['i32.const', 1] : null,
-  'i32.le_u': (a, b) => equal(a, b) ? ['i32.const', 1] : null,
-  'i32.ge_s': (a, b) => equal(a, b) ? ['i32.const', 1] : null,
-  'i32.ge_u': (a, b) => equal(a, b) ? ['i32.const', 1] : null,
-  'i64.lt_s': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i64.lt_u': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i64.gt_s': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i64.gt_u': (a, b) => equal(a, b) ? ['i32.const', 0] : null,
-  'i64.le_s': (a, b) => equal(a, b) ? ['i32.const', 1] : null,
-  'i64.le_u': (a, b) => equal(a, b) ? ['i32.const', 1] : null,
-  'i64.ge_s': (a, b) => equal(a, b) ? ['i32.const', 1] : null,
-  'i64.ge_u': (a, b) => equal(a, b) ? ['i32.const', 1] : null,
+  // Self-cancelling / tautological binary ops — drop both (equal) operands.
+  'i32.sub': selfFold(['i32.const', 0]),
+  'i64.sub': selfFold(['i64.const', 0]),
+  'i32.xor': selfFold(['i32.const', 0]),
+  'i64.xor': selfFold(['i64.const', 0]),
+  'i32.eq':  selfFold(['i32.const', 1]),
+  'i64.eq':  selfFold(['i32.const', 1]),
+  'i32.ne':  selfFold(['i32.const', 0]),
+  'i64.ne':  selfFold(['i32.const', 0]),
+  'i32.lt_s': selfFold(['i32.const', 0]),
+  'i32.lt_u': selfFold(['i32.const', 0]),
+  'i32.gt_s': selfFold(['i32.const', 0]),
+  'i32.gt_u': selfFold(['i32.const', 0]),
+  'i32.le_s': selfFold(['i32.const', 1]),
+  'i32.le_u': selfFold(['i32.const', 1]),
+  'i32.ge_s': selfFold(['i32.const', 1]),
+  'i32.ge_u': selfFold(['i32.const', 1]),
+  'i64.lt_s': selfFold(['i32.const', 0]),
+  'i64.lt_u': selfFold(['i32.const', 0]),
+  'i64.gt_s': selfFold(['i32.const', 0]),
+  'i64.gt_u': selfFold(['i32.const', 0]),
+  'i64.le_s': selfFold(['i32.const', 1]),
+  'i64.le_u': selfFold(['i32.const', 1]),
+  'i64.ge_s': selfFold(['i32.const', 1]),
+  'i64.ge_u': selfFold(['i32.const', 1]),
 
-  // Zero/all-bits absorption
+  // Zero/all-bits absorption — drops the NON-const operand, so guard its purity.
   'i32.mul': (a, b) => {
-    const ca = getConst(a), cb = getConst(b)
-    if (ca?.value === 0 || cb?.value === 0) return ['i32.const', 0]
+    if (getConst(b)?.value === 0 && isPure(a)) return ['i32.const', 0]
+    if (getConst(a)?.value === 0 && isPure(b)) return ['i32.const', 0]
     return null
   },
   'i64.mul': (a, b) => {
-    const ca = getConst(a), cb = getConst(b)
-    if (ca?.value === 0n || cb?.value === 0n) return ['i64.const', 0n]
+    if (getConst(b)?.value === ZERO64 && isPure(a)) return ['i64.const', 0]
+    if (getConst(a)?.value === ZERO64 && isPure(b)) return ['i64.const', 0]
     return null
   },
   'i32.and': (a, b) => {
-    if (equal(a, b)) return a
-    const ca = getConst(a), cb = getConst(b)
-    if (ca?.value === 0 || cb?.value === 0) return ['i32.const', 0]
+    if (equal(a, b) && isPure(b)) return a
+    if (getConst(b)?.value === 0 && isPure(a)) return ['i32.const', 0]
+    if (getConst(a)?.value === 0 && isPure(b)) return ['i32.const', 0]
     return null
   },
   'i64.and': (a, b) => {
-    if (equal(a, b)) return a
-    const ca = getConst(a), cb = getConst(b)
-    if (ca?.value === 0n || cb?.value === 0n) return ['i64.const', 0n]
+    if (equal(a, b) && isPure(b)) return a
+    if (getConst(b)?.value === ZERO64 && isPure(a)) return ['i64.const', 0]
+    if (getConst(a)?.value === ZERO64 && isPure(b)) return ['i64.const', 0]
     return null
   },
   'i32.or': (a, b) => {
-    if (equal(a, b)) return a
-    const ca = getConst(a), cb = getConst(b)
-    if (ca?.value === -1 || cb?.value === -1) return ['i32.const', -1]
+    if (equal(a, b) && isPure(b)) return a
+    if (getConst(b)?.value === -1 && isPure(a)) return ['i32.const', -1]
+    if (getConst(a)?.value === -1 && isPure(b)) return ['i32.const', -1]
     return null
   },
   'i64.or': (a, b) => {
-    if (equal(a, b)) return a
-    const ca = getConst(a), cb = getConst(b)
-    if (ca?.value === -1n || cb?.value === -1n) return ['i64.const', -1n]
+    if (equal(a, b) && isPure(b)) return a
+    if (getConst(b)?.value === NEG164 && isPure(a)) return ['i64.const', -1]
+    if (getConst(a)?.value === NEG164 && isPure(b)) return ['i64.const', -1]
     return null
   },
 
@@ -1969,7 +2830,12 @@ const peephole = (ast) => {
 
 /** Bytes a signed-LEB128 integer encodes to. */
 const slebSize = (v) => {
-  let x = typeof v === 'bigint' ? v : BigInt(Math.trunc(Number(v) || 0))
+  let x = typeof v === 'bigint' ? v
+    : typeof v === 'string' ? BigInt(v.replaceAll('_', ''))
+    : BigInt(Math.trunc(Number(v) || 0))
+  // Signed view of raw bits — exact natively; in-kernel the arm is dead
+  // (BigInt('0x…') already arrives as the signed i64 carrier there).
+  if (x > 0x7fffffffffffffffn) x = x - 0x8000000000000000n - 0x8000000000000000n
   let n = 1
   while (true) {
     const b = x & 0x7fn
@@ -2439,7 +3305,7 @@ const dedupe = (ast) => {
     walk(node, (n) => {
       if (!Array.isArray(n) || typeof n[1] !== 'string' || n[1][0] !== '$') return
       const op = n[0]
-      if (op === 'param' || op === 'local' || op === 'block' || op === 'loop' || op === 'if') {
+      if (op === 'param' || op === 'local' || isBranchScope(op)) {
         localNames.add(n[1])
       }
     })
@@ -2567,53 +3433,62 @@ const dedupTypes = (ast) => {
 
 // ==================== DATA SEGMENT PACKING ====================
 
-/** Parse a WAT data string literal into Uint8Array */
+/** Parse a WAT data string literal into a plain byte array. Plain arrays —
+ *  not Uint8Array — throughout the data codecs: typed-array views/methods have
+ *  spotty native lowerings (subarray dispatches to the HOST, in-situ variable-
+ *  index reads misread in the kernel), while plain number arrays are the
+ *  optimizer's lingua franca and proven kernel-faithful. */
 const parseDataString = (str) => {
-  if (typeof str !== 'string' || str.length < 2 || str[0] !== '"') return new Uint8Array()
-  const inner = str.slice(1, -1)
+  if (typeof str !== 'string' || str.length < 2 || str[0] !== '"') return []
   const bytes = []
-  for (let i = 0; i < inner.length; i++) {
-    if (inner[i] === '\\') {
-      const next = inner[++i]
-      if (next === 'x' || next === 'X') {
-        bytes.push(parseInt(inner.slice(i + 1, i + 3), 16))
-        i += 2
-      } else if (/[0-9a-fA-F]/.test(next) && /[0-9a-fA-F]/.test(inner[i + 1])) {
-        bytes.push(parseInt(inner.slice(i, i + 2), 16))
-        i++
-      } else if (next === 'n') bytes.push(10)
-      else if (next === 't') bytes.push(9)
-      else if (next === 'r') bytes.push(13)
-      else if (next === '\\') bytes.push(92)
-      else if (next === '"') bytes.push(34)
-      else bytes.push(next.charCodeAt(0))
+  // Hex digit value by char code, −1 for non-hex — pure number math (no
+  // regex/slice/parseInt on string views; see contract note above).
+  const hexv = (c) => c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1
+  const end = str.length - 1   // skip surrounding quotes
+  for (let i = 1; i < end; i++) {
+    const c = str.charCodeAt(i)
+    if (c !== 92) { bytes.push(c); continue }
+    const n = str.charCodeAt(++i)
+    if (n === 120 || n === 88) {        // \xHH
+      bytes.push((hexv(str.charCodeAt(i + 1)) << 4) | hexv(str.charCodeAt(i + 2)))
+      i += 2
     } else {
-      bytes.push(inner.charCodeAt(i))
+      const h1 = hexv(n), h2 = i + 1 < end ? hexv(str.charCodeAt(i + 1)) : -1
+      if (h1 >= 0 && h2 >= 0) { bytes.push((h1 << 4) | h2); i++ }
+      else if (n === 110) bytes.push(10)       // \n
+      else if (n === 116) bytes.push(9)        // \t
+      else if (n === 114) bytes.push(13)       // \r
+      else bytes.push(n)                       // \\ \" and any other escaped char
     }
   }
-  return new Uint8Array(bytes)
+  return bytes
 }
 
-/** Encode Uint8Array as WAT data string literal */
-const encodeDataString = (bytes) => {
+/** Encode a plain byte array as a WAT data string literal; `end` bounds the
+ *  bytes (always passed explicitly — see parseDataString's contract note).
+ *  (`b` comes from a plain-array element read, i.e. an untyped receiver — the
+ *  `.toString(16)` here is exactly the dispatch the tryRuntimeNumberMethod /
+ *  runtime-string-fork number arm exists for; it used to yield `undefined`
+ *  in-kernel and zeroed every escaped byte of the emitted data segment.) */
+const encodeDataString = (bytes, end) => {
   let str = '"'
-  for (let i = 0; i < bytes.length; i++) {
+  for (let i = 0; i < end; i++) {
     const b = bytes[i]
-    if (b >= 32 && b < 127 && b !== 34 && b !== 92) {
-      str += String.fromCharCode(b)
-    } else {
-      str += '\\' + b.toString(16).padStart(2, '0')
-    }
+    if (b >= 32 && b < 127 && b !== 34 && b !== 92) str += String.fromCharCode(b)
+    else str += '\\' + b.toString(16).padStart(2, '0')
   }
   return str + '"'
 }
 
-/** Trim trailing zeros from data content items */
+/** Trim trailing zeros from data content items. Per-byte pushes (never
+ *  push(...spread) — a segment can be hundreds of KB and spreading overflows
+ *  V8's argument stack; never Uint8Array — see parseDataString's note). */
 const trimTrailingZeros = (items) => {
   const bytes = []
   for (const item of items) {
     if (typeof item === 'string') {
-      bytes.push(...parseDataString(item))
+      const chunk = parseDataString(item)
+      for (let i = 0; i < chunk.length; i++) bytes.push(chunk[i])
     } else if (Array.isArray(item) && item[0] === 'i8') {
       for (let i = 1; i < item.length; i++) bytes.push(Number(item[i]) & 0xff)
     } else {
@@ -2624,7 +3499,7 @@ const trimTrailingZeros = (items) => {
   while (end > 0 && bytes[end - 1] === 0) end--
   if (end === bytes.length) return items
   if (end === 0) return []
-  return [encodeDataString(new Uint8Array(bytes.slice(0, end)))]
+  return [encodeDataString(bytes, end)]
 }
 
 /** Extract { memidx, offset } from an active data segment with constant offset */
@@ -2682,11 +3557,9 @@ const mergeDataSegments = (a, b) => {
       typeof aContent[0] === 'string' && typeof bContent[0] === 'string') {
     const aBytes = parseDataString(aContent[0])
     const bBytes = parseDataString(bContent[0])
-    const merged = new Uint8Array(aBytes.length + bBytes.length)
-    merged.set(aBytes)
-    merged.set(bBytes, aBytes.length)
+    for (let i = 0; i < bBytes.length; i++) aBytes.push(bBytes[i])
     a.length = aIdx
-    a.push(encodeDataString(merged))
+    a.push(encodeDataString(aBytes, aBytes.length))
     return true
   }
 
@@ -2871,12 +3744,14 @@ const reorder = (ast) => {
 const PASSES = [
   ['stripmut',      stripmut,       true,  'strip mut from never-written globals'],
   ['globals',       globals,        true,  'propagate immutable global constants'],
+  ['guardRefine',   guardRefine,    true,  'fold NaN-box tag reads under dominating tag guards'],
   ['fold',          fold,           true,  'constant folding'],
   ['identity',      identity,       true,  'remove identity ops (x + 0 → x)'],
   ['peephole',      peephole,       true,  'x-x→0, x&0→0, etc.'],
   ['strength',      strength,       true,  'strength reduction (x * 2 → x << 1)'],
   ['branch',        branch,         true,  'simplify constant branches'],
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
+  ['devirt',        devirt,         false, 'call_indirect with known closure constants → guarded direct calls — grows bytes for speed'],
   ['inlineOnce',    inlineOnce,     true,  'inline single-call functions into their lone caller (never duplicates)'],
   ['inline',        inline,         false, 'inline tiny functions — can duplicate bodies'],
   ['offset',        offset,         true,  'fold add+const into load/store offset'],
@@ -2934,8 +3809,62 @@ const normalize = (opts) => {
  * optimize(ast, 'treeshake')         // only treeshake
  * optimize(ast, { fold: true })      // explicit
  */
+/**
+ * Could `inlineOnce`/`inline` grow the binary on this module? They are the only
+ * size-*increasing* passes: splicing a callee body plus its `block`/param-setup
+ * wrapper can exceed the `call` it removes. Every other pass strictly shrinks or
+ * holds. So if no function is even a candidate (called exactly once, not pinned
+ * by export/start/elem/ref.func, not its own exporter), nothing can inflate and
+ * the size guard is dead weight. Cheap over-approximation of inlineOnce's own
+ * gating — a false positive only costs the guarded path (correct, just slower).
+ */
+const mayInline = (ast) => {
+  if (!Array.isArray(ast)) return false
+  const callRefs = new Map(), pinned = new Set(), other = new Set()
+  const scan = (n) => {
+    if (!Array.isArray(n)) return
+    const op = n[0]
+    if (op === 'call' && typeof n[1] === 'string') callRefs.set(n[1], (callRefs.get(n[1]) || 0) + 1)
+    else if (op === 'return_call' && typeof n[1] === 'string') other.add(n[1])
+    else if (op === 'ref.func' && typeof n[1] === 'string') pinned.add(n[1])
+    else if (op === 'export' && Array.isArray(n[2]) && n[2][0] === 'func' && typeof n[2][1] === 'string') pinned.add(n[2][1])
+    else if (op === 'start' && typeof n[1] === 'string') pinned.add(n[1])
+    else if (op === 'elem') for (const c of n) if (typeof c === 'string' && c[0] === '$') pinned.add(c)
+    for (let i = 1; i < n.length; i++) scan(n[i])
+  }
+  scan(ast)
+  for (const n of ast) {
+    if (!Array.isArray(n) || n[0] !== 'func' || typeof n[1] !== 'string') continue
+    const name = n[1]
+    if (callRefs.get(name) !== 1 || pinned.has(name) || other.has(name)) continue
+    if (n.some(c => Array.isArray(c) && c[0] === 'export')) continue // self-exporting func
+    return true
+  }
+  return false
+}
+
+// A `__start` whose body DCE emptied down to nothing — plus its `(start)`
+// directive — is pure noise: the directive invokes a no-op. jz's buildStartFn
+// only emits `__start` when it has content, so an empty one is always a post-DCE
+// artifact (e.g. a top-level `1 + 2;` whose dropped value the dead-code pass
+// removed). Drop both. Header nodes (param/result/local/export/type) don't count
+// as a body — a function carrying only locals still does nothing.
+const START_HEAD = new Set(['export', 'type', 'param', 'result', 'local'])
+function pruneEmptyStart(ast) {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  const fn = ast.find(n => Array.isArray(n) && n[0] === 'func' && n[1] === '$__start')
+  if (!fn) return ast
+  // Skip the name (index 1) and header nodes; a bare-string node past them is a
+  // real instruction (`drop`/`nop`/`unreachable`), so it stops the scan.
+  let b = 2
+  while (b < fn.length && Array.isArray(fn[b]) && START_HEAD.has(fn[b][0])) b++
+  if (b < fn.length) return ast  // real instructions remain
+  return ast.filter(n => !(Array.isArray(n) &&
+    ((n[0] === 'func' && n[1] === '$__start') || (n[0] === 'start' && n[1] === '$__start'))))
+}
+
 export default function optimize(ast, opts = true) {
-  if (typeof ast === 'string') ast = parse(ast)
+  if (typeof ast === 'string') ast = parse(ast)   // accept WAT source directly
   const strictGuard = opts === true  // default: zero tolerance for bloat
   opts = normalize(opts)
 
@@ -2943,58 +3872,88 @@ export default function optimize(ast, opts = true) {
   const verbose = opts.verbose || opts.log
 
   ast = clone(ast)
-  let beforeRound = null
 
-  // Size guard works on encoded bytes, not AST node count: passes like
-  // `globals` / `inlineOnce` are node-count-neutral yet move real bytes
-  // (a `global.get` ↔ a fat `f64.const`; a `call` ↔ an inlined body), so a
-  // node-count guard can't tell when a round bloated — or shrank. `binarySize`
-  // also returns Infinity if a round produced invalid wat, so a broken round
-  // reverts instead of escaping.
-  //
-  // A round's starting size always equals the previous round's ending size —
-  // the AST is untouched between iterations — so carry it forward and compile
-  // once per round instead of twice. `binarySize` is a full compile and by far
-  // the hottest thing in this loop, so halving the count of them matters.
+  // devirt trades bytes for speed by design (guards + duplicated args), so it
+  // runs ONCE after the rounds — its candidate shape (select of two i64 closure
+  // constants) only emerges from fold/propagate, and its intended growth must
+  // not trip the size-guard into reverting a whole round. A single sweep is
+  // complete: every call_indirect is visited; rewritten sites keep the original
+  // as the guarded fallback arm.
+  // `inline` (multi-caller, size-for-speed) is like `devirt`: it INTENTIONALLY grows
+  // the binary, so it must run OUTSIDE the per-round size-revert guard below (which
+  // would otherwise undo it). Run it once after the rounds converge, then tidy the
+  // (block (local.set $p arg) … body) wrappers it leaves with the same cleanup passes
+  // a normal round would. opt-in (speed level); a no-op when no small callee qualifies.
+  const runInline = (a) => {
+    if (!opts.inline) return a
+    // `inline: 'simd'` → SIMD-helper-only (jz's speed tier, avoids general bloat);
+    // `inline: true` / `'all'` → general inlining of tiny functions.
+    a = inline(a, { simdOnly: opts.inline === 'simd' })
+    if (opts.propagate) a = propagate(a)
+    if (opts.mergeBlocks) a = mergeBlocks(a)
+    if (opts.vacuum) a = vacuum(a)
+    if (opts.coalesceLocals) a = coalesceLocals(a)
+    return a
+  }
+  const finish = (a) => { a = runInline(a); return pruneEmptyStart(opts.devirt ? devirt(a) : a) }
+
+  // Fast path: jz owns this optimizer and feeds it a controlled, type-aware IR.
+  // The only passes that can *grow* the binary are inlineOnce/inline; when no
+  // function is an inline candidate (the common case for scalar REPL kernels)
+  // nothing can inflate, so we skip watr's per-round `binarySize` re-compile
+  // guard — up to four full encodes per call — and iterate to a fixpoint with
+  // zero compiles. A round that changes nothing is the natural exit.
+  if (!((opts.inlineOnce || opts.inline) && mayInline(ast))) {
+    // inlineOnce/inline can't fire here, so skip them — their candidate scan
+    // (a 16-round whole-module walk) is the second-costliest thing after
+    // propagate, and it would only confirm what `mayInline` already proved.
+    for (let round = 0; round < 3; round++) {
+      const beforeRound = clone(ast)
+      for (const [key, fn] of PASSES) if (opts[key] && key !== 'inlineOnce' && key !== 'inline' && key !== 'devirt') ast = fn(ast)
+      if (equal(beforeRound, ast)) break // fixpoint
+      if (verbose) log(`  round ${round + 1} applied`)
+    }
+    return finish(ast)
+  }
+
+  // Guarded path: inlining can inflate (a body bigger than the call it replaces),
+  // so score each round on encoded bytes and revert any that grows the binary.
+  // `binarySize` returns Infinity for invalid wat, so a broken round reverts too.
+  // A round's starting size equals the prior round's ending size, so carry it
+  // forward and compile once per round.
+  let beforeRound = null
   let sizeBefore = binarySize(ast)
   for (let round = 0; round < 3; round++) {
     beforeRound = clone(ast)
 
-    for (const [key, fn] of PASSES) if (opts[key]) ast = fn(ast)
+    for (const [key, fn] of PASSES) if (opts[key] && key !== 'devirt' && key !== 'inline') ast = fn(ast)
     // Second propagate sweep: `inlineOnce`/`inline` (above) leave fresh
     // `(local.set $p arg) … (local.get $p)` wrappers around each inlined call;
     // re-running propagation collapses them within this same round, so the size
-    // guard scores the cleaned result instead of waiting a round (which it may
-    // never get if `equal()` declares a fixpoint first).
+    // guard scores the cleaned result.
     if (opts.propagate && (opts.inlineOnce || opts.inline)) ast = propagate(ast)
 
-    // A round that changed nothing can't have inflated, so the convergence
-    // check goes before the compile — the final, fixpoint-confirming round
-    // (the common exit) then costs zero compiles instead of one.
+    // A round that changed nothing can't have inflated — check convergence
+    // before compiling so the fixpoint-confirming round costs zero compiles.
     if (equal(beforeRound, ast)) break
 
     const sizeAfter = binarySize(ast)
     const delta = sizeAfter - sizeBefore
+    if (verbose || delta !== 0) log(`  round ${round + 1}: ${delta > 0 ? '+' : ''}${delta} bytes`, delta)
 
-    if (verbose || delta !== 0) {
-      log(`  round ${round + 1}: ${delta > 0 ? '+' : ''}${delta} bytes`, delta)
-    }
-
-    // Size guard: default optimize must never inflate. Explicit passes get a
-    // little leniency (a round may grow a few bytes setting up a bigger win).
+    // Default optimize must never inflate; explicit passes get slight leniency.
     const tolerance = strictGuard ? 0 : 16
     if (delta > tolerance) {
       if (verbose) log(`  ⚠ round ${round + 1} inflated by ${delta} bytes, reverting`, delta)
       ast = beforeRound
       break
     }
-
-    sizeBefore = sizeAfter // this round's result is next round's baseline
+    sizeBefore = sizeAfter
   }
 
-  return ast
+  return finish(ast)
 }
 
 /** Count AST nodes (fast size heuristic). */
 export { count as size, count, binarySize }
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, inlineOnce, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, inlineOnce, devirt, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }

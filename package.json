@@ -26,6 +26,10 @@
     "./compile": {
       "types": "./types/src/compile.d.ts",
       "default": "./src/compile.js"
+    },
+    "./optimize": {
+      "types": "./types/src/optimize.d.ts",
+      "default": "./src/optimize.js"
     }
   },
   "typesVersions": {

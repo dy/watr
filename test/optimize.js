@@ -3,6 +3,14 @@ import assert from 'node:assert'
 import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 
+// The optimizer canonicalizes folded `i64.const` values to 16-digit hex (the raw
+// bits — lossless for NaN-box / bit-pattern constants). Hex and decimal encode to
+// identical bytes, so i64 fold tests assert on the VALUE, not the text form.
+const toBig = (s) => s[0] === '-' ? -BigInt(s.slice(1)) : BigInt(s)   // BigInt() rejects '-0x1'
+const i64has = (src, v) =>
+  [...src.matchAll(/\(i64\.const\s+(-?(?:0x[0-9a-fA-F]+|\d+))\)/g)]
+    .some(m => BigInt.asUintN(64, toBig(m[1])) === BigInt.asUintN(64, toBig(String(v))))
+
 // ==================== CONSTANT FOLDING ====================
 
 test('fold: i32 arithmetic', () => {
@@ -23,17 +31,19 @@ test('fold: i64 arithmetic', () => {
   const ast = parse('(module (func (result i64) (i64.add (i64.const 100) (i64.const 200))))')
   const opt = optimize(ast, 'fold')
   const src = print(opt)
-  assert(src.includes('i64.const 300'), 'should fold i64 100+200 to 300')
+  assert(i64has(src, 300n), 'should fold i64 100+200 to 300')
 })
 
 test('fold: signed hex integer literals', () => {
   for (const [type, expr, expect] of [
-    ['i32', '(i32.add (i32.const -0x1) (i32.const 2))', 'i32.const 1'],
-    ['i64', '(i64.add (i64.const -0x1) (i64.const 1))', 'i64.const 0'],
-    ['i64', '(i64.add (i64.const +0x2) (i64.const 3))', 'i64.const 5'],
+    ['i32', '(i32.add (i32.const -0x1) (i32.const 2))', 1n],
+    ['i64', '(i64.add (i64.const -0x1) (i64.const 1))', 0n],
+    ['i64', '(i64.add (i64.const +0x2) (i64.const 3))', 5n],
   ]) {
     const ast = parse(`(module (func (result ${type}) ${expr}))`)
-    assert(print(optimize(ast, 'fold')).includes(expect), `should fold ${expr}`)
+    const src = print(optimize(ast, 'fold'))
+    const ok = type === 'i64' ? i64has(src, expect) : src.includes(`i32.const ${expect}`)
+    assert(ok, `should fold ${expr}`)
   }
   // Round-trip: a bare `-0x1` must survive parse → optimize → compile and
   // evaluate to -1 at runtime. Guards getConst's negative-hex parse path so
@@ -1877,14 +1887,14 @@ test('fold: i64.extend8_s', () => {
   const ast = parse('(module (func (result i64) (i64.extend8_s (i64.const 255))))')
   const opt = optimize(ast, 'fold')
   const src = print(opt)
-  assert(src.includes('i64.const -1'), 'should fold i64 extend8_s(255) to -1')
+  assert(i64has(src, -1n), 'should fold i64 extend8_s(255) to -1')
 })
 
 test('fold: i64.reinterpret_f64 of constant', () => {
   // 256.0 has IEEE 754 bit pattern 0x4070000000000000 = 4643211215818981376
   const ast = parse('(module (func (result i64) (i64.reinterpret_f64 (f64.const 256))))')
   const src = print(optimize(ast, 'fold'))
-  assert(src.includes('i64.const 4643211215818981376'), 'reinterpret f64→i64 folded')
+  assert(i64has(src, 4643211215818981376n), 'reinterpret f64→i64 folded')
   assert(!src.includes('reinterpret'), 'reinterpret op gone')
 })
 
@@ -1905,7 +1915,7 @@ test('fold: chained convert + reinterpret', () => {
   // 65536 as f64 bit pattern: 0x40F0000000000000 = 4679240012837945344
   const ast = parse('(module (func (result i64) (i64.reinterpret_f64 (f64.convert_i32_s (i32.const 65536)))))')
   const src = print(optimize(ast, 'fold'))
-  assert(src.includes('i64.const 4679240012837945344'), 'chained fold')
+  assert(i64has(src, 4679240012837945344n), 'chained fold')
 })
 
 test('fold: i32.reinterpret_f32 of constant', () => {
@@ -1927,7 +1937,7 @@ test('fold: i64.reinterpret_f64 preserves NaN payload', () => {
   // 0x7FFA400300636261 == 9221753568630104673
   const ast = parse('(module (func (result i64) (i64.reinterpret_f64 (f64.const nan:0x7FFA400300636261))))')
   const src = print(optimize(ast, 'fold'))
-  assert(src.includes('i64.const 9221753568630104673'), 'should preserve nan:0x7FFA400300636261 payload, got: ' + src)
+  assert(i64has(src, 9221753568630104673n), 'should preserve nan:0x7FFA400300636261 payload, got: ' + src)
 })
 
 test('fold: i32.reinterpret_f32 preserves NaN payload', () => {
@@ -2040,6 +2050,19 @@ test('packData: merges adjacent constant-offset segments', () => {
   const src = print(opt)
   assert(!src.includes('(i32.const 2)'), 'should merge second segment')
   assert(src.includes('\\01\\02\\03\\04'), 'should have merged content')
+})
+
+test('packData: trims a large data segment without overflowing', () => {
+  // A multi-100KB segment: trimTrailingZeros used to `bytes.push(...parseDataString)`,
+  // and spreading that many call arguments overflows ("Maximum call stack size exceeded").
+  // Large programs (e.g. a self-hosted compiler's static data) hit exactly this.
+  const N = 200_000
+  const ast = parse(`(module (data (i32.const 0) "${'\\01'.repeat(N)}\\00\\00\\00"))`)
+  let opt
+  assert.doesNotThrow(() => { opt = optimize(ast, 'packData') }, 'must not overflow on large data')
+  const src = print(opt)
+  assert.equal((src.match(/\\01/g) || []).length, N, 'all non-zero bytes preserved')
+  assert(!src.includes('\\00'), 'trailing zero bytes trimmed')
 })
 
 // ==================== IMPORT FIELD MINIFICATION ====================
@@ -2254,4 +2277,39 @@ test('size: fast tier not slower than baseline', async () => {
 
   // 100 ops should complete in under 500ms (5ms per op on slow hardware)
   assert(elapsed < 500, `fast optimize should be fast (${elapsed.toFixed(0)}ms for ${N} runs)`)
+})
+
+// ── Size contract: default optimize must NEVER inflate the binary ────────────
+// The whole point of the optimizer is to not make output worse. The default
+// (strict) optimize reverts any round that grows the encoded binary, and its
+// default-on passes are size-non-increasing by construction. This locks that:
+// if any pass ever inflates one of these shapes, the contract test fails.
+test('optimize never inflates the binary (default size contract)', () => {
+  const mods = [
+    // constant folding / identity / strength / dead arithmetic
+    '(module (func (result i32) (i32.mul (i32.add (i32.const 3) (i32.const 4)) (i32.const 1))))',
+    '(module (func (result i64) (i64.add (i64.const 100) (i64.const 200))))',
+    // dead code after return / unreachable, unused locals
+    '(module (func (export "f") (param i32) (result i32) (local $u i32) (return (local.get 0)) (local.set $u (i32.const 9)) (local.get $u)))',
+    // dead function + dead global (treeshake), immutable global (stripmut/globals)
+    '(module (global $g (mut i32) (i32.const 7)) (func $dead (result i32) (i32.const 99)) (func (export "f") (result i32) (global.get $g)))',
+    // while-idiom: block+loop+br_if+br (loopify), if-then-br (brif), redundant br (unbranch)
+    `(module (func (export "g") (param i32) (result i32) (local $s i32)
+      (block $b (loop $l
+        (br_if $b (i32.eqz (local.get 0)))
+        (local.set $s (i32.add (local.get $s) (local.get 0)))
+        (local.set 0 (i32.sub (local.get 0) (i32.const 1)))
+        (br $l)))
+      (local.get $s)))`,
+    // single-caller function (inlineOnce), load/store offset folding (offset)
+    '(module (memory 1) (func $get (param i32) (result i32) (i32.load (i32.add (local.get 0) (i32.const 4)))) (func (export "f") (result i32) (call $get (i32.const 8))))',
+    // nested blocks, nops, drop-of-pure (vacuum / mergeBlocks)
+    '(module (func (export "f") (result i32) (block (block (nop) (drop (i32.const 5)))) (i32.const 1)))',
+  ]
+  for (const m of mods) {
+    const ast = parse(m)
+    const before = binarySize(ast)
+    const after = binarySize(optimize(ast))          // default (strict) optimize
+    assert(after <= before, `optimize inflated ${before}→${after} bytes for: ${m.replace(/\s+/g, ' ').slice(0, 60)}…`)
+  }
 })
