@@ -1,5 +1,6 @@
 import t, { is, ok, same, throws } from 'tst'
 import { compile, parse } from './runner.js'
+import rawCompile from '../src/compile.js'
 import { v128 } from '../src/encode.js'
 import {inline, file, wat2wasm, save} from './util.js'
 
@@ -2423,6 +2424,114 @@ t('compile: branch hints - multiple hints in one function', () => {
   is(inst.exports.test(0, 0), 20)
   is(inst.exports.test(0, 1), 10)
   is(inst.exports.test(1, 0), 5)
+})
+
+t('compile: metadata absolute offsets - single function', () => {
+  let wasm = rawCompile(parse(`(module
+    (func (export "f") (result i32)
+      (@metadata.code.srcmap "\\07")
+      i32.const 42
+    ))`, { annotations: true }))
+
+  ok(wasm instanceof Uint8Array, 'result is still a Uint8Array')
+  is(wasm.metadata.srcmap.length, 1, 'one srcmap entry')
+  let [off, data] = wasm.metadata.srcmap[0]
+  is(wasm[off], 0x41, 'absolute offset points at i32.const opcode')
+  is(wasm[off + 1], 42, 'immediate follows')
+  same([...data], [7], 'annotation data passes through')
+
+  // offset-bearing build is still a valid module
+  let inst = new WebAssembly.Instance(new WebAssembly.Module(wasm))
+  is(inst.exports.f(), 42)
+})
+
+t('compile: metadata absolute offsets - across funcs with imports/locals', () => {
+  let wasm = rawCompile(parse(`(module
+    (import "e" "imp" (func (param i32)))
+    (func (export "a") (param i32 i32) (result i32)
+      local.get 0
+      (@metadata.code.srcmap "\\01")
+      local.get 1
+      i32.add)
+    (func (export "b") (result i32)
+      (@metadata.code.srcmap "\\02")
+      i32.const 99))`, { annotations: true }))
+
+  is(wasm.metadata.srcmap.length, 2, 'two entries, sorted by offset')
+  is(wasm[wasm.metadata.srcmap[0][0]], 0x20, 'func a: 2nd local.get opcode')
+  is(wasm[wasm.metadata.srcmap[1][0]], 0x41, 'func b: i32.const opcode')
+  same([...wasm.metadata.srcmap[0][1]], [1])
+  same([...wasm.metadata.srcmap[1][1]], [2])
+
+  // imports satisfied → module instantiates
+  let inst = new WebAssembly.Instance(new WebAssembly.Module(wasm), { e: { imp() {} } })
+  is(inst.exports.a(2, 3), 5)
+  is(inst.exports.b(), 99)
+})
+
+t('compile: no annotations → no .metadata (common path stays free)', () => {
+  let wasm = rawCompile(parse(`(module (func (export "f") (result i32) i32.const 1))`))
+  ok(wasm instanceof Uint8Array, 'still a Uint8Array')
+  is(wasm.metadata, undefined, 'no .metadata when WAT had no annotations')
+})
+
+// extract a metadata.code.<name> custom section as [{funcIdx, pos, data}]
+const codeMeta = (wasm, name) => {
+  let p = 8
+  const u = () => { let n = 0, s = 0, b; do { b = wasm[p++]; n |= (b & 0x7f) << s; s += 7 } while (b & 0x80); return n }
+  while (p < wasm.length) {
+    const id = wasm[p++], size = u(), end = p + size // size first — `p` must advance past the LEB before computing end
+    if (id === 0) {
+      const nameLen = u(), nm = String.fromCharCode(...wasm.slice(p, p += nameLen))
+      if (nm === `metadata.code.${name}`) {
+        const out = [], nFuncs = u()
+        for (let f = 0; f < nFuncs; f++) { const fi = u(), nI = u(); for (let i = 0; i < nI; i++) { const pos = u(), dl = u(); out.push({ funcIdx: fi, pos, data: [...wasm.slice(p, p += dl)] }) } }
+        return out
+      }
+    }
+    p = end
+  }
+  return []
+}
+
+t('compile: baked metadata offsets are function-body-relative — match wabt', () => {
+  // locals present (5-byte locals vec) + a branch hint: instruction-stream-relative
+  // (the old bug) vs function-body-relative (spec/wabt) differ by the locals length
+  let src = `(module
+    (func $dummy)
+    (func (export "t") (param i32) (result i32)
+      (local i64) (local f64)
+      local.get 0
+      (@metadata.code.branch_hint "\\00")
+      if (result i32) i32.const 1 else i32.const 2 end))`
+  let wasm = rawCompile(parse(src, { annotations: true }))
+  let ref = new Uint8Array(wat2wasm(src, { metrics: false }).buffer)
+
+  let hints = codeMeta(wasm, 'branch_hint')
+  is(hints.length, 1, 'one baked hint (guards against vacuous [] == [])')
+  is(hints[0].pos, 7, 'function-body-relative: 5-byte locals vec + 2-byte local.get')
+  is(JSON.stringify(hints), JSON.stringify(codeMeta(ref, 'branch_hint')), 'baked offsets match wabt')
+  // returned absolute offset still lands on the branch op (0x04 = if)
+  is(wasm[wasm.metadata.branch_hint[0][0]], 0x04, 'absolute offset points at if')
+})
+
+t('compile: folded-form branch hints match wabt', () => {
+  // the official testsuite's nested folded case — hints attach to the same
+  // instruction wabt picks, now at the same (function-body-relative) offset
+  let src = `(module
+    (func (export "nested") (param i32 i32) (result i32)
+      (@metadata.code.branch_hint "\\00")
+      (if (result i32) (local.get 0)
+        (then
+          (@metadata.code.branch_hint "\\01")
+          (if (result i32) (local.get 1)
+            (then (i32.const 9)) (else (i32.const 10))))
+        (else (i32.const 11)))))`
+  let wasm = rawCompile(parse(src, { annotations: true }))
+  let ref = new Uint8Array(wat2wasm(src, { metrics: false }).buffer)
+  let hints = codeMeta(wasm, 'branch_hint')
+  is(hints.length, 2, 'two baked hints (guards against vacuous [] == [])')
+  is(JSON.stringify(hints), JSON.stringify(codeMeta(ref, 'branch_hint')), 'folded-form offsets match wabt')
 })
 
 

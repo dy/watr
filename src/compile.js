@@ -41,7 +41,11 @@ const cleanup = (node, result) => {
  * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
  *
  * @param {string|Array} nodes - The WAT tree or string to be compiled to WASM binary.
- * @returns {Uint8Array} The compiled WASM binary data.
+ * @returns {Uint8Array} The compiled WASM binary. When the WAT carries
+ *   `@metadata.code.<type>` annotations, the result also exposes a `.metadata`
+ *   property — `{ [type]: [[absoluteByteOffset, data], ...] }`, each offset the
+ *   instruction's position in the final binary. That's the hook a source-map
+ *   emitter needs to correlate generated wasm back to its source.
  */
 export default function compile(nodes) {
   // normalize to (module ...) form
@@ -237,32 +241,80 @@ export default function compile(nodes) {
   // pre-compute sections that may collect string constants (for strings section ordering)
   const globalSection = bin(SECTION.global)
   const elemSection = bin(SECTION.elem)
-  const codeSection = bin(SECTION.code)
+  // inline bin(code) so the per-function item bytes survive — with ctx.codeSizePrefix
+  // they let us lift code-metadata positions to absolute binary offsets below
+  const codeItems = ctx.code.filter(Boolean).map(item => build[SECTION.code](item, ctx)).filter(Boolean)
+  const codeSection = codeItems.length ? [SECTION.code, ...vec(vec(codeItems))] : []
   const metaSection = binMeta()
   const dataSection = bin(SECTION.data)
   const stringsSection = ctx.strings.length ? [SECTION.strings, ...vec([0x00, ...vec(ctx.strings.map(s => vec(s)))])] : []
 
+  // sections in binary order (each a byte array — lengths feed offset math)
+  const sections = [
+    bin(SECTION.custom),
+    bin(SECTION.type),
+    bin(SECTION.import),
+    bin(SECTION.func),
+    bin(SECTION.table),
+    bin(SECTION.memory),
+    bin(SECTION.tag),
+    stringsSection,
+    globalSection,
+    bin(SECTION.export),
+    bin(SECTION.start, false),
+    elemSection,
+    bin(SECTION.datacount, false),
+    codeSection,
+    metaSection,
+    dataSection
+  ]
+
   // build final binary
-  return Uint8Array.from([
+  const wasm = Uint8Array.from([
     0x00, 0x61, 0x73, 0x6d, // magic
     0x01, 0x00, 0x00, 0x00, // version
-    ...bin(SECTION.custom),
-    ...bin(SECTION.type),
-    ...bin(SECTION.import),
-    ...bin(SECTION.func),
-    ...bin(SECTION.table),
-    ...bin(SECTION.memory),
-    ...bin(SECTION.tag),
-    ...stringsSection,
-    ...globalSection,
-    ...bin(SECTION.export),
-    ...bin(SECTION.start, false),
-    ...elemSection,
-    ...bin(SECTION.datacount, false),
-    ...codeSection,
-    ...metaSection,
-    ...dataSection
+    ...sections.flat()
   ])
+
+  // Lift any (@metadata.code.*) annotations to absolute binary offsets and hang
+  // them off the result, so a source-map emitter can correlate wasm back to
+  // source. The result stays a Uint8Array; .metadata appears only when the WAT
+  // actually carried annotations — the common (annotation-free) path stays free.
+  const md = metadataOffsets()
+  if (md) wasm.metadata = md
+
+  return wasm
+
+  // Map each recorded code-metadata position (function-body-relative, as stored
+  // by build.code) to its absolute byte offset in the final binary.
+  // → { [type]: [[absoluteByteOffset, data], ...] } sorted by offset, or
+  //   undefined when no annotations were present.
+  function metadataOffsets() {
+    let has = false
+    for (const _ in ctx.metadata) has = true // any annotations? (no break — jz self-host lowers for-in without one)
+    if (!has) return
+    const out = {}
+    // 8 = magic + version; sections before code give the code section's base
+    const codeBase = 8 + sections.slice(0, sections.indexOf(codeSection)).reduce((n, s) => n + s.length, 0)
+    // function items are the tail of the code section (after id + size + count)
+    const itemsBase = codeBase + codeSection.length - codeItems.reduce((n, it) => n + it.length, 0)
+    // per code index → absolute offset of its function body (start of locals vec)
+    const bodyBase = []
+    for (let i = 0, off = itemsBase; i < codeItems.length; i++) {
+      bodyBase[i] = off + (ctx.codeSizePrefix?.[i] ?? 0)
+      off += codeItems[i].length
+    }
+    const importedFuncs = ctx.import.filter(imp => imp[2][0] === 'func').length
+    for (const type in ctx.metadata) {
+      const entries = []
+      for (const [funcIdx, instances] of ctx.metadata[type]) {
+        const base = bodyBase[funcIdx - importedFuncs]
+        for (const [pos, data] of instances) entries.push([base + pos, data])
+      }
+      out[type] = entries.sort((a, b) => a[0] - b[0])
+    }
+    return out
+  }
 }
 
 
@@ -722,19 +774,30 @@ const build = [
     ctx.meta = {}
     const bytes = instr(body, ctx)
 
-    // Store collected metadata for this function
-    const funcIdx = ctx.import.filter(imp => imp[2][0] === 'func').length + codeIdx
-    for (const type in ctx.meta) ((ctx.metadata ??= {})[type] ??= []).push([funcIdx, ctx.meta[type]])
-
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     // we skip locals provided by params
     let loctypes = ctx.local.slice(param.length).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
+    const locals = vec(loctypes.map(([n, t]) => [...uleb(n), ...reftype(t, ctx)]))
+
+    // Store collected metadata. instr() records positions relative to the
+    // instruction stream; shift them past the locals vec so they are
+    // function-body-relative — the reference point the code-metadata spec (and
+    // wabt/binaryen) use for the metadata.code.* sections.
+    const funcIdx = ctx.import.filter(imp => imp[2][0] === 'func').length + codeIdx
+    for (const type in ctx.meta) {
+      for (const inst of ctx.meta[type]) inst[0] += locals.length
+      ;((ctx.metadata ??= {})[type] ??= []).push([funcIdx, ctx.meta[type]])
+    }
 
     // cleanup tmp state
     ctx.local = ctx.block = ctx.meta = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    return vec([...vec(loctypes.map(([n, t]) => [...uleb(n), ...reftype(t, ctx)])), ...bytes])
+    const item = vec([...locals, ...bytes])
+    // size-prefix length (item minus its body) lets the now function-body-relative
+    // metadata positions be lifted to absolute binary offsets
+    ;(ctx.codeSizePrefix ??= [])[codeIdx] = item.length - locals.length - bytes.length
+    return item
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
@@ -986,8 +1049,12 @@ const instr = (nodes, ctx) => {
       bytes.push(...HANDLER[op](nodes, ctx, op))
     }
 
-    // Record metadata at current byte position
-    for (const [type, data] of meta) ((ctx.meta[type] ??= []).push([out.length, data]))
+    // Attach any pending annotations to this instruction's byte position, then
+    // clear — a (@metadata.code.*) annotation applies to the next instruction only
+    if (meta.length) {
+      for (const [type, data] of meta) ((ctx.meta[type] ??= []).push([out.length, data]))
+      meta = []
+    }
 
     out.push(...bytes)
   }
