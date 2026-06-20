@@ -357,18 +357,20 @@ t.mute('/test/official/custom/branch_hint.wast', async function () { await file(
 t.mute('/test/official/custom/custom_annot.wast', async function () { await file(this.name, { spectest }) })
 t.mute('/test/official/custom/name_annot.wast', async function () { await file(this.name, { spectest }) })
 
-// Proposals - custom-page-sizes
-t.skip('/test/official/proposals/custom-page-sizes/binary.wast', async function () { await file(this.name, { spectest }) })
+// Proposals - custom-page-sizes — decoder/validator assertions run on both backends;
+// cases that instantiate a custom-page-size memory need V8's --experimental-wasm-custom-page-sizes, so stay skipped.
+t.mute('/test/official/proposals/custom-page-sizes/binary.wast', async function () { await file(this.name, { spectest }) })
 t.skip('/test/official/proposals/custom-page-sizes/custom-page-sizes-invalid.wast', async function () { await file(this.name, { spectest }) })
 t.skip('/test/official/proposals/custom-page-sizes/custom-page-sizes.wast', async function () { await file(this.name, { spectest }) })
-t.skip('/test/official/proposals/custom-page-sizes/memory_max.wast', async function () { await file(this.name, { spectest }) })
-t.skip('/test/official/proposals/custom-page-sizes/memory_max_i64.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-page-sizes/memory_max.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-page-sizes/memory_max_i64.wast', async function () { await file(this.name, { spectest }) })
 
-// Proposals - custom-descriptors
+// Proposals - custom-descriptors — only the binary-decoder suite runs; everything that
+// validates/instantiates descriptor types needs V8's --experimental-wasm-custom-descriptors.
 t.skip('/test/official/proposals/custom-descriptors/descriptors.wast', async function () { await file(this.name, { spectest }) })
 t.skip('/test/official/proposals/custom-descriptors/exact.wast', async function () { await file(this.name, { spectest }) })
 t.skip('/test/official/proposals/custom-descriptors/binary-descriptors.wast', async function () { await file(this.name, { spectest }) })
-t.skip('/test/official/proposals/custom-descriptors/binary.wast', async function () { await file(this.name, { spectest }) })
+t.mute('/test/official/proposals/custom-descriptors/binary.wast', async function () { await file(this.name, { spectest }) })
 t.skip('/test/official/proposals/custom-descriptors/struct_new_desc.wast', async function () { await file(this.name, { spectest }) })
 t.skip('/test/official/proposals/custom-descriptors/ref_get_desc.wast', async function () { await file(this.name, { spectest }) })
 t.skip('/test/official/proposals/custom-descriptors/ref_cast_desc_eq.wast', async function () { await file(this.name, { spectest }) })
