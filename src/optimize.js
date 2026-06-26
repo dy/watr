@@ -2257,7 +2257,7 @@ const devirt = (ast) => {
 // Scalar transcendental helpers the auto-vectorizer rewrites to f64x2 mirrors (PPC_CALL2 in
 // src/optimize/vectorize.js). inlineOnce must NOT dissolve their call nodes when single-caller —
 // the post-phase lift needs the call to rewrite it. Keep in sync with PPC_CALL2's keys.
-const SIMD_PROTECTED = new Set(['$math.sin_core', '$math.cos_core', '$math.sin', '$math.cos', '$math.pow', '$math.atan2', '$math.hypot', '$math.log'])
+const SIMD_PROTECTED = new Set(['$math.sin_core', '$math.cos_core', '$math.sin', '$math.cos', '$math.pow', '$math.atan2', '$math.hypot', '$math.log', '$math.exp', '$math.exp2'])
 
 const inlineOnce = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
