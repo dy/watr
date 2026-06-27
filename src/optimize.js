@@ -1873,7 +1873,7 @@ const buildInline = (params, locals, inlResult, cBody, args) => {
  *
  * A callee qualifies when it is small (≤ INLINE_MAX_NODES IR nodes), named with
  * named params/locals, single-result-or-void, non-recursive, not pinned
- * (export/start/elem/ref.func), not a SIMD_PROTECTED transcendental, and free of
+ * (export/start/elem/ref.func), not in the caller's `pin` set, and free of
  * depth-relative branches / tail calls (the inlParse + inlUnsafe liftability
  * contract). Runs to a fixpoint so small-helper chains (sdf → sdRep) collapse.
  *
@@ -1893,7 +1893,7 @@ const buildInline = (params, locals, inlResult, cBody, args) => {
 const INLINE_MAX_NODES = 90
 const isV128SimdHelper = (params, inlResult) =>
   inlResult === 'v128' && params.length > 0 && params.every(p => p.type === 'v128')
-const inline = (ast, { simdOnly = false } = {}) => {
+const inline = (ast, { simdOnly = false, pin = EMPTY_SET } = {}) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
   const skip = new Set()  // callees with a non-inlinable site (arity mismatch) — don't re-pick
@@ -1917,7 +1917,7 @@ const inline = (ast, { simdOnly = false } = {}) => {
     // Pick a small, liftable, non-recursive callee with ≥1 plain-call site.
     let calleeName = null, parsed = null
     for (const [name, fn] of funcByName) {
-      if (skip.has(name) || pinned.has(name) || otherRef.has(name) || SIMD_PROTECTED.has(name)) continue
+      if (skip.has(name) || pinned.has(name) || otherRef.has(name) || pin.has(name)) continue
       if (!(callRefs.get(name) >= 1)) continue
       if (inlBodySize(fn) > INLINE_MAX_NODES) continue
       if (inlCallsSelf(fn, name)) continue
@@ -2254,12 +2254,7 @@ const devirt = (ast) => {
  * @param {Array} ast
  * @returns {Array}
  */
-// Scalar transcendental helpers the auto-vectorizer rewrites to f64x2 mirrors (PPC_CALL2 in
-// src/optimize/vectorize.js). inlineOnce must NOT dissolve their call nodes when single-caller —
-// the post-phase lift needs the call to rewrite it. Keep in sync with PPC_CALL2's keys.
-const SIMD_PROTECTED = new Set(['$math.sin_core', '$math.cos_core', '$math.sin', '$math.cos', '$math.pow', '$math.atan2', '$math.hypot', '$math.log', '$math.exp', '$math.exp2'])
-
-const inlineOnce = (ast) => {
+const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
   // Lift primitives are shared with `inline` (defined once above buildInline). inlineOnce
@@ -2291,11 +2286,10 @@ const inlineOnce = (ast) => {
     for (const [name, fn] of funcByName) {
       if (pinned.has(name) || otherRef.has(name)) continue
       if (callRefs.get(name) !== 1) continue
-      // Keep the scalar transcendentals that the auto-vectorizer maps to f64x2 mirrors (PPC_CALL2 in
-      // src/optimize/vectorize.js): inlining a single-caller $math.atan2/hypot/log would dissolve the
-      // call node before the post-phase lift can rewrite it to $math.atan2_2/hypot_2/log_v. Keep in
-      // sync with PPC_CALL2's keys.
-      if (SIMD_PROTECTED.has(name)) continue
+      // Caller-pinned functions stay intact: inlining a single-caller helper would dissolve the
+      // call node, and a consumer may rely on it surviving (e.g. jz pins the scalar transcendentals
+      // its auto-vectorizer later rewrites to f64x2 mirrors). The policy lives with the caller.
+      if (pin.has(name)) continue
       if (callsSelf(fn, name)) continue
       // named params/locals only (we'll rename them); reject locals with types
       // we can't zero-init on block re-entry.
@@ -3867,6 +3861,10 @@ export default function optimize(ast, opts = true) {
   if (typeof ast === 'string') ast = parse(ast)   // accept WAT source directly
   const strictGuard = opts === true  // default: zero tolerance for bloat
   opts = normalize(opts)
+  // `pin`: caller-supplied function names that inlineOnce/inline must NOT dissolve. Keeps
+  // optimizer policy with the CALLER — e.g. jz pins the scalar transcendentals its own
+  // auto-vectorizer later rewrites to f64x2 mirrors, so no consumer-specific names live here.
+  opts.pin = opts.pin instanceof Set ? opts.pin : new Set(opts.pin || [])
 
   const log = opts.log ? (msg, delta) => opts.log(msg, delta) : () => {}
   const verbose = opts.verbose || opts.log
@@ -3888,7 +3886,7 @@ export default function optimize(ast, opts = true) {
     if (!opts.inline) return a
     // `inline: 'simd'` → SIMD-helper-only (jz's speed tier, avoids general bloat);
     // `inline: true` / `'all'` → general inlining of tiny functions.
-    a = inline(a, { simdOnly: opts.inline === 'simd' })
+    a = inline(a, { simdOnly: opts.inline === 'simd', pin: opts.pin })
     if (opts.propagate) a = propagate(a)
     if (opts.mergeBlocks) a = mergeBlocks(a)
     if (opts.vacuum) a = vacuum(a)
@@ -3909,7 +3907,7 @@ export default function optimize(ast, opts = true) {
     // propagate, and it would only confirm what `mayInline` already proved.
     for (let round = 0; round < 3; round++) {
       const beforeRound = clone(ast)
-      for (const [key, fn] of PASSES) if (opts[key] && key !== 'inlineOnce' && key !== 'inline' && key !== 'devirt') ast = fn(ast)
+      for (const [key, fn] of PASSES) if (opts[key] && key !== 'inlineOnce' && key !== 'inline' && key !== 'devirt') ast = fn(ast, opts)
       if (equal(beforeRound, ast)) break // fixpoint
       if (verbose) log(`  round ${round + 1} applied`)
     }
@@ -3926,7 +3924,7 @@ export default function optimize(ast, opts = true) {
   for (let round = 0; round < 3; round++) {
     beforeRound = clone(ast)
 
-    for (const [key, fn] of PASSES) if (opts[key] && key !== 'devirt' && key !== 'inline') ast = fn(ast)
+    for (const [key, fn] of PASSES) if (opts[key] && key !== 'devirt' && key !== 'inline') ast = fn(ast, opts)
     // Second propagate sweep: `inlineOnce`/`inline` (above) leave fresh
     // `(local.set $p arg) … (local.get $p)` wrappers around each inlined call;
     // re-running propagation collapses them within this same round, so the size
