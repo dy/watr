@@ -412,6 +412,20 @@ test('inline: preserves exports', () => {
   assert(src.includes('call $helper'), 'should not inline exported func')
 })
 
+test('inline: opts.pin keeps named callees intact (caller-supplied no-inline list)', () => {
+  // A consumer may need a single-caller helper's call node to SURVIVE optimization — e.g.
+  // jz's auto-vectorizer rewrites $math.exp/log calls to f64x2 mirrors AFTER optimize, so the
+  // calls must not be dissolved first. `pin` lets the caller own that policy (no consumer
+  // names hardcoded in watr). Accepts an array or a Set.
+  const src = `(module
+    (func $keep (param $x i32) (result i32) (i32.add (local.get $x) (i32.const 1)))
+    (func (export "f") (result i32) (call $keep (i32.const 5)))
+  )`
+  assert(!print(optimize(parse(src))).includes('call $keep'), 'a single-caller helper is inlined by default')
+  assert(print(optimize(parse(src), { pin: ['$keep'] })).includes('call $keep'), 'opts.pin keeps the pinned call')
+  assert(print(optimize(parse(src), { pin: new Set(['$keep']) })).includes('call $keep'), 'opts.pin accepts a Set')
+})
+
 test('inline: callee with return is NOT inlined into different-typed caller', () => {
   // `(return X)` transfers control out of the enclosing function. If we inline
   // such a callee body into a different-typed caller, the `return` would
