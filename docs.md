@@ -199,6 +199,15 @@ sense when you control the host are **opt-in** (marked ◌); the rest are on by 
 
 ◌ = opt-in (`optimize(ast, 'foldarms')` or `optimize(ast, { foldarms: true })`).
 
+**`pin`** — array (or `Set`) of function names `inline`/`inlineOnce` must never dissolve, even
+when single-caller. Use it when a later pass of yours rewrites those `call` nodes and needs them
+intact — e.g. a downstream auto-vectorizer that maps `$math.exp`/`$math.log` calls to their f64x2
+mirrors after `optimize` runs. Keeps the no-inline policy with the caller, not hardcoded in watr.
+
+```js
+optimize(ast, { pin: ['$math.exp', '$math.log'] })   // these calls survive inlining
+```
+
 ### `parse(source, options?)`
 
 Parse to AST.
