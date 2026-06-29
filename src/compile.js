@@ -37,17 +37,10 @@ const cleanup = (node, result) => {
 }
 
 
-/**
- * Converts a WebAssembly Text Format (WAT) tree to a WebAssembly binary format (WASM).
- *
- * @param {string|Array} nodes - The WAT tree or string to be compiled to WASM binary.
- * @returns {Uint8Array} The compiled WASM binary. When the WAT carries
- *   `@metadata.code.<type>` annotations, the result also exposes a `.metadata`
- *   property — `{ [type]: [[absoluteByteOffset, data], ...] }`, each offset the
- *   instruction's position in the final binary. That's the hook a source-map
- *   emitter needs to correlate generated wasm back to its source.
- */
-export default function compile(nodes) {
+// Internal: assemble the module. sizeOnly=false → wasm bytes (Uint8Array); sizeOnly=true →
+// just the byte LENGTH, skipping materialization of the multi-MB binary — that's size()'s
+// reason to exist (the optimizer's size-revert guard can't afford to build bytes it discards).
+function assemble(nodes, sizeOnly) {
   // normalize to (module ...) form
   if (typeof nodes === 'string') err.src = nodes, nodes = parse(nodes) || []
   else err.src = '' // clear source if AST passed directly
@@ -63,10 +56,10 @@ export default function compile(nodes) {
   else if (typeof nodes[0] === 'string') nodes = [nodes]
 
   // binary abbr "\00" "\0x61" ...
-  if (nodes[idx] === 'binary') return Uint8Array.from(nodes.slice(++idx).flat())
+  if (nodes[idx] === 'binary') { const b = Uint8Array.from(nodes.slice(++idx).flat()); return sizeOnly ? b.length : b }
 
   // quote "a" "b"
-  if (nodes[idx] === 'quote') return compile(nodes.slice(++idx).map(v => v.valueOf().slice(1, -1)).flat().join(''))
+  if (nodes[idx] === 'quote') return assemble(nodes.slice(++idx).map(v => v.valueOf().slice(1, -1)).flat().join(''), sizeOnly)
 
   // expand grouped imports: (import "mod" (item "name" type)*) -> individual imports
   // compact import section (Phase 3)
@@ -241,6 +234,26 @@ export default function compile(nodes) {
   // pre-compute sections that may collect string constants (for strings section ordering)
   const globalSection = bin(SECTION.global)
   const elemSection = bin(SECTION.elem)
+  // measure: byte LENGTH only — skip building + materializing the multi-MB code byte array
+  // (the optimizer's size-revert guard only needs the count). Sizes the code section via
+  // codeItemSize; other sections are small, built normally + summed. Same string-collection
+  // ORDER as the emit path (global, elem, code, meta, data → strings).
+  if (sizeOnly) {
+    const codeSizes = ctx.code.filter(Boolean).map(item => codeItemSize(item, ctx))
+    const innerLen = codeSizes.length ? ulebSize(codeSizes.length) + codeSizes.reduce((a, b) => a + b, 0) : 0
+    const codeSecLen = codeSizes.length ? 1 + ulebSize(innerLen) + innerLen : 0  // SECTION.code + vec(vec(items))
+    const metaSection = binMeta()
+    const dataSection = bin(SECTION.data)
+    const stringsSection = ctx.strings.length ? [SECTION.strings, ...vec([0x00, ...vec(ctx.strings.map(s => vec(s)))])] : []
+    const others = [
+      bin(SECTION.custom), bin(SECTION.type), bin(SECTION.import), bin(SECTION.func),
+      bin(SECTION.table), bin(SECTION.memory), bin(SECTION.tag), stringsSection,
+      globalSection, bin(SECTION.export), bin(SECTION.start, false), elemSection,
+      bin(SECTION.datacount, false), metaSection, dataSection
+    ]
+    return 8 + codeSecLen + others.reduce((s, sec) => s + sec.length, 0)   // 8 = magic + version
+  }
+
   // inline bin(code) so the per-function item bytes survive — with ctx.codeSizePrefix
   // they let us lift code-metadata positions to absolute binary offsets below
   const codeItems = ctx.code.filter(Boolean).map(item => build[SECTION.code](item, ctx)).filter(Boolean)
@@ -317,6 +330,19 @@ export default function compile(nodes) {
   }
 }
 
+/**
+ * Convert a WAT tree (or source string) to a wasm binary (Uint8Array). When the WAT carries
+ * `@metadata.code.<type>` annotations the result also exposes `.metadata` —
+ * `{ [type]: [[absByteOffset, data], ...] }`, the hook a source-map emitter needs.
+ */
+export default function compile(nodes) { return assemble(nodes) }
+
+/**
+ * Byte size of `compile(nodes)` without materializing the binary — a peer transform for
+ * tooling (the optimizer's size-revert guard, size budgeting). Exactly `compile(nodes).length`,
+ * summed from section sizes instead of building them (invariant-tested).
+ */
+export function size(nodes) { return assemble(nodes, true) }
 
 /** Check if node is a valid index reference ($name or number) */
 const isIdx = n => n?.[0] === '$' || !isNaN(n)
@@ -1060,6 +1086,59 @@ const instr = (nodes, ctx) => {
   }
 
   return out.push(0x0b), out
+}
+
+// LEB128 byte-width of an unsigned integer (exact, reuses uleb so it can never drift).
+const ulebSize = (n) => uleb(n).length
+
+// Size-only twin of instr(): the byte LENGTH of the encoded instruction stream,
+// WITHOUT building the (multi-MB) byte array. Reuses every HANDLER for exact
+// immediate widths + index resolution — only `out.push(...bytes)` accumulation is
+// replaced by integer summation (the dominant cost on large modules). The
+// opcode-value tweaks in instr() (typed-select / nullable-reftype) change a byte
+// VALUE, not the length, so they're irrelevant here. MUST equal instr(...).length
+// (asserted by the byteSize↔compile invariant test).
+const instrSize = (nodes, ctx) => {
+  let size = 0, meta = []
+  while (nodes?.length) {
+    let op = nodes.shift()
+    if (op?.[0] === '@metadata') { meta.push(op.slice(1)); continue }
+    if (Array.isArray(op)) { op.loc != null && (err.loc = op.loc); err(`Unknown instruction ${op[0]}`) }
+    const opc = INSTR[op] || err(`Unknown instruction ${op}`)
+    let n = opc.length
+    if (HANDLER[op]) n += HANDLER[op](nodes, ctx, op).length
+    if (meta.length) { for (const [type, data] of meta) ((ctx.meta[type] ??= []).push([size, data])); meta = [] }
+    size += n
+  }
+  return size + 1   // trailing 0x0b (end)
+}
+
+// Size-only twin of build[SECTION.code]: byte LENGTH of one function's code item.
+// Mirrors the builder exactly (local setup, squash, metadata bookkeeping, vec
+// framing) but uses instrSize for the body — so locals/strings/metadata side
+// effects on ctx stay identical, only the body byte array is never materialized.
+const codeItemSize = (body, ctx) => {
+  let [typeidx, param] = body.shift()
+  if (!param) [, [param]] = ctx.type[id(typeidx, ctx.type)]
+  ctx.local = Object.create(param); ctx.block = []
+  ctx.local.name = 'local'; ctx.block.name = 'block'
+  if (ctx._codeIdx === undefined) ctx._codeIdx = 0
+  let codeIdx = ctx._codeIdx++
+  while (body[0]?.[0] === 'local') {
+    let [, ...types] = body.shift()
+    if (isId(types[0])) { let nm = types.shift(); if (nm in ctx.local) err(`Duplicate local ${nm}`); else ctx.local[nm] = ctx.local.length }
+    ctx.local.push(...types)
+  }
+  ctx.meta = {}
+  const bytesLen = instrSize(body, ctx)
+  let loctypes = ctx.local.slice(param.length).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
+  const locals = vec(loctypes.map(([n, t]) => [...uleb(n), ...reftype(t, ctx)]))
+  const funcIdx = ctx.import.filter(imp => imp[2][0] === 'func').length + codeIdx
+  for (const type in ctx.meta) { for (const inst of ctx.meta[type]) inst[0] += locals.length; ((ctx.metadata ??= {})[type] ??= []).push([funcIdx, ctx.meta[type]]) }
+  ctx.local = ctx.block = ctx.meta = null
+  const bodyLen = locals.length + bytesLen
+  ;(ctx.codeSizePrefix ??= [])[codeIdx] = ulebSize(bodyLen)   // = vec prefix width
+  return ulebSize(bodyLen) + bodyLen                          // vec([...locals, ...bytes]).length
 }
 
 // instantiation time value initializer (consuming) - normalize then encode + add end byte

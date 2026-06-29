@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
+import srcCompile, { size } from '../src/compile.js'
 
 // The optimizer canonicalizes folded `i64.const` values to 16-digit hex (the raw
 // bits — lossless for NaN-box / bit-pattern constants). Hex and decimal encode to
@@ -2365,4 +2366,27 @@ test('devirt: leaves dynamic and signature-mismatched indices alone (sound)', ()
     (func $bin2 (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))
     (func (export "f") (param i32) (result i32) (call_indirect (type $un) (local.get 0) (i32.const 0))))`
   assert(print(optimize(parse(mism), 'devirt')).includes('call_indirect'), 'signature-mismatched index not devirtualized')
+})
+
+// ==================== SIZE-ONLY binarySize (measure mode) ====================
+
+test('size(nodes) equals full compile(nodes).length across features', () => {
+  const mods = [
+    '(module (func (export "a") (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1))))',
+    '(module (memory 1) (func (param i32) (result i32) (i32.load offset=16 (local.get 0)) (i32.const 999999) (i32.add)))',
+    '(module (global $g (mut i64) (i64.const 0)) (func (result i64) (global.get $g) (i64.const 0x123456789abc) (i64.mul)))',
+    '(module (func (result f64) (f64.const 3.14159265358979) (f64.const 2.0) (f64.mul) (f64.sqrt)))',
+    '(module (func (param i32) (result i32) (local i32 i32 f64) (block (result i32) (br_if 0 (local.get 0)) (i32.const 5))))',
+    '(module (type $t (func (param i32) (result i32))) (table 1 funcref) (func (param i32)(result i32)(local.get 0)) (func (param i32)(result i32) (call_indirect (type $t) (local.get 0) (i32.const 0))))',
+    '(module (func (param i32)(result i32) (i32.const 0) (local.get 0) (select)) (func (param v128)(result v128)(local.get 0)(i8x16.splat (i32.const 7))(i8x16.add)))',
+    '(module (memory 1)(data (i32.const 0) "hello world") (func (result i32)(memory.size)))',
+    '(module (func (param i32)(result i32)(local.get 0)(if (result i32)(then (i32.const 1))(else (i32.const 2)))))',
+    '(module (func (param i32)(result i32)(block(block(block(br_table 0 1 2 (local.get 0))(i32.const 10))(i32.const 20))(i32.const 30))))',
+    '(module binary "\\00asm" "\\01\\00\\00\\00")',   // binary abbreviation → measure returns bytes.length (the {bytes} early-return path)
+  ]
+  for (const src of mods) {
+    const exact = srcCompile(parse(src)).length                // full materialize
+    const measured = size(parse(src))                          // size-only peer function
+    assert.equal(measured, exact, `measure ${measured} !== compile().length ${exact} for ${src.slice(0, 50)}`)
+  }
 })

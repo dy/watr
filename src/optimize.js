@@ -7,7 +7,7 @@
  * @module wat/optimize
  */
 
-import compile from './compile.js'
+import compile, { size } from './compile.js'
 import parse from './parse.js'
 
 // Fixpoint round caps — empirical convergence bounds, not correctness limits.
@@ -68,7 +68,10 @@ const count = (node) => {
  * @returns {number}
  */
 const binarySize = (ast) => {
-  try { return compile(ast).length } catch { return Infinity }
+  // `size` = byte length without materializing the binary — the size-revert guard only needs
+  // the count, and re-encoding the whole module each round is the optimizer's dominant cost on
+  // large modules. Exactly compile(ast).length (invariant-tested).
+  try { return size(ast) } catch { return Infinity }
 }
 
 /**
