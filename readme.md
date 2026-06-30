@@ -4,7 +4,7 @@
 _Light & fast WAT compiler_
 
 * [feature](https://webassembly.org/features/?categories=browsers%2Cstandalones%2Ctools) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
-* [compile](./docs.md#compilesource-options) · [polyfill](./docs.md#polyfillast-options) · [optimize](./docs.md#optimizeast-options) · [parse](./docs.md#parsesource-options) · [prettify](./docs.md#printtree-options) · [minify](./docs.md#printtree-options)
+* [compile](./docs.md#compilesource) · [polyfill](./docs.md#polyfillast-options) · [optimize](./docs.md#optimizeast-options) · [parse](./docs.md#parsesource-options) · [prettify](./docs.md#printtree-options) · [minify](./docs.md#printtree-options)
 * instant wasm, JS interop, CLI, clear errors
 
 **[docs](./docs.md)**  **·**  **[demo](https://dy.github.io/watr/play/)**
@@ -19,12 +19,15 @@ _Light & fast WAT compiler_
 import watr, { compile, parse, print } from 'watr'
 
 // compile to binary
-const binary = compile('(func (export "f") (result f64) (f64.const 1))', {
-  polyfill: false, // transform newer features to MVP
-  optimize: true   // fold constants, treeshake, eliminate dead code ...
-})
+const src = '(func (export "f") (result f64) (f64.const 1))'
+const binary = compile(src)
 const module = new WebAssembly.Module(binary)
 const { f } = new WebAssembly.Instance(module).exports
+
+// optional, heavy transforms ship as separate entries — compose them
+import optimize from 'watr/optimize'   // fold constants, treeshake, eliminate dead code …
+import polyfill from 'watr/polyfill'   // newer features → MVP
+compile(optimize(polyfill(src)))
 
 // parse
 parse('(i32.const 42)') // ['i32.const', 42]
@@ -56,7 +59,7 @@ npx watr input.wat --polyfill   # newer features → MVP
 
 ## Metrics
 
-* **watr** — ~84 KB minified (~24 KB gzipped), 4,460 op/s
+* **watr** — ~43 KB minified (~14 KB gzipped), 4,460 op/s
 * [spec/wast.js](https://github.com/WebAssembly/spec) — 216 KB, 2,185 op/s
 * [wabt](https://github.com/WebAssembly/wabt) — 282 KB, 1,273 op/s
 * [binaryen](https://github.com/WebAssembly/binaryen) — 1,100 KB, 718 op/s

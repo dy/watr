@@ -14,13 +14,18 @@
 
 import { readFileSync } from 'fs'
 import { compile as tcompile, watr as twatr } from '../src/template.js'
+// polyfill/optimize are JS-only library transforms (watr.wasm is the bare
+// encoder, and the default JS entry no longer bundles them), so both backends
+// source them from JS src rather than from the main entry or wasm exports.
+import optimize from '../src/optimize.js'
+import polyfill from '../src/polyfill.js'
 
 const isWasm = !!(
   typeof process !== 'undefined' && process.env?.WATR_WASM ||
   (typeof globalThis !== 'undefined' && globalThis.WATR_WASM)
 )
 
-let compile, parse, print, optimize, polyfill, watr
+let compile, parse, print, watr
 
 if (isWasm) {
   const { instantiate } = await import('../../jz/interop.js')
@@ -29,8 +34,6 @@ if (isWasm) {
 
   parse = exports.parse
   print = exports.print
-  optimize = exports.optimize
-  polyfill = exports.polyfill
 
   const backend = {
     parse,
@@ -41,7 +44,7 @@ if (isWasm) {
   compile = (source, ...values) => tcompile(backend, source, values)
   watr = (source, ...values) => twatr(backend, source, values)
 } else {
-  ;({ compile, parse, print, optimize, polyfill, default: watr } = await import('../watr.js'))
+  ;({ compile, parse, print, default: watr } = await import('../watr.js'))
 }
 
 export { compile, parse, print, optimize, polyfill, watr }

@@ -20,6 +20,24 @@ import { resultType } from './const.js'
 const PUA = '\uE000'
 
 /**
+ * Apply a backend transform (`polyfill`/`optimize`), or throw an actionable
+ * pointer when this entry doesn't bundle it. The default `watr` build wires a
+ * lean backend (parse + compile) and leaves the heavy transforms to their own
+ * entries, so `compile(src, { optimize })` here directs you to compose instead.
+ *
+ * @param {Function|undefined} fn - transform from the backend
+ * @param {string} name - 'polyfill' | 'optimize'
+ * @param {Array} ast
+ * @param {any} opt - the option value
+ * @returns {Array} transformed AST
+ */
+function applyTransform(fn, name, ast, opt) {
+  if (typeof fn !== 'function')
+    throw Error(`watr: '${name}' is not bundled in this entry \u2014 import it from 'watr/${name}' and compose: compile(${name}(src))`)
+  return fn(ast, opt)
+}
+
+/**
  * Infer type of an expression AST node.
  * Used for auto-import parameter type inference.
  *
@@ -209,9 +227,9 @@ export function compile(backend, source, values) {
       }
     }
 
-    // Apply transforms
-    if (opts.polyfill) ast = polyfill(ast, opts.polyfill)
-    if (opts.optimize) ast = optimize(ast, opts.optimize)
+    // Apply transforms (heavy passes live in separate entries — see applyTransform)
+    if (opts.polyfill) ast = applyTransform(polyfill, 'polyfill', ast, opts.polyfill)
+    if (opts.optimize) ast = applyTransform(optimize, 'optimize', ast, opts.optimize)
 
     const binary = emit(ast)
     // Attach imports for watr() to use
@@ -222,8 +240,8 @@ export function compile(backend, source, values) {
   // String/AST source with options
   if (opts.polyfill || opts.optimize) {
     let ast = typeof source === 'string' ? parse(source) : source
-    if (opts.polyfill) ast = polyfill(ast, opts.polyfill)
-    if (opts.optimize) ast = optimize(ast, opts.optimize)
+    if (opts.polyfill) ast = applyTransform(polyfill, 'polyfill', ast, opts.polyfill)
+    if (opts.optimize) ast = applyTransform(optimize, 'optimize', ast, opts.optimize)
     return emit(ast)
   }
   return emit(source)

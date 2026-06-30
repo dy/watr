@@ -27,6 +27,10 @@
       "types": "./types/src/compile.d.ts",
       "default": "./src/compile.js"
     },
+    "./polyfill": {
+      "types": "./types/src/polyfill.d.ts",
+      "default": "./src/polyfill.js"
+    },
     "./optimize": {
       "types": "./types/src/optimize.d.ts",
       "default": "./src/optimize.js"
@@ -42,6 +46,12 @@
       ],
       "compile": [
         "./types/src/compile.d.ts"
+      ],
+      "polyfill": [
+        "./types/src/polyfill.d.ts"
+      ],
+      "optimize": [
+        "./types/src/optimize.d.ts"
       ]
     }
   },

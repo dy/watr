@@ -127,9 +127,8 @@ t('polyfill: no-op when no features used', () => {
   is(f(), 42)
 })
 
-t('polyfill: via compile options', async () => {
-  const { compile } = await import('../watr.js')
-
+t('polyfill: composed with compile', () => {
+  // polyfill ships as its own entry now — compose it instead of a compile option
   const src = `
     (module
       (type $fn (func (result i32)))
@@ -140,7 +139,7 @@ t('polyfill: via compile options', async () => {
     )
   `
 
-  const binary = compile(src, { polyfill: true })
+  const binary = compile(polyfill(src))
   const mod = new WebAssembly.Module(binary)
   const { test } = new WebAssembly.Instance(mod).exports
 

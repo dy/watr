@@ -29,6 +29,19 @@ t('watr: no exports returns empty object', () => {
   is(Object.keys(exports).length, 0)
 })
 
+// The default entry is the lean encoder — polyfill/optimize are heavy and ship
+// as their own entries (`watr/polyfill`, `watr/optimize`). Pin both: they're not
+// re-exported here, and the legacy option form fails loud with a pointer rather
+// than silently skipping the transform. Imports `../watr.js` directly so the
+// assertion holds in wasm mode too (the runner wires transforms; the entry must not).
+t('watr: lean entry omits polyfill/optimize, points to subpaths', async () => {
+  const main = await import('../watr.js')
+  is(main.optimize, undefined)
+  is(main.polyfill, undefined)
+  throws(() => main.compile('(func)', { optimize: true }), /watr\/optimize/)
+  throws(() => main.compile('(func)', { polyfill: true }), /watr\/polyfill/)
+})
+
 t('watr: memory export', () => {
   const { mem } = watr`(memory (export "mem") 1)`
   ok(mem instanceof WebAssembly.Memory)

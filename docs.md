@@ -77,7 +77,7 @@ watr`(func (export "f") (result i32) \${ops})`
 watr('(func (export "f") (result i32) (i32.const 42))')
 ```
 
-### `compile(source, options?)`
+### `compile(source)`
 
 Compile to binary. Accepts a string, AST, or template literal.
 
@@ -88,17 +88,19 @@ compile(`(func (export "f"))`)                       // string
 compile(['func', ['export', '"f"']])                 // AST
 compile`(func (export "f") (f64.const \${Math.PI}))` // template
 // Uint8Array
+```
 
-// polyfill newer features to MVP
-compile(src, { polyfill: true })           // all features
-compile(src, { polyfill: 'funcref' })      // specific features
+`polyfill` and `optimize` are heavy, so they ship as separate entries rather
+than bloating the core. Compose them with `compile`:
 
-// optimize
-compile(src, { optimize: true })           // all optimizations
-compile(src, { optimize: 'fold' })         // specific optimizations
+```js
+import { compile } from 'watr'
+import polyfill from 'watr/polyfill'
+import optimize from 'watr/optimize'
 
-// both
-compile(src, { polyfill: true, optimize: true })
+compile(polyfill(src))             // polyfill newer features to MVP
+compile(optimize(src))             // optimize for size/speed
+compile(optimize(polyfill(src)))   // both
 ```
 
 ### `polyfill(ast, options?)`
@@ -106,7 +108,8 @@ compile(src, { polyfill: true, optimize: true })
 Transform AST to polyfill newer WebAssembly features for older runtimes.
 
 ```js
-import { polyfill, parse, compile } from 'watr'
+import polyfill from 'watr/polyfill'
+import { parse, compile } from 'watr'
 
 // auto-detect and polyfill all
 const ast = polyfill(parse(src))
@@ -147,7 +150,8 @@ polyfill(ast, { funcref: true })      // object
 Optimize AST for smaller size and better performance.
 
 ```js
-import { optimize, parse, print, compile } from 'watr'
+import optimize from 'watr/optimize'
+import { parse, print, compile } from 'watr'
 
 // auto-detect and apply all optimizations
 const ast = optimize(parse(src))
