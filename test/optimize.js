@@ -239,6 +239,18 @@ test('branch: select const → chosen value', () => {
   // Should keep the first value (condition is truthy)
 })
 
+test('branch: constant select must NOT drop a side-effecting discarded arm', () => {
+  // `select` evaluates BOTH arms before choosing (they are on the stack). Folding a
+  // constant-condition select to the kept arm is only sound when the DISCARDED arm is
+  // pure. Here the discarded (else) arm `(local.tee $p (f64.const 0))` writes $p — a
+  // real side effect (jz compiles `p = 0` as the else arm of `cond ? 0 : p`). Dropping
+  // it left `$p` at its incoming value → wrong result. Regression: the fold must
+  // preserve the write. (jz fuzz seed=2833 miscompiled before this guard.)
+  const ast = parse('(module (func (export "f") (param $p f64) (result f64) (drop (select (f64.const 0) (local.tee $p (f64.const 0)) (i32.const 1))) (local.get $p)))')
+  const src = print(optimize(ast))
+  assert(/local\.(set|tee) \$p/.test(src), 'the $p=0 write from the discarded select arm must survive')
+})
+
 // ==================== LOCAL REUSE ====================
 
 test('locals: removes unused', () => {
@@ -1138,6 +1150,15 @@ test('vacuum: select identical arms', () => {
   const src = print(opt)
   assert(!src.includes('select'), 'should remove select with identical arms')
   assert(src.includes('local.get $x'), 'should keep the value')
+})
+
+test('vacuum: select identical IMPURE arms is NOT collapsed (side effect runs twice)', () => {
+  // select evaluates BOTH arms, so identical arms with a side effect run it twice. Collapsing
+  // `select(tee, tee, c) → tee` would run it once — a semantics change. Keep the select unless
+  // the arm is pure. (Sibling of the constant-select side-effect guard above.)
+  const ast = parse('(module (func (param $x i32) (param $c i32) (result i32) (select (local.tee $x (i32.const 7)) (local.tee $x (i32.const 7)) (local.get $c))))')
+  const src = print(optimize(ast))
+  assert(src.includes('select'), 'select with identical impure (tee) arms must be kept')
 })
 
 test('vacuum: if with empty branches', () => {

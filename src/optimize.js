@@ -855,12 +855,18 @@ const branch = (ast) => {
 
     // (select a b (i32.const 0)) → b
     // (select a b (i32.const N)) → a (N != 0)
+    // `select` evaluates BOTH arms before choosing, so a side effect in the DISCARDED
+    // arm (a `local.tee`/`local.set`, store, or call) must still happen — folding to the
+    // kept arm would drop it (e.g. `p=0` compiled as the else arm of `cond?0:p`). Only
+    // fold when the discarded arm is pure; otherwise leave the select for a later pass.
     if (op === 'select' && node.length >= 4) {
       const cond = node[node.length - 1]
       const c = getConst(cond)
       if (!c) return
-      if (c.value === 0 || c.value === ZERO64) return node[2] // b
-      return node[1] // a
+      const zero = c.value === 0 || c.value === ZERO64
+      const keep = zero ? node[2] : node[1], discard = zero ? node[1] : node[2]
+      if (!isPure(discard)) return
+      return keep
     }
   })
 }
@@ -2707,10 +2713,12 @@ const vacuum = (ast) => {
       return ['block', ...eff]
     }
 
-    // (select x x cond) → x — only when cond is PURE. An impure cond may set a
-    // local that a later op reads (e.g. an address `local.tee` the matching store
-    // reuses); dropping it would leave that local stale. Keep the select otherwise.
-    if (op === 'select' && node.length >= 4 && equal(node[1], node[2]) && isPure(node[3])) return node[1]
+    // (select x x cond) → x — only when the arm AND cond are PURE. select evaluates BOTH
+    // arms, so collapsing two identical IMPURE arms to one would drop a side effect (run it
+    // once, not twice); and an impure cond may set a local a later op reads (an address
+    // `local.tee` the matching store reuses) — dropping it leaves that local stale. Keep
+    // the select unless everything discarded is pure.
+    if (op === 'select' && node.length >= 4 && equal(node[1], node[2]) && isPure(node[1]) && isPure(node[3])) return node[1]
 
     if (op === 'if') {
       const { cond, thenBranch, elseBranch } = parseIf(node)
