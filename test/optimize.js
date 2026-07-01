@@ -151,6 +151,24 @@ test('identity: x << 0 → x', () => {
   assert(!src.includes('i32.shl'), 'should remove shift by 0')
 })
 
+test('identity: reinterpret round-trip → x', () => {
+  for (const [outer, inner] of [['i64.reinterpret_f64', 'f64.reinterpret_i64'], ['f64.reinterpret_i64', 'i64.reinterpret_f64'], ['i32.reinterpret_f32', 'f32.reinterpret_i32'], ['f32.reinterpret_i32', 'i32.reinterpret_f32']]) {
+    const t = outer.slice(0, 3)
+    const opt = optimize(parse(`(module (func (param $x ${t}) (result ${t}) (${outer} (${inner} (local.get $x)))))`), 'identity')
+    assert(!print(opt).includes('reinterpret'), `${outer}∘${inner} folds to x`)
+  }
+})
+
+test('identity: wrap∘extend and boxPtr round-trip → x', () => {
+  for (const inner of ['i64.extend_i32_u', 'i64.extend_i32_s']) {
+    const opt = optimize(parse(`(module (func (param $x i32) (result i32) (i32.wrap_i64 (${inner} (local.get $x)))))`), 'identity')
+    assert(!print(opt).match(/wrap_i64|extend_i32/), `wrap∘${inner} folds to x`)
+  }
+  // NaN-box (un)box chain: wrap∘reinterpret∘reinterpret∘extend collapses fully in one walk.
+  const box = optimize(parse('(module (func (param $x i32) (result i32) (i32.wrap_i64 (i64.reinterpret_f64 (f64.reinterpret_i64 (i64.extend_i32_u (local.get $x)))))))'), 'identity')
+  assert.equal(print(box).match(/wrap_i64|reinterpret|extend_i32/), null, 'boxPtr round-trip collapses to (local.get $x)')
+})
+
 // ==================== STRENGTH REDUCTION ====================
 
 test('strength: x * 2 → x << 1', () => {

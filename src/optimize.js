@@ -7,7 +7,7 @@
  * @module wat/optimize
  */
 
-import compile, { size } from './compile.js'
+import { size } from './compile.js'
 import parse from './parse.js'
 
 // Fixpoint round caps — empirical convergence bounds, not correctness limits.
@@ -708,6 +708,20 @@ const IDENTITIES = {
   // f * 1 → x (careful with NaN, skip for floats)
 }
 
+// Unary cast round-trips `outer(inner(x)) → x`. Each pair is bit-for-bit identity:
+//   reinterpret∘reinterpret — a value bit-cast to the other repr and back is unchanged.
+//   wrap_i64∘extend_i32_{s,u} — extend fills the high 32 bits, wrap drops them, low 32 = x.
+// Generic wasm identities (Binaryen folds them); a NaN-box language leans on them heavily,
+// since (un)boxing a pointer is exactly a wrap∘reinterpret∘reinterpret∘extend chain that
+// collapses to nothing once these fire bottom-up.
+const ROUNDTRIP = {
+  'i64.reinterpret_f64': 'f64.reinterpret_i64',
+  'f64.reinterpret_i64': 'i64.reinterpret_f64',
+  'i32.reinterpret_f32': 'f32.reinterpret_i32',
+  'f32.reinterpret_i32': 'i32.reinterpret_f32',
+  'i32.wrap_i64': new Set(['i64.extend_i32_u', 'i64.extend_i32_s']),
+}
+
 /**
  * Remove identity operations.
  * @param {Array} ast
@@ -715,7 +729,15 @@ const IDENTITIES = {
  */
 const identity = (ast) => {
   return walkPost(ast, (node) => {
-    if (!Array.isArray(node) || node.length !== 3) return
+    if (!Array.isArray(node)) return
+    // Unary cast round-trip: outer(inner(x)) → x (post-order, so an inner pair already
+    // collapsed before the outer op sees it — the whole box/unbox chain unwinds in one walk).
+    if (node.length === 2 && Array.isArray(node[1]) && node[1].length === 2) {
+      const inv = ROUNDTRIP[node[0]]
+      if (inv && (typeof inv === 'string' ? node[1][0] === inv : inv.has(node[1][0]))) return node[1][1]
+      return
+    }
+    if (node.length !== 3) return
     const fn = IDENTITIES[node[0]]
     if (!fn) return
     const result = fn(node[1], node[2])
