@@ -2630,19 +2630,28 @@ const coalesceLocals = (ast) => {
         const here = pos++
         if (decls.has(name)) {
           let u = uses.get(name)
-          if (!u) { u = { start: here, end: here, firstOp: op, firstCond: condDepth > 0, loops: new Set() }; uses.set(name, u) }
+          // A first WRITE only licenses slot-joining when it executes on EVERY path that
+          // reaches a later read — else the read must see the local's implicit ZERO, and a
+          // joined slot would leak the previous occupant's residue. Three skippable
+          // contexts break the guarantee: an if/else arm (condDepth), a LOOP body (a
+          // zero-trip loop skips the write but a read after the loop still runs — the
+          // mat4 `iters=0` miscompile), and any statement AFTER a br/br_if/return in the
+          // same list (the rotated-loop entry guard `(block (br_if $out …) …)` shape).
+          if (!u) { u = { start: here, end: here, firstOp: op, firstCond: condDepth > 0 || loopStack.length > 0, loops: new Set() }; uses.set(name, u) }
           if (here > u.end) u.end = here
           for (const ls of loopStack) u.loops.add(ls)
         }
       } else {
         pos++
         const isIf = op === 'if'
+        let branched = false   // a direct-child br/br_if/return makes the REST of this list conditional
         for (let i = 1; i < n.length; i++) {
           const c = n[i]
-          const cond = isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')
+          const cond = (isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')) || branched
           if (cond) condDepth++
           visit(c)
           if (cond) condDepth--
+          if (Array.isArray(c) && (c[0] === 'br_if' || c[0] === 'br' || c[0] === 'br_table' || c[0] === 'return' || c[0] === 'return_call' || c[0] === 'return_call_indirect' || c[0] === 'unreachable')) branched = true
         }
       }
 
@@ -3760,6 +3769,177 @@ const reorder = (ast) => {
   return ['module', ...imports, ...funcs, ...others]
 }
 
+// ==================== LOOP-INVARIANT CODE MOTION ====================
+
+/**
+ * licm — hoist loop-invariant PURE, NON-TRAPPING value expressions out of loops into
+ * fresh locals computed once before the loop. The mechanical half of LICM: no alias
+ * analysis, so memory loads and calls are never hoisted; only arithmetic/compare/
+ * select/conversion/SIMD subtrees whose leaves are constants, loop-unwritten locals,
+ * or immutable globals. Hoisting is speculation-safe (an `if`-arm expression now runs
+ * every entry, a zero-trip loop runs it once) because every whitelisted op is pure and
+ * cannot trap — trapping ops (int div/rem, non-saturating float→int trunc) and effects
+ * (loads/stores/calls/tees) are excluded, so the only cost is wasted work, never a
+ * changed result. Identical hoists within one loop share one local (loop-level CSE —
+ * repeated `f64x2.splat (f64.const C)` broadcasts collapse to a single set).
+ *
+ * Runs ONCE after the rounds (like `inline`): the invariants worth hoisting only exist
+ * after inlineOnce/inline splice callee bodies into the loop, and a later `propagate`
+ * round would forward a single-use hoist straight back into the loop, undoing it.
+ * Opt-in (speed-for-size: new locals + sets grow the binary slightly).
+ *
+ * Loops are processed innermost-first; a hoisted inner set whose RHS is invariant to
+ * the outer loop hoists again on the outer pass (the RHS is a value position of the
+ * set), cascading multi-level invariants outward one level per enclosing loop.
+ */
+// Pure & non-trapping op test. v128/SIMD ops are all non-trapping except memory ops;
+// scalar arithmetic is safe except int div/rem (trap on 0/overflow) and the trapping
+// float→int truncations (`iNN.trunc_fMM_x`; the `trunc_sat` forms saturate instead).
+const licmPure = (op) => {
+  if (typeof op !== 'string') return false
+  if (op === 'select') return true
+  if (/^(v128|[if](8x16|16x8|32x4|64x2))\./.test(op)) return !/\.(load|store)/.test(op)
+  if (!/^[if](32|64)\./.test(op) && !/^f(32|64)\./.test(op)) return false
+  if (/\.(load|store)/.test(op)) return false
+  if (/\.(div_[su]|rem_[su])$/.test(op)) return false
+  if (/^i(32|64)\.trunc_f/.test(op) && !op.includes('trunc_sat')) return false
+  return true
+}
+
+const licm = (ast) => {
+  for (const func of ast) {
+    if (!Array.isArray(func) || func[0] !== 'func') continue
+
+    // Local/param types (for typing hoisted expressions through local.get leaves).
+    const localTypes = new Map()
+    let declEnd = 1   // insertion point for fresh (local …) decls: after params/result/locals
+    for (let i = 1; i < func.length; i++) {
+      const c = func[i]
+      if (!Array.isArray(c)) { if (typeof c === 'string' && c[0] === '$') declEnd = i + 1; continue }
+      if (c[0] === 'param' || c[0] === 'local') {
+        if (typeof c[1] === 'string' && c[1][0] === '$') localTypes.set(c[1], c[2])
+        declEnd = i + 1
+      } else if (c[0] === 'result' || c[0] === 'export' || c[0] === 'type') declEnd = i + 1
+      else break
+    }
+
+    // Immutable module globals: declared without (mut …) — reads are invariant everywhere.
+    const immutGlobals = new Set()
+    for (const g of ast) {
+      if (!Array.isArray(g)) continue
+      if (g[0] === 'global' && typeof g[1] === 'string' && !g.some(c => Array.isArray(c) && c[0] === 'mut')) immutGlobals.add(g[1])
+      if (g[0] === 'import') { const d = g[g.length - 1]; if (Array.isArray(d) && d[0] === 'global' && typeof d[1] === 'string' && !d.some(c => Array.isArray(c) && c[0] === 'mut')) immutGlobals.add(d[1]) }
+    }
+
+    // Result type of a hoistable subtree (null ⇒ untypeable ⇒ don't hoist).
+    const typeOf = (n) => {
+      if (!Array.isArray(n)) return null
+      const op = n[0]
+      if (op === 'select') return typeOf(n[1])
+      if (op === 'local.get') return localTypes.get(n[1]) ?? null
+      if (/\.extract_lane/.test(op)) { const p = op.slice(0, op.indexOf('.')); return p === 'f64x2' ? 'f64' : p === 'f32x4' ? 'f32' : p === 'i64x2' ? 'i64' : 'i32' }
+      if (/^(v128|[if](8x16|16x8|32x4|64x2))\./.test(op)) return op.endsWith('any_true') || op.endsWith('all_true') || op.endsWith('bitmask') ? 'i32' : 'v128'
+      return resultType(op)
+    }
+
+    let minted = 0
+    const freshName = () => {
+      let n
+      do { n = `$__licm${minted++}` } while (localTypes.has(n))
+      return n
+    }
+    const newDecls = []
+
+    const processLoop = (loop, parent, idx) => {
+      // Only hoist when the loop sits in a statement list we can splice into.
+      const pop = Array.isArray(parent) ? parent[0] : null
+      if (pop !== 'func' && pop !== 'block' && pop !== 'loop' && pop !== 'then' && pop !== 'else') return
+
+      // Loop effect summary: the write-set of locals, and whether globals stay stable.
+      const writes = new Set()
+      let hasCall = false, hasGlobalSet = false
+      walk(loop, (n) => {
+        if (!Array.isArray(n)) return
+        const op = n[0]
+        if ((op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string') writes.add(n[1])
+        else if (op === 'global.set') hasGlobalSet = true
+        else if (op === 'call' || op === 'call_indirect' || op === 'call_ref' || op === 'return_call' || op === 'return_call_indirect') hasCall = true
+      })
+
+      // Invariant: every node in the subtree is a const, an unwritten local, a stable
+      // global read, or a whitelisted pure op. Non-array children of whitelisted ops
+      // are immediates (lane indices, shuffle masks, v128.const payload) — allowed.
+      const inv = (n) => {
+        if (!Array.isArray(n)) return false
+        const op = n[0]
+        if (typeof op !== 'string') return false
+        if (op.endsWith('.const')) return true
+        if (op === 'local.get') return typeof n[1] === 'string' && !writes.has(n[1])
+        if (op === 'global.get') return typeof n[1] === 'string' && (immutGlobals.has(n[1]) || (!hasGlobalSet && !hasCall))
+        if (!licmPure(op)) return false
+        for (let i = 1; i < n.length; i++) if (Array.isArray(n[i]) && !inv(n[i])) return false
+        return true
+      }
+      // Cost gate: ≥2 real ops (consts/gets free) — hoisting a lone add trades a local
+      // for one op and mostly just grows the binary; a guard pair or splat-chain pays.
+      const opCount = (n) => {
+        if (!Array.isArray(n)) return 0
+        const op = n[0]
+        let c = (typeof op === 'string' && !op.endsWith('.const') && op !== 'local.get') ? 1 : 0
+        for (let i = 1; i < n.length; i++) c += opCount(n[i])
+        return c
+      }
+
+      const hoisted = []            // [ ['local.set', name, expr] … ]
+      const byKey = new Map()       // stringified expr → local name (dedupe within this loop)
+      const tryHoist = (node, par, i) => {
+        if (!Array.isArray(node)) return
+        const op = node[0]
+        // Never lift a bare statement/decl; only value expressions match the pure set.
+        // Cost gate: ≥2 real ops — except a v128 SPLAT root, worth hoisting even alone: a
+        // broadcast re-materialized per iteration occupies a vector unit + widens live ranges
+        // (the colorpq 1M-iteration splat(coeff) recompute), where scalar 1-op trees are
+        // register-trivial and V8 folds them anyway.
+        const isSplat = typeof node[0] === 'string' && node[0].endsWith('.splat')
+        if (inv(node) && (opCount(node) >= 2 || isSplat)) {
+          const ty = typeOf(node)
+          if (ty) {
+            let key
+            try { key = JSON.stringify(node) } catch { key = null }
+            let name = key != null ? byKey.get(key) : undefined
+            if (name === undefined) {
+              name = freshName()
+              localTypes.set(name, ty)
+              newDecls.push(['local', name, ty])
+              hoisted.push(['local.set', name, node])
+              if (key != null) byKey.set(key, name)
+            }
+            par[i] = ['local.get', name]
+            return
+          }
+        }
+        for (let i2 = 1; i2 < node.length; i2++) tryHoist(node[i2], node, i2)
+      }
+      for (let i = 1; i < loop.length; i++) if (Array.isArray(loop[i])) tryHoist(loop[i], loop, i)
+      if (hoisted.length) parent.splice(idx, 0, ...hoisted)
+    }
+
+    // Innermost-first: recurse before processing, and track (parent, idx) for splicing.
+    // Indices shift as hoists are spliced in — iterate by live position.
+    const visit = (parent) => {
+      for (let i = 1; i < parent.length; i++) {
+        const n = parent[i]
+        if (!Array.isArray(n)) continue
+        visit(n)
+        if (n[0] === 'loop') { const before = parent.length; processLoop(n, parent, i); i += parent.length - before }
+      }
+    }
+    visit(func)
+    if (newDecls.length) func.splice(declEnd, 0, ...newDecls)
+  }
+  return ast
+}
+
 // ==================== MAIN ====================
 
 /**
@@ -3781,6 +3961,7 @@ const PASSES = [
   ['devirt',        devirt,         false, 'call_indirect with a constant or known closure-const index → direct/guarded calls — grows bytes for speed'],
   ['inlineOnce',    inlineOnce,     true,  'inline single-call functions into their lone caller (never duplicates)'],
   ['inline',        inline,         false, 'inline tiny functions — can duplicate bodies'],
+  ['licm',          licm,           false, 'hoist loop-invariant pure arithmetic out of loops — adds locals (speed-for-size); runs once after rounds'],
   ['offset',        offset,         true,  'fold add+const into load/store offset'],
   ['unbranch',      unbranch,       true,  'remove redundant br at end of own block'],
   ['loopify',       loopify,        true,  'collapse block+loop+brif while-idiom into loop+if'],
@@ -3926,7 +4107,9 @@ export default function optimize(ast, opts = true) {
     if (opts.coalesceLocals) a = coalesceLocals(a)
     return a
   }
-  const finish = (a) => { a = runInline(a); return pruneEmptyStart(opts.devirt ? devirt(a) : a) }
+  // licm runs ONCE after the rounds + inline: its invariants only exist after inlining, and a
+  // later propagate round would forward a single-use hoist back into the loop, undoing it.
+  const finish = (a) => { a = runInline(a); if (opts.licm) a = licm(a); return pruneEmptyStart(opts.devirt ? devirt(a) : a) }
 
   // Fast path: jz owns this optimizer and feeds it a controlled, type-aware IR.
   // The only passes that can *grow* the binary are inlineOnce/inline; when no
@@ -3940,7 +4123,7 @@ export default function optimize(ast, opts = true) {
     // propagate, and it would only confirm what `mayInline` already proved.
     for (let round = 0; round < 3; round++) {
       const beforeRound = clone(ast)
-      for (const [key, fn] of PASSES) if (opts[key] && key !== 'inlineOnce' && key !== 'inline' && key !== 'devirt') ast = fn(ast, opts)
+      for (const [key, fn] of PASSES) if (opts[key] && key !== 'inlineOnce' && key !== 'inline' && key !== 'devirt' && key !== 'licm') ast = fn(ast, opts)
       if (equal(beforeRound, ast)) break // fixpoint
       if (verbose) log(`  round ${round + 1} applied`)
     }
@@ -3957,7 +4140,7 @@ export default function optimize(ast, opts = true) {
   for (let round = 0; round < 3; round++) {
     beforeRound = clone(ast)
 
-    for (const [key, fn] of PASSES) if (opts[key] && key !== 'devirt' && key !== 'inline') ast = fn(ast, opts)
+    for (const [key, fn] of PASSES) if (opts[key] && key !== 'devirt' && key !== 'inline' && key !== 'licm') ast = fn(ast, opts)
     // Second propagate sweep: `inlineOnce`/`inline` (above) leave fresh
     // `(local.set $p arg) … (local.get $p)` wrappers around each inlined call;
     // re-running propagation collapses them within this same round, so the size

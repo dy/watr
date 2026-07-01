@@ -251,6 +251,107 @@ test('branch: constant select must NOT drop a side-effecting discarded arm', () 
   assert(/local\.(set|tee) \$p/.test(src), 'the $p=0 write from the discarded select arm must survive')
 })
 
+test('coalesce: zero-trip loop write must not join a dead slot (implicit-zero read)', () => {
+  // $dead is written before the loop and never used after — its interval ends pre-loop.
+  // $out's FIRST use is a write INSIDE the loop; its read comes after. A zero-trip loop
+  // (n=0) skips the write, so the read must observe $out's implicit ZERO — but interval
+  // coalescing joined $out into $dead's slot and the read leaked $dead's residue (7).
+  // The rotated-loop shape jz emits: (block (…inits…) (br_if $exit) (loop …)); the jz
+  // mat4 `iters=0` miscompile read matmul residue through exactly this join. Pinned at
+  // the pass level ('coalesce'-only) — the full default pipeline reshapes the decoy away.
+  const src = `(module (memory 1) (func (export "f") (param $n i32) (result f64)
+    (local $dead f64) (local $out f64) (local $i i32)
+    (local.set $dead (f64.add (f64.convert_i32_s (local.get $n)) (f64.const 7)))
+    (f64.store (i32.const 0) (local.get $dead))
+    (block $b
+      (br_if $b (i32.ge_s (local.get $i) (local.get $n)))
+      (loop $l
+        (local.set $out (f64.const 3))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $l (i32.lt_s (local.get $i) (local.get $n)))))
+    (local.get $out)))`
+  const before = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(src)))).exports.f
+  const after = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'coalesce')))).exports.f
+  assert.equal(before(0), 0, 'unoptimized zero-trip reads the implicit zero')
+  assert.equal(after(0), before(0), 'coalesced zero-trip must also read zero, not the dead slot residue')
+  assert.equal(after(2), before(2), 'looping case unchanged')
+  // Full default pipeline stays correct too (whatever passes run around coalesce).
+  const full = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src))))).exports.f
+  assert.equal(full(0), before(0))
+  assert.equal(full(3), before(3))
+})
+
+// ==================== LOOP-INVARIANT CODE MOTION ====================
+
+// A loop recomputing an invariant guard pair (`select` over `f64.ne` of an unwritten
+// local) every iteration — the raytrace hot-loop shape. licm must hoist the whole
+// subtree to a single pre-loop local.set and leave one local.get inside.
+const LICM_GUARD = `(module (func (export "f") (param $x f64) (param $n i32) (result f64)
+  (local $i i32) (local $acc f64)
+  (block $b (loop $l
+    (br_if $b (i32.ge_s (local.get $i) (local.get $n)))
+    (local.set $acc (f64.add (local.get $acc)
+      (select (f64.const 1) (f64.const 2) (f64.ne (local.get $x) (local.get $x)))))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $l)))
+  (local.get $acc)))`
+
+test('licm: invariant select guard hoists out of the loop', () => {
+  const src = print(optimize(parse(LICM_GUARD), { licm: true }))
+  // The guard now computes once, before the loop, into a fresh local.
+  const loopBody = src.slice(src.indexOf('(loop'))
+  assert(!loopBody.includes('f64.ne'), 'guard compare must leave the loop body')
+  assert(src.includes('f64.ne'), 'guard compare must still exist (hoisted, not deleted)')
+  // Bit-exact: run it.
+  const before = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(LICM_GUARD)))).exports.f
+  const after = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(LICM_GUARD), { licm: true })))).exports.f
+  assert.equal(after(3.5, 4), before(3.5, 4))
+  assert.equal(after(NaN, 4), before(NaN, 4))       // the guard's whole point
+  assert.equal(after(1.0, 0), before(1.0, 0))       // zero-trip loop: hoist runs, result identical
+})
+
+test('licm: loop-varying expression stays; loads, calls, and trapping ops never hoist', () => {
+  // 'licm' string form: run ONLY this pass — the default pipeline would legitimately
+  // inlineOnce+fold `call $g` first, which is not what this test pins.
+  const src = print(optimize(parse(`(module
+    (memory 1)
+    (func $g (result f64) (f64.const 7))
+    (func (export "f") (param $x f64) (param $n i32) (result f64)
+      (local $i i32) (local $acc f64)
+      (block $b (loop $l
+        (br_if $b (i32.ge_s (local.get $i) (local.get $n)))
+        ;; varies with $i — must stay
+        (local.set $acc (f64.add (local.get $acc) (f64.mul (f64.convert_i32_s (local.get $i)) (f64.const 2))))
+        ;; invariant ADDRESS but a LOAD — no alias analysis, must stay
+        (local.set $acc (f64.add (local.get $acc) (f64.load (i32.const 8))))
+        ;; invariant args but a CALL — must stay
+        (local.set $acc (f64.add (local.get $acc) (call $g)))
+        ;; invariant operands but TRAPPING (div by zero possible) — must stay
+        (local.set $acc (f64.add (local.get $acc) (f64.convert_i32_s (i32.div_s (i32.const 10) (local.get $n)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $l)))
+      (local.get $acc)))`), 'licm'))
+  const loopBody = src.slice(src.indexOf('(loop'))
+  assert(loopBody.includes('f64.load'), 'load must stay in the loop')
+  assert(loopBody.includes('call $g'), 'call must stay in the loop')
+  assert(loopBody.includes('i32.div_s'), 'trapping div must stay in the loop')
+  assert(loopBody.includes('f64.convert_i32_s (local.get $i)') || /convert_i32_s\s*\(local\.get \$i\)/.test(loopBody.replace(/\n\s*/g, ' ')), 'loop-varying compute must stay')
+})
+
+test('licm: identical invariant subtrees share one hoisted local (loop-level CSE)', () => {
+  const src = print(optimize(parse(`(module (func (export "f") (param $x f64) (param $n i32) (result f64)
+    (local $i i32) (local $a f64) (local $b f64)
+    (block $bl (loop $l
+      (br_if $bl (i32.ge_s (local.get $i) (local.get $n)))
+      (local.set $a (f64.mul (f64.add (local.get $x) (f64.const 1)) (f64.const 3)))
+      (local.set $b (f64.mul (f64.add (local.get $x) (f64.const 1)) (f64.const 3)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (f64.add (local.get $a) (local.get $b))))`), { licm: true }))
+  const hoists = (src.match(/local\.set \$__licm/g) || []).length
+  assert.equal(hoists, 1, `identical invariant exprs must share one hoist, got ${hoists}`)
+})
+
 // ==================== LOCAL REUSE ====================
 
 test('locals: removes unused', () => {
