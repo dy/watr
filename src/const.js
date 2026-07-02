@@ -1,18 +1,20 @@
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
-// Format: 'name' or 'name handler'
+// Format: a flat dense list — a STRING 'name' or 'name immtype' takes the next opcode;
+// a NUMBER repositions the cursor (plain opcode, or (prefix << 16) | subopcode for the
+// multi-byte pages 0xfb GC / 0xfc bulk+rounding / 0xfd SIMD / 0xfe atomics).
 // Immediate types: blocktype, labelidx, funcidx, typeidx, tableidx, memoryidx, globalidx, localidx, dataidx, elemidx, multi
 // Value types: i32, i64, f32, f64, v128
-export const INSTR = [
+const TABLE = [
   // 0x00-0x0a: control
-  'unreachable', 'nop', 'block block', 'loop block', 'if block', 'else null', 'then null', , 'throw tagidx', , 'throw_ref',
+  'unreachable', 'nop', 'block block', 'loop block', 'if block', 'else', 'then', 0x08, 'throw tagidx', 0x0a, 'throw_ref',
   // 0x0b-0x19: control
-  'end end', 'br labelidx', 'br_if labelidx', 'br_table br_table', 'return', 'call funcidx', 'call_indirect call_indirect', 'return_call funcidx', 'return_call_indirect call_indirect', 'call_ref typeidx', 'return_call_ref typeidx', , , , ,
+  'end end', 'br labelidx', 'br_if labelidx', 'br_table br_table', 'return', 'call funcidx', 'call_indirect call_indirect', 'return_call funcidx', 'return_call_indirect call_indirect', 'call_ref typeidx', 'return_call_ref typeidx',
   // 0x1a-0x1f: parametric
-  'drop', 'select select', '', , , 'try_table try_table',
+  0x1a, 'drop', 'select select', 0x1f, 'try_table try_table',
   // 0x20-0x27: variable
-  'local.get localidx', 'local.set localidx', 'local.tee localidx', 'global.get globalidx', 'global.set globalidx', 'table.get tableidx', 'table.set tableidx', ,
+  'local.get localidx', 'local.set localidx', 'local.tee localidx', 'global.get globalidx', 'global.set globalidx', 'table.get tableidx', 'table.set tableidx',
   // 0x28-0x3e: memory
-  'i32.load memarg', 'i64.load memarg', 'f32.load memarg', 'f64.load memarg',
+  0x28, 'i32.load memarg', 'i64.load memarg', 'f32.load memarg', 'f64.load memarg',
   'i32.load8_s memarg', 'i32.load8_u memarg', 'i32.load16_s memarg', 'i32.load16_u memarg',
   'i64.load8_s memarg', 'i64.load8_u memarg', 'i64.load16_s memarg', 'i64.load16_u memarg', 'i64.load32_s memarg', 'i64.load32_u memarg',
   'i32.store memarg', 'i64.store memarg', 'f32.store memarg', 'f64.store memarg',
@@ -45,134 +47,121 @@ export const INSTR = [
   'f64.convert_i32_s', 'f64.convert_i32_u', 'f64.convert_i64_s', 'f64.convert_i64_u', 'f64.promote_f32',
   'i32.reinterpret_f32', 'i64.reinterpret_f64', 'f32.reinterpret_i32', 'f64.reinterpret_i64',
   // 0xc0-0xc4: sign extension
-  'i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s', , , , , , , , , , , ,
+  'i32.extend8_s', 'i32.extend16_s', 'i64.extend8_s', 'i64.extend16_s', 'i64.extend32_s',
   // 0xd0-0xd6: reference
-  'ref.null ref_null', 'ref.is_null', 'ref.func funcidx', 'ref.eq', 'ref.as_non_null', 'br_on_null labelidx', 'br_on_non_null labelidx',
-  // 0xd7-0xdf: padding (9 empty slots)
-  , , , , , , , , ,
+  0xd0, 'ref.null ref_null', 'ref.is_null', 'ref.func funcidx', 'ref.eq', 'ref.as_non_null', 'br_on_null labelidx', 'br_on_non_null labelidx',
   // 0xe0-0xe6: stack switching (Phase 3)
-  'cont.new typeidx', 'cont.bind cont_bind', 'suspend tagidx', 'resume resume', 'resume_throw resume_throw', 'resume_throw_ref resume_throw_ref', 'switch switch_cont',
-  // 0xe7-0xfa: padding (20 empty slots)
-  , , , , , , , , , , , , , , , , , , , ,
-  // 0xfb: GC instructions (nested array for multi-byte opcodes)
-  [
-    'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx_field', 'struct.get_s typeidx_field', 'struct.get_u typeidx_field', 'struct.set typeidx_field',
-    'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx_multi', 'array.new_data typeidx_dataidx', 'array.new_elem typeidx_elemidx',
-    'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx_typeidx',
-    'array.init_data typeidx_dataidx', 'array.init_elem typeidx_elemidx', 'ref.test reftype', 'ref.test_null reftype', 'ref.cast reftype', 'ref.cast_null reftype', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
-    'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u',
-    // custom descriptors (Phase 3): 0xFB 0x20-0x26
-    , 'struct.new_desc typeidx', 'struct.new_default_desc typeidx', 'ref.get_desc typeidx', 'ref.cast_desc_eq reftype', , 'br_on_cast_desc_eq reftype2', 'br_on_cast_desc_eq_fail reftype2',
-    // 0xFB 0x28-0x7F: padding (88 empty slots)
-    ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-    // stringref: 0xFB 0x80-0xB7
-    'string.new_utf8 memoryidx?', 'string.new_wtf16 memoryidx?', 'string.const stringidx', 'string.measure_utf8', 'string.measure_wtf8', 'string.measure_wtf16',
-    'string.encode_utf8 memoryidx?', 'string.encode_wtf16 memoryidx?', 'string.concat', 'string.eq', 'string.is_usv_sequence',
-    'string.new_lossy_utf8 memoryidx?', 'string.new_wtf8 memoryidx?', 'string.encode_lossy_utf8 memoryidx?', 'string.encode_wtf8 memoryidx?',
-    , // 0x8F
-    'string.as_wtf8', 'stringview_wtf8.advance', 'stringview_wtf8.encode_utf8 memoryidx?', 'stringview_wtf8.slice',
-    'stringview_wtf8.encode_lossy_utf8 memoryidx?', 'stringview_wtf8.encode_wtf8 memoryidx?',
-    ,, // 0x96-0x97
-    'string.as_wtf16', 'stringview_wtf16.length', 'stringview_wtf16.get_codeunit', 'stringview_wtf16.encode memoryidx?', 'stringview_wtf16.slice',
-    ,,, // 0x9D-0x9F
-    'string.as_iter', 'stringview_iter.next', 'stringview_iter.advance', 'stringview_iter.rewind', 'stringview_iter.slice',
-    ,,,,,,,,,,, // 0xA5-0xAF
-    'string.new_utf8_array', 'string.new_wtf16_array', 'string.encode_utf8_array', 'string.encode_wtf16_array',
-    'string.new_lossy_utf8_array', 'string.new_wtf8_array', 'string.encode_lossy_utf8_array', 'string.encode_wtf8_array'
-  ],
-
-  // 0xfc: Bulk memory/table operations + rounding mode control (nested array)
-  [
-    'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
-    'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
-    'memory.init dataidx_memoryidx', 'data.drop dataidx', 'memory.copy memoryidx_memoryidx', 'memory.fill memoryidx?',
-    'table.init reversed', 'elem.drop elemidx', 'table.copy tableidx_tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx', ,
-    'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u',
-    // 0x17-0x7F: padding (105 empty slots)
-    ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-    // 0x80-0xBB: rounding mode control
-    'f32.sqrt_ceil', 'f32.add_ceil', 'f32.sub_ceil', 'f32.mul_ceil', 'f32.div_ceil',
-    'f64.sqrt_ceil', 'f64.add_ceil', 'f64.sub_ceil', 'f64.mul_ceil', 'f64.div_ceil',
-    'f32.convert_ceil_i32_s', 'f32.convert_ceil_i32_u', 'f32.convert_ceil_i64_s', 'f32.convert_ceil_i64_u', 'f32.demote_ceil_f64',
-    'f64.convert_ceil_i32_s', 'f64.convert_ceil_i32_u', 'f64.convert_ceil_i64_s', 'f64.convert_ceil_i64_u', 'f64.promote_ceil_f32',
-    'f32.sqrt_floor', 'f32.add_floor', 'f32.sub_floor', 'f32.mul_floor', 'f32.div_floor',
-    'f64.sqrt_floor', 'f64.add_floor', 'f64.sub_floor', 'f64.mul_floor', 'f64.div_floor',
-    'f32.convert_floor_i32_s', 'f32.convert_floor_i32_u', 'f32.convert_floor_i64_s', 'f32.convert_floor_i64_u', 'f32.demote_floor_f64',
-    'f64.convert_floor_i32_s', 'f64.convert_floor_i32_u', 'f64.convert_floor_i64_s', 'f64.convert_floor_i64_u', 'f64.promote_floor_f32',
-    'f32.sqrt_trunc', 'f32.add_trunc', 'f32.sub_trunc', 'f32.mul_trunc', 'f32.div_trunc',
-    'f64.sqrt_trunc', 'f64.add_trunc', 'f64.sub_trunc', 'f64.mul_trunc', 'f64.div_trunc',
-    'f32.convert_trunc_i32_s', 'f32.convert_trunc_i32_u', 'f32.convert_trunc_i64_s', 'f32.convert_trunc_i64_u', 'f32.demote_trunc_f64',
-    'f64.convert_trunc_i32_s', 'f64.convert_trunc_i32_u', 'f64.convert_trunc_i64_s', 'f64.convert_trunc_i64_u', 'f64.promote_trunc_f32'
-  ],
-
-  // 0xfd: SIMD instructions (nested array)
-  [
-    'v128.load memarg', 'v128.load8x8_s memarg', 'v128.load8x8_u memarg', 'v128.load16x4_s memarg', 'v128.load16x4_u memarg',
-    'v128.load32x2_s memarg', 'v128.load32x2_u memarg', 'v128.load8_splat memarg', 'v128.load16_splat memarg', 'v128.load32_splat memarg',
-    'v128.load64_splat memarg', 'v128.store memarg', 'v128.const v128const', 'i8x16.shuffle shuffle',
-    'i8x16.swizzle', 'i8x16.splat', 'i16x8.splat', 'i32x4.splat', 'i64x2.splat', 'f32x4.splat', 'f64x2.splat',
-    'i8x16.extract_lane_s laneidx', 'i8x16.extract_lane_u laneidx', 'i8x16.replace_lane laneidx',
-    'i16x8.extract_lane_s laneidx', 'i16x8.extract_lane_u laneidx', 'i16x8.replace_lane laneidx',
-    'i32x4.extract_lane laneidx', 'i32x4.replace_lane laneidx', 'i64x2.extract_lane laneidx', 'i64x2.replace_lane laneidx',
-    'f32x4.extract_lane laneidx', 'f32x4.replace_lane laneidx', 'f64x2.extract_lane laneidx', 'f64x2.replace_lane laneidx',
-    'i8x16.eq', 'i8x16.ne', 'i8x16.lt_s', 'i8x16.lt_u', 'i8x16.gt_s', 'i8x16.gt_u', 'i8x16.le_s', 'i8x16.le_u', 'i8x16.ge_s', 'i8x16.ge_u',
-    'i16x8.eq', 'i16x8.ne', 'i16x8.lt_s', 'i16x8.lt_u', 'i16x8.gt_s', 'i16x8.gt_u', 'i16x8.le_s', 'i16x8.le_u', 'i16x8.ge_s', 'i16x8.ge_u',
-    'i32x4.eq', 'i32x4.ne', 'i32x4.lt_s', 'i32x4.lt_u', 'i32x4.gt_s', 'i32x4.gt_u', 'i32x4.le_s', 'i32x4.le_u', 'i32x4.ge_s', 'i32x4.ge_u',
-    'f32x4.eq', 'f32x4.ne', 'f32x4.lt', 'f32x4.gt', 'f32x4.le', 'f32x4.ge', 'f64x2.eq', 'f64x2.ne', 'f64x2.lt', 'f64x2.gt', 'f64x2.le', 'f64x2.ge',
-    'v128.not', 'v128.and', 'v128.andnot', 'v128.or', 'v128.xor', 'v128.bitselect', 'v128.any_true',
-    'v128.load8_lane memlane', 'v128.load16_lane memlane', 'v128.load32_lane memlane', 'v128.load64_lane memlane',
-    'v128.store8_lane memlane', 'v128.store16_lane memlane', 'v128.store32_lane memlane', 'v128.store64_lane memlane',
-    'v128.load32_zero memarg', 'v128.load64_zero memarg', 'f32x4.demote_f64x2_zero', 'f64x2.promote_low_f32x4',
-    'i8x16.abs', 'i8x16.neg', 'i8x16.popcnt', 'i8x16.all_true', 'i8x16.bitmask', 'i8x16.narrow_i16x8_s', 'i8x16.narrow_i16x8_u',
-    'f32x4.ceil', 'f32x4.floor', 'f32x4.trunc', 'f32x4.nearest', 'i8x16.shl', 'i8x16.shr_s', 'i8x16.shr_u',
-    'i8x16.add', 'i8x16.add_sat_s', 'i8x16.add_sat_u', 'i8x16.sub', 'i8x16.sub_sat_s', 'i8x16.sub_sat_u',
-    'f64x2.ceil', 'f64x2.floor', 'i8x16.min_s', 'i8x16.min_u', 'i8x16.max_s', 'i8x16.max_u', 'f64x2.trunc', 'i8x16.avgr_u',
-    'i16x8.extadd_pairwise_i8x16_s', 'i16x8.extadd_pairwise_i8x16_u', 'i32x4.extadd_pairwise_i16x8_s', 'i32x4.extadd_pairwise_i16x8_u',
-    'i16x8.abs', 'i16x8.neg', 'i16x8.q15mulr_sat_s', 'i16x8.all_true', 'i16x8.bitmask', 'i16x8.narrow_i32x4_s', 'i16x8.narrow_i32x4_u',
-    'i16x8.extend_low_i8x16_s', 'i16x8.extend_high_i8x16_s', 'i16x8.extend_low_i8x16_u', 'i16x8.extend_high_i8x16_u',
-    'i16x8.shl', 'i16x8.shr_s', 'i16x8.shr_u', 'i16x8.add', 'i16x8.add_sat_s', 'i16x8.add_sat_u', 'i16x8.sub', 'i16x8.sub_sat_s', 'i16x8.sub_sat_u',
-    'f64x2.nearest', 'i16x8.mul', 'i16x8.min_s', 'i16x8.min_u', 'i16x8.max_s', 'i16x8.max_u', , 'i16x8.avgr_u',
-    'i16x8.extmul_low_i8x16_s', 'i16x8.extmul_high_i8x16_s', 'i16x8.extmul_low_i8x16_u', 'i16x8.extmul_high_i8x16_u',
-    'i32x4.abs', 'i32x4.neg', , 'i32x4.all_true', 'i32x4.bitmask', , , 'i32x4.extend_low_i16x8_s', 'i32x4.extend_high_i16x8_s',
-    'i32x4.extend_low_i16x8_u', 'i32x4.extend_high_i16x8_u', 'i32x4.shl', 'i32x4.shr_s', 'i32x4.shr_u', 'i32x4.add', , , 'i32x4.sub', , , ,
-    'i32x4.mul', 'i32x4.min_s', 'i32x4.min_u', 'i32x4.max_s', 'i32x4.max_u', 'i32x4.dot_i16x8_s', ,
-    'i32x4.extmul_low_i16x8_s', 'i32x4.extmul_high_i16x8_s', 'i32x4.extmul_low_i16x8_u', 'i32x4.extmul_high_i16x8_u',
-    'i64x2.abs', 'i64x2.neg', , 'i64x2.all_true', 'i64x2.bitmask', , , 'i64x2.extend_low_i32x4_s', 'i64x2.extend_high_i32x4_s',
-    'i64x2.extend_low_i32x4_u', 'i64x2.extend_high_i32x4_u', 'i64x2.shl', 'i64x2.shr_s', 'i64x2.shr_u', 'i64x2.add', , , 'i64x2.sub', , , ,
-    'i64x2.mul', 'i64x2.eq', 'i64x2.ne', 'i64x2.lt_s', 'i64x2.gt_s', 'i64x2.le_s', 'i64x2.ge_s',
-    'i64x2.extmul_low_i32x4_s', 'i64x2.extmul_high_i32x4_s', 'i64x2.extmul_low_i32x4_u', 'i64x2.extmul_high_i32x4_u',
-    'f32x4.abs', 'f32x4.neg', , 'f32x4.sqrt', 'f32x4.add', 'f32x4.sub', 'f32x4.mul', 'f32x4.div', 'f32x4.min', 'f32x4.max', 'f32x4.pmin', 'f32x4.pmax',
-    'f64x2.abs', 'f64x2.neg', , 'f64x2.sqrt', 'f64x2.add', 'f64x2.sub', 'f64x2.mul', 'f64x2.div', 'f64x2.min', 'f64x2.max', 'f64x2.pmin', 'f64x2.pmax',
-    'i32x4.trunc_sat_f32x4_s', 'i32x4.trunc_sat_f32x4_u', 'f32x4.convert_i32x4_s', 'f32x4.convert_i32x4_u',
-    'i32x4.trunc_sat_f64x2_s_zero', 'i32x4.trunc_sat_f64x2_u_zero', 'f64x2.convert_low_i32x4_s', 'f64x2.convert_low_i32x4_u',
-    'i8x16.relaxed_swizzle', 'i32x4.relaxed_trunc_f32x4_s', 'i32x4.relaxed_trunc_f32x4_u', 'i32x4.relaxed_trunc_f64x2_s_zero',
-    'i32x4.relaxed_trunc_f64x2_u_zero', 'f32x4.relaxed_madd', 'f32x4.relaxed_nmadd', 'f64x2.relaxed_madd', 'f64x2.relaxed_nmadd',
-    'i8x16.relaxed_laneselect', 'i16x8.relaxed_laneselect', 'i32x4.relaxed_laneselect', 'i64x2.relaxed_laneselect',
-    'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max',
-    'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s'
-  ],
+  0xe0, 'cont.new typeidx', 'cont.bind cont_bind', 'suspend tagidx', 'resume resume', 'resume_throw resume_throw', 'resume_throw_ref resume_throw_ref', 'switch switch_cont',
+  // 0xfb: GC instructions
+  0xfb0000, 'struct.new typeidx', 'struct.new_default typeidx', 'struct.get typeidx_field', 'struct.get_s typeidx_field', 'struct.get_u typeidx_field', 'struct.set typeidx_field',
+  'array.new typeidx', 'array.new_default typeidx', 'array.new_fixed typeidx_multi', 'array.new_data typeidx_dataidx', 'array.new_elem typeidx_elemidx',
+  'array.get typeidx', 'array.get_s typeidx', 'array.get_u typeidx', 'array.set typeidx', 'array.len', 'array.fill typeidx', 'array.copy typeidx_typeidx',
+  'array.init_data typeidx_dataidx', 'array.init_elem typeidx_elemidx', 'ref.test reftype', 'ref.test_null reftype', 'ref.cast reftype', 'ref.cast_null reftype', 'br_on_cast reftype2', 'br_on_cast_fail reftype2',
+  'any.convert_extern', 'extern.convert_any', 'ref.i31', 'i31.get_s', 'i31.get_u',
+  // custom descriptors (Phase 3): 0xFB 0x20-0x26
+  0xfb0020, 'struct.new_desc typeidx', 'struct.new_default_desc typeidx', 'ref.get_desc typeidx', 'ref.cast_desc_eq reftype', 0xfb0025, 'br_on_cast_desc_eq reftype2', 'br_on_cast_desc_eq_fail reftype2',
+  // stringref: 0xFB 0x80-0xB7
+  0xfb0080, 'string.new_utf8 memoryidx?', 'string.new_wtf16 memoryidx?', 'string.const stringidx', 'string.measure_utf8', 'string.measure_wtf8', 'string.measure_wtf16',
+  'string.encode_utf8 memoryidx?', 'string.encode_wtf16 memoryidx?', 'string.concat', 'string.eq', 'string.is_usv_sequence',
+  'string.new_lossy_utf8 memoryidx?', 'string.new_wtf8 memoryidx?', 'string.encode_lossy_utf8 memoryidx?', 'string.encode_wtf8 memoryidx?',
+  0xfb0090, 'string.as_wtf8', 'stringview_wtf8.advance', 'stringview_wtf8.encode_utf8 memoryidx?', 'stringview_wtf8.slice',
+  'stringview_wtf8.encode_lossy_utf8 memoryidx?', 'stringview_wtf8.encode_wtf8 memoryidx?',
+  0xfb0098, 'string.as_wtf16', 'stringview_wtf16.length', 'stringview_wtf16.get_codeunit', 'stringview_wtf16.encode memoryidx?', 'stringview_wtf16.slice',
+  0xfb00a0, 'string.as_iter', 'stringview_iter.next', 'stringview_iter.advance', 'stringview_iter.rewind', 'stringview_iter.slice',
+  0xfb00b0, 'string.new_utf8_array', 'string.new_wtf16_array', 'string.encode_utf8_array', 'string.encode_wtf16_array',
+  'string.new_lossy_utf8_array', 'string.new_wtf8_array', 'string.encode_lossy_utf8_array', 'string.encode_wtf8_array',
+  // 0xfc: Bulk memory/table operations + rounding mode control
+  0xfc0000, 'i32.trunc_sat_f32_s', 'i32.trunc_sat_f32_u', 'i32.trunc_sat_f64_s', 'i32.trunc_sat_f64_u',
+  'i64.trunc_sat_f32_s', 'i64.trunc_sat_f32_u', 'i64.trunc_sat_f64_s', 'i64.trunc_sat_f64_u',
+  'memory.init dataidx_memoryidx', 'data.drop dataidx', 'memory.copy memoryidx_memoryidx', 'memory.fill memoryidx?',
+  'table.init reversed', 'elem.drop elemidx', 'table.copy tableidx_tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx',
+  0xfc0013, 'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u',
+  // 0x80-0xBB: rounding mode control
+  0xfc0080, 'f32.sqrt_ceil', 'f32.add_ceil', 'f32.sub_ceil', 'f32.mul_ceil', 'f32.div_ceil',
+  'f64.sqrt_ceil', 'f64.add_ceil', 'f64.sub_ceil', 'f64.mul_ceil', 'f64.div_ceil',
+  'f32.convert_ceil_i32_s', 'f32.convert_ceil_i32_u', 'f32.convert_ceil_i64_s', 'f32.convert_ceil_i64_u', 'f32.demote_ceil_f64',
+  'f64.convert_ceil_i32_s', 'f64.convert_ceil_i32_u', 'f64.convert_ceil_i64_s', 'f64.convert_ceil_i64_u', 'f64.promote_ceil_f32',
+  'f32.sqrt_floor', 'f32.add_floor', 'f32.sub_floor', 'f32.mul_floor', 'f32.div_floor',
+  'f64.sqrt_floor', 'f64.add_floor', 'f64.sub_floor', 'f64.mul_floor', 'f64.div_floor',
+  'f32.convert_floor_i32_s', 'f32.convert_floor_i32_u', 'f32.convert_floor_i64_s', 'f32.convert_floor_i64_u', 'f32.demote_floor_f64',
+  'f64.convert_floor_i32_s', 'f64.convert_floor_i32_u', 'f64.convert_floor_i64_s', 'f64.convert_floor_i64_u', 'f64.promote_floor_f32',
+  'f32.sqrt_trunc', 'f32.add_trunc', 'f32.sub_trunc', 'f32.mul_trunc', 'f32.div_trunc',
+  'f64.sqrt_trunc', 'f64.add_trunc', 'f64.sub_trunc', 'f64.mul_trunc', 'f64.div_trunc',
+  'f32.convert_trunc_i32_s', 'f32.convert_trunc_i32_u', 'f32.convert_trunc_i64_s', 'f32.convert_trunc_i64_u', 'f32.demote_trunc_f64',
+  'f64.convert_trunc_i32_s', 'f64.convert_trunc_i32_u', 'f64.convert_trunc_i64_s', 'f64.convert_trunc_i64_u', 'f64.promote_trunc_f32',
+  // 0xfd: SIMD instructions
+  0xfd0000, 'v128.load memarg', 'v128.load8x8_s memarg', 'v128.load8x8_u memarg', 'v128.load16x4_s memarg', 'v128.load16x4_u memarg',
+  'v128.load32x2_s memarg', 'v128.load32x2_u memarg', 'v128.load8_splat memarg', 'v128.load16_splat memarg', 'v128.load32_splat memarg',
+  'v128.load64_splat memarg', 'v128.store memarg', 'v128.const v128const', 'i8x16.shuffle shuffle',
+  'i8x16.swizzle', 'i8x16.splat', 'i16x8.splat', 'i32x4.splat', 'i64x2.splat', 'f32x4.splat', 'f64x2.splat',
+  'i8x16.extract_lane_s laneidx', 'i8x16.extract_lane_u laneidx', 'i8x16.replace_lane laneidx',
+  'i16x8.extract_lane_s laneidx', 'i16x8.extract_lane_u laneidx', 'i16x8.replace_lane laneidx',
+  'i32x4.extract_lane laneidx', 'i32x4.replace_lane laneidx', 'i64x2.extract_lane laneidx', 'i64x2.replace_lane laneidx',
+  'f32x4.extract_lane laneidx', 'f32x4.replace_lane laneidx', 'f64x2.extract_lane laneidx', 'f64x2.replace_lane laneidx',
+  'i8x16.eq', 'i8x16.ne', 'i8x16.lt_s', 'i8x16.lt_u', 'i8x16.gt_s', 'i8x16.gt_u', 'i8x16.le_s', 'i8x16.le_u', 'i8x16.ge_s', 'i8x16.ge_u',
+  'i16x8.eq', 'i16x8.ne', 'i16x8.lt_s', 'i16x8.lt_u', 'i16x8.gt_s', 'i16x8.gt_u', 'i16x8.le_s', 'i16x8.le_u', 'i16x8.ge_s', 'i16x8.ge_u',
+  'i32x4.eq', 'i32x4.ne', 'i32x4.lt_s', 'i32x4.lt_u', 'i32x4.gt_s', 'i32x4.gt_u', 'i32x4.le_s', 'i32x4.le_u', 'i32x4.ge_s', 'i32x4.ge_u',
+  'f32x4.eq', 'f32x4.ne', 'f32x4.lt', 'f32x4.gt', 'f32x4.le', 'f32x4.ge', 'f64x2.eq', 'f64x2.ne', 'f64x2.lt', 'f64x2.gt', 'f64x2.le', 'f64x2.ge',
+  'v128.not', 'v128.and', 'v128.andnot', 'v128.or', 'v128.xor', 'v128.bitselect', 'v128.any_true',
+  'v128.load8_lane memlane', 'v128.load16_lane memlane', 'v128.load32_lane memlane', 'v128.load64_lane memlane',
+  'v128.store8_lane memlane', 'v128.store16_lane memlane', 'v128.store32_lane memlane', 'v128.store64_lane memlane',
+  'v128.load32_zero memarg', 'v128.load64_zero memarg', 'f32x4.demote_f64x2_zero', 'f64x2.promote_low_f32x4',
+  'i8x16.abs', 'i8x16.neg', 'i8x16.popcnt', 'i8x16.all_true', 'i8x16.bitmask', 'i8x16.narrow_i16x8_s', 'i8x16.narrow_i16x8_u',
+  'f32x4.ceil', 'f32x4.floor', 'f32x4.trunc', 'f32x4.nearest', 'i8x16.shl', 'i8x16.shr_s', 'i8x16.shr_u',
+  'i8x16.add', 'i8x16.add_sat_s', 'i8x16.add_sat_u', 'i8x16.sub', 'i8x16.sub_sat_s', 'i8x16.sub_sat_u',
+  'f64x2.ceil', 'f64x2.floor', 'i8x16.min_s', 'i8x16.min_u', 'i8x16.max_s', 'i8x16.max_u', 'f64x2.trunc', 'i8x16.avgr_u',
+  'i16x8.extadd_pairwise_i8x16_s', 'i16x8.extadd_pairwise_i8x16_u', 'i32x4.extadd_pairwise_i16x8_s', 'i32x4.extadd_pairwise_i16x8_u',
+  'i16x8.abs', 'i16x8.neg', 'i16x8.q15mulr_sat_s', 'i16x8.all_true', 'i16x8.bitmask', 'i16x8.narrow_i32x4_s', 'i16x8.narrow_i32x4_u',
+  'i16x8.extend_low_i8x16_s', 'i16x8.extend_high_i8x16_s', 'i16x8.extend_low_i8x16_u', 'i16x8.extend_high_i8x16_u',
+  'i16x8.shl', 'i16x8.shr_s', 'i16x8.shr_u', 'i16x8.add', 'i16x8.add_sat_s', 'i16x8.add_sat_u', 'i16x8.sub', 'i16x8.sub_sat_s', 'i16x8.sub_sat_u',
+  'f64x2.nearest', 'i16x8.mul', 'i16x8.min_s', 'i16x8.min_u', 'i16x8.max_s', 'i16x8.max_u', 0xfd009b, 'i16x8.avgr_u',
+  'i16x8.extmul_low_i8x16_s', 'i16x8.extmul_high_i8x16_s', 'i16x8.extmul_low_i8x16_u', 'i16x8.extmul_high_i8x16_u',
+  'i32x4.abs', 'i32x4.neg', 0xfd00a3, 'i32x4.all_true', 'i32x4.bitmask', 0xfd00a7, 'i32x4.extend_low_i16x8_s', 'i32x4.extend_high_i16x8_s',
+  'i32x4.extend_low_i16x8_u', 'i32x4.extend_high_i16x8_u', 'i32x4.shl', 'i32x4.shr_s', 'i32x4.shr_u', 'i32x4.add', 0xfd00b1, 'i32x4.sub',
+  0xfd00b5, 'i32x4.mul', 'i32x4.min_s', 'i32x4.min_u', 'i32x4.max_s', 'i32x4.max_u', 'i32x4.dot_i16x8_s',
+  0xfd00bc, 'i32x4.extmul_low_i16x8_s', 'i32x4.extmul_high_i16x8_s', 'i32x4.extmul_low_i16x8_u', 'i32x4.extmul_high_i16x8_u',
+  'i64x2.abs', 'i64x2.neg', 0xfd00c3, 'i64x2.all_true', 'i64x2.bitmask', 0xfd00c7, 'i64x2.extend_low_i32x4_s', 'i64x2.extend_high_i32x4_s',
+  'i64x2.extend_low_i32x4_u', 'i64x2.extend_high_i32x4_u', 'i64x2.shl', 'i64x2.shr_s', 'i64x2.shr_u', 'i64x2.add', 0xfd00d1, 'i64x2.sub',
+  0xfd00d5, 'i64x2.mul', 'i64x2.eq', 'i64x2.ne', 'i64x2.lt_s', 'i64x2.gt_s', 'i64x2.le_s', 'i64x2.ge_s',
+  'i64x2.extmul_low_i32x4_s', 'i64x2.extmul_high_i32x4_s', 'i64x2.extmul_low_i32x4_u', 'i64x2.extmul_high_i32x4_u',
+  'f32x4.abs', 'f32x4.neg', 0xfd00e3, 'f32x4.sqrt', 'f32x4.add', 'f32x4.sub', 'f32x4.mul', 'f32x4.div', 'f32x4.min', 'f32x4.max', 'f32x4.pmin', 'f32x4.pmax',
+  'f64x2.abs', 'f64x2.neg', 0xfd00ef, 'f64x2.sqrt', 'f64x2.add', 'f64x2.sub', 'f64x2.mul', 'f64x2.div', 'f64x2.min', 'f64x2.max', 'f64x2.pmin', 'f64x2.pmax',
+  'i32x4.trunc_sat_f32x4_s', 'i32x4.trunc_sat_f32x4_u', 'f32x4.convert_i32x4_s', 'f32x4.convert_i32x4_u',
+  'i32x4.trunc_sat_f64x2_s_zero', 'i32x4.trunc_sat_f64x2_u_zero', 'f64x2.convert_low_i32x4_s', 'f64x2.convert_low_i32x4_u',
+  'i8x16.relaxed_swizzle', 'i32x4.relaxed_trunc_f32x4_s', 'i32x4.relaxed_trunc_f32x4_u', 'i32x4.relaxed_trunc_f64x2_s_zero',
+  'i32x4.relaxed_trunc_f64x2_u_zero', 'f32x4.relaxed_madd', 'f32x4.relaxed_nmadd', 'f64x2.relaxed_madd', 'f64x2.relaxed_nmadd',
+  'i8x16.relaxed_laneselect', 'i16x8.relaxed_laneselect', 'i32x4.relaxed_laneselect', 'i64x2.relaxed_laneselect',
+  'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max',
+  'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s',
   // 0xfe: atomic/thread instructions
-  [
-    'memory.atomic.notify memarg', 'memory.atomic.wait32 memarg', 'memory.atomic.wait64 memarg', 'atomic.fence opt_memory',
-    ,,,,,,,,,,,,
-    'i32.atomic.load memarg', 'i64.atomic.load memarg', 'i32.atomic.load8_u memarg', 'i32.atomic.load16_u memarg',
-    'i64.atomic.load8_u memarg', 'i64.atomic.load16_u memarg', 'i64.atomic.load32_u memarg', 'i32.atomic.store memarg',
-    'i64.atomic.store memarg', 'i32.atomic.store8 memarg', 'i32.atomic.store16 memarg', 'i64.atomic.store8 memarg',
-    'i64.atomic.store16 memarg', 'i64.atomic.store32 memarg', 'i32.atomic.rmw.add memarg', 'i64.atomic.rmw.add memarg',
-    'i32.atomic.rmw8.add_u memarg', 'i32.atomic.rmw16.add_u memarg', 'i64.atomic.rmw8.add_u memarg', 'i64.atomic.rmw16.add_u memarg',
-    'i64.atomic.rmw32.add_u memarg', 'i32.atomic.rmw.sub memarg', 'i64.atomic.rmw.sub memarg', 'i32.atomic.rmw8.sub_u memarg',
-    'i32.atomic.rmw16.sub_u memarg', 'i64.atomic.rmw8.sub_u memarg', 'i64.atomic.rmw16.sub_u memarg', 'i64.atomic.rmw32.sub_u memarg',
-    'i32.atomic.rmw.and memarg', 'i64.atomic.rmw.and memarg', 'i32.atomic.rmw8.and_u memarg', 'i32.atomic.rmw16.and_u memarg',
-    'i64.atomic.rmw8.and_u memarg', 'i64.atomic.rmw16.and_u memarg', 'i64.atomic.rmw32.and_u memarg', 'i32.atomic.rmw.or memarg',
-    'i64.atomic.rmw.or memarg', 'i32.atomic.rmw8.or_u memarg', 'i32.atomic.rmw16.or_u memarg', 'i64.atomic.rmw8.or_u memarg',
-    'i64.atomic.rmw16.or_u memarg', 'i64.atomic.rmw32.or_u memarg', 'i32.atomic.rmw.xor memarg', 'i64.atomic.rmw.xor memarg',
-    'i32.atomic.rmw8.xor_u memarg', 'i32.atomic.rmw16.xor_u memarg', 'i64.atomic.rmw8.xor_u memarg', 'i64.atomic.rmw16.xor_u memarg',
-    'i64.atomic.rmw32.xor_u memarg', 'i32.atomic.rmw.xchg memarg', 'i64.atomic.rmw.xchg memarg', 'i32.atomic.rmw8.xchg_u memarg',
-    'i32.atomic.rmw16.xchg_u memarg', 'i64.atomic.rmw8.xchg_u memarg', 'i64.atomic.rmw16.xchg_u memarg', 'i64.atomic.rmw32.xchg_u memarg',
-    'i32.atomic.rmw.cmpxchg memarg', 'i64.atomic.rmw.cmpxchg memarg', 'i32.atomic.rmw8.cmpxchg_u memarg', 'i32.atomic.rmw16.cmpxchg_u memarg',
-    'i64.atomic.rmw8.cmpxchg_u memarg', 'i64.atomic.rmw16.cmpxchg_u memarg', 'i64.atomic.rmw32.cmpxchg_u memarg'
-  ]
+  0xfe0000, 'memory.atomic.notify memarg', 'memory.atomic.wait32 memarg', 'memory.atomic.wait64 memarg', 'atomic.fence opt_memory',
+  0xfe0010, 'i32.atomic.load memarg', 'i64.atomic.load memarg', 'i32.atomic.load8_u memarg', 'i32.atomic.load16_u memarg',
+  'i64.atomic.load8_u memarg', 'i64.atomic.load16_u memarg', 'i64.atomic.load32_u memarg', 'i32.atomic.store memarg',
+  'i64.atomic.store memarg', 'i32.atomic.store8 memarg', 'i32.atomic.store16 memarg', 'i64.atomic.store8 memarg',
+  'i64.atomic.store16 memarg', 'i64.atomic.store32 memarg', 'i32.atomic.rmw.add memarg', 'i64.atomic.rmw.add memarg',
+  'i32.atomic.rmw8.add_u memarg', 'i32.atomic.rmw16.add_u memarg', 'i64.atomic.rmw8.add_u memarg', 'i64.atomic.rmw16.add_u memarg',
+  'i64.atomic.rmw32.add_u memarg', 'i32.atomic.rmw.sub memarg', 'i64.atomic.rmw.sub memarg', 'i32.atomic.rmw8.sub_u memarg',
+  'i32.atomic.rmw16.sub_u memarg', 'i64.atomic.rmw8.sub_u memarg', 'i64.atomic.rmw16.sub_u memarg', 'i64.atomic.rmw32.sub_u memarg',
+  'i32.atomic.rmw.and memarg', 'i64.atomic.rmw.and memarg', 'i32.atomic.rmw8.and_u memarg', 'i32.atomic.rmw16.and_u memarg',
+  'i64.atomic.rmw8.and_u memarg', 'i64.atomic.rmw16.and_u memarg', 'i64.atomic.rmw32.and_u memarg', 'i32.atomic.rmw.or memarg',
+  'i64.atomic.rmw.or memarg', 'i32.atomic.rmw8.or_u memarg', 'i32.atomic.rmw16.or_u memarg', 'i64.atomic.rmw8.or_u memarg',
+  'i64.atomic.rmw16.or_u memarg', 'i64.atomic.rmw32.or_u memarg', 'i32.atomic.rmw.xor memarg', 'i64.atomic.rmw.xor memarg',
+  'i32.atomic.rmw8.xor_u memarg', 'i32.atomic.rmw16.xor_u memarg', 'i64.atomic.rmw8.xor_u memarg', 'i64.atomic.rmw16.xor_u memarg',
+  'i64.atomic.rmw32.xor_u memarg', 'i32.atomic.rmw.xchg memarg', 'i64.atomic.rmw.xchg memarg', 'i32.atomic.rmw8.xchg_u memarg',
+  'i32.atomic.rmw16.xchg_u memarg', 'i64.atomic.rmw8.xchg_u memarg', 'i64.atomic.rmw16.xchg_u memarg', 'i64.atomic.rmw32.xchg_u memarg',
+  'i32.atomic.rmw.cmpxchg memarg', 'i64.atomic.rmw.cmpxchg memarg', 'i32.atomic.rmw8.cmpxchg_u memarg', 'i32.atomic.rmw16.cmpxchg_u memarg',
+  'i64.atomic.rmw8.cmpxchg_u memarg', 'i64.atomic.rmw16.cmpxchg_u memarg', 'i64.atomic.rmw32.cmpxchg_u memarg',
 ]
+
+// Lookup tables derived from TABLE eagerly at module load — OPCODE: name → packed opcode
+// (uleb applied at emit); IMM: name → immediate type, keying compile.js's HANDLER
+// encoders. One flat non-recursive scan over const data, results hold only strings/ints —
+// fresh dictionaries, no mutation of TABLE, no function values — the shape a static
+// evaluator (jz self-host) folds to plain data at compile time.
+export const OPCODE = {}, IMM = {}
+for (let i = 0, code = 0, item, nm, imm; i < TABLE.length; i++)
+  typeof (item = TABLE[i]) === 'number' ? code = item
+    : ([nm, imm] = item.split(' '), OPCODE[nm] = code++, imm && (IMM[nm] = imm))
 
 /**
  * Result value-type of an instruction, inferred from its name — the single

@@ -1,8 +1,8 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
-import { SECTION, TYPE, KIND, INSTR, DEFTYPE } from './const.js'
+import { SECTION, TYPE, KIND, OPCODE, IMM, DEFTYPE } from './const.js'
 import parse from './parse.js'
-import { err, unescape, str } from './util.js'
+import { err, unescape, str, setErrLoc, setErrSrc, getErrLoc, getErrSrc } from './util.js'
 
 
 /**
@@ -42,9 +42,9 @@ const cleanup = (node, result) => {
 // reason to exist (the optimizer's size-revert guard can't afford to build bytes it discards).
 function assemble(nodes, sizeOnly) {
   // normalize to (module ...) form
-  if (typeof nodes === 'string') err.src = nodes, nodes = parse(nodes) || []
-  else err.src = '' // clear source if AST passed directly
-  err.loc = 0
+  if (typeof nodes === 'string') setErrSrc(nodes), nodes = parse(nodes) || []
+  else setErrSrc('') // clear source if AST passed directly
+  setErrLoc(0)
 
   nodes = isDroppable(nodes) ? [] : (cleanup(nodes) ?? [])
 
@@ -84,7 +84,7 @@ function assemble(nodes, sizeOnly) {
   nodes.slice(idx).filter((n) => {
     if (!Array.isArray(n)) {
       // find token as standalone word (not substring of another token)
-      let pos = err.loc, src = err.src, c
+      let pos = getErrLoc(), src = getErrSrc(), c
       while ((pos = src.indexOf(n, pos)) >= 0) {
         c = src.charCodeAt(pos - 1)
         // check not preceded by word char or $
@@ -94,11 +94,11 @@ function assemble(nodes, sizeOnly) {
         if (c > 47 && c < 58 || c > 64 && c < 91 || c > 96 && c < 123 || c === 95) { pos++; continue }
         break
       }
-      if (pos >= 0) err.loc = pos
+      if (pos >= 0) setErrLoc(pos)
       err(`Unexpected token ${n}`)
     }
     let [kind, ...node] = n
-    err.loc = n.loc // track position for errors
+    setErrLoc(n.loc) // track position for errors
     // (@custom "name" placement? data) - custom section support
     if (kind === '@custom') {
       ctx.custom.push(node)
@@ -141,7 +141,7 @@ function assemble(nodes, sizeOnly) {
     // prepare/normalize nodes
     .forEach((n) => {
       let [kind, ...node] = n
-      err.loc = n.loc // track position for errors
+      setErrLoc(n.loc) // track position for errors
       let imported // if node needs to be imported
 
       // import abbr
@@ -395,7 +395,7 @@ function normalize(nodes, ctx) {
     }
     else if (Array.isArray(node)) {
       let op = node[0]
-      node.loc != null && (err.loc = node.loc) // track position for errors
+      node.loc != null && setErrLoc(node.loc) // track position for errors
 
       // code metadata annotations - pass through as marker with metadata type and data
       // (@metadata.code.<type> data:str)
@@ -405,8 +405,8 @@ function normalize(nodes, ctx) {
         continue
       }
 
-      // Check if node is a valid instruction (string with opcode in INSTR)
-      if (typeof op !== 'string' || !Array.isArray(INSTR[op])) { out.push(node); continue }
+      // Check if node is a valid instruction (string with a known opcode)
+      if (typeof op !== 'string' || typeof OPCODE[op] !== 'number') { out.push(node); continue }
       const parts = node.slice(1)
       if (op === 'block' || op === 'loop') {
         out.push(op)
@@ -894,9 +894,8 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 
 
 
-// Pre-defined instruction handlers
-const IMM = {
-  null: () => [],
+// Immediate encoders, keyed by immediate type (IMM in const.js maps op name → immediate type)
+const HANDLER = {
   reversed: (n, c) => { let t = n.shift(), e = n.shift(); return [...uleb(id(e, c.elem)), ...uleb(id(t, c.table))] },
   block: (n, c) => {
     c.block.push(1)
@@ -955,8 +954,6 @@ const IMM = {
     const memIdx = isId(n[0]) || (isIdx(n[0]) && (isMemParam(n[1]) || isIdx(n[1]))) ? id(n.shift(), c.memory) : 0
     return [...memargEnc(n, op, memIdx), ...uleb(parseUint(n.shift()))]
   },
-  '*': (n) => uleb(n.shift()),
-
   // *idx types
   labelidx: (n, c) => uleb(blockid(n.shift(), c.block)),
   laneidx: (n) => [parseUint(n.shift(), 0xff)],
@@ -1028,19 +1025,6 @@ const IMM = {
   }
 };
 
-// per-op imm handlers
-const HANDLER = {};
-
-
-// Populate INSTR and IMM
-(function populate(items, pre) {
-  for (let op = 0, item, nm, imm; op < items.length; op++) if (item = items[op]) {
-    // Nested array (0xfb, 0xfc, 0xfd opcodes)
-    if (Array.isArray(item)) populate(item, op)
-    else [nm, imm] = item.split(' '), INSTR[nm] = pre ? [pre, ...uleb(op)] : [op], imm && (HANDLER[nm] = IMM[imm])
-  }
-})(INSTR);
-
 
 // instruction encoder
 const instr = (nodes, ctx) => {
@@ -1058,21 +1042,25 @@ const instr = (nodes, ctx) => {
 
     // Array = unknown instruction passed through from normalize
     if (Array.isArray(op)) {
-      op.loc != null && (err.loc = op.loc)
+      op.loc != null && setErrLoc(op.loc)
       err(`Unknown instruction ${op[0]}`)
     }
 
-    let [...bytes] = INSTR[op] || err(`Unknown instruction ${op}`)
+    const code = OPCODE[op]
+    if (typeof code !== 'number') err(`Unknown instruction ${op}`)
+    // unpack: top byte is the page prefix (0xfb-0xfe), low bits the uleb-encoded subopcode
+    let bytes = code > 0xffff ? [code >>> 16, ...uleb(code & 0xffff)] : [code]
 
-    // special op handlers
-    if (HANDLER[op]) {
+    // immediate encoding
+    const imm = IMM[op]
+    if (imm) {
       // select: becomes typed select (opcode+1) if next node is an array with result types
       if (op === 'select' && nodes[0]?.length) bytes[0]++
       // ref.type|cast: opcode+1 if type is nullable: (ref null $t) or (funcref, anyref, etc.)
-      else if (HANDLER[op] === IMM.reftype && !op.endsWith('_null') && (nodes[0][1] === 'null' || nodes[0][0] !== 'ref')) {
+      else if (imm === 'reftype' && !op.endsWith('_null') && (nodes[0][1] === 'null' || nodes[0][0] !== 'ref')) {
         bytes[bytes.length - 1]++
       }
-      bytes.push(...HANDLER[op](nodes, ctx, op))
+      bytes.push(...HANDLER[imm](nodes, ctx, op))
     }
 
     // Attach any pending annotations to this instruction's byte position, then
@@ -1103,10 +1091,11 @@ const instrSize = (nodes, ctx) => {
   while (nodes?.length) {
     let op = nodes.shift()
     if (op?.[0] === '@metadata') { meta.push(op.slice(1)); continue }
-    if (Array.isArray(op)) { op.loc != null && (err.loc = op.loc); err(`Unknown instruction ${op[0]}`) }
-    const opc = INSTR[op] || err(`Unknown instruction ${op}`)
-    let n = opc.length
-    if (HANDLER[op]) n += HANDLER[op](nodes, ctx, op).length
+    if (Array.isArray(op)) { op.loc != null && setErrLoc(op.loc); err(`Unknown instruction ${op[0]}`) }
+    const code = OPCODE[op]
+    if (typeof code !== 'number') err(`Unknown instruction ${op}`)
+    let n = code > 0xffff ? 1 + ulebSize(code & 0xffff) : 1
+    if (IMM[op]) n += HANDLER[IMM[op]](nodes, ctx, op).length
     if (meta.length) { for (const [type, data] of meta) ((ctx.meta[type] ??= []).push([size, data])); meta = [] }
     size += n
   }

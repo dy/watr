@@ -1,23 +1,37 @@
+// Ambient source/position for err()'s "at line:col" suffix — set by assemble()
+// as it walks a module (err.loc/err.src used to be expando properties on the
+// `err` function itself; a self-hosted compile-clear-compile loop bump-allocates
+// a HASH props table the first time a property lands on a function value, and
+// that table dangles across an arena `_clear` between compiles — corrupting the
+// SECOND self-host compile. Plain module-level `let`s are a global-set, not a
+// dynamic-key write, so they carry no such table and are `_clear`-safe.
+let errLoc, errSrc
+
 /**
  * Throws an error with optional source position.
- * Uses err.src for source and err.loc for default position.
- * If pos provided or err.loc set, appends "at line:col".
+ * Uses the ambient errSrc for source and errLoc for default position.
+ * If pos provided or errLoc set, appends "at line:col".
  *
  * @param {string} text - Error message
- * @param {number} [pos] - Byte offset in source (defaults to err.loc)
+ * @param {number} [pos] - Byte offset in source (defaults to errLoc)
  * @throws {Error}
  */
-export const err = (text, pos=err.loc) => {
-  if (pos != null && err.src) {
+export const err = (text, pos=errLoc) => {
+  if (pos != null && errSrc) {
     let line = 1, col = 1
-    for (let i = 0; i < pos && i < err.src.length; i++) {
-      if (err.src[i] === '\n') line++, col = 1
+    for (let i = 0; i < pos && i < errSrc.length; i++) {
+      if (errSrc.charCodeAt(i) === 10) line++, col = 1
       else col++
     }
     text += ` at ${line}:${col}`
   }
   throw Error(text)
 }
+// Accessors for the ambient position/source (compile.js is the only writer).
+export const setErrLoc = (loc) => { errLoc = loc }
+export const setErrSrc = (src) => { errSrc = src }
+export const getErrLoc = () => errLoc
+export const getErrSrc = () => errSrc
 
 /** Regex to detect invalid underscore placement in numbers */
 export const sepRE = /^_|_$|[^\da-f]_|_[^\da-f]/i
