@@ -858,8 +858,22 @@ const ROUNDTRIP = {
  * @param {Array} ast
  * @returns {Array}
  */
+// Integer comparison complements: eqz(REL a b) ≡ INVERT(REL) a b — ints partition the
+// whole domain with no third outcome. Floats are EXCLUDED: eqz(lt(NaN,x))=1 but ge(NaN,x)=0.
+const INVERT = {
+  'i32.eq': 'i32.ne', 'i32.ne': 'i32.eq', 'i32.lt_s': 'i32.ge_s', 'i32.ge_s': 'i32.lt_s',
+  'i32.lt_u': 'i32.ge_u', 'i32.ge_u': 'i32.lt_u', 'i32.gt_s': 'i32.le_s', 'i32.le_s': 'i32.gt_s',
+  'i32.gt_u': 'i32.le_u', 'i32.le_u': 'i32.gt_u',
+  'i64.eq': 'i64.ne', 'i64.ne': 'i64.eq', 'i64.lt_s': 'i64.ge_s', 'i64.ge_s': 'i64.lt_s',
+  'i64.lt_u': 'i64.ge_u', 'i64.ge_u': 'i64.lt_u', 'i64.gt_s': 'i64.le_s', 'i64.le_s': 'i64.gt_s',
+  'i64.gt_u': 'i64.le_u', 'i64.le_u': 'i64.gt_u',
+}
+
 const identityNode = (node) => {
     if (!Array.isArray(node)) return
+    // (i32.eqz (REL a b)) → (INVREL a b) — one byte, same operands, same order
+    if (node[0] === 'i32.eqz' && node.length === 2 && Array.isArray(node[1]) && INVERT[node[1][0]] && node[1].length === 3)
+      return [INVERT[node[1][0]], node[1][1], node[1][2]]
     // Unary cast round-trip: outer(inner(x)) → x (post-order, so an inner pair already
     // collapsed before the outer op sees it — the whole box/unbox chain unwinds in one walk).
     if (node.length === 2 && Array.isArray(node[1]) && node[1].length === 2) {
@@ -1572,7 +1586,7 @@ const writesMemory = (node) => {
   if (!Array.isArray(node)) return false
   const op = node[0]
   if (typeof op === 'string') {
-    if (op.endsWith('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init') return true
+    if (op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow') return true
     // Atomic RMW / store / notify all mutate memory; `.atomic.load` doesn't.
     if (op.includes('.atomic.') && !op.endsWith('.load')) return true
   }
@@ -1645,10 +1659,61 @@ const forwardPropagate = (funcNode, params, useCounts) => {
   let changed = false
   const getUseCount = name => useCounts.get(name) || { gets: 0, sets: 0, tees: 0 }
   const known = new Map()
+  // depth of flat (bare-token) control nesting; each binding records the depth it
+  // was created at — see the bare-token barrier below for why that bounds validity
+  let depth = 0
+  const readsLocals = (v) => {
+    let f = false
+    walk(v, c => { if (Array.isArray(c) && (c[0] === 'local.get' || c[0] === 'local.tee')) f = true })
+    return f
+  }
 
   for (let i = 1; i < funcNode.length; i++) {
     const instr = funcNode[i]
-    if (!Array.isArray(instr)) continue
+    // Flat-form instructions live as bare sibling TOKENS, invisible to the array
+    // handlers below (wax: folded exprs inside a flat control skeleton). Only
+    // tokens that can invalidate a binding are barriers; bare VALUE ops can't
+    // touch locals, so tracking flows straight across them. Validity across flat
+    // control rests on one structural fact: wasm forward-branches only to ends of
+    // ENCLOSING blocks, so any path that skips a write also skips every later
+    // point inside the write's block — a binding is path-valid anywhere within
+    // the flat block that created it, and dies at that block's 'end'/'else'.
+    // A 'loop' back-edge re-executes an unknown suffix, so only bindings whose
+    // local has no other write and whose value reads no mutable state (locals,
+    // globals, memory, calls) may cross a loop header.
+    if (!Array.isArray(instr)) {
+      if (typeof instr !== 'string') continue
+      if (instr === 'block' || instr === 'if') depth++
+      else if (instr === 'loop') {
+        depth++
+        for (const [key, t] of known) {
+          const uses = getUseCount(key)
+          if (!(uses.sets + uses.tees <= 1 && t.pure && !readsLocals(t.val) && !readsCallableState(t.val))) known.delete(key)
+        }
+      }
+      else if (instr === 'else') { for (const [key, t] of known) if (t.depth >= depth) known.delete(key) }
+      else if (instr === 'end') { depth = depth > 0 ? depth - 1 : 0; for (const [key, t] of known) if (t.depth > depth) known.delete(key) }
+      else if (instr === 'try' || instr === 'try_table') { depth++; known.clear() }
+      else if (instr === 'delegate') { depth = depth > 0 ? depth - 1 : 0; known.clear() }
+      else if (instr === 'catch' || instr === 'catch_all') known.clear()
+      else if (instr === 'local.set' || instr === 'local.tee') {
+        const tgt = funcNode[i + 1]
+        if (typeof tgt === 'string') { known.delete(tgt); purgeRefs(known, tgt) }
+        else known.clear() // numeric index may alias a tracked name — give up
+      }
+      else if (instr === 'global.set') {
+        const tgt = funcNode[i + 1]
+        typeof tgt === 'string' ? purgeGlobalRefs(known, tgt) : known.clear()
+      }
+      else if (instr === 'call' || instr === 'call_indirect' || instr === 'return_call' || instr === 'return_call_indirect') {
+        for (const [key, tracked] of known) if (readsCallableState(tracked.val)) known.delete(key)
+      }
+      else if (instr.includes('.store') || instr === 'memory.copy' || instr === 'memory.fill' || instr === 'memory.init' ||
+               (instr.includes('.atomic.') && !instr.endsWith('.load'))) {
+        for (const [key, tracked] of known) if (tracked.readsMem) known.delete(key)
+      }
+      continue
+    }
     const op = instr[0]
 
     if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') continue
@@ -1683,7 +1748,8 @@ const forwardPropagate = (funcNode, params, useCounts) => {
         val: instr[2], pure: isPure(instr[2]),
         readsMem: readsMemory(instr[2]),
         singleUse: uses.gets <= 1 && uses.sets <= 1 && uses.tees === 0,
-        copy: isLocalCopy(instr[2], instr[1])
+        copy: isLocalCopy(instr[2], instr[1]),
+        depth
       })
       continue
     }
@@ -1833,6 +1899,36 @@ const deadThroughLoop = (funcNode, name, loop) => {
  * @param {Set<string>} params
  * @param {Map<string,{gets:number,sets:number,tees:number}>} useCounts
  */
+// Two adjacent sets whose reads sit under one commutative integer node in
+// ANTI-order can never both sink — each value would have to cross the other's
+// effects. Swapping the node's (pure, trap-free) operands reorders the reads to
+// match statement order; the ordinary sink then fuses both, preserving the
+// original side-effect order. Pure arms make the swap itself unobservable, and
+// the anti-order trigger makes it idempotent.
+const COMMUTATIVE = new Set(['i32.add', 'i32.mul', 'i32.and', 'i32.or', 'i32.xor',
+  'i64.add', 'i64.mul', 'i64.and', 'i64.or', 'i64.xor'])
+const commuteForSink = (scope) => {
+  let changed = false
+  for (let i = 1; i < scope.length - 2; i++) {
+    const a = scope[i], b = scope[i + 1], stmt = scope[i + 2]
+    if (!Array.isArray(a) || a[0] !== 'local.set' || a.length !== 3 || typeof a[1] !== 'string') continue
+    if (!Array.isArray(b) || b[0] !== 'local.set' || b.length !== 3 || typeof b[1] !== 'string' || a[1] === b[1]) continue
+    if (!Array.isArray(stmt)) continue
+    const gets = (sub, name) => { let k = 0; walk(sub, c => { if (Array.isArray(c) && c[0] === 'local.get' && c[1] === name) k++ }); return k }
+    walk(stmt, n => {
+      if (!Array.isArray(n) || !COMMUTATIVE.has(n[0]) || n.length !== 3) return
+      const l = n[1], r = n[2]
+      if (!Array.isArray(l) || !Array.isArray(r)) return
+      if (gets(l, b[1]) && gets(r, a[1]) && !gets(l, a[1]) && !gets(r, b[1]) &&
+          isPure(l) && isPure(r) && !hasTrap(l) && !hasTrap(r)) {
+        n[1] = r; n[2] = l
+        changed = true
+      }
+    })
+  }
+  return changed
+}
+
 const sinkSets = (funcNode, params, useCounts) => {
   let changed = false
 
@@ -1972,6 +2068,53 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
   let changed = false
   const getPostUseCount = name => useCounts.get(name) || { gets: 0, sets: 0, tees: 0 }
 
+  // Wasm zero-initializes locals — an explicit `(local.set $x (T.const 0))` whose
+  // local was never touched before restates the default. The default only holds at
+  // FUNCTION entry (this runs per scope — a loop-body scope re-enters with carried
+  // values). Candidates: top-level statements only, before any flat control token
+  // (inside a loop a reset is load-bearing). Touches: EVERY get/set/tee anywhere
+  // reached so far — including nested arms (`(if P (then (set $x 5))) (set $x 0)`
+  // keeps the reset) and bare flat-form refs (target = next sibling token).
+  if (funcNode[0] === 'func') {
+    const touched = new Set()
+    // flat control nesting at the current statement — a candidate is valid only at
+    // depth 0 (outermost sequence, executed at most once per call; a zero-init
+    // inside a flat loop is an each-iteration reset)
+    let depth = 0
+    const isZero = (v) => {
+      const c = getConst(v)
+      if (!c) return false
+      return c.type === 'i32' ? c.value === 0 : c.type === 'i64' ? c.value === 0n :
+        Object.is(c.value, 0) // floats: +0 only — -0 is not the default
+    }
+    const mark = (n, parent, idx) => {
+      if (Array.isArray(n)) {
+        if ((n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string') touched.add(n[1])
+      } else if (idx > 0 && (n === 'local.get' || n === 'local.set' || n === 'local.tee')) {
+        const tgt = parent[idx + 1]
+        typeof tgt === 'string' ? touched.add(tgt) : touched.add('*') // numeric ref: give up
+      }
+    }
+    for (let i = 1; i < funcNode.length && !touched.has('*'); i++) {
+      const n = funcNode[i]
+      if (!Array.isArray(n)) {
+        if (typeof n !== 'string') continue
+        if (n === 'block' || n === 'loop' || n === 'if' || n === 'try' || n === 'try_table') depth++
+        else if (n === 'end' || n === 'delegate') depth = depth > 0 ? depth - 1 : 0
+        else mark(n, funcNode, i)
+        continue
+      }
+      const op = n[0]
+      if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') continue
+      if (depth === 0 && op === 'local.set' && n.length === 3 && typeof n[1] === 'string' &&
+          !params.has(n[1]) && !touched.has(n[1]) && isZero(n[2])) {
+        funcNode.splice(i, 1); i--; changed = true
+        continue
+      }
+      walk(n, mark)
+    }
+  }
+
   // Dead tee (statement-level or nested): written but never read back — the value on
   // the stack is all that matters, so unwrap it (the decl dies via the unused sweep).
   walkPost(funcNode, n => {
@@ -2104,7 +2247,14 @@ const cse = (ast) => {
         const collect = (n, parent, idx) => {
           if (!Array.isArray(n)) return
           const o = n[0]
-          if (o === 'if' || o === 'block' || o === 'loop' || o === 'then' || o === 'else' || o === 'try_table') return
+          // an if's CONDITION evaluates unconditionally — candidates there are as
+          // dominant as any statement's; the arms stay opaque (own scopes)
+          if (o === 'if') {
+            const { condIdx, cond } = parseIf(n)
+            if (Array.isArray(cond)) collect(cond, n, condIdx)
+            return
+          }
+          if (o === 'block' || o === 'loop' || o === 'then' || o === 'else' || o === 'try_table') return
           if (typeof o === 'string' && resultType(o) && isPure(n)) {
             const est = estBytes(n)
             if (est >= 4) {
@@ -2164,12 +2314,18 @@ const cse = (ast) => {
  * @param {Array} ast
  * @returns {Array}
  */
-const inlineMacro = (ast) => {
+const inlineMacro = (ast, { pin = EMPTY_SET } = {}) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  // expansion trades ~2B call for the body's own bytes per site — profitable only
+  // below a small call count (the def's fixed ~9B amortizes)
+  const CAP = 3
+  const callCount = new Map()
+  walk(ast, n => { if (Array.isArray(n) && n[0] === 'call' && typeof n[1] === 'string') callCount.set(n[1], (callCount.get(n[1]) || 0) + 1) })
   const macros = new Map()
   for (const n of ast.slice(1)) {
     if (!Array.isArray(n) || n[0] !== 'func' || typeof n[1] !== 'string' || n[1][0] !== '$') continue
     if (n.some(c => Array.isArray(c) && c[0] === 'export')) continue
+    if (pin.has(n[1]) || (callCount.get(n[1]) || 0) > CAP) continue
     const params = [], body = []
     let results = 0, ok = true
     for (let i = 2; i < n.length && ok; i++) {
@@ -2189,7 +2345,10 @@ const inlineMacro = (ast) => {
     const seq = []
     let bad = false
     walk(expr, c => {
-      const o = Array.isArray(c) ? c[0] : c
+      // arrays only: walk also hands back each node's own head token as a leaf,
+      // which would double-count every get ('local.get' matching again as a string)
+      if (!Array.isArray(c)) { if (c === 'return' || (typeof c === 'string' && FLAT_CTRL.has(c))) bad = true; return }
+      const o = c[0]
       if (o === 'local.get') seq.push(c[1])
       else if (o === 'local.set' || o === 'local.tee' || o === 'return' || o === 'br' || o === 'br_if' ||
                o === 'br_table' || o === 'block' || o === 'loop' || o === 'if' || o === 'try_table' ||
@@ -2262,19 +2421,97 @@ const specializeParams = (ast) => {
     for (let k = params.length - 1; k >= 0; k--) {
       const first = sites[0][2 + k]
       if (!sites.every(c => sameConst(c[2 + k], first))) continue
-      const cost = 4 + constInstrSize(first) // local decl + set + const at callee
+      const pd = params[k]
+      // never-written single-read param: splice the const straight onto the one
+      // get — no local, no set, no coalesce slot. A const is a pure leaf, so any
+      // position the read occupied is equivalent (invariance guaranteed by
+      // writes === 0, including across loop back-edges).
+      let reads = 0, writes = 0, readSite = null
+      walk(fn, n => {
+        if (!Array.isArray(n) || n[1] !== pd[1]) return
+        if (n[0] === 'local.get') { reads++; readSite = n }
+        else if (n[0] === 'local.set' || n[0] === 'local.tee') writes++
+      })
+      const direct = writes === 0 && reads <= 1
+      const cost = direct ? (reads === 0 ? 0 : Math.max(0, constInstrSize(first) - 2))
+        : 4 + constInstrSize(first) // local decl + set + const at callee
       const gain = sites.length * constInstrSize(first) + 1
       if (gain <= cost) continue
-      // callee: param → zero-cost local + init
-      const pd = params[k]
       const pi = fn.indexOf(pd)
       fn.splice(pi, 1)
-      let at = 2
-      while (at < fn.length && Array.isArray(fn[at]) &&
-        (fn[at][0] === 'export' || fn[at][0] === 'param' || fn[at][0] === 'result' || fn[at][0] === 'local')) at++
-      fn.splice(at, 0, ['local', pd[1], pd[2]], ['local.set', pd[1], clone(first)])
+      if (direct) {
+        if (readSite) { readSite.length = 0; readSite.push(...clone(first)) }
+      } else {
+        let at = 2
+        while (at < fn.length && Array.isArray(fn[at]) &&
+          (fn[at][0] === 'export' || fn[at][0] === 'param' || fn[at][0] === 'result' || fn[at][0] === 'local')) at++
+        fn.splice(at, 0, ['local', pd[1], pd[2]], ['local.set', pd[1], clone(first)])
+      }
       for (const c of sites) c.splice(2 + k, 1)
       params.splice(k, 1)
+    }
+  }
+  return ast
+}
+
+/**
+ * Elide a function-tail `return`: falling off the body returns the same values, so
+ * the explicit return (folded, or wax's stacked VALUE-`return` pair) is framing.
+ * Sound only when everything before the producer is provably stack-neutral —
+ * `return` DISCARDS extra stack values, fall-through does not. The statement that
+ * produces the result value is exempt from neutrality exactly when its arity is
+ * known to match the function's single result (plain value ops; block/loop/if with
+ * an explicit matching (result); calls to known-void functions never qualify).
+ * Runs AFTER tailmerge — the return markers key its epilogue matching.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const rettail = (ast) => {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  const voidFuncs = collectVoidFuncs(ast)
+  const stackNeutral = (n) => {
+    if (n === 'nop' || n === 'unreachable' || n === 'return') return true
+    if (!Array.isArray(n)) return false
+    const op = n[0]
+    if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') return true
+    if (op === 'local.set' || op === 'global.set' || op === 'drop' || op === 'nop' || op === 'return' ||
+        op === 'br' || op === 'unreachable' || op === 'memory.copy' || op === 'memory.fill' ||
+        op?.includes?.('.store')) return true
+    if (op === 'br_if') return n.length <= 3
+    if (op === 'block' || op === 'loop' || op === 'if')
+      return !n.some(c => Array.isArray(c) && c[0] === 'result')
+    if (op === 'call') return voidFuncs.has(n[1])
+    return false
+  }
+  // does this statement produce exactly ONE value (the single-result case)?
+  const producesOne = (n) => {
+    if (!Array.isArray(n)) return false
+    const op = n[0]
+    if (op === 'block' || op === 'loop' || op === 'if')
+      return n.some(c => Array.isArray(c) && c[0] === 'result' && c.length === 2)
+    if (op === 'call' || op === 'call_indirect' || op === 'return_call' || op === 'return_call_indirect')
+      return false // result arity unknown here — only the void set is tracked
+    if (op === 'local.set' || op === 'global.set' || op === 'drop' || op?.includes?.('.store')) return false
+    return true // plain value op: exactly one value in this IR
+  }
+  for (const node of ast.slice(1)) {
+    if (!Array.isArray(node) || node[0] !== 'func') continue
+    const results = node.reduce((k, c) => Array.isArray(c) && c[0] === 'result' ? k + c.length - 1 : k, 0)
+    if (results > 1) continue
+    const bodyStart = typeof node[1] === 'string' && node[1][0] === '$' ? 2 : 1
+    const last = node[node.length - 1]
+    const isRet = last === 'return' ? 1 : Array.isArray(last) && last[0] === 'return' ? 2 : 0
+    if (!isRet) continue
+    if (isRet === 1) {
+      // stacked form: the statement before `return` is the value producer — exempt
+      // it only when its single-value arity matches the declared single result
+      const end = results === 1 ? node.length - 2 : node.length - 1
+      if (results === 1 && !producesOne(node[end])) continue
+      if (!node.slice(bodyStart, end).every(stackNeutral)) continue
+      node.pop()
+    } else {
+      if (!node.slice(bodyStart, -1).every(stackNeutral)) continue
+      node.splice(node.length - 1, 1, ...last.slice(1))
     }
   }
   return ast
@@ -2448,6 +2685,7 @@ const propagate = (ast) => {
           if (blocked || j >= scope.length || !Array.isArray(scope[j]) || scope[j][0] !== 'loop') continue
           if (deadThroughLoop(funcNode, st[1], scope[j])) { scope.splice(i, 1); i--; progressed = true }
         }
+        if (commuteForSink(scope)) progressed = true
         if (sinkSets(scope, params, counts)) progressed = true
         if (eliminateDeadStores(scope, params, counts)) progressed = true
         if (eliminateAdjacentDeadStores(scope, params)) progressed = true
@@ -3389,7 +3627,12 @@ const coalesceLocals = (ast) => {
     }
 
     const visit = (n) => {
-      if (abort || !Array.isArray(n)) return
+      if (abort) return
+      // flat-form control tokens make loop/arm boundaries invisible to the interval
+      // model — a joined slot could leak residue across an unseen back-edge
+      if (typeof n === 'string' && (n === 'loop' || n === 'block' || n === 'if' || n === 'else' || n === 'end' ||
+          n === 'br' || n === 'br_if' || n === 'br_table')) { abort = true; return }
+      if (!Array.isArray(n)) return
       const op = n[0]
       const isLoop = op === 'loop'
       if (isLoop) loopStack.push({ start: pos, end: pos })
@@ -3883,21 +4126,25 @@ const offset = (ast) => {
  * @param {Array} ast
  * @returns {Array}
  */
-const unbranch = (ast) => {
-  // Func names/indices whose signature has no result — their calls are stack-neutral
-  // statements for the trailing-return check below.
+// Func names whose signature has no result — their calls are stack-neutral
+// statements. Named only: declaration order diverges from binary index under
+// inline imports, so numeric call refs are never trusted.
+const collectVoidFuncs = (ast) => {
   const voidFuncs = new Set()
   if (Array.isArray(ast) && ast[0] === 'module') {
     for (const n of ast.slice(1)) {
       if (!Array.isArray(n)) continue
       const fn = n[0] === 'func' ? n : n[0] === 'import' ? n.find(s => Array.isArray(s) && s[0] === 'func') : null
       if (!fn) continue
-      // Named only: declaration order diverges from binary index under inline
-      // imports, so numeric call refs are never trusted here.
       if (typeof fn[1] === 'string' && fn[1][0] === '$' &&
           !fn.some(c => Array.isArray(c) && (c[0] === 'result' || c[0] === 'type'))) voidFuncs.add(fn[1])
     }
   }
+  return voidFuncs
+}
+
+const unbranch = (ast) => {
+  const voidFuncs = collectVoidFuncs(ast)
   // A statement that provably leaves nothing on the stack. `return` mid-body is fine
   // (dead tail); anything unrecognized — including bare tokens — bails the transform.
   const stackNeutral = (n) => {
@@ -3917,20 +4164,6 @@ const unbranch = (ast) => {
   walk(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
-    // A `return` as a function's LAST instruction is the func-level twin: falling off
-    // the body returns anyway, so `(return v…)` there just leaves v… as the result.
-    // Sound only when every earlier statement is stack-neutral: `return` DISCARDS any
-    // extra stack values, fall-through does not.
-    if (op === 'func') {
-      const last = node[node.length - 1]
-      const isRet = last === 'return' ? 1 : Array.isArray(last) && last[0] === 'return' ? 2 : 0
-      if (!isRet || !node.slice(1, -1).every(stackNeutral)) return
-      // bare `return` returns the values already on the stack — elidable only for a
-      // void func (a value-returning bare return implies a non-neutral producer anyway)
-      if (isRet === 1) node.pop()
-      else node.splice(node.length - 1, 1, ...last.slice(1))
-      return
-    }
     // Loops: `br $loop_label` jumps BACK to loop top (continue), not out.
     // Only `block` allows trailing-br elision because `br $block_label` exits the block.
     if (op !== 'block') return
@@ -4969,6 +5202,7 @@ const PASSES = [
   ['loopify',       loopify,        true,  'collapse block+loop+brif while-idiom into loop+if'],
   ['brif',          brif,           true,  'if-then-br → br_if'],
   ['tailmerge',     tailmerge,      true,  'share byte-identical early-exit epilogues via block + br_if'],
+  ['rettail',       rettail,        true,  'elide a function-tail return once epilogues are merged'],
   ['foldarms',      foldarms,       false, 'merge identical trailing if arms — can add block wrapper'],
   ['deadcode',      deadcode,       true,  'eliminate dead code after unreachable/br/return'],
   ['vacuum',        vacuum,         true,  'remove nops, drop-of-pure, empty branches'],
@@ -5152,7 +5386,7 @@ export default function optimize(ast, opts = true) {
   // Module-scoped passes always run; their mutations re-dirty functions through the
   // per-func snapshots.
   const MODULE_SCOPE = new Set(['stripmut', 'globals', 'guardRefine', 'macro', 'spec', 'inlineOnce',
-    'dedupe', 'dedupTypes', 'packData', 'treeshake', 'minifyImports', 'reorder', 'unbranch'])
+    'dedupe', 'dedupTypes', 'packData', 'treeshake', 'minifyImports', 'reorder', 'unbranch', 'rettail'])
   const collectFuncs = () => { const out = []; for (const n of ast) if (Array.isArray(n) && n[0] === 'func') out.push(n); return out }
   const snapshots = new Map()
   let dirty = null // null = everything

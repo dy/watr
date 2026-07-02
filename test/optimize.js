@@ -2759,3 +2759,50 @@ test('impure trap-free dead store reduces to its side-effect core', () => {
     (global.get $g)))`
   assert.equal(run(src).f(), 9, 'global.set inside the dead store still runs')
 })
+
+test('flat control skeleton: pre-loop constant must not freeze a loop-carried local', () => {
+  // wax shape: folded exprs inside a bare-token control skeleton. Propagating the
+  // pre-loop 0 into the flat loop body folds the exit guard away — infinite loop.
+  const src = `(module (func (export "f") (result i32) (local $i i32)
+    (local.set $i (i32.const 0))
+    block $B loop $L
+      (br_if $B (i32.ge_s (local.get $i) (i32.const 3)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      br $L
+    end end
+    (local.get $i)))`
+  assert.equal(run(src).f(), 3)
+  // a single-write closed constant may legitimately cross the flat loop header
+  const stable = `(module (func (export "g") (result i32) (local $c i32) (local $i i32)
+    (local.set $c (i32.const 5))
+    block $B loop $L
+      (br_if $B (i32.ge_s (local.get $i) (local.get $c)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      br $L
+    end end
+    (local.get $i)))`
+  assert.equal(run(stable).g(), 5)
+})
+
+test('flat block: binding created inside a skippable block dies at its end', () => {
+  // br_if can skip the write; the get after `end` must not see the inner constant
+  const src = `(module (func (export "f") (param $p i32) (result i32) (local $x i32)
+    block $B
+      (br_if $B (local.get $p))
+      (local.set $x (i32.const 5))
+    end
+    (local.get $x)))`
+  const { f } = run(src)
+  assert.equal(f(1), 0, 'skipping path reads the default 0')
+  assert.equal(f(0), 5)
+})
+
+test('tracked memory read goes stale after a narrow store (store8)', () => {
+  const src = `(module (memory 1) (func (export "f") (result i32) (local $x i32) (local $y i32)
+    (i32.store (i32.const 0) (i32.const 0x01010101))
+    (local.set $x (i32.load (i32.const 0)))
+    (i32.store8 (i32.const 0) (i32.const 0xff))
+    (local.set $y (local.get $x))
+    (i32.sub (local.get $y) (i32.load (i32.const 0)))))`
+  assert.equal(run(src).f(), 0x01010101 - 0x010101ff)
+})

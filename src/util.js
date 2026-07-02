@@ -111,7 +111,13 @@ export const clone = (node) => Array.isArray(node) ? node.map(clone) : node
  */
 export const walk = (node, fn, parent, idx) => {
   fn(node, parent, idx)
-  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walk(node[i], fn, node, i)
+  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) {
+    const c = node[i]
+    // leaves get their visit inline — half of all nodes are strings/numbers, and a
+    // full recursive frame per leaf dominates traversal cost on big modules
+    if (Array.isArray(c)) walk(c, fn, node, i)
+    else fn(c, node, i)
+  }
 }
 
 /**
@@ -129,7 +135,11 @@ export const walk = (node, fn, parent, idx) => {
  * @returns {any} The (possibly replaced) node
  */
 export const walkPost = (node, fn, parent, idx) => {
-  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walkPost(node[i], fn, node, i)
+  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) {
+    const c = node[i]
+    if (Array.isArray(c)) walkPost(c, fn, node, i)
+    else { const r = fn(c, node, i); if (r !== undefined) node[i] = r }
+  }
   const result = fn(node, parent, idx)
   if (result !== undefined && parent) parent[idx] = result
   return result !== undefined ? result : node
