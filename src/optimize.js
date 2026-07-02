@@ -7,7 +7,7 @@
  * @module wat/optimize
  */
 
-import { size } from './compile.js'
+import { numdata, size } from './compile.js'
 import { IMM, OPCODE, resultType } from './const.js'
 import parse from './parse.js'
 import { clone, walk, walkPost } from './util.js'
@@ -2215,6 +2215,55 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
       return n[2]
     }
   })
+
+  // Locally-dead tee: the local IS read somewhere, but every path from this tee
+  // reaches an unconditional top-level rewrite (or the function's end) before any
+  // read — the whole-function gate above can't see that. Conservative forward
+  // proof over the FUNC body's top-level siblings only: the tee's own statement
+  // may hold no other reference to the local (an operand evaluated after the tee
+  // reads the teed value), no sibling may touch the local or branch (recursively,
+  // bare flat tokens included) before the kill.
+  if (funcNode[0] === 'func') {
+    for (let i = 1; i < funcNode.length; i++) {
+      const stmt = funcNode[i]
+      if (!Array.isArray(stmt)) continue
+      walk(stmt, (n, parent, idx) => {
+        if (!parent || !Array.isArray(n) || n[0] !== 'local.tee' || n.length !== 3 || typeof n[1] !== 'string') return
+        const x = n[1]
+        let refs = 0, flat = false
+        walk(stmt, (c, p2, i2) => {
+          if (!Array.isArray(c)) { if (i2 !== 0 && typeof c === 'string' && OPCODE[c] !== undefined) flat = true; return }
+          if ((c[0] === 'local.get' || c[0] === 'local.set' || c[0] === 'local.tee') && c[1] === x) refs++
+        })
+        if (flat || refs !== 1) return
+        let kill = false, unsafe = false
+        for (let j = i + 1; j < funcNode.length && !kill && !unsafe; j++) {
+          const sib = funcNode[j]
+          if (!Array.isArray(sib)) { if (typeof sib === 'string' && OPCODE[sib] !== undefined) unsafe = true; continue }
+          if (sib[0] === 'local.set' && sib[1] === x && sib.length === 3) {
+            let readsX = false
+            walk(sib[2], (c, p2, i2) => {
+              if (!Array.isArray(c)) { if (i2 !== 0 && typeof c === 'string' && OPCODE[c] !== undefined) readsX = true; return }
+              if ((c[0] === 'local.get' || c[0] === 'local.tee') && c[1] === x) readsX = true
+            })
+            readsX ? unsafe = true : kill = true
+            continue
+          }
+          let bad = false
+          walk(sib, (c, p2, i2) => {
+            if (!Array.isArray(c)) { if (i2 !== 0 && typeof c === 'string' && OPCODE[c] !== undefined) bad = true; return }
+            const o = c[0]
+            if ((o === 'local.get' || o === 'local.tee' || o === 'local.set') && c[1] === x) bad = true
+            else if (o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' ||
+                     o === 'throw' || o === 'return_call' || o === 'return_call_indirect' || o === 'try_table') bad = true
+          })
+          if (bad) unsafe = true
+        }
+        // reaching the function's end without a read is a kill too — the frame dies
+        if (!unsafe) { parent[idx] = n[2]; changed = true }
+      })
+    }
+  }
 
   for (let i = funcNode.length - 1; i >= 1; i--) {
     const sub = funcNode[i]
@@ -4937,12 +4986,13 @@ const trimTrailingZeros = (items) => {
   const bytes = []
   for (const item of items) {
     if (typeof item === 'string') {
+      if (item[0] !== '"') continue // comment token — contributes no bytes
       const chunk = parseDataString(item)
       for (let i = 0; i < chunk.length; i++) bytes.push(chunk[i])
-    } else if (Array.isArray(item) && item[0] === 'i8') {
-      for (let i = 1; i < item.length; i++) bytes.push(Number(item[i]) & 0xff)
     } else {
-      return items // non-trimmable item
+      const chunk = numdata(item) // i8/i16/i32/i64/f32/f64 lanes — compile's own encoder
+      if (!chunk) return items // non-trimmable item
+      for (let i = 0; i < chunk.length; i++) bytes.push(chunk[i])
     }
   }
   let end = bytes.length
@@ -4981,11 +5031,48 @@ const getDataLength = (node) => {
   let len = 0
   for (let i = idx; i < node.length; i++) {
     const item = node[i]
-    if (typeof item === 'string') len += parseDataString(item).length
-    else if (Array.isArray(item) && item[0] === 'i8') len += item.length - 1
-    else return null
+    if (typeof item === 'string') { if (item[0] === '"') len += parseDataString(item).length }
+    else { const chunk = numdata(item); if (!chunk) return null; len += chunk.length }
   }
   return len
+}
+
+// Zero-assumption fences shared by the trailing-zero trim and the zero-run split:
+// both rewrite segments on the premise that unwritten memory IS zero. That premise
+// needs (each refuted by a live counterexample when absent): a single plain
+// module-DEFINED memory (imported/shared memory is not guaranteed zero), every
+// segment active with const offset and known length, and per segment — fully
+// inside the INITIAL memory (a shrunk segment must not un-trap an out-of-bounds
+// write) and disjoint from every other segment (a later zero run may deliberately
+// overwrite an earlier segment's bytes). Returns null when the module as a whole
+// fails the shared preconditions.
+const zeroFence = (ast) => {
+  let mem = null
+  for (const node of ast) {
+    if (!Array.isArray(node)) continue
+    if (node[0] === 'memory') {
+      if (mem) return null
+      const rest = node.filter((c, i) => i > 0 && !(typeof c === 'string' && c[0] === '$') && !(Array.isArray(c) && c[0] === 'export'))
+      const plain = rest.length >= 1 && rest.length <= 2 && rest.every(v => !Array.isArray(v) && !isNaN(Number(v))) &&
+        !node.some(c => Array.isArray(c) && c[0] === 'import')
+      if (!plain) return null
+      mem = { min: Number(rest[0]) }
+    } else if (node[0] === 'import' && node.some(c => Array.isArray(c) && c[0] === 'memory')) return null
+  }
+  if (!mem) return null
+  const segs = []
+  for (const node of ast) {
+    if (!Array.isArray(node) || node[0] !== 'data') continue
+    const info = getDataOffset(node), len = getDataLength(node)
+    if (!info || len === null) return null
+    segs.push({ node, offset: info.offset, len })
+  }
+  return { min: mem.min, segs }
+}
+const segSafe = (fence, node) => {
+  const seg = fence.segs.find(o => o.node === node)
+  return seg && seg.offset + seg.len <= fence.min * 65536 &&
+    !fence.segs.some(o => o.node !== node && o.offset < seg.offset + seg.len && seg.offset < o.offset + o.len)
 }
 
 /** Merge segment b into a (consecutive offsets, same memory) */
@@ -5026,21 +5113,34 @@ const mergeDataSegments = (a, b) => {
 const packData = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
-  // Trim trailing zeros
-  for (const node of ast) {
-    if (!Array.isArray(node) || node[0] !== 'data') continue
-    let contentStart = 1
-    if (typeof node[1] === 'string' && node[1][0] === '$') contentStart = 2
-    if (contentStart < node.length && Array.isArray(node[contentStart]) &&
-        typeof node[contentStart][0] === 'string' && !node[contentStart][0].startsWith('"')) {
-      contentStart++
-    }
-    const content = node.slice(contentStart)
-    if (content.length === 0) continue
-    const trimmed = trimTrailingZeros(content)
-    if (trimmed.length !== content.length || (trimmed.length > 0 && trimmed[0] !== content[0])) {
-      node.length = contentStart
-      node.push(...trimmed)
+  // Trim trailing zeros. Wasm zero-fills a module-DEFINED memory, so a segment's
+  // trailing zero run restates the default — but ONLY under fences (each refuted
+  // by a live counterexample when absent): the segment must be ACTIVE with a
+  // constant offset (a passive segment's length is memory.init semantics); the
+  // module's sole memory must be plain and module-defined (an imported/shared
+  // memory is not guaranteed zero where the segment lands); the full segment must
+  // fit the memory's INITIAL size (a shrunk segment must not un-trap an
+  // out-of-bounds write); and no other active segment may touch this one's range
+  // (a later zero run may deliberately overwrite an earlier segment's bytes).
+  trim: {
+    const fence = zeroFence(ast)
+    if (!fence) break trim
+    for (const seg of fence.segs) {
+      if (!segSafe(fence, seg.node)) continue
+      const node = seg.node
+      let contentStart = 1
+      if (typeof node[1] === 'string' && node[1][0] === '$') contentStart = 2
+      if (contentStart < node.length && Array.isArray(node[contentStart]) &&
+          typeof node[contentStart][0] === 'string' && !node[contentStart][0].startsWith('"')) {
+        contentStart++
+      }
+      const content = node.slice(contentStart)
+      if (content.length === 0) continue
+      const trimmed = trimTrailingZeros(content)
+      if (trimmed.length !== content.length || (trimmed.length > 0 && trimmed[0] !== content[0])) {
+        node.length = contentStart
+        node.push(...trimmed)
+      }
     }
   }
 
@@ -5093,9 +5193,12 @@ const packData = (ast) => {
   })
   if (refsData || importedMem) return ast
 
+  // splitting drops zero runs — same zero-assumption fences as the trim above
+  const fence = zeroFence(ast)
   const out = []
   for (const node of ast) {
     if (!Array.isArray(node) || node[0] !== 'data' || (typeof node[1] === 'string' && node[1][0] === '$')) { out.push(node); continue }
+    if (!fence || !segSafe(fence, node)) { out.push(node); continue }
     let idx = 1
     const mem = Array.isArray(node[idx]) && node[idx][0] === 'memory' ? node[idx++] : null
     const off = node[idx]

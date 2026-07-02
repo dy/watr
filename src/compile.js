@@ -1183,7 +1183,7 @@ const align = (op) => {
 }
 
 // Convert WAT numeric data (i8/i16/i32/i64/f32/f64 lists) to bytes (Phase 2: WAT numeric values)
-const numdata = (item) => {
+export const numdata = (item) => {
   if (!Array.isArray(item)) return null
   const [t, ...vs] = item
   if (t !== 'i8' && t !== 'i16' && t !== 'i32' && t !== 'i64' && t !== 'f32' && t !== 'f64') return null

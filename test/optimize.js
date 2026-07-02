@@ -2213,6 +2213,7 @@ test('dedupTypes: preserves different types', () => {
 
 test('packData: trims trailing zeros', () => {
   const ast = parse(`(module
+    (memory 1)
     (data (i32.const 0) "\\01\\02\\00\\00")
   )`)
   const opt = optimize(ast, 'packData')
@@ -2237,7 +2238,7 @@ test('packData: trims a large data segment without overflowing', () => {
   // and spreading that many call arguments overflows ("Maximum call stack size exceeded").
   // Large programs (e.g. a self-hosted compiler's static data) hit exactly this.
   const N = 200_000
-  const ast = parse(`(module (data (i32.const 0) "${'\\01'.repeat(N)}\\00\\00\\00"))`)
+  const ast = parse(`(module (memory 4) (data (i32.const 0) "${'\\01'.repeat(N)}\\00\\00\\00"))`)
   let opt
   assert.doesNotThrow(() => { opt = optimize(ast, 'packData') }, 'must not overflow on large data')
   const src = print(opt)
@@ -2855,4 +2856,23 @@ test('const-chain reassociation folds through a variable', () => {
   assert.equal(run(src).f(10), 15)
   const txt = print(optimize(parse(src)))
   assert.equal((txt.match(/i32\.const/g) || []).length, 1, 'four constants collapse into one')
+})
+
+test('data zero-trim fences: overlap, OOB trap, imported memory all preserved', () => {
+  // a later segment's zero run deliberately clears an earlier segment's bytes
+  const overlap = `(module (memory (export "m") 1)
+    (data (i32.const 0) "\\ff\\ff\\ff\\ff")
+    (data (i32.const 2) "\\00\\00"))`
+  const m = run(overlap).m
+  assert.deepEqual([...new Uint8Array(m.buffer, 0, 4)], [255, 255, 0, 0], 'zero-clear tail survives')
+  // an out-of-bounds segment must still trap at instantiation
+  const oob = `(module (memory 1) (data (i32.const 65533) "\\01\\02\\03\\00\\00"))`
+  assert.throws(() => run(oob), /bounds|out of/i, 'OOB data segment still traps')
+  // an imported memory is not guaranteed zero — segment length must not shrink
+  const imported = `(module (import "env" "mem" (memory 1)) (data (i32.const 10) "\\01\\02\\00\\00\\00"))`
+  const mem = new WebAssembly.Memory({ initial: 1 })
+  new Uint8Array(mem.buffer)[13] = 0xab
+  const bin = compile(optimize(parse(imported)))
+  new WebAssembly.Instance(new WebAssembly.Module(bin), { env: { mem } })
+  assert.deepEqual([...new Uint8Array(mem.buffer, 10, 5)], [1, 2, 0, 0, 0], 'zero bytes still overwrite host content')
 })
