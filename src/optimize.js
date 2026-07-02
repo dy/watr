@@ -1864,6 +1864,140 @@ const eliminateAdjacentDeadStores = (funcNode, params) => {
   return changed
 }
 
+// Conservative LOW estimate of a subtree's encoded bytes (under-estimating keeps the
+// CSE profit gate honest: never fire on a loss).
+const estBytes = (n) => {
+  if (!Array.isArray(n)) return typeof n === 'number' ? 2 : 1
+  let b = OPCODE[n[0]] > 0xffff ? 2 : 1
+  for (let i = 1; i < n.length; i++) b += estBytes(n[i])
+  return b
+}
+
+/**
+ * Local common-subexpression elimination: identical pure subtrees repeated within a
+ * straight-line scope compute once into a fresh local (first site tees, later sites
+ * get). Grouping stops at every invalidation: a statement that writes a local the
+ * expression reads, writes memory (for memory-reading exprs), or calls out (memory/
+ * global-reading exprs). Candidates come only from the unconditional part of each
+ * statement — nested control bodies are separate scopes with their own table.
+ * Fires only when the byte win is provable: (n−1)·bytes(expr) > tee+gets+decl cost.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const cse = (ast) => {
+  let uid = 0
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    const scopes = []
+    walkPost(fn, n => { if (isScopeNode(n)) scopes.push(n) })
+    const decls = []
+    for (const scope of scopes) {
+      const live = new Map(), all = []
+      for (let si = 1; si < scope.length; si++) {
+        const stmt = scope[si]
+        if (!Array.isArray(stmt)) { live.clear(); continue } // flat token — unknown order
+        const h = stmt[0]
+        if (h === 'param' || h === 'result' || h === 'local' || h === 'type' || h === 'export') continue
+        // this statement's write effects
+        const wLocals = new Set(), wGlobals = new Set()
+        let wMem = writesMemory(stmt), call = false
+        walk(stmt, n => {
+          if (!Array.isArray(n)) return
+          const o = n[0]
+          if ((o === 'local.set' || o === 'local.tee') && typeof n[1] === 'string') wLocals.add(n[1])
+          else if (o === 'global.set' && typeof n[1] === 'string') wGlobals.add(n[1])
+          else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') call = true
+        })
+        // candidates from the unconditional spine of the statement
+        const collect = (n, parent, idx) => {
+          if (!Array.isArray(n)) return
+          const o = n[0]
+          if (o === 'if' || o === 'block' || o === 'loop' || o === 'then' || o === 'else' || o === 'try_table') return
+          if (typeof o === 'string' && resultType(o) && isPure(n)) {
+            const est = estBytes(n)
+            if (est >= 4) {
+              const key = hashFunc(n, EMPTY_SET)
+              let g = live.get(key)
+              if (!g) {
+                g = { expr: n, sites: [], est, type: resultType(o), reads: new Set(), mem: readsMemory(n), glob: false }
+                walk(n, c => {
+                  if (!Array.isArray(c)) return
+                  if (c[0] === 'local.get' && typeof c[1] === 'string') g.reads.add(c[1])
+                  else if (c[0] === 'global.get') g.glob = true
+                })
+                live.set(key, g); all.push(g)
+              }
+              g.sites.push([parent, idx])
+              // repeats never yield sub-candidates: a group seeded inside a repeat
+              // would tee into a subtree the outer conversion detaches
+              if (g.sites.length > 1) return
+            }
+          }
+          for (let i = 1; i < n.length; i++) collect(n[i], n, i)
+        }
+        collect(stmt, scope, si)
+        // invalidate against this statement's writes
+        for (const [k, g] of live) {
+          if (g.mem && (wMem || call)) { live.delete(k); continue }
+          if (g.glob && (call || wGlobals.size)) { live.delete(k); continue }
+          for (const l of wLocals) if (g.reads.has(l)) { live.delete(k); break }
+        }
+      }
+      for (const g of all) {
+        const n = g.sites.length
+        if (n < 2 || (n - 1) * (g.est - 2) <= 4) continue
+        const name = '$cse' + uid++
+        decls.push(['local', name, g.type])
+        const [p0, i0] = g.sites[0]
+        p0[i0] = ['local.tee', name, g.expr]
+        for (let k = 1; k < n; k++) { const [p, i] = g.sites[k]; p[i] = ['local.get', name] }
+      }
+    }
+    if (decls.length) {
+      let at = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
+      while (at < fn.length && Array.isArray(fn[at]) &&
+        (fn[at][0] === 'export' || fn[at][0] === 'type' || fn[at][0] === 'param' || fn[at][0] === 'result' || fn[at][0] === 'local')) at++
+      fn.splice(at, 0, ...decls)
+    }
+  })
+  return ast
+}
+
+/**
+ * Merge alias locals: `(local.set $A (local.tee $B V))` writes the same value into
+ * two slots. When that is the ONLY write either local ever gets, their write
+ * histories are identical — every read of $A (even one sequenced before the def,
+ * which sees the zero default on both) equals the same read of $B. So $A's reads
+ * rename to $B and the alias write drops. Params are excluded ($B would carry a
+ * call-argument value where $A held zero).
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const mergeLocals = (ast) => {
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    const params = new Set()
+    for (const c of fn) if (Array.isArray(c) && c[0] === 'param' && typeof c[1] === 'string') params.add(c[1])
+    const counts = countLocalUses(fn)
+    const renames = new Map()
+    walkPost(fn, (n) => {
+      if (!Array.isArray(n) || n[0] !== 'local.set' || n.length !== 3 ||
+          !Array.isArray(n[2]) || n[2][0] !== 'local.tee' || n[2].length !== 3) return
+      const A = n[1], B = n[2][1]
+      if (typeof A !== 'string' || typeof B !== 'string' || A === B) return
+      if (params.has(A) || params.has(B) || renames.has(A) || renames.has(B)) return
+      const ca = counts.get(A), cb = counts.get(B)
+      if (!ca || !cb || ca.sets !== 1 || ca.tees !== 0 || cb.sets !== 0 || cb.tees !== 1) return
+      renames.set(A, B)
+      return ['local.set', B, n[2][2]]
+    })
+    if (renames.size) walkPost(fn, (n) => {
+      if (Array.isArray(n) && n[0] === 'local.get' && renames.has(n[1])) return ['local.get', renames.get(n[1])]
+    })
+  })
+  return ast
+}
+
 /**
  * Propagate values through locals and eliminate single-use/dead locals.
  * Constants propagate to all uses; pure single-use exprs inline into get site.
@@ -1947,7 +2081,9 @@ const inlUnsafe = (n) => {
   const op = n[0]
   if (op === 'return_call' || op === 'return_call_indirect' || op === 'return_call_ref') return true
   if (op === 'try' || op === 'try_table' || op === 'delegate' || op === 'rethrow') return true  // exception labels — not handled by the relabeler below
-  if (inlIsBranch(op)) for (let i = 1; i < n.length; i++) if (typeof n[i] === 'number' || (typeof n[i] === 'string' && /^\d+$/.test(n[i]))) return true
+  // NUMERIC branch labels are safe to splice: internal depths are preserved verbatim,
+  // and a function-frame branch (depth past every callee block) lands exactly on the
+  // single wrapper block buildInline adds — the same return-to-exit semantics.
   for (let i = 1; i < n.length; i++) if (inlUnsafe(n[i])) return true
   return false
 }
@@ -2808,14 +2944,13 @@ const coalesceLocals = (ast) => {
   walk(ast, (funcNode) => {
     if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
 
-    const decls = new Map()
+    const decls = new Map(), params = new Map()
     for (const sub of funcNode) {
-      if (Array.isArray(sub) && sub[0] === 'local' &&
-          typeof sub[1] === 'string' && sub[1][0] === '$' && typeof sub[2] === 'string') {
-        decls.set(sub[1], sub[2])
-      }
+      if (!Array.isArray(sub) || typeof sub[1] !== 'string' || sub[1][0] !== '$' || typeof sub[2] !== 'string') continue
+      if (sub[0] === 'local') decls.set(sub[1], sub[2])
+      else if (sub[0] === 'param') params.set(sub[1], sub[2])
     }
-    if (decls.size < 2) return
+    if (!decls.size || decls.size + params.size < 2) return
 
     const uses = new Map()
     const loopStack = []
@@ -2836,7 +2971,7 @@ const coalesceLocals = (ast) => {
         // read-then-write of $x (firstOp = local.get).
         if (isSet) for (let i = 2; i < n.length; i++) visit(n[i])
         const here = pos++
-        if (decls.has(name)) {
+        if (decls.has(name) || params.has(name)) {
           let u = uses.get(name)
           // A first WRITE only licenses slot-joining when it executes on EVERY path that
           // reaches a later read — else the read must see the local's implicit ZERO, and a
@@ -2845,7 +2980,14 @@ const coalesceLocals = (ast) => {
           // zero-trip loop skips the write but a read after the loop still runs — the
           // mat4 `iters=0` miscompile), and any statement AFTER a br/br_if/return in the
           // same list (the rotated-loop entry guard `(block (br_if $out …) …)` shape).
-          if (!u) { u = { start: here, end: here, firstOp: op, firstCond: condDepth > 0 || loopStack.length > 0, loops: new Set() }; uses.set(name, u) }
+          if (!u) {
+            u = { start: here, end: here, firstOp: op, firstCondIf: condDepth > 0,
+                  firstLoop: loopStack[loopStack.length - 1] ?? null, escapes: false, loops: new Set() }
+            uses.set(name, u)
+          }
+          // a use outside the first write's innermost loop makes zero-trip skips
+          // observable — the slot must not be joined
+          else if ((loopStack[loopStack.length - 1] ?? null) !== u.firstLoop) u.escapes = true
           if (here > u.end) u.end = here
           for (const ls of loopStack) u.loops.add(ls)
         }
@@ -2868,24 +3010,34 @@ const coalesceLocals = (ast) => {
     visit(funcNode)
     if (abort) return
 
-    // A use inside a loop must stay live for the whole loop — the next
-    // iteration could read what this iteration wrote.
+    // A use inside a loop must stay live for the whole loop — the next iteration
+    // could read what this iteration wrote. EXCEPT a write-first, unconditional,
+    // non-escaping local: every trip rewrites it before any read, so its lifetime
+    // is per-iteration and its raw [write, lastUse] range is the true one.
     for (const u of uses.values()) {
+      if (u.firstOp !== 'local.get' && !u.firstCondIf && !u.escapes && u.firstLoop !== null) continue
       for (const ls of u.loops) {
         if (ls.start < u.start) u.start = ls.start
         if (ls.end > u.end) u.end = ls.end
       }
     }
 
-    const ordered = [...uses.entries()].sort((a, b) => a[1].start - b[1].start)
+    const ordered = [...uses.entries()].filter(([n]) => decls.has(n)).sort((a, b) => a[1].start - b[1].start)
     const rename = new Map()
-    const slots = []
+    // Params seed pre-colored slots: the argument value is live from entry to its last
+    // use — after that the slot is free scratch for a same-typed local. Zero-reading
+    // locals still never join (a param holds the caller's residue, not zero).
+    const slots = [...params].map(([name, type]) => ({ primary: name, type, end: uses.get(name)?.end ?? -1 }))
     for (const [name, range] of ordered) {
       // Read-first locals depend on the implicit zero; locals first seen inside
       // an if/else branch may be skipped on the alternate path — either way
-      // they'd observe a prior slot's residue if reused. They may *start* a
-      // fresh slot (the function's zero init), but never *join* one.
-      const readsZero = range.firstOp === 'local.get' || range.firstCond
+      // they'd observe a prior slot's residue if reused. A first write INSIDE a
+      // loop is fine as long as every use stays in that same loop (each iteration
+      // writes before reading — loop-carried read-before-write shows up as a
+      // firstOp get); a use escaping the loop could observe a zero-trip skip.
+      // They may *start* a fresh slot (the function's zero init), but never *join* one.
+      const readsZero = range.firstOp === 'local.get' || range.firstCondIf ||
+        (range.firstLoop !== null && range.escapes)
       const type = decls.get(name)
       const slot = readsZero ? null : slots.find(s => s.type === type && s.end < range.start)
       if (slot) { rename.set(name, slot.primary); if (range.end > slot.end) slot.end = range.end }
@@ -4310,11 +4462,13 @@ const PASSES = [
   ['strength',      strength,       true,  'strength reduction (x * 2 → x << 1)'],
   ['branch',        branch,         true,  'simplify constant branches'],
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
+  ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
   ['devirt',        devirt,         false, 'call_indirect with a constant or known closure-const index → direct/guarded calls — grows bytes for speed'],
   ['inlineOnce',    inlineOnce,     true,  'inline single-call functions into their lone caller (never duplicates)'],
   ['inline',        inline,         false, 'inline tiny functions — can duplicate bodies'],
   ['licm',          licm,           false, 'hoist loop-invariant pure arithmetic out of loops — adds locals (speed-for-size); runs once after rounds'],
   ['offset',        offset,         true,  'fold add+const into load/store offset'],
+  ['cse',           cse,            true,  'reuse repeated pure subexpressions via a tee\'d local — runs once after rounds (byte-profit gated)'],
   ['unbranch',      unbranch,       true,  'remove redundant br at end of own block'],
   ['loopify',       loopify,        true,  'collapse block+loop+brif while-idiom into loop+if'],
   ['brif',          brif,           true,  'if-then-br → br_if'],
@@ -4479,6 +4633,14 @@ export default function optimize(ast, opts = true) {
     a = runInline(a)
     if (opts.devirt) a = devirt(a)
     if (opts.licm) a = licm(a)
+    // cse runs ONCE at fixpoint: inside the rounds its tee'd locals block the very
+    // collapses (propagate/sink/merge) that would erase the expressions outright,
+    // and any net wobble trips the exit guard into unwinding a whole round.
+    if (opts.cse) {
+      a = cse(a)
+      if (opts.coalesce) a = coalesceLocals(a)
+      if (opts.locals) a = localReuse(a)
+    }
     return wrapper ? (wrapper[slot] = a, wrapper) : a
   }
 
@@ -4496,7 +4658,7 @@ export default function optimize(ast, opts = true) {
       const beforeRound = clone(ast)
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inlineOnce' || key === 'inline' || key === 'devirt' || key === 'licm') continue
+        if (!opts[key] || key === 'inlineOnce' || key === 'inline' || key === 'devirt' || key === 'licm' || key === 'cse') continue
         if (SIMPLIFY_KEYS.has(key)) { if (!fused) ast = simplify(ast, opts), fused = true; continue }
         ast = fn(ast, opts)
       }
@@ -4520,7 +4682,7 @@ export default function optimize(ast, opts = true) {
 
     let fused = false
     for (const [key, fn] of PASSES) {
-      if (!opts[key] || key === 'devirt' || key === 'inline' || key === 'licm') continue
+      if (!opts[key] || key === 'devirt' || key === 'inline' || key === 'licm' || key === 'cse') continue
       if (SIMPLIFY_KEYS.has(key)) { if (!fused) ast = simplify(ast, opts), fused = true; continue }
       ast = fn(ast, opts)
     }
@@ -4548,4 +4710,4 @@ export default function optimize(ast, opts = true) {
 
 /** Count AST nodes (fast size heuristic). */
 export { count as size, count, binarySize }
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, inline, inlineOnce, devirt, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inline, inlineOnce, devirt, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }

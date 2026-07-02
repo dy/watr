@@ -348,8 +348,12 @@ test('licm: identical invariant subtrees share one hoisted local (loop-level CSE
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (f64.add (local.get $a) (local.get $b))))`), { licm: true }))
-  const hoists = (src.match(/local\.set \$__licm/g) || []).length
-  assert.equal(hoists, 1, `identical invariant exprs must share one hoist, got ${hoists}`)
+  // the hoisted local may be renamed into a dead param slot by coalesce — assert
+  // substance: the invariant is computed exactly once, and the result is right
+  const muls = (src.match(/f64\.mul/g) || []).length
+  assert.equal(muls, 1, `identical invariant exprs must compute once, got ${muls}`)
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(src)))).exports
+  assert.equal(f(2, 3), 18, 'hoisted invariant behaves')
 })
 
 // ==================== LOCAL REUSE ====================
@@ -688,14 +692,21 @@ test('inlineOnce: void callee with early return', () => {
   assert.equal(exports.f(42), 42)
 })
 
-test('inlineOnce: skips callees with numeric branch labels', () => {
-  // Depth-relative labels shift under the added block nesting — must be left alone.
-  const ast = parse(`(module
+test('inlineOnce: numeric branch labels splice correctly', () => {
+  // Splicing preserves internal depths verbatim, and a function-frame branch (depth
+  // past every callee block) lands exactly on buildInline's single wrapper block —
+  // the same return-to-exit meaning. So numeric labels are no reason to refuse.
+  const src = `(module
     (func $h (result i32) (block (result i32) (br 0 (i32.const 5))))
+    (func $g (result i32) (block (br 1 (i32.const 7))) (i32.const 0))
     (func (export "f") (result i32) (call $h))
-  )`)
-  const opt = optimize(ast, 'inlineOnce')
-  assert(print(opt).includes('call $h'), 'numeric-label callee left intact')
+    (func (export "g") (result i32) (call $g)))`
+  const opt = optimize(parse(src), 'inlineOnce')
+  const txt = print(opt)
+  assert(!txt.includes('call $h') && !txt.includes('call $g'), 'numeric-label callees inlined')
+  const x = run(src, 'inlineOnce')
+  assert.equal(x.f(), 5)
+  assert.equal(x.g(), 7)
 })
 
 // ==================== COMBINED ====================
