@@ -1002,9 +1002,7 @@ const branch = (ast) => {
         if (thenBranch?.length !== 2 || elseBranch?.length !== 2) return
         const a = thenBranch[1], b = elseBranch[1]
         if (!isPure(a) || !isPure(b) || count(a) > 6 || count(b) > 6) return
-        let traps = false
-        walk([a, b], n => { const o = Array.isArray(n) ? n[0] : n; if (typeof o === 'string' && /\.(div|rem)_[su]$|\.trunc_f/.test(o)) traps = true })
-        if (traps) return
+        if (hasTrap(a) || hasTrap(b)) return
         return ['select', a, b, cond]
       }
       const taken = c.value !== 0 && c.value !== ZERO64 ? thenBranch : elseBranch
@@ -1350,22 +1348,53 @@ const localReuse = (ast) => {
     }
 
     // Find which locals are actually used
+    let numericRef = false
     walk(node, (n) => {
       if (!Array.isArray(n)) return
       const op = n[0]
       if (op === 'local.get' || op === 'local.set' || op === 'local.tee') {
         const ref = n[1]
-        if (typeof ref === 'string') usedLocals.add(ref)
+        if (typeof ref === 'string') { usedLocals.add(ref); if (ref[0] !== '$') numericRef = true }
+        else if (typeof ref === 'number') { usedLocals.add(String(ref)); numericRef = true }
       }
     })
 
-    // Remove unused local declarations
-    for (let i = localDecls.length - 1; i >= 0; i--) {
+    // Remove unused named declarations — but any bare-numeric ref pins the whole
+    // index layout (removal would shift every later slot), so only the trailing
+    // prune below applies then.
+    if (!numericRef) for (let i = localDecls.length - 1; i >= 0; i--) {
       const { idx, node: decl } = localDecls[i]
       const name = typeof decl[1] === 'string' && decl[1][0] === '$' ? decl[1] : null
       if (name && !usedLocals.has(name)) {
         node.splice(idx, 1)
       }
+    }
+
+    // Trailing UNNAMED slots prune from the end only — no later index can shift.
+    let params = 0
+    for (const sub of node) if (Array.isArray(sub) && sub[0] === 'param')
+      params += typeof sub[1] === 'string' && sub[1][0] === '$' ? 1 : sub.length - 1
+    const decls = []
+    for (let i = 1; i < node.length; i++) if (Array.isArray(node[i]) && node[i][0] === 'local') decls.push(node[i])
+    let slot = params
+    const slotOf = new Map() // decl → first slot index
+    for (const d of decls) {
+      slotOf.set(d, slot)
+      slot += typeof d[1] === 'string' && d[1][0] === '$' ? 1 : d.length - 1
+    }
+    for (let i = decls.length - 1; i >= 0; i--) {
+      const d = decls[i]
+      if (typeof d[1] === 'string' && d[1][0] === '$') {
+        if (usedLocals.has(d[1]) || usedLocals.has(String(slotOf.get(d)))) break
+        node.splice(node.indexOf(d), 1)
+        continue
+      }
+      let len = d.length
+      while (len > 1 && !usedLocals.has(String(slotOf.get(d) + len - 2))) len--
+      if (len === d.length) break
+      d.length = len
+      if (len === 1) node.splice(node.indexOf(d), 1)
+      else break
     }
   })
 
@@ -1734,11 +1763,47 @@ const sinkSets = (funcNode, params, useCounts) => {
     if (!Array.isArray(setNode) || setNode[0] !== 'local.set' || setNode.length !== 3 || !Array.isArray(setNode[2])) continue
     const name = setNode[1]
     if (params.has(name)) continue
-    // the get may BE the whole next statement (the classic adjacent pair), or sit
-    // on its first-evaluated path (benign leaf operands may precede it)
-    const nxt = funcNode[i + 1], skipped = new Set()
-    const hit = Array.isArray(nxt) && nxt[0] === 'local.get' && nxt[1] === name && nxt.length === 2
-      ? [funcNode, i + 1] : firstEvalGet(nxt, name, skipped)
+    const val = setNode[2]
+    // The landing site is the statement that first touches $name — a PURE value may
+    // cross up to a few non-interfering statements to reach it (bounded lookahead:
+    // the win class is near-adjacent; unbounded scans cost quadratic time for
+    // nothing). Crossed statements must not write the value's inputs, and when the
+    // value reads memory they must not write memory or call out.
+    const vLocals = new Set(), vGlobals = new Set()
+    walk(val, n => {
+      if (!Array.isArray(n)) return
+      if ((n[0] === 'local.get' || n[0] === 'local.tee') && typeof n[1] === 'string') vLocals.add(n[1])
+      else if (n[0] === 'global.get' && typeof n[1] === 'string') vGlobals.add(n[1])
+    })
+    const vMem = readsMemory(val)
+    const vPure = isPure(val)
+    let hit = null, skipped = null
+    for (let j = i + 1; j < funcNode.length && j <= i + 5; j++) {
+      const stmt = funcNode[j]
+      if (!Array.isArray(stmt)) break // flat token — order unattributable
+      const h0 = stmt[0]
+      if (h0 === 'param' || h0 === 'result' || h0 === 'local' || h0 === 'type' || h0 === 'export') continue
+      let touches = false
+      walk(stmt, n => { if (Array.isArray(n) && typeof n[1] === 'string' && n[1] === name &&
+        (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')) touches = true })
+      if (touches) {
+        skipped = new Set()
+        hit = stmt[0] === 'local.get' && stmt[1] === name && stmt.length === 2
+          ? [funcNode, j] : firstEvalGet(stmt, name, skipped)
+        break
+      }
+      // only a PURE value crosses; interference blocks
+      let bad = !vPure || (vMem && writesMemory(stmt))
+      if (!bad) walk(stmt, n => {
+        if (!Array.isArray(n)) { if (typeof n === 'string' && OPCODE[n] !== undefined) bad = true; return }
+        const o = n[0]
+        if ((o === 'local.set' || o === 'local.tee') && vLocals.has(n[1])) bad = true
+        else if (o === 'global.set' && vGlobals.has(n[1])) bad = true
+        else if ((o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') && (vMem || vGlobals.size)) bad = true
+        else if (isBranchScope(o) || o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' || o === 'throw') bad = true
+      })
+      if (bad) break
+    }
     if (!hit) continue
     // the sunk value now evaluates AFTER the skipped leaves — it must not write them
     if (skipped.size) {
@@ -3715,8 +3780,40 @@ const stripmut = (ast) => {
 // if's own end — no equivalent exists one level up, so that shape is not rewritten.
 const unnest = (l) => typeof l === 'string' && l[0] === '$' ? l : +l > 0 ? +l - 1 : null
 
+/** Ops that can trap even when 'pure': int div/rem, float→int trunc. */
+const hasTrap = (n) => {
+  let t = false
+  walk(n, c => { const o = Array.isArray(c) ? c[0] : c; if (typeof o === 'string' && /\.(div|rem)_[su]$|\.trunc_f/.test(o)) t = true })
+  return t
+}
+
+// In TEST position (if/br_if/select condition) only non-zero-ness matters, so a
+// double eqz is a no-op there: (i32.eqz (i32.eqz X)) → X. (In value contexts it
+// normalizes to 0/1 and must stay.)
+const untest = (c) => Array.isArray(c) && c[0] === 'i32.eqz' && Array.isArray(c[1]) && c[1][0] === 'i32.eqz' ? untest(c[1][1]) : c
+
 const brif = (ast) => {
   return walkPost(ast, (node) => {
+    // (br_if $L A) (br_if $L B) → (br_if $L (i32.or A B)) — one branch instruction
+    // instead of two. B now evaluates even when A already branches, so it must be
+    // pure and trap-free; evaluation order A-then-B is preserved.
+    if (Array.isArray(node) && (isScopeNode(node) || node[0] === 'if')) {
+      for (let i = 1; i < node.length - 1; i++) {
+        const a = node[i], b = node[i + 1]
+        if (Array.isArray(a) && a[0] === 'br_if' && a.length === 3 && Array.isArray(a[2]) &&
+            Array.isArray(b) && b[0] === 'br_if' && b.length === 3 && b[1] === a[1] &&
+            Array.isArray(b[2]) && isPure(b[2]) && !hasTrap(b[2])) {
+          node.splice(i, 2, ['br_if', a[1], ['i32.or', a[2], b[2]]])
+          i--
+        }
+      }
+    }
+    // double-eqz vanishes in test position
+    if (Array.isArray(node)) {
+      if (node[0] === 'br_if' && node.length === 3) { const c = untest(node[2]); if (c !== node[2]) node[2] = c }
+      else if (node[0] === 'if') { const { condIdx, cond } = parseIf(node); const c = untest(cond); if (c !== cond) node[condIdx] = c }
+      else if (node[0] === 'select' && node.length === 4) { const c = untest(node[3]); if (c !== node[3]) node[3] = c }
+    }
     if (!Array.isArray(node) || node[0] !== 'if') return
     const { cond, thenBranch, elseBranch } = parseIf(node)
     const thenEmpty = !thenBranch || thenBranch.length <= 1
@@ -3812,7 +3909,9 @@ const hashFunc = (node, localNames) => {
       for (let i = v.length - 1; i >= 0; i--) stack.push(v[i])
       stack.push('[')
     } else if (typeof v === 'string') {
-      parts.push(localNames.has(v) ? '$__L' : v)
+      const t = localNames.get ? localNames.get(v) : localNames.has(v) ? '$__L' : undefined
+      // a bare-numeric ref right after a local op is the same slot as its named twin
+      parts.push(t ?? ((parts[parts.length - 1] === 'local.get' || parts[parts.length - 1] === 'local.set' || parts[parts.length - 1] === 'local.tee') && v !== '' && !isNaN(v) ? 'L' + +v : v))
     } else if (typeof v === 'bigint') {
       parts.push(v.toString() + 'n')
     } else if (typeof v === 'number') {
@@ -3848,21 +3947,29 @@ const dedupe = (ast) => {
     const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
     if (!name) continue
 
-    // Collect names that are internal to this function: the func name itself,
-    // its params, locals, and any block/loop labels nested in the body. All of
-    // these get normalized to a single token in the hash so that two funcs
-    // differing only in identifier choices still dedupe.
-    const localNames = new Set()
-    if (typeof node[1] === 'string' && node[1][0] === '$') localNames.add(node[1])
-    walk(node, (n) => {
-      if (!Array.isArray(n) || typeof n[1] !== 'string' || n[1][0] !== '$') return
-      const op = n[0]
-      if (op === 'param' || op === 'local' || isBranchScope(op)) {
-        localNames.add(n[1])
+    // Canonical positional identity: params/locals map to their INDEX ('L0', 'L1'…
+    // — bare-numeric refs land on the same tokens), labels to first-occurrence
+    // order ('B0'…), the func's own name to 'F'. Positional tokens make the hash a
+    // faithful canonical form: same string ⇔ structurally equivalent modulo naming
+    // (the old single-token collapse hashed (sub $a $b) equal to (sub $b $a)).
+    // Declarations leave the body hash and return as a positional type vector, so
+    // a named-decl clone matches its unnamed twin.
+    const canon = new Map([[name, 'F']])
+    const types = []
+    let li = 0, bi = 0
+    const body = ['func']
+    for (let i = 2; i < node.length; i++) {
+      const c = node[i]
+      if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'local')) {
+        if (typeof c[1] === 'string' && c[1][0] === '$') { canon.set(c[1], 'L' + li++); types.push(c[0] === 'param' ? 'p' + c[2] : c[2]) }
+        else for (let k = 1; k < c.length; k++) { types.push(c[0] === 'param' ? 'p' + c[k] : c[k]); li++ }
       }
+      else body.push(c)
+    }
+    walk(node, (n) => {
+      if (Array.isArray(n) && isBranchScope(n[0]) && typeof n[1] === 'string' && n[1][0] === '$' && !canon.has(n[1])) canon.set(n[1], 'B' + bi++)
     })
-
-    const hash = hashFunc(node, localNames)
+    const hash = types.join(' ') + '#' + hashFunc(body, canon)
 
     if (signatures.has(hash)) {
       redirects.set(name, signatures.get(hash))

@@ -2691,3 +2691,21 @@ test('treeshake: dead table + its segments go; ref.func declarations survive', (
   const w = compile(optimize(parse(decl)))
   assert(new WebAssembly.Module(w) instanceof WebAssembly.Module, 'declaring segment kept — module validates')
 })
+
+test('dedupe: canonical positional hash — merges naming clones, never operand swaps', () => {
+  const src = `(module
+    (func $a (param $x i32) (param $y i32) (result i32) (i32.sub (local.get $x) (local.get $y)))
+    (func $b (param $p i32) (param $q i32) (result i32) (i32.sub (local.get $p) (local.get $q)))
+    (func $c (param $x i32) (param $y i32) (result i32) (i32.sub (local.get $y) (local.get $x)))
+    (func (export "u") (param i32 i32) (result i32) (i32.sub (local.get 0) (local.get 1)))
+    (func (export "a") (result i32) (call $a (i32.const 7) (i32.const 3)))
+    (func (export "b") (result i32) (call $b (i32.const 7) (i32.const 3)))
+    (func (export "c") (result i32) (call $c (i32.const 7) (i32.const 3))))`
+  const x = run(src)
+  assert.equal(x.a(), 4)
+  assert.equal(x.b(), 4)
+  assert.equal(x.c(), -4, 'operand-swapped func must NOT be merged with its mirror')
+  assert.equal(x.u(7, 3), 4)
+  const txt = print(optimize(parse(src)))
+  assert((txt.match(/i32\.sub/g) || []).length <= 3, 'naming clones merged')
+})
