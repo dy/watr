@@ -2806,3 +2806,53 @@ test('tracked memory read goes stale after a narrow store (store8)', () => {
     (i32.sub (local.get $y) (i32.load (i32.const 0)))))`
   assert.equal(run(src).f(), 0x01010101 - 0x010101ff)
 })
+
+test('inlineOnce: bare stack-style return in the callee exits the inline block, not the caller', () => {
+  const src = `(module
+    (global $g (mut i32) (i32.const 0))
+    (func $helper (param $x i32)
+      block $b
+        (br_if $b (i32.eqz (local.get $x)))
+        (global.set $g (i32.const 1))
+        return
+      end
+      (global.set $g (i32.const 2)))
+    (func (export "f") (param $x i32) (result i32)
+      (call $helper (local.get $x))
+      (global.set $g (i32.add (global.get $g) (i32.const 10)))
+      (global.get $g)))`
+  const { f } = run(src)
+  assert.equal(f(1), 11, 'statements after the inlined call still execute')
+  assert.equal(f(0), 12)
+})
+
+test('rettail: void trailing loop with if-nested returns lifts to a typed loop', () => {
+  const src = `(module (func (export "find") (param $n i32) (result i32) (local $i i32)
+    (loop $L
+      (if (i32.ge_s (local.get $i) (i32.const 10)) (then (return (i32.const -1))))
+      (if (i32.eq (local.get $i) (local.get $n)) (then (return (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $L))
+    (i32.const 0)))`
+  const { find } = run(src)
+  assert.equal(find(3), 3)
+  assert.equal(find(50), -1, 'exhausted loop returns the -1 arm, never the dead filler')
+  // a loop with an escaping branch to an outer label must NOT be lifted
+  const escape = `(module (func (export "g") (param $n i32) (result i32) (local $i i32)
+    block $out
+      (loop $L
+        (br_if $out (i32.ge_s (local.get $i) (local.get $n)))
+        (local.set $i (i32.add (local.get $i) (i32.const 2)))
+        (br $L))
+    end
+    (local.get $i)))`
+  assert.equal(run(escape).g(5), 6)
+})
+
+test('const-chain reassociation folds through a variable', () => {
+  const src = `(module (func (export "f") (param $x i32) (result i32)
+    (i32.sub (i32.sub (i32.add (i32.add (local.get $x) (i32.const 5)) (i32.const 3)) (i32.const 2)) (i32.const 1))))`
+  assert.equal(run(src).f(10), 15)
+  const txt = print(optimize(parse(src)))
+  assert.equal((txt.match(/i32\.const/g) || []).length, 1, 'four constants collapse into one')
+})

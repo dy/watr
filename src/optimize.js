@@ -745,10 +745,46 @@ const nanFoldNode = (node) => {
       }
 }
 
+// Associative-chain reassociation: (op (op x C1) C2) → (op x (C1 <combine> C2))
+// when x is NOT itself const (the all-const case is ordinary folding). sub is
+// non-commutative but still associates against its own const RHS:
+// (x − C1) − C2 = x − (C1 + C2), so sub's combine step is add, not sub.
+const CHAIN_COMBINE = {
+  'i32.add': 'i32.add', 'i32.sub': 'i32.add', 'i32.and': 'i32.and', 'i32.or': 'i32.or', 'i32.xor': 'i32.xor',
+  'i64.add': 'i64.add', 'i64.sub': 'i64.add', 'i64.and': 'i64.and', 'i64.or': 'i64.or', 'i64.xor': 'i64.xor',
+}
+const chainFoldNode = (node) => {
+  if (node.length !== 3) return
+  const op = node[0], inner = node[1]
+  if (!Array.isArray(inner) || inner.length !== 3) return
+  let combineOp = null
+  if (inner[0] === op) combineOp = CHAIN_COMBINE[op]
+  else if (CHAIN_COMBINE[op]) {
+    // mixed add/sub chains associate too: (sub (add x C1) C2) = add x (C1−C2),
+    // (add (sub x C1) C2) = sub x (C1−C2) — the output keeps the INNER op
+    const t = op.slice(0, 4)
+    if ((op === t + 'add' && inner[0] === t + 'sub') || (op === t + 'sub' && inner[0] === t + 'add'))
+      combineOp = t + 'sub'
+  }
+  if (!combineOp) return
+  if (getConst(inner[1])) return // fully const — the ordinary fold path handles it
+  const c1 = getConst(inner[2]), c2 = getConst(node[2])
+  if (!c1 || !c2) return
+  const r = FOLDABLE[combineOp](c1.value, c2.value)
+  if (r === null || r === undefined) return
+  const out = makeConst(resultType(op), r)
+  // never inflate: 2 opcodes + 2 consts become 1 opcode + 1 const — gate on the
+  // consts alone (strictly conservative; the opcode is always a net win)
+  if (constInstrSize(out) > constInstrSize(inner[2]) + constInstrSize(node[2])) return
+  return [inner[0], inner[1], out]
+}
+
 const foldNode = (node) => {
     if (!Array.isArray(node)) return
     const nan = nanFoldNode(node)
     if (nan) return nan
+    const chain = chainFoldNode(node)
+    if (chain) return chain
     const fn = FOLDABLE[node[0]]
     if (!fn) return
     // Arity comes from the NODE — every WAT op is fixed-arity, so node.length
@@ -995,6 +1031,55 @@ const branch = (ast) => {
         ['then', ...thenBranch.slice(1, -1), a[2]],
         ['else', ...elseBranch.slice(1, -1), b[2]]]]
     })
+  })
+  // dead local round-trip: (if C (then STMTS (local.set $x A))) with NO else, sitting
+  // as the function's second-to-last statement, immediately followed by the function's
+  // own tail (local.get $x) — when that trailing get is $x's ONLY read anywhere in the
+  // function, $x never needs to leave the stack at all: fuse the pair into one tail
+  // if-expression (explicit else = keep $x), dropping the local.set that fed the
+  // trailing get. A `(i32.eqz Y)` condition additionally swaps arms to drop the eqz
+  // (i32 only — an i64 value is not a valid if condition).
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    const bodyStart = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
+    const results = fn.reduce((k, c) => Array.isArray(c) && c[0] === 'result' ? k + c.length - 1 : k, 0)
+    if (results !== 1 || fn.length < bodyStart + 2) return
+    const last = fn[fn.length - 1], prev = fn[fn.length - 2]
+    if (!Array.isArray(last) || last[0] !== 'local.get' || last.length !== 2) return
+    const x = last[1]
+    if (typeof x !== 'string' || x[0] !== '$') return
+    if (fn.some(c => Array.isArray(c) && c[0] === 'param' && c[1] === x)) return
+    if (!Array.isArray(prev) || prev[0] !== 'if') return
+    const { cond, thenBranch, elseBranch } = parseIf(prev)
+    if (elseBranch || !Array.isArray(cond) || !(thenBranch?.length >= 2)) return
+    const a = thenBranch[thenBranch.length - 1]
+    if (!Array.isArray(a) || a[0] !== 'local.set' || a.length !== 3 || a[1] !== x || !Array.isArray(a[2])) return
+    let t = null
+    for (const c of fn) if (Array.isArray(c) && (c[0] === 'local' || c[0] === 'param') && c[1] === x) t = c[2]
+    if (typeof t !== 'string' || !/^([if](32|64)|v128)$/.test(t)) return
+    // an early exit inside the arm would skip the fused tail value — must be branch-free
+    let jumps = false
+    walk(thenBranch, n => {
+      const o = Array.isArray(n) ? n[0] : n
+      if (o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' ||
+          o === 'throw' || o === 'return_call' || o === 'return_call_indirect' || o === 'try_table') jumps = true
+    })
+    if (jumps) return
+    // $x must be dead outside this exact pair: its only static read anywhere in the
+    // function is the trailing get we're about to consume (a `local.tee $x` inside
+    // `cond` is a legitimate write for the condition test, untouched by this fusion)
+    const uses = countLocalUses(fn).get(x)
+    if (!uses || uses.gets !== 1) return
+    let ifCond = cond
+    let thenArm = ['then', ...thenBranch.slice(1, -1), a[2]]
+    let elseArm = ['else', ['local.get', x]]
+    if (Array.isArray(cond) && cond.length === 2 && cond[0] === 'i32.eqz') {
+      ifCond = cond[1]
+      const swappedThen = ['then', ...elseArm.slice(1)]
+      elseArm = ['else', ...thenArm.slice(1)]
+      thenArm = swappedThen
+    }
+    fn.splice(fn.length - 2, 2, ['if', ['result', t], ifCond, thenArm, elseArm])
   })
   return walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
@@ -2291,11 +2376,22 @@ const cse = (ast) => {
           for (const l of wLocals) if (g.reads.has(l)) { live.delete(k); break }
         }
       }
+      // A fresh local appended to the locals vector costs 2 B (new count+type run) —
+      // unless its type matches the run it lands after, where the count just
+      // increments for free. Track the run tail (locals only — params aren't in the
+      // binary locals vector) so the gate prices each candidate exactly.
+      let tailType = null
+      for (let i = 1; i < fn.length; i++) if (Array.isArray(fn[i]) && fn[i][0] === 'local') {
+        const t = fn[i][fn[i].length - 1]
+        tailType = typeof t === 'string' ? t : null
+      }
       for (const g of all) {
         const n = g.sites.length
-        if (n < 2 || (n - 1) * (g.est - 2) <= 4) continue
+        const declCost = g.type === tailType ? 0 : 2
+        if (n < 2 || (n - 1) * (g.est - 2) <= 2 + declCost) continue
         const name = '$cse' + uid++
         decls.push(['local', name, g.type])
+        tailType = g.type
         const [p0, i0] = g.sites[0]
         p0[i0] = ['local.tee', name, g.expr]
         for (let k = 1; k < n; k++) { const [p, i] = g.sites[k]; p[i] = ['local.get', name] }
@@ -2501,6 +2597,73 @@ const rettail = (ast) => {
     if (op === 'local.set' || op === 'global.set' || op === 'drop' || op?.includes?.('.store')) return false
     return true // plain value op: exactly one value in this IR
   }
+  // Convert a tail-position statement into the value form it feeds a (result T)
+  // scope: an unwrapped `return V` becomes V; a diverging br/unreachable stays; an
+  // untyped if recurses into both arms (each must convert). null = doesn't qualify.
+  const convertTail = (nd, T) => {
+    if (!Array.isArray(nd)) return null // bare/unfolded token forms: bail (soundness fence)
+    const op = nd[0]
+    if (op === 'br' || op === 'unreachable') return nd // diverging — still valid under (result T)
+    if (op === 'return') {
+      if (nd.length !== 2 || !producesOne(nd[1])) return null
+      return nd[1]
+    }
+    if (op === 'if') {
+      if (nd.some(c => Array.isArray(c) && c[0] === 'result')) return null // already typed — not our shape
+      const { cond, thenBranch, elseBranch } = parseIf(nd)
+      if (!thenBranch || !elseBranch || thenBranch.length < 2 || elseBranch.length < 2) return null
+      const thenBody = thenBranch.slice(1), elseBody = elseBranch.slice(1)
+      if (!thenBody.slice(0, -1).every(stackNeutral)) return null
+      if (!elseBody.slice(0, -1).every(stackNeutral)) return null
+      const thenConv = convertTail(thenBody[thenBody.length - 1], T)
+      const elseConv = convertTail(elseBody[elseBody.length - 1], T)
+      if (thenConv === null || elseConv === null) return null
+      return ['if', ['result', T], cond,
+        ['then', ...thenBody.slice(0, -1), thenConv],
+        ['else', ...elseBody.slice(0, -1), elseConv]]
+    }
+    return null
+  }
+  // A void trailing loop whose only exits are `br` back to itself or `return V` at
+  // (possibly if-nested) tail positions: type the loop (result T), unwrap the
+  // returns, and drop the dead trailing filler that only satisfied the void shape.
+  const tryLoopLift = (node, bodyStart, T) => {
+    const n = node.length
+    const loopIdx = Array.isArray(node[n - 1]) && node[n - 1][0] === 'loop' ? n - 1
+      : n >= 2 && Array.isArray(node[n - 2]) && node[n - 2][0] === 'loop' ? n - 2 : -1
+    if (loopIdx < 0) return
+    const loop = node[loopIdx]
+    if (loop.some(c => Array.isArray(c) && (c[0] === 'result' || c[0] === 'param'))) return
+    // every statement before the loop must be stack-neutral — the lifted loop's
+    // value becomes the function's fall-through result, alone on the stack
+    if (!node.slice(bodyStart, loopIdx).every(stackNeutral)) return
+    const label = typeof loop[1] === 'string' && loop[1][0] === '$' ? loop[1] : null
+    if (!label) return // named label required — branch-target safety is checked by identity
+    const body = loop.slice(2)
+    if (!body.length) return
+    // conservative fence: every branch anywhere in the loop must target only this
+    // loop's own label (never escape outward, never a sibling scope)
+    let branchesSafe = true
+    walk(loop, (nd, parent, idx) => {
+      // bare flat-form tokens (idx 0 is a folded node's own head, not a flat token)
+      if (!Array.isArray(nd)) { if (idx !== 0 && typeof nd === 'string' && OPCODE[nd] !== undefined) branchesSafe = false; return }
+      const o = nd[0]
+      if (o === 'br' || o === 'br_if') { if (nd[1] !== label) branchesSafe = false }
+      else if (o === 'br_table') { for (const t of nd.slice(1, -1)) if (t !== label) branchesSafe = false }
+      else if (o === 'return_call' || o === 'return_call_indirect' || o === 'try_table' || o === 'throw') branchesSafe = false
+      // nested scopes (their own labels, own exits) are conservatively out of scope
+      else if (nd !== loop && (o === 'block' || o === 'loop')) branchesSafe = false
+    })
+    if (!branchesSafe) return
+    if (!body.slice(0, -1).every(stackNeutral)) return
+    const converted = convertTail(body[body.length - 1], T)
+    if (converted === null) return
+    // every convertible tail diverges or returns — the original loop never fell
+    // through, so a trailing filler statement was unreachable: delete it
+    loop.splice(2 + body.length - 1, 1, converted)
+    loop.splice(2, 0, ['result', T])
+    if (loopIdx === n - 2) node.pop()
+  }
   for (const node of ast.slice(1)) {
     if (!Array.isArray(node) || node[0] !== 'func') continue
     const results = node.reduce((k, c) => Array.isArray(c) && c[0] === 'result' ? k + c.length - 1 : k, 0)
@@ -2508,7 +2671,13 @@ const rettail = (ast) => {
     const bodyStart = typeof node[1] === 'string' && node[1][0] === '$' ? 2 : 1
     const last = node[node.length - 1]
     const isRet = last === 'return' ? 1 : Array.isArray(last) && last[0] === 'return' ? 2 : 0
-    if (!isRet) continue
+    if (!isRet) {
+      if (results === 1) {
+        const rc = node.find(c => Array.isArray(c) && c[0] === 'result' && c.length === 2)
+        if (rc) tryLoopLift(node, bodyStart, rc[1])
+      }
+      continue
+    }
     if (isRet === 1) {
       // stacked form: the statement before `return` is the value producer — exempt
       // it only when its single-value arity matches the declared single result
@@ -3381,6 +3550,10 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
     }
     for (const n of cBody) collectLabels(n)
     const sub = (n) => {
+      // bare stack-style `return` (flat/wax form) copied verbatim would become a
+      // hard FUNCTION return inside the caller, truncating everything after the
+      // splice — same rewrite as the folded form: exit the inline block instead
+      if (n === 'return') return ['br', exit]
       if (!Array.isArray(n)) return n
       const op = n[0]
       if ((op === 'local.get' || op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string' && rename.has(n[1]))
@@ -4039,6 +4212,43 @@ const globals = (ast) => {
     else if (n[0] === 'global.get') reads.set(ref, (reads.get(ref) || 0) + 1)
   })
 
+  // Local encoded-size estimate for a small cloned expression subtree — consts and
+  // global.get price at their real encoded size; every other op is 1 opcode byte +
+  // its operands. Approximate (ignores multi-byte prefixed opcodes and memarg
+  // immediates) but only ever used to COMPARE before/after shapes of the same
+  // subtree, so the approximation errors cancel.
+  const estSize = (node) => {
+    if (!Array.isArray(node)) return 0
+    if (node[0] === 'i32.const' || node[0] === 'i64.const' || node[0] === 'f32.const' || node[0] === 'f64.const') return constInstrSize(node)
+    if (node[0] === 'global.get') return GLOBAL_GET_SIZE
+    let n = 1
+    for (let i = 1; i < node.length; i++) n += estSize(node[i])
+    return n
+  }
+  // Ancestor-aware read pricing: a global.get nested under const-chain ops may fold
+  // away almost entirely once literalized (chain reassociation collapses the ops).
+  // Pricing every read at a flat const size misses this — clone each read's small
+  // enclosing subtree, splice in the literal, fold it locally, and measure the
+  // REAL shape instead of guessing. One walk collects every global's sites.
+  const ANCESTOR_DEPTH = 2
+  const gsites = new Map()
+  {
+    const stack = []
+    const visit = (node) => {
+      if (!Array.isArray(node)) return
+      if (node[0] === 'global.get' && typeof node[1] === 'string' && constGlobals.has(node[1])) {
+        const anchor = stack.length >= ANCESTOR_DEPTH ? stack[stack.length - ANCESTOR_DEPTH] : stack[0]
+        let a = gsites.get(node[1])
+        if (!a) gsites.set(node[1], a = [])
+        a.push(clone(anchor ?? node))
+        return
+      }
+      stack.push(node)
+      for (let i = 0; i < node.length; i++) visit(node[i])
+      stack.pop()
+    }
+    visit(ast)
+  }
   // Keep only globals where propagation is size-neutral or better.
   const propagate = new Set()
   for (const [name, init] of constGlobals) {
@@ -4046,8 +4256,14 @@ const globals = (ast) => {
     if (r === 0) continue // dead anyway — leave to treeshake
     const cs = constInstrSize(init)
     const declSize = cs + 2 // valtype + mutability byte + init expr + `end`
-    const before = r * GLOBAL_GET_SIZE + declSize
-    const after = r * cs + (exported.has(name) ? declSize : 0)
+    let before = declSize, after = exported.has(name) ? declSize : 0
+    for (const site of gsites.get(name) || []) {
+      before += estSize(site)
+      const spliced = walkPost(clone(site), (n) => {
+        if (Array.isArray(n) && n[0] === 'global.get' && n[1] === name) return clone(init)
+      })
+      after += estSize(fold(spliced))
+    }
     if (after <= before) propagate.add(name)
   }
   if (propagate.size === 0) return ast
