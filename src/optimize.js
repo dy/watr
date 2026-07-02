@@ -1868,8 +1868,12 @@ const sinkSets = (funcNode, params, useCounts) => {
         (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')) touches = true })
       if (touches) {
         skipped = new Set()
+        const state = { reads: false }
         hit = stmt[0] === 'local.get' && stmt[1] === name && stmt.length === 2
-          ? [funcNode, j] : firstEvalGet(stmt, name, skipped)
+          ? [funcNode, j] : firstEvalGet(stmt, name, skipped, state)
+        // crossed pure subtrees may read globals/memory — an effectful value must
+        // not move past them
+        if (hit && state.reads && !vPure) hit = null
         break
       }
       // only a PURE value crosses; interference blocks
@@ -1913,32 +1917,48 @@ const sinkSets = (funcNode, params, useCounts) => {
  * skipped; bodies that are entered conditionally or repeatedly (then/else arms,
  * loops, try_table) are opaque — descent stops there. → [parent, idx] or null.
  */
-const firstEvalGet = (stmt, name, skipped) => {
-  let cur = stmt
-  while (Array.isArray(cur)) {
-    // Bodies (re-)entered conditionally or repeatedly are opaque — checked on the
-    // node ITSELF, so a statement that IS a loop is rejected up front (its "first"
-    // instruction runs once per iteration, not once).
+const firstEvalGet = (stmt, name, skipped, state) => {
+  // Full evaluation-order scan: operands are visited left-to-right; the target get
+  // may sit at any nesting level. A completed subtree may be CROSSED (the sunk value
+  // then evaluates after it) only when it is pure and trap-free — its local reads are
+  // recorded in `skipped` (the caller verifies the value doesn't write them) and any
+  // global/memory read sets `state.reads` (the caller then requires a pure value).
+  // Conditionally or repeatedly (re-)entered bodies stay opaque.
+  let hit = null
+  const scan = (cur) => {
+    if (hit) return true
+    if (!Array.isArray(cur)) return true
     const h = cur[0]
-    if (h === 'loop' || h === 'then' || h === 'else' || h === 'try_table') return null
-    let child = null, ci = -1
+    if (h === 'loop' || h === 'then' || h === 'else' || h === 'try_table') return false
     for (let i = 1; i < cur.length; i++) {
       const c = cur[i]
       if (!Array.isArray(c)) continue // strings/numbers: immediates, labels, memargs
       const ch = c[0]
       if (ch === 'result' || ch === 'param' || ch === 'type' || ch === 'local' || ch === 'export') continue
-      // A benign leaf operand (another local's get, a const) may evaluate before the
-      // sunk value without observing it — record it so the caller can verify the
-      // value doesn't WRITE that local, and keep scanning right.
-      if (ch === 'local.get' && c.length === 2 && c[1] !== name) { skipped?.add(c[1]); continue }
-      if (ch.endsWith?.('.const')) continue
-      child = c, ci = i; break
+      if (ch === 'local.get' && c.length === 2) {
+        if (c[1] === name) { hit = [cur, i]; return true }
+        skipped?.add(c[1])
+        continue
+      }
+      if (isPure(c) && !hasTrap(c)) {
+        let containsTarget = false
+        walk(c, x => { if (Array.isArray(x) && x[0] === 'local.get' && x[1] === name) containsTarget = true })
+        if (containsTarget) return scan(c) // the target lives here — descend, same rules
+        // crossable — collect what it observes
+        walk(c, x => {
+          if (!Array.isArray(x)) return
+          if (x[0] === 'local.get' && typeof x[1] === 'string') skipped?.add(x[1])
+          else if (x[0] === 'global.get' || (typeof x[0] === 'string' && x[0].includes('.load'))) state && (state.reads = true)
+        })
+        continue
+      }
+      // first non-crossable child: the spine — descend; failure inside blocks the scan
+      return scan(c)
     }
-    if (!child) return null
-    if (child[0] === 'local.get') return child[1] === name ? [cur, ci] : null
-    cur = child
+    return true
   }
-  return null
+  const ok = scan(stmt)
+  return ok && hit ? hit : null
 }
 
 /**
