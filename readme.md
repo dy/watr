@@ -65,6 +65,20 @@ npx watr input.wat --polyfill   # newer features → MVP
 * [binaryen](https://github.com/WebAssembly/binaryen) — 1,100 KB, 718 op/s
 * [wat-compiler](https://github.com/stagas/wat-compiler) — ~152 KB (+ wabt dep), 539 op/s
 
+### Optimizer vs binaryen (wasm-opt 128)
+
+Measured on [test/example](./test/example) (21 modules, `optimize(src)` defaults vs `wasm-opt -all`):
+
+|  | size (total) | time (batch) | footprint |
+|---|---|---|---|
+| **watr/optimize** | **20,708 B** | **91 ms** in-process | 113 KB min (35 KB gz) |
+| `wasm-opt -Oz` | 19,852 B | 1,100 ms CLI | ~1.1 MB js / native binary |
+| `wasm-opt -O3` | 22,302 B | — | — |
+
+Smaller than `-O3` on every module; ties or beats `-Oz` on 12 of 20 (within 4.3% overall — the rest is CSE-class work).
+Binaryen's native core outruns watr on multi-MB single modules (a 5.5 MB module: 0.3 s vs 2.6 s, sizes within 4%) —
+watr's edge is batch/in-process use with no process spawn and a ~30× smaller footprint.
+
 
 ## Used by
 
