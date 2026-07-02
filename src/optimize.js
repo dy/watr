@@ -963,13 +963,23 @@ const branch = (ast) => {
     walkPost(fn, (node) => {
       if (!Array.isArray(node) || node[0] !== 'if' || node.length !== 4) return
       const { cond, thenBranch, elseBranch } = parseIf(node)
-      if (!Array.isArray(cond) || thenBranch?.length !== 2 || elseBranch?.length !== 2) return
-      const a = thenBranch[1], b = elseBranch[1]
+      if (!Array.isArray(cond) || !(thenBranch?.length >= 2) || !(elseBranch?.length >= 2)) return
+      const a = thenBranch[thenBranch.length - 1], b = elseBranch[elseBranch.length - 1]
       if (!Array.isArray(a) || a[0] !== 'local.set' || a.length !== 3 || !Array.isArray(a[2])) return
       if (!Array.isArray(b) || b[0] !== 'local.set' || b.length !== 3 || b[1] !== a[1] || !Array.isArray(b[2])) return
       const t = ltype.get(a[1])
       if (typeof t !== 'string' || !/^([if](32|64)|v128)$/.test(t)) return
-      return ['local.set', a[1], ['if', ['result', t], cond, ['then', a[2]], ['else', b[2]]]]
+      // an early exit inside an arm would skip the hoisted set — arms must be branch-free
+      let jumps = false
+      walk([thenBranch, elseBranch], n => {
+        const o = Array.isArray(n) ? n[0] : n
+        if (o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' ||
+            o === 'throw' || o === 'return_call' || o === 'return_call_indirect' || o === 'try_table') jumps = true
+      })
+      if (jumps) return
+      return ['local.set', a[1], ['if', ['result', t], cond,
+        ['then', ...thenBranch.slice(1, -1), a[2]],
+        ['else', ...elseBranch.slice(1, -1), b[2]]]]
     })
   })
   return walkPost(ast, (node) => {
@@ -1964,6 +1974,64 @@ const cse = (ast) => {
 }
 
 /**
+ * Macro inlining: a function whose whole body is ONE small expression using each
+ * param exactly once, in declaration order, expands at every call site by
+ * substituting the arguments positionally — no wrapper, no locals, argument
+ * evaluation order preserved verbatim (so impure args stay sound). The husk loses
+ * its callers and treeshake collects it; the expansion feeds fold/offset/cse.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const inlineMacro = (ast) => {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  const macros = new Map()
+  for (const n of ast.slice(1)) {
+    if (!Array.isArray(n) || n[0] !== 'func' || typeof n[1] !== 'string' || n[1][0] !== '$') continue
+    if (n.some(c => Array.isArray(c) && c[0] === 'export')) continue
+    const params = [], body = []
+    let results = 0, ok = true
+    for (let i = 2; i < n.length && ok; i++) {
+      const c = n[i]
+      if (c === 'return' && i === n.length - 1) continue // trailing bare return is a no-op
+      if (!Array.isArray(c)) ok = false
+      else if (c[0] === 'param') (typeof c[1] === 'string' && c[1][0] === '$' && c.length === 3) ? params.push(c[1]) : ok = false
+      else if (c[0] === 'result') results += c.length - 1
+      else if (c[0] === 'local') ok = false
+      else if (c[0] === 'type') continue
+      else body.push(c)
+    }
+    if (!ok || body.length !== 1 || results !== 1) continue
+    const expr = body[0]
+    if (estBytes(expr) > 12) continue
+    // params each read once, in order; no writes, control, or self-recursion inside
+    const seq = []
+    let bad = false
+    walk(expr, c => {
+      const o = Array.isArray(c) ? c[0] : c
+      if (o === 'local.get') seq.push(c[1])
+      else if (o === 'local.set' || o === 'local.tee' || o === 'return' || o === 'br' || o === 'br_if' ||
+               o === 'br_table' || o === 'block' || o === 'loop' || o === 'if' || o === 'try_table' ||
+               ((o === 'call' || o === 'return_call') && c[1] === n[1])) bad = true
+    })
+    if (bad || seq.length !== params.length || seq.some((x, i) => x !== params[i])) continue
+    macros.set(n[1], { params, expr })
+  }
+  if (!macros.size) return ast
+  walkPost(ast, n => {
+    if (!Array.isArray(n) || n[0] !== 'call' || !macros.has(n[1])) return
+    const m = macros.get(n[1])
+    if (n.length - 2 !== m.params.length) return
+    const idx = new Map(m.params.map((p, i) => [p, i]))
+    const out = clone(m.expr)
+    const expanded = walkPost(out, c => {
+      if (Array.isArray(c) && c[0] === 'local.get' && idx.has(c[1])) return n[2 + idx.get(c[1])]
+    })
+    return expanded
+  })
+  return ast
+}
+
+/**
  * Merge alias locals: `(local.set $A (local.tee $B V))` writes the same value into
  * two slots. When that is the ONLY write either local ever gets, their write
  * histories are identical — every read of $A (even one sequenced before the def,
@@ -2953,8 +3021,8 @@ const coalesceLocals = (ast) => {
     if (!decls.size || decls.size + params.size < 2) return
 
     const uses = new Map()
-    const loopStack = []
-    let pos = 0, abort = false, condDepth = 0
+    const loopStack = [], condStack = []
+    let pos = 0, abort = false
 
     const visit = (n) => {
       if (abort || !Array.isArray(n)) return
@@ -2981,13 +3049,17 @@ const coalesceLocals = (ast) => {
           // mat4 `iters=0` miscompile), and any statement AFTER a br/br_if/return in the
           // same list (the rotated-loop entry guard `(block (br_if $out …) …)` shape).
           if (!u) {
-            u = { start: here, end: here, firstOp: op, firstCondIf: condDepth > 0,
+            u = { start: here, end: here, firstOp: op,
+                  firstArm: condStack[condStack.length - 1] ?? null, armEscapes: false,
                   firstLoop: loopStack[loopStack.length - 1] ?? null, escapes: false, loops: new Set() }
             uses.set(name, u)
+          } else {
+            // a use outside the first write's innermost loop makes zero-trip skips
+            // observable; a use outside its arm can execute on a path that never
+            // wrote — either way the slot must not be joined
+            if ((loopStack[loopStack.length - 1] ?? null) !== u.firstLoop) u.escapes = true
+            if ((condStack[condStack.length - 1] ?? null) !== u.firstArm) u.armEscapes = true
           }
-          // a use outside the first write's innermost loop makes zero-trip skips
-          // observable — the slot must not be joined
-          else if ((loopStack[loopStack.length - 1] ?? null) !== u.firstLoop) u.escapes = true
           if (here > u.end) u.end = here
           for (const ls of loopStack) u.loops.add(ls)
         }
@@ -2998,9 +3070,9 @@ const coalesceLocals = (ast) => {
         for (let i = 1; i < n.length; i++) {
           const c = n[i]
           const cond = (isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')) || branched
-          if (cond) condDepth++
+          if (cond) condStack.push(c)
           visit(c)
-          if (cond) condDepth--
+          if (cond) condStack.pop()
           if (Array.isArray(c) && (c[0] === 'br_if' || c[0] === 'br' || c[0] === 'br_table' || c[0] === 'return' || c[0] === 'return_call' || c[0] === 'return_call_indirect' || c[0] === 'unreachable')) branched = true
         }
       }
@@ -3015,7 +3087,7 @@ const coalesceLocals = (ast) => {
     // non-escaping local: every trip rewrites it before any read, so its lifetime
     // is per-iteration and its raw [write, lastUse] range is the true one.
     for (const u of uses.values()) {
-      if (u.firstOp !== 'local.get' && !u.firstCondIf && !u.escapes && u.firstLoop !== null) continue
+      if (u.firstOp !== 'local.get' && !u.escapes && (u.firstArm === null || !u.armEscapes) && u.firstLoop !== null) continue
       for (const ls of u.loops) {
         if (ls.start < u.start) u.start = ls.start
         if (ls.end > u.end) u.end = ls.end
@@ -3029,14 +3101,15 @@ const coalesceLocals = (ast) => {
     // locals still never join (a param holds the caller's residue, not zero).
     const slots = [...params].map(([name, type]) => ({ primary: name, type, end: uses.get(name)?.end ?? -1 }))
     for (const [name, range] of ordered) {
-      // Read-first locals depend on the implicit zero; locals first seen inside
-      // an if/else branch may be skipped on the alternate path — either way
-      // they'd observe a prior slot's residue if reused. A first write INSIDE a
-      // loop is fine as long as every use stays in that same loop (each iteration
-      // writes before reading — loop-carried read-before-write shows up as a
-      // firstOp get); a use escaping the loop could observe a zero-trip skip.
-      // They may *start* a fresh slot (the function's zero init), but never *join* one.
-      const readsZero = range.firstOp === 'local.get' || range.firstCondIf ||
+      // Read-first locals depend on the implicit zero — they may *start* a fresh
+      // slot (the function's zero init) but never *join* one. A first WRITE joins
+      // when it dominates every read: uses confined to the write's own if-arm run
+      // only on the path that wrote (arm-contained), and uses confined to the
+      // write's loop are rewritten every trip (loop-carried read-before-write
+      // shows up as a firstOp get). A use escaping either region could observe a
+      // skipped write — the previous occupant's residue — so it blocks joining.
+      const readsZero = range.firstOp === 'local.get' ||
+        (range.firstArm !== null && range.armEscapes) ||
         (range.firstLoop !== null && range.escapes)
       const type = decls.get(name)
       const slot = readsZero ? null : slots.find(s => s.type === type && s.end < range.start)
@@ -4463,6 +4536,7 @@ const PASSES = [
   ['branch',        branch,         true,  'simplify constant branches'],
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
   ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
+  ['macro',         inlineMacro,    true,  'expand single-expression functions at call sites (positional, zero wrapper)'],
   ['devirt',        devirt,         false, 'call_indirect with a constant or known closure-const index → direct/guarded calls — grows bytes for speed'],
   ['inlineOnce',    inlineOnce,     true,  'inline single-call functions into their lone caller (never duplicates)'],
   ['inline',        inline,         false, 'inline tiny functions — can duplicate bodies'],
@@ -4710,4 +4784,4 @@ export default function optimize(ast, opts = true) {
 
 /** Count AST nodes (fast size heuristic). */
 export { count as size, count, binarySize }
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inline, inlineOnce, devirt, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, inline, inlineOnce, devirt, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
