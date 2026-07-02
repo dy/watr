@@ -8,7 +8,9 @@
  */
 
 import { size } from './compile.js'
+import { IMM, resultType } from './const.js'
 import parse from './parse.js'
+import { clone, walk, walkPost } from './util.js'
 
 // Fixpoint round caps — empirical convergence bounds, not correctness limits.
 // Each pass only makes monotonic progress, so hitting a cap merely leaves a few
@@ -17,38 +19,6 @@ const MAX_PROP_ROUNDS = 6     // forward-prop / set-get / tee fixpoint per scope
 const MAX_INLINE_ROUNDS = 16  // single-caller inline-chain depth (deep generated stdlib)
 
 // === WAT optimizer passes ===
-
-// — AST helpers (formerly watr/util.js) — every node is an s-expression
-// array `[head, ...args]`; non-arrays are immediates.
-const clone = (node) => Array.isArray(node) ? node.map(clone) : node
-
-/** Walk depth-first pre-order, read-only. fn(node, parent, idx). */
-const walk = (node, fn, parent, idx) => {
-  fn(node, parent, idx)
-  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walk(node[i], fn, node, i)
-}
-
-/** Walk depth-first post-order. fn may return a replacement node or mutate in place. */
-const walkPost = (node, fn, parent, idx) => {
-  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) walkPost(node[i], fn, node, i)
-  const result = fn(node, parent, idx)
-  if (result !== undefined && parent) parent[idx] = result
-  return result !== undefined ? result : node
-}
-
-/** Result value type of an op from its name prefix (formerly watr/const.js).
- *  Comparisons/eqz on scalar int/float collapse to i32; else the name prefix. */
-const resultType = (op) => {
-  if (typeof op !== 'string') return null
-  const dot = op.indexOf('.')
-  if (dot < 0) return null
-  const prefix = op.slice(0, dot)
-  const scalar = prefix === 'i32' || prefix === 'i64' || prefix === 'f32' || prefix === 'f64'
-  if (scalar && /^(eqz?|ne|[lg][te])(_[su])?$/.test(op.slice(dot + 1))) return 'i32'
-  if (scalar || prefix === 'v128') return prefix
-  if (op === 'memory.size' || op === 'memory.grow') return 'i32'
-  return null
-}
 
 /**
  * Recursively count AST nodes — fast size heuristic without compiling.
@@ -147,13 +117,22 @@ const treeshake = (ast) => {
 
   let funcIdx = 0, globalIdx = 0, typeIdx = 0, tableIdx = 0, memIdx = 0
   const elems = [], data = [], exports = [], starts = []
+  // Highest index referenced by a bare NUMERAL per space, from surviving sites only.
+  // Removing entry i shifts every later index down, so numeric refs cap removal:
+  // only entries above the cap may be dropped (named refs re-resolve; numerals don't).
+  const numRef = { func: -1, global: -1, type: -1, table: -1, memory: -1 }
+  // Inline-import defs ((global $g (import …) …)) occupy the import-first region of the
+  // binary index space, so declaration-order idx diverges from binary idx — numeric
+  // comparisons are unreliable there. Numeric refs + inline imports → freeze the space.
+  const inlineImport = { func: false, global: false, type: false }
 
   for (const node of ast.slice(1)) {
     if (!Array.isArray(node)) continue
     const kind = node[0]
+    const inlImp = node.some(s => Array.isArray(s) && s[0] === 'import')
     if (kind === 'type')   register(types,   node, typeIdx++)
-    else if (kind === 'func')   register(funcs,   node, funcIdx++)
-    else if (kind === 'global') register(globals, node, globalIdx++)
+    else if (kind === 'func')   register(funcs,   node, funcIdx++), inlImp && (inlineImport.func = true)
+    else if (kind === 'global') register(globals, node, globalIdx++), inlImp && (inlineImport.global = true)
     else if (kind === 'table')  register(tables,  node, tableIdx++)
     else if (kind === 'memory') register(memories, node, memIdx++)
     else if (kind === 'import') {
@@ -172,20 +151,23 @@ const treeshake = (ast) => {
     else if (kind === 'data') data.push(node)
   }
 
-  // Worklist: function entries whose body still needs to be scanned for refs.
+  // Worklist: entries (funcs, globals, tables, types) whose node awaits a ref scan.
   const work = []
   const enqueue = (entry) => { if (entry && !entry.scanned) work.push(entry) }
-  const markFunc = (ref) => {
-    const e = funcs.get(ref); if (!e) return
-    if (!e.used) e.used = true
-    enqueue(e)
+  // Resolve a ref, coercing bare numerals ('3' → 3) onto the shared idx key and
+  // recording the numeric-removal cap for the space.
+  const deref = (map, space, ref) => {
+    if (typeof ref === 'string' && ref[0] !== '$' && ref !== '' && !isNaN(ref)) ref = +ref
+    if (typeof ref === 'number') numRef[space] = Math.max(numRef[space], ref)
+    return map.get(ref)
   }
-  const markGlobal = (ref) => { const e = globals.get(ref); if (e) e.used = true }
-  const markTable  = (ref) => { const e = tables.get(ref);  if (e) e.used = true }
-  const markMemory = (ref) => { if (typeof ref === 'string' && ref[0] !== '$') ref = +ref; const e = memories.get(ref); if (e) e.used = true }
-  const markType   = (ref) => { const e = types.get(ref);   if (e) e.used = true }
+  const markFunc   = (ref) => { const e = deref(funcs, 'func', ref); if (e) e.used = true, enqueue(e) }
+  const markGlobal = (ref) => { const e = deref(globals, 'global', ref); if (e) e.used = true, enqueue(e) }
+  const markTable  = (ref) => { const e = deref(tables, 'table', ref); if (e) e.used = true, enqueue(e) }
+  const markMemory = (ref) => { const e = deref(memories, 'memory', ref); if (e) e.used = true }
+  const markType   = (ref) => { const e = deref(types, 'type', ref); if (e) e.used = true, enqueue(e) }
 
-  // Roots: explicit exports, start funcs, elem-referenced funcs, inline-exported items.
+  // Roots: explicit exports, start funcs, elem/data segments, inline-exported items.
   for (const exp of exports) {
     for (const sub of exp) {
       if (!Array.isArray(sub)) continue
@@ -196,22 +178,28 @@ const treeshake = (ast) => {
       else if (kind === 'memory') markMemory(ref)
     }
   }
-  for (const start of starts) {
-    let ref = start[1]
-    if (typeof ref === 'string' && ref[0] !== '$') ref = +ref
-    markFunc(ref)
-  }
+  for (const start of starts) markFunc(start[1])
   for (const elem of elems) {
-    walk(elem, n => {
-      if (Array.isArray(n) && n[0] === 'ref.func') markFunc(n[1])
-      else if (typeof n === 'string' && n[0] === '$') markFunc(n)
-    })
+    // (elem declare? (table t)? offset-expr? reftype? item*) — items are bare
+    // $names/numerals or (item …)/(ref.func …) exprs; offsets may read globals.
+    for (const part of elem.slice(1)) {
+      if (Array.isArray(part)) {
+        if (part[0] === 'table') markTable(part[1])
+        else walk(part, n => {
+          if (Array.isArray(n) && n[0] === 'ref.func') markFunc(n[1])
+          else if (Array.isArray(n) && n[0] === 'global.get') markGlobal(n[1])
+          else if (typeof n === 'string' && n[0] === '$') markFunc(n)
+        })
+      }
+      else if (typeof part === 'string' && part !== 'func' && part !== 'declare' && (part[0] === '$' || !isNaN(part))) markFunc(part)
+    }
   }
   for (const d of data) {
     const first = d[1]
     if (Array.isArray(first) && first[0] === 'memory') markMemory(first[1])
     else if (typeof first === 'string' && first[0] === '$') markMemory(first)
     else if (Array.isArray(first)) markMemory(0)
+    walk(d, n => { if (Array.isArray(n) && n[0] === 'global.get') markGlobal(n[1]) })
   }
   for (const m of [funcs, globals, tables, memories]) for (const e of m.values()) if (e.used) enqueue(e)
 
@@ -223,23 +211,38 @@ const treeshake = (ast) => {
     return ast
   }
 
-  // Drain worklist: each function body gets walked exactly once.
+  // Drain worklist: each live node (func body, global/table init, type def) is
+  // walked exactly once. IMM (the instruction registry's immediate types) says
+  // which index space an op's first immediate addresses — one source of truth
+  // for call/ref.func/global.get/struct.new/call_ref/…, named or numeric.
   while (work.length) {
     const entry = work.pop()
     if (entry.scanned) continue
     entry.scanned = true
     if (entry.isImport) continue
-    walk(entry.node, n => {
+    walk(entry.node, (n, parent, idx) => {
       if (!Array.isArray(n)) {
-        if (typeof n === 'string' && n[0] === '$') markFunc(n)
+        // Bare $name (flat-form immediate, label, any position): the flat style
+        // gives no structure to say which space it addresses — mark them all.
+        // A named global.set target is exempt: a write alone doesn't keep a
+        // global alive (its decl + sets are dropped together below).
+        if (typeof n === 'string' && n[0] === '$' && !(parent?.[0] === 'global.set' && idx === 1))
+          markFunc(n), markGlobal(n), markTable(n), markMemory(n), markType(n)
         return
       }
       const [op, ref] = n
-      if (op === 'call' || op === 'return_call' || op === 'ref.func') markFunc(ref)
-      else if (op === 'global.get' || op === 'global.set') markGlobal(ref)
-      else if (op === 'type') markType(ref)
-      else if (op === 'call_indirect' || op === 'return_call_indirect') {
-        for (const sub of n) if (typeof sub === 'string' && sub[0] === '$') markTable(sub)
+      if (op === 'type') return markType(ref)
+      if (op === 'call_indirect' || op === 'return_call_indirect') {
+        for (const sub of n) if (typeof sub === 'string' && sub[0] === '$') return markTable(sub)
+        return markTable(0) // implicit table 0
+      }
+      if (op === 'global.set') { if (!(typeof ref === 'string' && ref[0] === '$')) markGlobal(ref); return }
+      const imm = typeof op === 'string' ? IMM[op] : null
+      if (imm) {
+        if (imm.startsWith('funcidx')) markFunc(ref)
+        else if (imm.startsWith('globalidx')) markGlobal(ref)
+        else if (imm.startsWith('typeidx')) markType(ref)
+        else if (imm.startsWith('tableidx')) markTable(ref)
       }
       if (typeof op === 'string' && (op.startsWith('memory.') || op.includes('.load') || op.includes('.store'))) {
         markMemory(0)
@@ -247,26 +250,32 @@ const treeshake = (ast) => {
     })
   }
 
+  // Removal gate: unused AND above the space's numeric-ref cap (nothing numeric shifts).
+  const cap = (space) => inlineImport[space] && numRef[space] >= 0 ? Infinity : numRef[space]
+  const droppable = (sub, space) => { const e = nodeMap.get(sub); return e && !e.used && e.idx > cap(space) }
+
   // Filter: keep used definitions. nodeMap handles unnamed entries directly.
   const result = ['module']
+  const deadGlobals = new Set() // named write-only globals whose decl is dropped
   for (const node of ast.slice(1)) {
     if (!Array.isArray(node)) { result.push(node); continue }
     const kind = node[0]
     if (kind === 'func' || kind === 'global' || kind === 'type') {
-      if (nodeMap.get(node)?.used) result.push(node)
+      if (!droppable(node, kind)) result.push(node)
+      else if (kind === 'global' && typeof node[1] === 'string' && node[1][0] === '$') deadGlobals.add(node[1])
     } else if (kind === 'import') {
-      // Keep import only if any of its sub-items is used.
-      let used = false
-      for (const sub of node) {
-        if (!Array.isArray(sub)) continue
-        const e = nodeMap.get(sub)
-        if (e?.used) { used = true; break }
-      }
-      if (used) result.push(node)
+      // Keep import unless every tracked sub-item is droppable (untracked kinds — tag — stay).
+      const subs = node.filter(sub => Array.isArray(sub) && nodeMap.has(sub))
+      if (!subs.length || subs.some(sub => !droppable(sub, sub[0]))) result.push(node)
     } else {
       result.push(node)
     }
   }
+  // Neuter writes to dropped write-only globals: (global.set $dead V) → (drop V)
+  // (vacuum erases the drop when V is pure).
+  if (deadGlobals.size) walkPost(result, n => {
+    if (Array.isArray(n) && n[0] === 'global.set' && deadGlobals.has(n[1])) return ['drop', n[2]]
+  })
   return result
 }
 
@@ -640,7 +649,13 @@ const fold = (ast) => {
       if (!a) return
       const r = fn(a.value)
       if (r === null || r === undefined) return
-      return makeConst(resultType(node[0]), r)
+      // Never inflate: a fixed-width f32/f64.const (5/9 B) or wide-sleb i64.const can
+      // out-size the 1-byte op + small const it replaces — (f32.convert_i32_s
+      // (i32.const 22)) is 4 B, (f32.const 22) is 5 B. The driver's mayInline fast
+      // path (and standalone pass callers) rely on fold being monotonic.
+      const out = makeConst(resultType(node[0]), r)
+      if (constInstrSize(out) > 1 + constInstrSize(node[1])) return
+      return out
     }
     // Binary
     if (node.length === 3) {
@@ -648,7 +663,11 @@ const fold = (ast) => {
       if (!a || !b) return
       const r = fn(a.value, b.value)
       if (r === null || r === undefined) return
-      return makeConst(resultType(node[0]), r)
+      // same monotonicity gate: e.g. (i64.shl (i64.const 1) (i64.const 63)) is 5 B,
+      // its folded i64.const is 11 B
+      const out = makeConst(resultType(node[0]), r)
+      if (constInstrSize(out) > 1 + constInstrSize(node[1]) + constInstrSize(node[2])) return
+      return out
     }
   })
 }
@@ -1102,46 +1121,35 @@ const deadcode = (ast) => {
 }
 
 /**
- * Remove instructions after terminators within a block.
+ * Remove instructions after the first terminator within a block.
+ *
+ * Depth-aware of WAT's flat (unfolded) control style, which parse keeps as bare
+ * sibling STRINGS: 'block'/'loop'/'if' open a sub-block whose matching bare 'end'
+ * closes a live branch-landing label — a terminator inside it only ends that
+ * sub-block's own tail, and anything after a bare 'end'/'else' is reachable again
+ * (Duff's-device br_table dispatch relies on exactly this). So a cut only starts
+ * at depth 0 and is cancelled by any later flat landing token.
+ * Bare 'br'/'br_table' strings carry their immediates as following siblings, so
+ * they never start a cut (their extent is unknowable here); folded arrays and the
+ * immediate-less 'return'/'unreachable' do.
  * @param {Array} block
  */
 const eliminateDeadInBlock = (block) => {
-  let terminated = false
-  let firstTerminator = -1
-
+  let cut = -1, depth = 0
   for (let i = 1; i < block.length; i++) {
-    const node = block[i]
-
-    // Skip type annotations
-    if (Array.isArray(node)) {
-      const op = node[0]
-      if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') continue
-
-      if (terminated) {
-        if (firstTerminator === -1) firstTerminator = i
-      }
-
-      if (TERMINATORS.has(op)) {
-        terminated = true
-        firstTerminator = i + 1
-      }
-    } else if (typeof node === 'string') {
-      // String instructions like 'unreachable', 'return', 'drop', 'nop'
-      if (terminated) {
-        if (firstTerminator === -1) firstTerminator = i
-      }
-
-      if (TERMINATORS.has(node)) {
-        terminated = true
-        firstTerminator = i + 1
-      }
+    const node = block[i], op = Array.isArray(node) ? node[0] : node
+    if (typeof op !== 'string') continue
+    // skip head annotations
+    if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') continue
+    if (typeof node === 'string') {
+      if (op === 'block' || op === 'loop' || op === 'if') { depth++; continue }
+      if (op === 'end') { depth && depth--, cut = -1; continue }
+      if (op === 'else') { cut = -1; continue }
     }
+    if (depth || cut >= 0) continue
+    if (TERMINATORS.has(op) && (Array.isArray(node) || op === 'return' || op === 'unreachable')) cut = i + 1
   }
-
-  // Remove dead code
-  if (firstTerminator > 0 && firstTerminator < block.length) {
-    block.splice(firstTerminator)
-  }
+  if (cut > 0 && cut < block.length) block.splice(cut)
 }
 
 // ==================== LOCAL REUSE ====================
@@ -1229,6 +1237,9 @@ const IMPURE_SUBSTRINGS = ['.store', 'memory.', '.atomic.']
  * Conservative — returns false for anything that might trap, mutate state, or branch.
  */
 const isPure = (node) => {
+  // A bare string can be a stack-style INSTRUCTION token ('return', 'drop', …), not
+  // just an immediate — judge it by the same op tables as the folded form.
+  if (typeof node === 'string') return !IMPURE_OPS.has(node) && !IMPURE_SUBSTRINGS.some(s => node.includes(s))
   if (!Array.isArray(node)) return true
   const op = node[0]
   if (typeof op !== 'string') return false
@@ -1538,61 +1549,74 @@ const forwardPropagate = (funcNode, params, useCounts) => {
 }
 
 /**
- * Remove adjacent (local.set $x expr) (local.get $x) pairs when $x has no other uses.
- * Returns true if any pair was removed.
- * @param {Array} funcNode
+ * Sink (local.set $x V) into the next statement when that statement's FIRST-evaluated
+ * instruction is (local.get $x): sole-use pairs substitute V outright, multi-use ones
+ * fuse into (local.tee $x V). Subsumes the old adjacent-only set/get-pair and tee
+ * passes — the get may sit arbitrarily deep (call argument, store address, br_if
+ * condition) as long as it is on the first-evaluated path, which keeps V's
+ * evaluation order identical.
+ * @param {Array} funcNode - straight-line scope (body / block / then / else)
  * @param {Set<string>} params
  * @param {Map<string,{gets:number,sets:number,tees:number}>} useCounts
  */
-const eliminateSetGetPairs = (funcNode, params, useCounts) => {
+const sinkSets = (funcNode, params, useCounts) => {
   let changed = false
 
   for (let i = 1; i < funcNode.length - 1; i++) {
     const setNode = funcNode[i]
-    const getNode = funcNode[i + 1]
-    if (!Array.isArray(setNode) || setNode[0] !== 'local.set' || setNode.length !== 3) continue
-    if (!Array.isArray(getNode) || getNode[0] !== 'local.get' || getNode.length !== 2) continue
+    // node[2] must be the folded value EXPRESSION — a bare string there is a
+    // trailing stack-style instruction riding the same node, not a value
+    if (!Array.isArray(setNode) || setNode[0] !== 'local.set' || setNode.length !== 3 || !Array.isArray(setNode[2])) continue
     const name = setNode[1]
-    if (getNode[1] !== name || params.has(name)) continue
+    if (params.has(name)) continue
+    // the get may BE the whole next statement (the classic adjacent pair), or sit
+    // on its first-evaluated path
+    const nxt = funcNode[i + 1]
+    const hit = Array.isArray(nxt) && nxt[0] === 'local.get' && nxt[1] === name && nxt.length === 2
+      ? [funcNode, i + 1] : firstEvalGet(nxt, name)
+    if (!hit) continue
     const uses = useCounts.get(name) || { gets: 0, sets: 0, tees: 0 }
-    // Must be exactly 1 set and 1 get (the pair), no tees
-    if (uses.sets !== 1 || uses.gets !== 1 || uses.tees !== 0) continue
-    // Replace the pair with just the expression
-    const expr = clone(setNode[2])
-    funcNode.splice(i, 2, ...(Array.isArray(expr) ? [expr] : [expr]))
+    // Sole set+get pair → substitute the value outright (decl dies next sweep);
+    // otherwise fuse into a tee at the get site. Either way the value's evaluation
+    // point is unchanged — the get was the first instruction executed after the set.
+    const single = uses.sets === 1 && uses.gets === 1 && uses.tees === 0
+    hit[0][hit[1]] = single ? clone(setNode[2]) : ['local.tee', name, clone(setNode[2])]
+    funcNode.splice(i, 1)
     changed = true
-    i-- // adjust index because we removed 2 and inserted 1
+    i--
   }
 
   return changed
 }
 
 /**
- * Convert (local.set $x expr) (local.get $x) to (local.tee $x expr)
- * when $x has additional uses beyond this pair.
- * @param {Array} funcNode
- * @param {Set<string>} params
- * @param {Map<string,{gets:number,sets:number,tees:number}>} useCounts
+ * Locate the (local.get $name) that is provably the FIRST instruction executed in
+ * `stmt`, descending the first-evaluated path: at each level the first non-immediate
+ * (array) child of a left-to-right op is what runs first. Annotation heads are
+ * skipped; bodies that are entered conditionally or repeatedly (then/else arms,
+ * loops, try_table) are opaque — descent stops there. → [parent, idx] or null.
  */
-const createLocalTees = (funcNode, params, useCounts) => {
-  let changed = false
-
-  for (let i = 1; i < funcNode.length - 1; i++) {
-    const setNode = funcNode[i]
-    const getNode = funcNode[i + 1]
-    if (!Array.isArray(setNode) || setNode[0] !== 'local.set' || setNode.length !== 3) continue
-    if (!Array.isArray(getNode) || getNode[0] !== 'local.get' || getNode.length !== 2) continue
-    const name = setNode[1]
-    if (getNode[1] !== name || params.has(name)) continue
-    const uses = useCounts.get(name) || { gets: 0, sets: 0, tees: 0 }
-    // Only if there's more than just this set+get pair
-    if (uses.sets + uses.gets + uses.tees <= 2) continue
-    // Replace with local.tee (set+get combined)
-    funcNode.splice(i, 2, ['local.tee', name, clone(setNode[2])])
-    changed = true
+const firstEvalGet = (stmt, name) => {
+  let cur = stmt
+  while (Array.isArray(cur)) {
+    // Bodies (re-)entered conditionally or repeatedly are opaque — checked on the
+    // node ITSELF, so a statement that IS a loop is rejected up front (its "first"
+    // instruction runs once per iteration, not once).
+    const h = cur[0]
+    if (h === 'loop' || h === 'then' || h === 'else' || h === 'try_table') return null
+    let child = null, ci = -1
+    for (let i = 1; i < cur.length; i++) {
+      const c = cur[i]
+      if (!Array.isArray(c)) continue // strings/numbers: immediates, labels, memargs
+      const ch = c[0]
+      if (ch === 'result' || ch === 'param' || ch === 'type' || ch === 'local' || ch === 'export') continue
+      child = c, ci = i; break
+    }
+    if (!child) return null
+    if (child[0] === 'local.get') return child[1] === name ? [cur, ci] : null
+    cur = child
   }
-
-  return changed
+  return null
 }
 
 /**
@@ -1693,19 +1717,20 @@ const propagate = (ast) => {
     const scopes = []
     walkPost(funcNode, n => { if (isScopeNode(n)) scopes.push(n) })
 
-    // One use-count per round, shared by every scope: substitutions only ever
-    // *drop* gets, so a stale count can only make a sub-pass act more cautiously
-    // (skip a not-yet-provably-dead store, decline a not-yet-provably-single use) —
-    // never wrongly. The next round re-counts and mops up. (Recounting per sub-pass
-    // per scope is O(scopes·funcSize) and crippling on big modules.)
+    // One use-count per propagation sweep: for the cautious sub-passes a stale count
+    // only over-counts (skip a not-yet-provably-dead store) — never wrongly. The
+    // exception is sinkSets' sole-use substitution: copy-propagation REPLICATES gets
+    // of a copy's source local, so an under-count there would orphan a surviving get —
+    // recount once after the propagation sweep before sinking. (Recounting per
+    // sub-pass per scope is O(scopes·funcSize) and crippling on big modules.)
     for (let round = 0; round < MAX_PROP_ROUNDS; round++) {
       const useCounts = countLocalUses(funcNode)
       let progressed = false
+      for (const scope of scopes) if (forwardPropagate(scope, params, useCounts)) progressed = true
+      const counts = progressed ? countLocalUses(funcNode) : useCounts
       for (const scope of scopes) {
-        if (forwardPropagate(scope, params, useCounts)) progressed = true
-        if (eliminateSetGetPairs(scope, params, useCounts)) progressed = true
-        if (createLocalTees(scope, params, useCounts)) progressed = true
-        if (eliminateDeadStores(scope, params, useCounts)) progressed = true
+        if (sinkSets(scope, params, counts)) progressed = true
+        if (eliminateDeadStores(scope, params, counts)) progressed = true
         if (eliminateAdjacentDeadStores(scope, params)) progressed = true
       }
       if (!progressed) break
@@ -1735,7 +1760,13 @@ const inlBodyStart = (fn) => {
 const inlIsBranch = op => op === 'br' || op === 'br_if' || op === 'br_table'
 // A subtree we can't lift into a (block …): depth-relative branch labels (which would
 // shift under the added nesting) or tail calls (which would escape the wrapping block).
+// Flat (unfolded) control tokens can't be relabeled under the inline wrapper's added
+// nesting — bodies carrying them don't lift. Bare 'return' is exempt: buildInline
+// rewrites it to a br. Bare value ops ('drop', 'i32.add', …) are position-independent.
+const FLAT_CTRL = new Set(['block', 'loop', 'if', 'else', 'end', 'br', 'br_if', 'br_table',
+  'try_table', 'catch', 'catch_all', 'delegate', 'rethrow', 'return_call', 'return_call_indirect'])
 const inlUnsafe = (n) => {
+  if (typeof n === 'string') return FLAT_CTRL.has(n)
   if (!Array.isArray(n)) return false
   const op = n[0]
   if (op === 'return_call' || op === 'return_call_indirect' || op === 'return_call_ref') return true
@@ -1874,6 +1905,7 @@ const buildInline = (params, locals, inlResult, cBody, args) => {
   }
   for (const n of cBody) collectLabels(n)
   const sub = (n) => {
+    if (n === 'return') return ['br', exit] // bare stack-style return — value already on stack
     if (!Array.isArray(n)) return n
     const op = n[0]
     if ((op === 'local.get' || op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string' && rename.has(n[1]))
@@ -2741,6 +2773,15 @@ const vacuum = (ast) => {
       if (elseBranch && elseEmpty && !thenEmpty) {
         return node.filter(c => c !== elseBranch)
       }
+
+      // (if cond (then) (else X)) → (if (i32.eqz cond) (then X)) — void ifs only
+      // (a result-typed if needs both arms); the eqz byte costs less than the
+      // else marker + arm framing it removes.
+      if (thenEmpty && thenBranch && elseBranch && !elseEmpty && Array.isArray(cond) &&
+          !node.some(c => Array.isArray(c) && c[0] === 'result')) {
+        return node.filter(c => c !== thenBranch && c !== elseBranch && c !== cond)
+          .concat([['i32.eqz', cond], ['then', ...elseBranch.slice(1)]])
+      }
     }
 
     // Clean out nops, drop-of-pure sequences, and empty annotations from blocks
@@ -2866,8 +2907,9 @@ const peephole = (ast) => {
 
 /** Bytes a signed-LEB128 integer encodes to. */
 const slebSize = (v) => {
+  // BigInt() rejects signed hex ('-0x1', '+0x2') — strip the sign and reapply.
   let x = typeof v === 'bigint' ? v
-    : typeof v === 'string' ? BigInt(v.replaceAll('_', ''))
+    : typeof v === 'string' ? (v = v.replaceAll('_', ''), v[0] === '-' ? -BigInt(v.slice(1)) : BigInt(v[0] === '+' ? v.slice(1) : v))
     : BigInt(Math.trunc(Number(v) || 0))
   // Signed view of raw bits — exact natively; in-kernel the arm is dead
   // (BigInt('0x…') already arrives as the signed i64 carrier there).
@@ -3041,9 +3083,53 @@ const offset = (ast) => {
  * @returns {Array}
  */
 const unbranch = (ast) => {
+  // Func names/indices whose signature has no result — their calls are stack-neutral
+  // statements for the trailing-return check below.
+  const voidFuncs = new Set()
+  if (Array.isArray(ast) && ast[0] === 'module') {
+    for (const n of ast.slice(1)) {
+      if (!Array.isArray(n)) continue
+      const fn = n[0] === 'func' ? n : n[0] === 'import' ? n.find(s => Array.isArray(s) && s[0] === 'func') : null
+      if (!fn) continue
+      // Named only: declaration order diverges from binary index under inline
+      // imports, so numeric call refs are never trusted here.
+      if (typeof fn[1] === 'string' && fn[1][0] === '$' &&
+          !fn.some(c => Array.isArray(c) && (c[0] === 'result' || c[0] === 'type'))) voidFuncs.add(fn[1])
+    }
+  }
+  // A statement that provably leaves nothing on the stack. `return` mid-body is fine
+  // (dead tail); anything unrecognized — including bare tokens — bails the transform.
+  const stackNeutral = (n) => {
+    if (n === 'nop' || n === 'unreachable' || n === 'return') return true
+    if (!Array.isArray(n)) return false
+    const op = n[0]
+    if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') return true
+    if (op === 'local.set' || op === 'global.set' || op === 'drop' || op === 'nop' || op === 'return' ||
+        op === 'br' || op === 'unreachable' || op === 'memory.copy' || op === 'memory.fill' ||
+        op === 'store' || op?.includes?.('.store')) return true
+    if (op === 'br_if') return n.length <= 3 // (br_if l cond) — no extra value operand
+    if (op === 'block' || op === 'loop' || op === 'if')
+      return !n.some(c => Array.isArray(c) && c[0] === 'result')
+    if (op === 'call') return voidFuncs.has(n[1])
+    return false
+  }
   walk(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
+    // A `return` as a function's LAST instruction is the func-level twin: falling off
+    // the body returns anyway, so `(return v…)` there just leaves v… as the result.
+    // Sound only when every earlier statement is stack-neutral: `return` DISCARDS any
+    // extra stack values, fall-through does not.
+    if (op === 'func') {
+      const last = node[node.length - 1]
+      const isRet = last === 'return' ? 1 : Array.isArray(last) && last[0] === 'return' ? 2 : 0
+      if (!isRet || !node.slice(1, -1).every(stackNeutral)) return
+      // bare `return` returns the values already on the stack — elidable only for a
+      // void func (a value-returning bare return implies a non-neutral producer anyway)
+      if (isRet === 1) node.pop()
+      else node.splice(node.length - 1, 1, ...last.slice(1))
+      return
+    }
     // Loops: `br $loop_label` jumps BACK to loop top (continue), not out.
     // Only `block` allows trailing-br elision because `br $block_label` exits the block.
     if (op !== 'block') return
@@ -3200,6 +3286,12 @@ const stripmut = (ast) => {
  * @param {Array} ast
  * @returns {Array}
  */
+// Dissolving an `if` removes one level of branch-target nesting (the if's own
+// implicit label). A $name label re-resolves relative to its new depth, but a raw
+// numeric (depth-relative) label goes stale and must drop by 1. Label 0 targets the
+// if's own end — no equivalent exists one level up, so that shape is not rewritten.
+const unnest = (l) => typeof l === 'string' && l[0] === '$' ? l : +l > 0 ? +l - 1 : null
+
 const brif = (ast) => {
   return walkPost(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'if') return
@@ -3209,14 +3301,14 @@ const brif = (ast) => {
 
     // (if cond (then (br $l))) → (br_if $l cond)
     if (!thenEmpty && elseEmpty && thenBranch.length === 2) {
-      const t = thenBranch[1]
-      if (Array.isArray(t) && t[0] === 'br' && t.length === 2) return ['br_if', t[1], cond]
+      const t = thenBranch[1], l = Array.isArray(t) && t[0] === 'br' && t.length === 2 && unnest(t[1])
+      if (l != null && l !== false) return ['br_if', l, cond]
     }
 
     // (if cond (then) (else (br $l))) → (br_if $l (i32.eqz cond))
     if (thenEmpty && !elseEmpty && elseBranch.length === 2) {
-      const e = elseBranch[1]
-      if (Array.isArray(e) && e[0] === 'br' && e.length === 2) return ['br_if', e[1], ['i32.eqz', cond]]
+      const e = elseBranch[1], l = Array.isArray(e) && e[0] === 'br' && e.length === 2 && unnest(e[1])
+      if (l != null && l !== false) return ['br_if', l, ['i32.eqz', cond]]
     }
   })
 }
@@ -3665,7 +3757,53 @@ const packData = (ast) => {
     ast = ast.filter((_, i) => !toRemove.has(i))
   }
 
-  return ast
+  // Split active segments at long interior zero runs and shift leading zeros into
+  // the offset — unwritten memory is zero-initialized anyway. Sound only when no
+  // instruction references data indices (splitting renumbers segments) and no
+  // memory is imported (an import's pre-existing bytes must be overwritten, not
+  // skipped). Named segments are left whole (a name implies index identity).
+  let refsData = false, importedMem = false
+  walk(ast, n => {
+    const op = Array.isArray(n) ? n[0] : n
+    if (op === 'memory.init' || op === 'data.drop' || op === 'array.new_data' || op === 'array.init_data') refsData = true
+    if (!Array.isArray(n)) return
+    if ((op === 'import' || op === 'memory') && n.some(s => Array.isArray(s) && (s[0] === 'memory' || s[0] === 'import'))) importedMem = true
+  })
+  if (refsData || importedMem) return ast
+
+  const out = []
+  for (const node of ast) {
+    if (!Array.isArray(node) || node[0] !== 'data' || (typeof node[1] === 'string' && node[1][0] === '$')) { out.push(node); continue }
+    let idx = 1
+    const mem = Array.isArray(node[idx]) && node[idx][0] === 'memory' ? node[idx++] : null
+    const off = node[idx]
+    if (!Array.isArray(off) || (off[0] !== 'i32.const' && off[0] !== 'i64.const')) { out.push(node); continue }
+    const items = node.slice(idx + 1)
+    if (!items.length || !items.every(s => typeof s === 'string')) { out.push(node); continue }
+    const bytes = items.flatMap(parseDataString)
+    const base = Number(off[1])
+    // collect [start, end) pieces separated by zero runs longer than the cost of a
+    // fresh segment header (mode + offset expr + end + length prefix)
+    const pieces = []
+    let s = -1
+    for (let i = 0; i <= bytes.length; i++) {
+      if (i < bytes.length && bytes[i] !== 0) { s < 0 && (s = i); continue }
+      if (s < 0) continue
+      // extend over short zero runs: find next nonzero
+      let j = i
+      while (j < bytes.length && bytes[j] === 0) j++
+      const segCost = 4 + slebSize(base + j) + 1
+      if (j - i > segCost || j >= bytes.length) pieces.push([s, i]), s = -1
+      i = j - 1
+    }
+    if (!pieces.length) continue // all zeros — segment is a no-op, drop it
+    if (pieces.length === 1 && pieces[0][0] === 0 && pieces[0][1] === bytes.length) { out.push(node); continue }
+    for (const [ps, pe] of pieces) {
+      const head = mem ? ['data', mem] : ['data']
+      out.push([...head, [off[0], String(base + ps)], encodeDataString(bytes.slice(ps), pe - ps)])
+    }
+  }
+  return out
 }
 
 // ==================== IMPORT FIELD MINIFICATION ====================
@@ -4107,9 +4245,27 @@ export default function optimize(ast, opts = true) {
     if (opts.coalesceLocals) a = coalesceLocals(a)
     return a
   }
+  // parse() returns [comment…, ['module',…]] when top-level trivia precedes the module —
+  // whole-module passes key on ast[0] === 'module' and would silently no-op on the wrapper.
+  // Run the pipeline on the module node itself and splice it back, so comments survive.
+  let wrapper = null, slot = -1
+  if (Array.isArray(ast) && ast[0] !== 'module') {
+    const i = ast.findIndex(n => Array.isArray(n) && n[0] === 'module')
+    if (i >= 0) wrapper = ast, slot = i, ast = ast[i]
+  }
+
   // licm runs ONCE after the rounds + inline: its invariants only exist after inlining, and a
   // later propagate round would forward a single-use hoist back into the loop, undoing it.
-  const finish = (a) => { a = runInline(a); if (opts.licm) a = licm(a); return pruneEmptyStart(opts.devirt ? devirt(a) : a) }
+  // devirt must run BEFORE licm: its collector pattern-matches the in-loop closure-const
+  // select chain feeding a call_indirect, and licm hoists exactly that chain into a local —
+  // hoist first and no call site ever devirtualizes (jz speed tier, closures devirt tests).
+  const finish = (a) => {
+    a = runInline(a)
+    if (opts.devirt) a = devirt(a)
+    if (opts.licm) a = licm(a)
+    a = pruneEmptyStart(a)
+    return wrapper ? (wrapper[slot] = a, wrapper) : a
+  }
 
   // Fast path: jz owns this optimizer and feeds it a controlled, type-aware IR.
   // The only passes that can *grow* the binary are inlineOnce/inline; when no

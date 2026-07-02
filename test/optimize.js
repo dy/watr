@@ -2045,12 +2045,14 @@ test('fold: i64.extend8_s', () => {
   assert(i64has(src, -1n), 'should fold i64 extend8_s(255) to -1')
 })
 
-test('fold: i64.reinterpret_f64 of constant', () => {
-  // 256.0 has IEEE 754 bit pattern 0x4070000000000000 = 4643211215818981376
-  const ast = parse('(module (func (result i64) (i64.reinterpret_f64 (f64.const 256))))')
-  const src = print(optimize(ast, 'fold'))
-  assert(i64has(src, 4643211215818981376n), 'reinterpret f64→i64 folded')
-  assert(!src.includes('reinterpret'), 'reinterpret op gone')
+test('fold: i64.reinterpret_f64 of constant stays monotone', () => {
+  // 256.0's bit pattern 0x4070000000000000 slebs to 10 B — folding would grow the
+  // 10-B op+f64.const to an 11-B i64.const, so fold must leave it (never-inflate
+  // invariant; NaN-payload reinterprets keep their own dedicated, ungated fold).
+  const src0 = '(module (func (result i64) (i64.reinterpret_f64 (f64.const 256))))'
+  const src = print(optimize(parse(src0), 'fold'))
+  assert(src.includes('reinterpret'), 'inflating reinterpret fold skipped')
+  assert(compile(optimize(parse(src0), 'fold')).length <= compile(parse(src0)).length)
 })
 
 test('fold: f64.reinterpret_i64 round-trip', () => {
@@ -2060,17 +2062,18 @@ test('fold: f64.reinterpret_i64 round-trip', () => {
   assert(!src.includes('reinterpret'), 'reinterpret op gone')
 })
 
-test('fold: f64.convert_i32_s', () => {
-  const ast = parse('(module (func (result f64) (f64.convert_i32_s (i32.const 65536))))')
-  const src = print(optimize(ast, 'fold'))
-  assert(src.includes('f64.const 65536'), 'convert i32→f64 folded')
+test('fold: f64.convert_i32_s stays monotone', () => {
+  // 1-B op + 4-B i32.const → 9-B f64.const would inflate; fold must skip it
+  const src0 = '(module (func (result f64) (f64.convert_i32_s (i32.const 65536))))'
+  const src = print(optimize(parse(src0), 'fold'))
+  assert(src.includes('f64.convert_i32_s'), 'inflating convert fold skipped')
+  assert(compile(optimize(parse(src0), 'fold')).length <= compile(parse(src0)).length)
 })
 
-test('fold: chained convert + reinterpret', () => {
-  // 65536 as f64 bit pattern: 0x40F0000000000000 = 4679240012837945344
-  const ast = parse('(module (func (result i64) (i64.reinterpret_f64 (f64.convert_i32_s (i32.const 65536)))))')
-  const src = print(optimize(ast, 'fold'))
-  assert(i64has(src, 4679240012837945344n), 'chained fold')
+test('fold: chained convert + reinterpret stays monotone', () => {
+  // the whole chain (6 B) is smaller than the folded 11-B i64.const — kept as-is
+  const src0 = '(module (func (result i64) (i64.reinterpret_f64 (f64.convert_i32_s (i32.const 65536)))))'
+  assert(compile(optimize(parse(src0), 'fold')).length <= compile(parse(src0)).length)
 })
 
 test('fold: i32.reinterpret_f32 of constant', () => {
@@ -2375,7 +2378,8 @@ test('size: default propagates single-use locals & tiny consts', () => {
     (local.set $k (i32.const 1000000))
     (i32.add (i32.add (local.get $k) (local.get $k)) (i32.add (local.get $k) (local.get $k)))
   ))`
-  assert(print(optimize(parse(reuse))).includes('local.set'), 'wide reused const stays in a local')
+  // the wide const must materialize exactly once (as a set or a tee), never per use
+  assert.equal(print(optimize(parse(reuse))).split('1000000').length - 1, 1, 'wide reused const written once')
 })
 
 test('size: empty module not inflated', () => {
@@ -2529,4 +2533,125 @@ test('size(nodes) equals full compile(nodes).length across features', () => {
     const measured = size(parse(src))                          // size-only peer function
     assert.equal(measured, exact, `measure ${measured} !== compile().length ${exact} for ${src.slice(0, 50)}`)
   }
+})
+
+// ==================== REGRESSIONS (optimizer soundness) ====================
+// Each test pins a repro-confirmed miscompile; the shapes are minimal versions of
+// the corpus failures (dino/brownian/maze/raycast/types) that exposed them.
+
+const run = (src, opts = true) => new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), opts)))).exports
+
+test('deadcode: flat block/end br_table arms survive (Duff dispatch)', () => {
+  const src = `(module (memory (export "m") 1) (func (export "f") (param $x i32)
+    block $b0 block $b1 (br_table $b1 $b0 (local.get $x)) end $b1
+      (i32.store (i32.const 0) (i32.const 11))
+    end $b0
+      (i32.store (i32.const 4) (i32.const 22))))`
+  const { f, m } = run(src, 'deadcode')
+  f(0)
+  const b = new Int32Array(m.buffer)
+  assert.equal(b[0], 11, 'arm 0 executed')
+  assert.equal(b[1], 22, 'fallthrough arm executed')
+})
+
+test('brif: numeric branch label survives losing the if nesting level', () => {
+  // (br 2) escapes if→loop→func; brif dissolves the if, so the numeral must drop to 1
+  const src = `(module (func (export "f") (local $i i32)
+    (local.set $i (i32.const 3))
+    (loop
+      (if (i32.eqz (local.get $i)) (then (br 2)))
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+      (br 0))))`
+  run(src, 'brif').f() // used to throw Bad label 2 at compile; also must terminate
+})
+
+test('fold: int→float const conversion never inflates', () => {
+  const src = '(module (func (export "f") (result f32) (f32.convert_i32_s (i32.const 22))))'
+  const base = compile(parse(src)).length
+  assert(compile(optimize(parse(src))).length <= base, 'optimize must not grow the binary')
+  assert.equal(run(src).f(), 22)
+})
+
+test('module passes fire under a leading top-level comment', () => {
+  const src = ';; banner\n(module (func $dead (result i32) (i32.const 1)) (func (export "f") (result i32) (i32.const 2)))'
+  const opt = optimize(parse(src))
+  assert(!print(opt).includes('$dead'), 'treeshake removes the dead func despite the comment wrapper')
+  assert.equal(run(src).f(), 2)
+})
+
+test('treeshake: bare-numeric refs cap removal below them', () => {
+  const src = `(module (global $g (mut i32) (i32.const 0))
+    (func $dead0 (result i32) (i32.const 9))
+    (func $init (global.set $g (i32.const 7)))
+    (start 1)
+    (func $dead2 (result i32) (i32.const 8))
+    (func (export "get") (result i32) (global.get $g)))`
+  const opt = optimize(parse(src))
+  const txt = print(opt)
+  assert(txt.includes('$dead0'), 'index below the numeric (start 1) ref must stay — removal would shift it')
+  assert(!txt.includes('$dead2'), 'index above the numeric ref is safely removable')
+  assert.equal(run(src).get(), 7, 'start still reaches $init')
+})
+
+test('treeshake: write-only global dies, its sets neutered', () => {
+  const src = `(module (global $w (mut i32) (i32.const 0))
+    (func (export "f") (result i32) (global.set $w (i32.const 5)) (i32.const 3)))`
+  const opt = optimize(parse(src))
+  assert(!print(opt).includes('global'), 'set-only global removed')
+  assert.equal(run(src).f(), 3)
+})
+
+test('sinkSets: a loop statement is opaque to first-eval sinking', () => {
+  // sinking (local.set $i 3) into the loop head would re-init $i every iteration
+  const src = `(module (func (export "f") (result i32) (local $i i32) (local $s i32)
+    (local.set $i (i32.const 3))
+    (loop $l
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+      (local.set $s (i32.add (local.get $s) (i32.const 1)))
+      (br_if $l (i32.and (i32.ne (local.get $i) (i32.const 0)) (i32.lt_s (local.get $s) (i32.const 100)))))
+    (local.get $s)))`
+  assert.equal(run(src).f(), 3)
+})
+
+test('propagate: copy fan-out cannot orphan a multi-use local', () => {
+  const src = `(module (func (export "f") (result i32) (local $a i32) (local $b i32) (local $c i32)
+    (local.set $a (i32.const 5))
+    (local.set $b (local.get $a))
+    (local.set $c (i32.add (local.get $b) (i32.const 1)))
+    (i32.add (local.get $c) (local.get $b))))`
+  assert.equal(run(src).f(), 11)
+})
+
+test('unbranch: func-tail return kept when it discards stack values', () => {
+  const src = '(module (func (export "f") (result i32) (i32.const 99) (return (i32.const 7))))'
+  assert.equal(run(src).f(), 7)
+})
+
+test('packData: interior zero runs split without changing memory image', () => {
+  const src = `(module (memory (export "m") 1)
+    (data (i32.const 0) "ab${'\\00'.repeat(40)}cd"))`
+  const base = compile(parse(src)).length
+  assert(compile(optimize(parse(src))).length < base, 'zero run replaced by a second segment')
+  const b = new Uint8Array(run(src).m.buffer)
+  assert.equal(String.fromCharCode(b[0], b[1], b[42], b[43]), 'abcd')
+  assert.equal(b[20], 0)
+})
+
+test('inlineOnce: callee with bare trailing return inlines correctly', () => {
+  const src = `(module
+    (func $inc (param $p i32) (result i32) (i32.add (local.get $p) (i32.const 1)) return)
+    (func (export "f") (result i32) (call $inc (i32.const 4))))`
+  const opt = optimize(parse(src))
+  assert(!print(opt).includes('call'), 'single-caller callee inlined')
+  assert.equal(run(src).f(), 5)
+})
+
+test('vacuum: empty-then if inverts into the else arm', () => {
+  const src = `(module (func (export "f") (param i32) (result i32) (local $r i32)
+    (if (local.get 0) (then) (else (local.set $r (i32.const 9))))
+    (local.get $r)))`
+  assert(print(optimize(parse(src), 'vacuum')).includes('i32.eqz'), 'condition inverted, else promoted')
+  const { f } = run(src)
+  assert.equal(f(0), 9)
+  assert.equal(f(1), 0)
 })
