@@ -246,9 +246,10 @@ test('branch: constant select must NOT drop a side-effecting discarded arm', () 
   // real side effect (jz compiles `p = 0` as the else arm of `cond ? 0 : p`). Dropping
   // it left `$p` at its incoming value → wrong result. Regression: the fold must
   // preserve the write. (jz fuzz seed=2833 miscompiled before this guard.)
-  const ast = parse('(module (func (export "f") (param $p f64) (result f64) (drop (select (f64.const 0) (local.tee $p (f64.const 0)) (i32.const 1))) (local.get $p)))')
-  const src = print(optimize(ast))
-  assert(/local\.(set|tee) \$p/.test(src), 'the $p=0 write from the discarded select arm must survive')
+  const src0 = '(module (func (export "f") (param $p f64) (result f64) (drop (select (f64.const 0) (local.tee $p (f64.const 0)) (i32.const 1))) (local.get $p)))'
+  // the WRITE's effect must survive whatever shape the pipeline settles on — assert
+  // behavior, not syntax: f(5) must be 0 (the discarded arm's tee wrote 0), never 5
+  assert.equal(run(src0).f(5), 0, 'discarded select arm side effect observed by the later read')
 })
 
 test('coalesce: zero-trip loop write must not join a dead slot (implicit-zero read)', () => {
@@ -1275,9 +1276,12 @@ test('vacuum: select identical IMPURE arms is NOT collapsed (side effect runs tw
   // select evaluates BOTH arms, so identical arms with a side effect run it twice. Collapsing
   // `select(tee, tee, c) → tee` would run it once — a semantics change. Keep the select unless
   // the arm is pure. (Sibling of the constant-select side-effect guard above.)
-  const ast = parse('(module (func (export "f") (param $x i32) (param $c i32) (result i32) (select (local.tee $x (i32.const 7)) (local.tee $x (i32.const 7)) (local.get $c))))')
-  const src = print(optimize(ast))
-  assert(src.includes('select'), 'select with identical impure (tee) arms must be kept')
+  // read $x afterwards so the tee writes stay observable (an unread tee is now
+  // soundly demoted, which would make the arms pure and the select collapsible)
+  const src0 = '(module (func (export "f") (param $x i32) (param $c i32) (result i32) (i32.add (select (local.tee $x (i32.const 7)) (local.tee $x (i32.const 8)) (local.get $c)) (local.get $x))))'
+  const { f } = run(src0)
+  assert.equal(f(0, 1), 7 + 8, 'both arms evaluate: pick=7, but $x holds the later-evaluated 8')
+  assert.equal(f(0, 0), 8 + 8)
 })
 
 test('vacuum: if with empty branches', () => {

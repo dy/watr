@@ -1762,7 +1762,7 @@ const sinkSets = (funcNode, params, useCounts) => {
     // trailing stack-style instruction riding the same node, not a value
     if (!Array.isArray(setNode) || setNode[0] !== 'local.set' || setNode.length !== 3 || !Array.isArray(setNode[2])) continue
     const name = setNode[1]
-    if (params.has(name)) continue
+    if (typeof name !== 'string') continue // params sink like locals: past this set the argument value is dead
     const val = setNode[2]
     // The landing site is the statement that first touches $name — a PURE value may
     // cross up to a few non-interfering statements to reach it (bounded lookahead:
@@ -1794,8 +1794,9 @@ const sinkSets = (funcNode, params, useCounts) => {
       }
       // only a PURE value crosses; interference blocks
       let bad = !vPure || (vMem && writesMemory(stmt))
-      if (!bad) walk(stmt, n => {
-        if (!Array.isArray(n)) { if (typeof n === 'string' && OPCODE[n] !== undefined) bad = true; return }
+      if (!bad) walk(stmt, (n, parent, idx) => {
+        // op-position strings are the folded node's own mnemonic, not flat tokens
+        if (!Array.isArray(n)) { if (idx !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) bad = true; return }
         const o = n[0]
         if ((o === 'local.set' || o === 'local.tee') && vLocals.has(n[1])) bad = true
         else if (o === 'global.set' && vGlobals.has(n[1])) bad = true
@@ -1875,7 +1876,7 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
   // the stack is all that matters, so unwrap it (the decl dies via the unused sweep).
   walkPost(funcNode, n => {
     if (Array.isArray(n) && n[0] === 'local.tee' && n.length === 3 &&
-        typeof n[1] === 'string' && !params.has(n[1]) && getPostUseCount(n[1]).gets === 0) {
+        typeof n[1] === 'string' && getPostUseCount(n[1]).gets === 0) {
       changed = true
       return n[2]
     }
@@ -1885,7 +1886,7 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
     const sub = funcNode[i]
     if (!Array.isArray(sub)) continue
     const name = typeof sub[1] === 'string' ? sub[1] : null
-    if (!name || params.has(name)) continue
+    if (!name) continue
     const uses = getPostUseCount(name)
     // Dead store: set but never read.
     if (sub[0] === 'local.set' && uses.gets === 0 && uses.tees === 0) {
@@ -3088,6 +3089,29 @@ const coalesceLocals = (ast) => {
     const uses = new Map()
     const loopStack = [], condStack = []
     let pos = 0, abort = false
+    // effective innermost arm for a local: frames where BOTH sibling arms write it
+    // at statement level are transparent (the write happens on every path)
+    const effArm = (name) => {
+      let k = condStack.length - 1
+      while (k >= 0 && condStack[k].bothW && condStack[k].bothW.has(name)) k--
+      return k >= 0 ? condStack[k] : null
+    }
+    // statement-level writes of a branch-free arm; null when the arm can exit early
+    const armSets = (arm) => {
+      let ok = true
+      walk(arm, x => {
+        const o = Array.isArray(x) ? x[0] : x
+        if (o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' ||
+            o === 'throw' || o === 'return_call' || o === 'return_call_indirect') ok = false
+      })
+      if (!ok) return null
+      const set = new Set()
+      for (let k = 1; k < arm.length; k++) {
+        const st = arm[k]
+        if (Array.isArray(st) && (st[0] === 'local.set' || st[0] === 'local.tee') && typeof st[1] === 'string') set.add(st[1])
+      }
+      return set
+    }
 
     const visit = (n) => {
       if (abort || !Array.isArray(n)) return
@@ -3115,15 +3139,17 @@ const coalesceLocals = (ast) => {
           // same list (the rotated-loop entry guard `(block (br_if $out …) …)` shape).
           if (!u) {
             u = { start: here, end: here, firstOp: op,
-                  firstArm: condStack[condStack.length - 1] ?? null, armEscapes: false,
+                  firstArm: effArm(name), armEscapes: false,
                   firstLoop: loopStack[loopStack.length - 1] ?? null, escapes: false, loops: new Set() }
             uses.set(name, u)
           } else {
             // a use outside the first write's innermost loop makes zero-trip skips
-            // observable; a use outside its arm can execute on a path that never
-            // wrote — either way the slot must not be joined
+            // observable; a use outside its EFFECTIVE arm can execute on a path that
+            // never wrote — either way the slot must not be joined. (A local written
+            // at statement level in BOTH branch-free arms of an if is written on
+            // every path through it, so those arm frames are transparent for it.)
             if ((loopStack[loopStack.length - 1] ?? null) !== u.firstLoop) u.escapes = true
-            if ((condStack[condStack.length - 1] ?? null) !== u.firstArm) u.armEscapes = true
+            if (effArm(name) !== u.firstArm) u.armEscapes = true
           }
           if (here > u.end) u.end = here
           for (const ls of loopStack) u.loops.add(ls)
@@ -3131,11 +3157,20 @@ const coalesceLocals = (ast) => {
       } else {
         pos++
         const isIf = op === 'if'
+        let bothW = null
+        if (isIf) {
+          const { thenBranch, elseBranch } = parseIf(n)
+          if (thenBranch && elseBranch) {
+            const a = armSets(thenBranch), b = armSets(elseBranch)
+            if (a && b) { bothW = new Set(); for (const x of a) if (b.has(x)) bothW.add(x); if (!bothW.size) bothW = null }
+          }
+        }
         let branched = false   // a direct-child br/br_if/return makes the REST of this list conditional
         for (let i = 1; i < n.length; i++) {
           const c = n[i]
-          const cond = (isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')) || branched
-          if (cond) condStack.push(c)
+          const isArm = isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')
+          const cond = isArm || branched
+          if (cond) condStack.push({ bothW: isArm ? bothW : null })
           visit(c)
           if (cond) condStack.pop()
           if (Array.isArray(c) && (c[0] === 'br_if' || c[0] === 'br' || c[0] === 'br_table' || c[0] === 'return' || c[0] === 'return_call' || c[0] === 'return_call_indirect' || c[0] === 'unreachable')) branched = true
@@ -3288,6 +3323,9 @@ const vacuum = (ast) => {
  *  still yields the same value AND runs the operand). */
 const selfFold = (val) => (a, b) => equal(a, b) && isPure(a) ? val : null
 const PEEPHOLE = {
+  // (local.tee $x (local.get $x)) re-stores the exact value already held — for any
+  // bit pattern — so it is the bare get.
+  'local.tee': (a, b) => Array.isArray(b) && b[0] === 'local.get' && b[1] === a ? b : null,
   // Self-cancelling / tautological binary ops — drop both (equal) operands.
   'i32.sub': selfFold(['i32.const', 0]),
   'i64.sub': selfFold(['i64.const', 0]),
@@ -4645,6 +4683,7 @@ const PASSES = [
   ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
   ['macro',         inlineMacro,    true,  'expand single-expression functions at call sites (positional, zero wrapper)'],
   ['devirt',        devirt,         false, 'call_indirect with a constant or known closure-const index → direct/guarded calls — grows bytes for speed'],
+  ['dedupe',        dedupe,         true,  'eliminate duplicate functions (before inlineOnce dissolves identical single-caller helpers)'],
   ['inlineOnce',    inlineOnce,     true,  'inline single-call functions into their lone caller (never duplicates)'],
   ['inline',        inline,         false, 'inline tiny functions — can duplicate bodies'],
   ['licm',          licm,           false, 'hoist loop-invariant pure arithmetic out of loops — adds locals (speed-for-size); runs once after rounds'],
@@ -4659,7 +4698,6 @@ const PASSES = [
   ['mergeBlocks',   mergeBlocks,    true,  'unwrap `(block $L …)` whose label is never targeted'],
   ['coalesce',      coalesceLocals, true,  'share local slots between same-type non-overlapping locals'],
   ['locals',        localReuse,     true,  'remove unused locals'],
-  ['dedupe',        dedupe,         true,  'eliminate duplicate functions'],
   ['dedupTypes',    dedupTypes,     true,  'merge identical type definitions'],
   ['packData',      packData,       true,  'trim trailing zeros, merge adjacent data segments'],
   ['reorder',       reorder,        false, 'put hot functions first — no AST reduction'],
@@ -4846,7 +4884,9 @@ export default function optimize(ast, opts = true) {
       if (equal(beforeRound, ast)) break // fixpoint
       if (verbose) log(`  round ${round + 1} applied`)
     }
-    return finish(ast)
+    // treeshake/dedupe can EXPOSE single-caller candidates mid-rounds (dropping the
+    // other callers) — the entry check was a snapshot; recheck before finishing
+    if (!((opts.inlineOnce || opts.inline) && mayInline(ast))) return finish(ast)
   }
 
   // Guarded path: inlining can inflate (a body bigger than the call it replaces).
