@@ -2214,6 +2214,142 @@ const inlineMacro = (ast) => {
 }
 
 /**
+ * Specialize parameters that every call site passes the same constant: the param
+ * becomes a local initialized to that constant, and the argument disappears from
+ * every site. Named, unexported callees whose name appears ONLY as folded
+ * (call $f …) sites qualify; int constants compare by canonical value, floats by
+ * Object.is on non-NaN (per the signed-zero refutation — -0/NaN defer).
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const specializeParams = (ast) => {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  const sameConst = (a, b) => {
+    if (!Array.isArray(a) || !Array.isArray(b) || a[0] !== b[0] || !a[0].endsWith?.('.const')) return false
+    const ca = getConst(a), cb = getConst(b)
+    if (!ca || !cb) return false
+    if (a[0] === 'i32.const' || a[0] === 'i64.const') return String(ca.value) === String(cb.value)
+    const na = Number(ca.value), nb = Number(cb.value)
+    return !Number.isNaN(na) && !Number.isNaN(nb) && Object.is(na, nb)
+  }
+  // one module walk: call sites and raw name occurrences for every func
+  const allSites = new Map(), occ = new Map()
+  walk(ast, n => {
+    if (Array.isArray(n)) {
+      if (n[0] === 'call' && typeof n[1] === 'string') {
+        let a = allSites.get(n[1])
+        if (!a) allSites.set(n[1], a = [])
+        a.push(n)
+      }
+      return
+    }
+    if (typeof n === 'string' && n[0] === '$') occ.set(n, (occ.get(n) || 0) + 1)
+  })
+  for (const fn of ast.slice(1)) {
+    if (!Array.isArray(fn) || fn[0] !== 'func' || typeof fn[1] !== 'string' || fn[1][0] !== '$') continue
+    if (fn.some(c => Array.isArray(c) && (c[0] === 'export' || c[0] === 'type'))) continue
+    const name = fn[1]
+    const params = []
+    for (const c of fn) if (Array.isArray(c) && c[0] === 'param') {
+      if (typeof c[1] !== 'string' || c[1][0] !== '$' || c.length !== 3) { params.length = 0; break }
+      params.push(c)
+    }
+    if (!params.length) continue
+    // every textual occurrence of the name must be a folded call head or the def
+    const sites = allSites.get(name) || []
+    if (!sites.length || (occ.get(name) || 0) !== sites.length + 1) continue
+    if (sites.some(c => c.length - 2 !== params.length)) continue
+    for (let k = params.length - 1; k >= 0; k--) {
+      const first = sites[0][2 + k]
+      if (!sites.every(c => sameConst(c[2 + k], first))) continue
+      const cost = 4 + constInstrSize(first) // local decl + set + const at callee
+      const gain = sites.length * constInstrSize(first) + 1
+      if (gain <= cost) continue
+      // callee: param → zero-cost local + init
+      const pd = params[k]
+      const pi = fn.indexOf(pd)
+      fn.splice(pi, 1)
+      let at = 2
+      while (at < fn.length && Array.isArray(fn[at]) &&
+        (fn[at][0] === 'export' || fn[at][0] === 'param' || fn[at][0] === 'result' || fn[at][0] === 'local')) at++
+      fn.splice(at, 0, ['local', pd[1], pd[2]], ['local.set', pd[1], clone(first)])
+      for (const c of sites) c.splice(2 + k, 1)
+      params.splice(k, 1)
+    }
+  }
+  return ast
+}
+
+/**
+ * Tail-merge duplicated early-exit epilogues: several `(if C (then STMTS… (return V)))`
+ * sites whose arm bodies are byte-identical collapse to `(br_if $L C)` into one shared
+ * copy placed after a block wrapping the body. Sound under the verifier's contract:
+ * arm bodies are strictly branch-free straight-line code (calls / local & global
+ * accesses / numeric ops) ending in a function-level `return` — the only relocated
+ * instructions are position-independent, and each branch arrives with whatever state
+ * its site had, exactly as the duplicated copy would. The function's own last
+ * statement must already terminate, so the block can never fall through into the
+ * shared copy.
+ * @param {Array} ast
+ * @returns {Array}
+ */
+let tmUid = 0
+const tailmerge = (ast) => {
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    const isTerm = (n) => n === 'unreachable' || n === 'return' ||
+      (Array.isArray(n) && (n[0] === 'return' || n[0] === 'unreachable' || n[0] === 'br'))
+    const last = fn[fn.length - 1]
+    if (!isTerm(last)) return
+    // linear, position-independent snippet: no branch/control may relocate
+    const movable = (body) => {
+      let ok = true
+      walk(body, x => {
+        const o = Array.isArray(x) ? x[0] : (typeof x === 'string' && OPCODE[x] !== undefined ? x : null)
+        if (o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return_call' || o === 'return_call_indirect' ||
+            o === 'loop' || o === 'block' || o === 'if' || o === 'try_table' || o === 'unreachable') ok = false
+      })
+      return ok
+    }
+    const EMPTY_MAP = new Map()
+    const groups = new Map()
+    // sites may sit at any depth: `return` exits the function from anywhere, and the
+    // replacement br_if targets the wrapper block by NAME
+    walk(fn, (st, parent, idx) => {
+      if (!Array.isArray(st) || st[0] !== 'if' || st.length !== 3 || !parent) return
+      const { cond, thenBranch, elseBranch } = parseIf(st)
+      if (!Array.isArray(cond) || !thenBranch || elseBranch) return
+      const body = thenBranch.slice(1)
+      if (!body.length) return
+      // folded (return V) or wax's stacked `VALUE return` pair
+      const ret = body[body.length - 1]
+      if (!(Array.isArray(ret) && ret[0] === 'return') && ret !== 'return') return
+      if (!movable(body) || estBytes(['b', ...body]) < 5) return
+      const key = hashFunc(['b', ...body], EMPTY_MAP)
+      let g = groups.get(key)
+      if (!g) groups.set(key, g = { body, sites: [] })
+      g.sites.push([parent, idx])
+    })
+    // every qualifying group wraps its own labeled block (inner groups nest inside
+    // the earlier wrappers; br_if targets by name, so depth is irrelevant)
+    const chosen = [...groups.values()].filter(g => g.sites.length >= 2)
+    for (const g of chosen) {
+      const label = '$__tm' + tmUid++
+      for (const [parent, idx] of g.sites) {
+        const { cond } = parseIf(parent[idx])
+        parent[idx] = ['br_if', label, cond]
+      }
+      let at = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
+      while (at < fn.length && Array.isArray(fn[at]) &&
+        (fn[at][0] === 'export' || fn[at][0] === 'type' || fn[at][0] === 'param' || fn[at][0] === 'result' || fn[at][0] === 'local')) at++
+      const stmts = fn.splice(at, fn.length - at)
+      fn.push(['block', label, ...stmts], ...g.body)
+    }
+  })
+  return ast
+}
+
+/**
  * Merge alias locals: `(local.set $A (local.tee $B V))` writes the same value into
  * two slots. When that is the ONLY write either local ever gets, their write
  * histories are identical — every read of $A (even one sequenced before the def,
@@ -4821,6 +4957,7 @@ const PASSES = [
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
   ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
   ['macro',         inlineMacro,    true,  'expand single-expression functions at call sites (positional, zero wrapper)'],
+  ['spec',          specializeParams, true, 'drop parameters every call site passes the same constant'],
   ['devirt',        devirt,         false, 'call_indirect with a constant or known closure-const index → direct/guarded calls — grows bytes for speed'],
   ['dedupe',        dedupe,         true,  'eliminate duplicate functions (before inlineOnce dissolves identical single-caller helpers)'],
   ['inlineOnce',    inlineOnce,     true,  'inline single-call functions into their lone caller (never duplicates)'],
@@ -4831,6 +4968,7 @@ const PASSES = [
   ['unbranch',      unbranch,       true,  'remove redundant br at end of own block'],
   ['loopify',       loopify,        true,  'collapse block+loop+brif while-idiom into loop+if'],
   ['brif',          brif,           true,  'if-then-br → br_if'],
+  ['tailmerge',     tailmerge,      true,  'share byte-identical early-exit epilogues via block + br_if'],
   ['foldarms',      foldarms,       false, 'merge identical trailing if arms — can add block wrapper'],
   ['deadcode',      deadcode,       true,  'eliminate dead code after unreachable/br/return'],
   ['vacuum',        vacuum,         true,  'remove nops, drop-of-pure, empty branches'],
@@ -5070,4 +5208,4 @@ export default function optimize(ast, opts = true) {
 
 /** Count AST nodes (fast size heuristic). */
 export { count as size, count, binarySize }
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, inline, inlineOnce, devirt, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
