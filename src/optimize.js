@@ -1531,11 +1531,7 @@ const canSubst = (k) => (k.pure && k.singleUse) || isTinyConst(k.val) || k.copy
 
 /** Drop tracked values that read `$name`: rewriting `$name` makes them stale. */
 const purgeRefs = (known, name) => {
-  for (const [key, tracked] of known) {
-    let refs = false
-    walk(tracked.val, n => { if (Array.isArray(n) && (n[0] === 'local.get' || n[0] === 'local.tee') && n[1] === name) refs = true })
-    if (refs) known.delete(key)
-  }
+  for (const [key, tracked] of known) if (tracked.refs.has(name)) known.delete(key)
 }
 
 /** Drop tracked values that read global `$name`: a `global.set $name` makes them stale.
@@ -1544,11 +1540,25 @@ const purgeRefs = (known, name) => {
  *  intervening `f = …` and substitute the NEW global. That silently breaks the canonical
  *  pointer swap `let s = f; f = g; g = s` (g would read post-swap f, i.e. itself). */
 const purgeGlobalRefs = (known, name) => {
-  for (const [key, tracked] of known) {
-    let refs = false
-    walk(tracked.val, n => { if (Array.isArray(n) && n[0] === 'global.get' && n[1] === name) refs = true })
-    if (refs) known.delete(key)
-  }
+  for (const [key, tracked] of known) if (tracked.grefs.has(name)) known.delete(key)
+}
+
+/** One walk over a tracked value collecting every fact the invalidation paths ask
+ *  later: which locals/globals it reads, whether it reads memory, and whether it
+ *  reads any state a call could mutate (memory, globals, tables, nested calls). */
+const scanVal = (val) => {
+  const refs = new Set(), grefs = new Set()
+  let mem = false, ext = false
+  walk(val, n => {
+    if (!Array.isArray(n)) return
+    const o = n[0]
+    if (o === 'local.get' || o === 'local.tee') { if (typeof n[1] === 'string') refs.add(n[1]) }
+    else if (o === 'global.get') { if (typeof n[1] === 'string') grefs.add(n[1]); ext = true }
+    else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect' ||
+             o === 'table.get' || o === 'table.size') ext = true
+    else if (typeof o === 'string' && (o.includes('.load') || o === 'memory.copy' || o === 'memory.size')) mem = ext = true
+  })
+  return { refs, grefs, mem, ext }
 }
 
 /** True if `node` recursively contains an op that may read linear memory.
@@ -1662,11 +1672,6 @@ const forwardPropagate = (funcNode, params, useCounts) => {
   // depth of flat (bare-token) control nesting; each binding records the depth it
   // was created at — see the bare-token barrier below for why that bounds validity
   let depth = 0
-  const readsLocals = (v) => {
-    let f = false
-    walk(v, c => { if (Array.isArray(c) && (c[0] === 'local.get' || c[0] === 'local.tee')) f = true })
-    return f
-  }
 
   for (let i = 1; i < funcNode.length; i++) {
     const instr = funcNode[i]
@@ -1688,7 +1693,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
         depth++
         for (const [key, t] of known) {
           const uses = getUseCount(key)
-          if (!(uses.sets + uses.tees <= 1 && t.pure && !readsLocals(t.val) && !readsCallableState(t.val))) known.delete(key)
+          if (!(uses.sets + uses.tees <= 1 && t.pure && !t.refs.size && !t.ext)) known.delete(key)
         }
       }
       else if (instr === 'else') { for (const [key, t] of known) if (t.depth >= depth) known.delete(key) }
@@ -1706,7 +1711,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
         typeof tgt === 'string' ? purgeGlobalRefs(known, tgt) : known.clear()
       }
       else if (instr === 'call' || instr === 'call_indirect' || instr === 'return_call' || instr === 'return_call_indirect') {
-        for (const [key, tracked] of known) if (readsCallableState(tracked.val)) known.delete(key)
+        for (const [key, tracked] of known) if (tracked.ext) known.delete(key)
       }
       else if (instr.includes('.store') || instr === 'memory.copy' || instr === 'memory.fill' || instr === 'memory.init' ||
                (instr.includes('.atomic.') && !instr.endsWith('.load'))) {
@@ -1744,9 +1749,10 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       if (writesMemory(instr[2])) {
         for (const [key, tracked] of known) if (tracked.readsMem) known.delete(key)
       }
+      const facts = scanVal(instr[2])
       known.set(instr[1], {
         val: instr[2], pure: isPure(instr[2]),
-        readsMem: readsMemory(instr[2]),
+        refs: facts.refs, grefs: facts.grefs, readsMem: facts.mem, ext: facts.ext,
         singleUse: uses.gets <= 1 && uses.sets <= 1 && uses.tees === 0,
         copy: isLocalCopy(instr[2], instr[1]),
         depth
@@ -1766,7 +1772,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     // (memory, globals, tables, nested calls). Pure expressions over locals
     // and constants survive — callees can't reach caller locals.
     if (op === 'call' || op === 'call_indirect' || op === 'return_call' || op === 'return_call_indirect')
-      for (const [key, tracked] of known) if (readsCallableState(tracked.val)) known.delete(key)
+      for (const [key, tracked] of known) if (tracked.ext) known.delete(key)
 
     // Substitute: standalone local.get (walkPost can't replace root)
     if (op === 'local.get' && instr.length === 2 && typeof instr[1] === 'string') {
@@ -2362,6 +2368,7 @@ const inlineMacro = (ast, { pin = EMPTY_SET } = {}) => {
     if (!Array.isArray(n) || n[0] !== 'call' || !macros.has(n[1])) return
     const m = macros.get(n[1])
     if (n.length - 2 !== m.params.length) return
+    inflations++
     const idx = new Map(m.params.map((p, i) => [p, i]))
     const out = clone(m.expr)
     const expanded = walkPost(out, c => {
@@ -2708,6 +2715,11 @@ const propagate = (ast) => {
 // every caller of a small body), so the lift lives here once.
 
 let inlineUid = 0
+// Bumped by every splice that can GROW the binary (inline / inlineOnce /
+// inlineMacro expansion). The driver's exit size-guard exists solely for these —
+// when none fired during rounds, every executed pass was size-monotone and both
+// guard encodes are skipped.
+let inflations = 0
 const INL_HEAD = new Set(['export', 'type', 'param', 'result', 'local'])
 const inlBodyStart = (fn) => {
   let i = 2
@@ -2848,6 +2860,7 @@ const inlBodySize = (fn) => {
  *     …body, renamed, `return X` → `br $__inlN X`…)
  */
 const buildInline = (params, locals, inlResult, cBody, args) => {
+  inflations++
   const uid = ++inlineUid
   const exit = `$__inl${uid}`
   const rename = new Map()
@@ -3351,6 +3364,7 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
     }
     const cBody = callee.slice(bodyStart(callee))
 
+    inflations++
     const uid = ++inlineUid
     const exit = `$__inl${uid}`
     const rename = new Map()
@@ -5455,7 +5469,9 @@ export default function optimize(ast, opts = true) {
   // case instead of one per round; `binarySize` returns Infinity for invalid wat,
   // so a broken round unwinds the same way.
   const pristine = clone(ast)
-  const sizeBefore = binarySize(ast)
+  const countBefore = count(ast)
+  const inflBefore = inflations
+  let sizeBefore = null
   let beforeRound = null, cur = null
   runRounds(false, () => { beforeRound = cur; cur = clone(ast) })
   // `cur` is the clone taken at the LAST round's start; if that round changed
@@ -5466,8 +5482,14 @@ export default function optimize(ast, opts = true) {
   // (local.set $p arg) … (local.get $p) wrappers around each inlined call
   if (opts.propagate && dirty) for (const f of dirty) propagate(f)
 
+  // No inflating splice fired and the node count didn't grow: every executed pass
+  // was size-monotone, so both guard encodes (the optimizer's dominant cost on a
+  // large module) are provably redundant.
+  if (inflations === inflBefore && count(ast) <= countBefore) return finish(ast)
+
   // Default optimize must never inflate; explicit passes get slight leniency.
   const tolerance = strictGuard ? 0 : 16
+  sizeBefore = binarySize(pristine)
   let sizeAfter = binarySize(ast)
   if (sizeAfter - sizeBefore > tolerance && beforeRound) {
     if (verbose) log(`  ⚠ net +${sizeAfter - sizeBefore} bytes — unwinding last round`, sizeAfter - sizeBefore)

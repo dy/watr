@@ -1076,8 +1076,8 @@ const instr = (nodes, ctx) => {
   return out.push(0x0b), out
 }
 
-// LEB128 byte-width of an unsigned integer (exact, reuses uleb so it can never drift).
-const ulebSize = (n) => uleb(n).length
+// LEB128 byte-width of a non-negative number (7 bits per byte).
+const ulebSize = (n) => { let k = 1; n >>>= 7; while (n) k++, n >>>= 7; return k }
 
 // Size-only twin of instr(): the byte LENGTH of the encoded instruction stream,
 // WITHOUT building the (multi-MB) byte array. Reuses every HANDLER for exact
