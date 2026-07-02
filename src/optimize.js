@@ -179,20 +179,31 @@ const treeshake = (ast) => {
     }
   }
   for (const start of starts) markFunc(start[1])
+  const elemTarget = new Map() // active elem node → target table entry (write-only edge, not liveness)
+  const elemKind = new Map()   // elem node → 'active' | 'passive' | 'declare'
   for (const elem of elems) {
     // (elem declare? (table t)? offset-expr? reftype? item*) — items are bare
     // $names/numerals or (item …)/(ref.func …) exprs; offsets may read globals.
+    let target, active = false
+    if (elem.includes('declare')) elemKind.set(elem, 'declare')
     for (const part of elem.slice(1)) {
       if (Array.isArray(part)) {
-        if (part[0] === 'table') markTable(part[1])
-        else walk(part, n => {
-          if (Array.isArray(n) && n[0] === 'ref.func') markFunc(n[1])
-          else if (Array.isArray(n) && n[0] === 'global.get') markGlobal(n[1])
-          else if (typeof n === 'string' && n[0] === '$') markFunc(n)
-        })
+        // the TARGET ref is a write edge — it caps the index space (deref) but does
+        // not make the table live; only reads (code/exports) do
+        if (part[0] === 'table') target = deref(tables, 'table', part[1])
+        else {
+          if (part[0] === 'offset' || (part[0] !== 'item' && typeof part[0] === 'string' && !part[0].startsWith('ref'))) active = true
+          walk(part, n => {
+            if (Array.isArray(n) && n[0] === 'ref.func') markFunc(n[1])
+            else if (Array.isArray(n) && n[0] === 'global.get') markGlobal(n[1])
+            else if (typeof n === 'string' && n[0] === '$') markFunc(n)
+          })
+        }
       }
       else if (typeof part === 'string' && part !== 'func' && part !== 'declare' && (part[0] === '$' || !isNaN(part))) markFunc(part)
     }
+    if (active) elemTarget.set(elem, target ?? tables.get(0))
+    if (!elemKind.has(elem)) elemKind.set(elem, active ? 'active' : 'passive')
   }
   for (const d of data) {
     const first = d[1]
@@ -215,12 +226,23 @@ const treeshake = (ast) => {
   // walked exactly once. IMM (the instruction registry's immediate types) says
   // which index space an op's first immediate addresses — one source of truth
   // for call/ref.func/global.get/struct.new/call_ref/…, named or numeric.
+  let elemIdxUsed = false // table.init/elem.drop consume element indices — forbids elem removal
+  const refFunced = new Set() // funcs referenced by ref.func in live code — they must STAY declared
   while (work.length) {
     const entry = work.pop()
     if (entry.scanned) continue
     entry.scanned = true
     if (entry.isImport) continue
     walk(entry.node, (n, parent, idx) => {
+      if (Array.isArray(n)) {
+        const op = n[0]
+        if (op === 'table.init' || op === 'elem.drop' || op === 'array.new_elem' || op === 'array.init_elem') elemIdxUsed = true
+        else if (op === 'ref.func') refFunced.add(deref(funcs, 'func', n[1]))
+      }
+      // a bare token OUTSIDE op position is flat-form usage whose operands we can't
+      // attribute — freeze segment removal (op-position strings were handled above)
+      else if (typeof n === 'string' && idx !== 0 &&
+        (n === 'table.init' || n === 'elem.drop' || n === 'array.new_elem' || n === 'array.init_elem' || n === 'ref.func')) elemIdxUsed = true
       if (!Array.isArray(n)) {
         // Bare $name (flat-form immediate, label, any position): the flat style
         // gives no structure to say which space it addresses — mark them all.
@@ -254,11 +276,40 @@ const treeshake = (ast) => {
   const cap = (space) => inlineImport[space] && numRef[space] >= 0 ? Infinity : numRef[space]
   const droppable = (sub, space) => { const e = nodeMap.get(sub); return e && !e.used && e.idx > cap(space) }
 
+  // Dead tables: never read by code or exports — their active elem segments only fill
+  // unobservable slots, so table + segments go together (funcs those segments pinned
+  // are re-judged next round). Element-index consumers forbid segment removal.
+  const dropNodes = new Set()
+  if (!elemIdxUsed) {
+    for (const e of new Set(tables.values())) {
+      if (e.used || e.isImport || e.idx <= cap('table')) continue
+      dropNodes.add(e.node)
+      for (const [elem, t] of elemTarget) if (t === e) dropNodes.add(elem)
+    }
+    // With no element-index consumers, a passive segment is unreachable outright and a
+    // declare segment carries no runtime data — BUT both also serve as the declaration
+    // that validates in-code ref.func. Droppable only when every ref.func'd function in
+    // the segment stays anchored elsewhere (export or surviving active segment).
+    const elemFuncs = (elem) => {
+      const out = []
+      walk(elem, n => { const e = typeof n === 'string' && n !== 'declare' && n !== 'func' && (n[0] === '$' || !isNaN(n)) ? deref(funcs, 'func', n) : Array.isArray(n) && n[0] === 'ref.func' ? deref(funcs, 'func', n[1]) : null; if (e) out.push(e) })
+      return out
+    }
+    const anchored = new Set()
+    for (const [elem, kind] of elemKind) if (kind === 'active' && !dropNodes.has(elem)) for (const e of elemFuncs(elem)) anchored.add(e)
+    for (const exp of exports) for (const sub of exp) if (Array.isArray(sub) && sub[0] === 'func') { const e = deref(funcs, 'func', sub[1]); if (e) anchored.add(e) }
+    for (const [elem, kind] of elemKind) {
+      if (kind !== 'passive' && kind !== 'declare') continue
+      if (elemFuncs(elem).every(e => !refFunced.has(e) || anchored.has(e))) dropNodes.add(elem)
+    }
+  }
+
   // Filter: keep used definitions. nodeMap handles unnamed entries directly.
   const result = ['module']
   const deadGlobals = new Set() // named write-only globals whose decl is dropped
   for (const node of ast.slice(1)) {
     if (!Array.isArray(node)) { result.push(node); continue }
+    if (dropNodes.has(node)) continue
     const kind = node[0]
     if (kind === 'func' || kind === 'global' || kind === 'type') {
       if (!droppable(node, kind)) result.push(node)
@@ -610,8 +661,7 @@ const makeConst = (type, value) => {
  * @param {Array} ast
  * @returns {Array}
  */
-const fold = (ast) => {
-  return walkPost(ast, (node) => {
+const foldNode = (node) => {
     if (!Array.isArray(node)) return
     const fn = FOLDABLE[node[0]]
     if (!fn) return
@@ -669,8 +719,9 @@ const fold = (ast) => {
       if (constInstrSize(out) > 1 + constInstrSize(node[1]) + constInstrSize(node[2])) return
       return out
     }
-  })
 }
+/** Constant folding as a standalone pass. */
+const fold = (ast) => walkPost(ast, foldNode)
 
 // ==================== IDENTITY REMOVAL ====================
 
@@ -746,8 +797,7 @@ const ROUNDTRIP = {
  * @param {Array} ast
  * @returns {Array}
  */
-const identity = (ast) => {
-  return walkPost(ast, (node) => {
+const identityNode = (node) => {
     if (!Array.isArray(node)) return
     // Unary cast round-trip: outer(inner(x)) → x (post-order, so an inner pair already
     // collapsed before the outer op sees it — the whole box/unbox chain unwinds in one walk).
@@ -762,8 +812,9 @@ const identity = (ast) => {
     const result = fn(node[1], node[2])
     if (result === null) return  // no optimization, keep original
     return result
-  })
 }
+/** Identity elimination as a standalone pass. */
+const identity = (ast) => walkPost(ast, identityNode)
 
 // ==================== STRENGTH REDUCTION ====================
 
@@ -772,8 +823,7 @@ const identity = (ast) => {
  * @param {Array} ast
  * @returns {Array}
  */
-const strength = (ast) => {
-  return walkPost(ast, (node) => {
+const strengthNode = (node) => {
     if (!Array.isArray(node) || node.length !== 3) return
     const [op, a, b] = node
 
@@ -827,8 +877,9 @@ const strength = (ast) => {
       if (vb != null && vb > 0n && (vb & (vb - 1n)) === 0n)
         return ['i64.and', a, ['i64.const', '0x' + _i64Hex16(vb - 1n)]]
     }
-  })
 }
+/** Strength reduction as a standalone pass. */
+const strength = (ast) => walkPost(ast, strengthNode)
 
 // ==================== BRANCH SIMPLIFICATION ====================
 
@@ -847,7 +898,22 @@ const branch = (ast) => {
     if (op === 'if') {
       const { condIdx, cond, thenBranch, elseBranch } = parseIf(node)
       const c = getConst(cond)
-      if (!c) return
+      // (if (result T) c (then A) (else B)) → (select A B c) for small pure numeric
+      // arms — drops ~3 B of block framing per site. select evaluates BOTH arms, so
+      // each must be pure AND trap-free (no int div/rem, no float→int trunc), and
+      // cheap enough that speculating it costs nothing.
+      if (!c) {
+        if (!Array.isArray(cond)) return
+        const rt = node.find(p => Array.isArray(p) && p[0] === 'result')
+        if (!rt || rt.length !== 2 || !/^[if](32|64)$/.test(rt[1])) return
+        if (thenBranch?.length !== 2 || elseBranch?.length !== 2) return
+        const a = thenBranch[1], b = elseBranch[1]
+        if (!isPure(a) || !isPure(b) || count(a) > 6 || count(b) > 6) return
+        let traps = false
+        walk([a, b], n => { const o = Array.isArray(n) ? n[0] : n; if (typeof o === 'string' && /\.(div|rem)_[su]$|\.trunc_f/.test(o)) traps = true })
+        if (traps) return
+        return ['select', a, b, cond]
+      }
       const taken = c.value !== 0 && c.value !== ZERO64 ? thenBranch : elseBranch
       if (taken && taken.length > 1) {
         const contents = taken.slice(1)
@@ -2893,13 +2959,35 @@ const PEEPHOLE = {
  * @param {Array} ast
  * @returns {Array}
  */
-const peephole = (ast) => {
-  return walkPost(ast, (node) => {
+const peepholeNode = (node) => {
     if (!Array.isArray(node) || node.length !== 3) return
     const fn = PEEPHOLE[node[0]]
     if (!fn) return
     const result = fn(node[1], node[2])
     if (result !== null) return result
+}
+/** Peephole rules as a standalone pass. */
+const peephole = (ast) => walkPost(ast, peepholeNode)
+
+/**
+ * Fused algebraic sweep — fold → identity → strength → peephole applied per node in
+ * ONE bottom-up traversal instead of four, re-running the family on a node until it
+ * stabilizes (children are final when the parent is visited, so cross-rule cascades
+ * converge in-walk instead of across driver rounds). The rule set follows the same
+ * option keys as the standalone passes.
+ */
+const SIMPLIFY = [['fold', foldNode], ['identity', identityNode], ['strength', strengthNode], ['peephole', peepholeNode]]
+const SIMPLIFY_KEYS = new Set(SIMPLIFY.map(([k]) => k))
+const simplify = (ast, opts) => {
+  const rules = SIMPLIFY.filter(([k]) => opts[k]).map(([, f]) => f)
+  if (!rules.length) return ast
+  return walkPost(ast, (node) => {
+    let out
+    for (let i = 0, spins = 0; i < rules.length; i++) {
+      const r = rules[i](out === undefined ? node : out)
+      if (r !== undefined && spins++ < 10) { out = r, i = -1 } // a hit re-runs the family
+    }
+    return out
   })
 }
 
@@ -4279,7 +4367,12 @@ export default function optimize(ast, opts = true) {
     // propagate, and it would only confirm what `mayInline` already proved.
     for (let round = 0; round < 3; round++) {
       const beforeRound = clone(ast)
-      for (const [key, fn] of PASSES) if (opts[key] && key !== 'inlineOnce' && key !== 'inline' && key !== 'devirt' && key !== 'licm') ast = fn(ast, opts)
+      let fused = false
+      for (const [key, fn] of PASSES) {
+        if (!opts[key] || key === 'inlineOnce' || key === 'inline' || key === 'devirt' || key === 'licm') continue
+        if (SIMPLIFY_KEYS.has(key)) { if (!fused) ast = simplify(ast, opts), fused = true; continue }
+        ast = fn(ast, opts)
+      }
       if (equal(beforeRound, ast)) break // fixpoint
       if (verbose) log(`  round ${round + 1} applied`)
     }
@@ -4296,7 +4389,12 @@ export default function optimize(ast, opts = true) {
   for (let round = 0; round < 3; round++) {
     beforeRound = clone(ast)
 
-    for (const [key, fn] of PASSES) if (opts[key] && key !== 'devirt' && key !== 'inline' && key !== 'licm') ast = fn(ast, opts)
+    let fused = false
+    for (const [key, fn] of PASSES) {
+      if (!opts[key] || key === 'devirt' || key === 'inline' || key === 'licm') continue
+      if (SIMPLIFY_KEYS.has(key)) { if (!fused) ast = simplify(ast, opts), fused = true; continue }
+      ast = fn(ast, opts)
+    }
     // Second propagate sweep: `inlineOnce`/`inline` (above) leave fresh
     // `(local.set $p arg) … (local.get $p)` wrappers around each inlined call;
     // re-running propagation collapses them within this same round, so the size

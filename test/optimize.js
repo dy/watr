@@ -2655,3 +2655,22 @@ test('vacuum: empty-then if inverts into the else arm', () => {
   assert.equal(f(0), 9)
   assert.equal(f(1), 0)
 })
+
+test('treeshake: dead table + its segments go; ref.func declarations survive', () => {
+  const src = `(module
+    (table $dead 2 funcref)
+    (elem (table $dead) (i32.const 0) funcref $f)
+    (func $f (result i32) (i32.const 1))
+    (func (export "g") (result i32) (i32.const 2)))`
+  const txt = print(optimize(parse(src)))
+  assert(!txt.includes('table'), 'unread table and its segment removed')
+  assert.equal(run(src).g(), 2)
+
+  // a passive segment is the DECLARATION an in-code ref.func needs — it must stay
+  const decl = `(module
+    (import "m" "l" (func $log))
+    (elem func 0)
+    (func (export "f") (result funcref) (ref.func 0)))`
+  const w = compile(optimize(parse(decl)))
+  assert(new WebAssembly.Module(w) instanceof WebAssembly.Module, 'declaring segment kept — module validates')
+})
