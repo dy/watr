@@ -178,7 +178,20 @@ const treeshake = (ast) => {
       else if (kind === 'memory') markMemory(ref)
     }
   }
-  for (const start of starts) markFunc(start[1])
+  // A start func with an empty body is a no-op: drop the (start) root itself and
+  // let ordinary liveness collect the func (renumbering absorbs the index shift).
+  const START_HEAD = new Set(['export', 'type', 'param', 'result', 'local'])
+  const emptyBody = (fn) => {
+    let b = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
+    while (b < fn.length && Array.isArray(fn[b]) && START_HEAD.has(fn[b][0])) b++
+    return b >= fn.length
+  }
+  const deadStarts = new Set()
+  for (const st of starts) {
+    const e = deref(funcs, 'func', st[1])
+    if (e && !e.isImport && emptyBody(e.node)) deadStarts.add(st)
+    else markFunc(st[1])
+  }
   const elemTarget = new Map() // active elem node → target table entry (write-only edge, not liveness)
   const elemKind = new Map()   // elem node → 'active' | 'passive' | 'declare'
   for (const elem of elems) {
@@ -213,14 +226,6 @@ const treeshake = (ast) => {
     walk(d, n => { if (Array.isArray(n) && n[0] === 'global.get') markGlobal(n[1]) })
   }
   for (const m of [funcs, globals, tables, memories]) for (const e of m.values()) if (e.used) enqueue(e)
-
-  // If nothing anchors the module (no exports, start, elem, or inline exports),
-  // assume the module is consumed elsewhere and keep everything.
-  const hasAnchor = exports.length > 0 || starts.length > 0 || elems.length > 0 || work.length > 0
-  if (!hasAnchor) {
-    for (const m of [funcs, globals, tables, memories]) for (const e of m.values()) e.used = true
-    return ast
-  }
 
   // Drain worklist: each live node (func body, global/table init, type def) is
   // walked exactly once. IMM (the instruction registry's immediate types) says
@@ -320,7 +325,7 @@ const treeshake = (ast) => {
   const deadGlobals = new Set() // named write-only globals whose decl is dropped
   for (const node of ast.slice(1)) {
     if (!Array.isArray(node)) { result.push(node); continue }
-    if (dropNodes.has(node)) continue
+    if (dropNodes.has(node) || deadStarts.has(node)) continue
     const kind = node[0]
     if (kind === 'func' || kind === 'global' || kind === 'type') {
       if (!droppable(node, kind)) result.push(node)
@@ -713,22 +718,13 @@ const makeConst = (type, value) => {
  * @param {Array} ast
  * @returns {Array}
  */
-const foldNode = (node) => {
-    if (!Array.isArray(node)) return
-    const fn = FOLDABLE[node[0]]
-    if (!fn) return
-
-    // Arity comes from the NODE — every WAT op is fixed-arity, so node.length
-    // fully determines unary vs binary. NEVER from Function.length: the
-    // self-host kernel's closures don't carry a faithful `.length`, and the
-    // old `fn.length === 1/2` checks silently disabled ALL folding in-kernel
-    // (the L2 self-host divergence — unfolded consts fed the vectorizer
-    // shapes native never produces).
-    // Unary
-    if (node.length === 2) {
-      // NaN-payload reinterprets fold at the TEXT level — the payload double
-      // must never ride as a raw f64 value (see _nanBitsHex). Applies in both
-      // directions: nan: literal → i64 bits, and NaN-pattern i64 → nan: literal.
+// NaN-payload reinterprets fold at the TEXT level — the payload double must never
+// ride as a raw f64 value (see _nanBitsHex). Applies in both directions: nan:
+// literal → i64 bits, and NaN-pattern i64 → nan: literal. These are MANDATORY
+// (correctness, not size — the i64 sleb may out-size the f64 form), so the driver
+// runs them once up front, keeping the rounds size-monotone for the guard.
+const nanFoldNode = (node) => {
+      if (!Array.isArray(node) || node.length !== 2) return
       if (node[0] === 'i64.reinterpret_f64') {
         const inner = node[1]
         if (Array.isArray(inner) && inner.length === 2 && inner[0] === 'f64.const' && typeof inner[1] === 'string') {
@@ -747,6 +743,19 @@ const foldNode = (node) => {
             ((hi & 0x80000000) !== 0 ? '-' : '') + 'nan:0x' + (hi & 0xfffff).toString(16).padStart(5, '0') + h.slice(8)]
         }
       }
+}
+
+const foldNode = (node) => {
+    if (!Array.isArray(node)) return
+    const nan = nanFoldNode(node)
+    if (nan) return nan
+    const fn = FOLDABLE[node[0]]
+    if (!fn) return
+    // Arity comes from the NODE — every WAT op is fixed-arity, so node.length
+    // fully determines unary vs binary (never Function.length: self-host closures
+    // don't carry a faithful one).
+    // Unary
+    if (node.length === 2) {
       const a = getConst(node[1])
       if (!a) return
       const r = fn(a.value)
@@ -941,6 +950,28 @@ const strength = (ast) => walkPost(ast, strengthNode)
  * @returns {Array}
  */
 const branch = (ast) => {
+  // if-arm value threading: (if C (then (local.set $x A)) (else (local.set $x B)))
+  // → (local.set $x (if (result T) C (then A) (else B))) — the set happens on both
+  // paths anyway, and the value-form if is one select-promotion away from collapsing.
+  // Needs the local's declared type for the result annotation, hence the per-func walk.
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    const ltype = new Map()
+    for (const c of fn)
+      if (Array.isArray(c) && (c[0] === 'local' || c[0] === 'param') && typeof c[1] === 'string' && typeof c[2] === 'string') ltype.set(c[1], c[2])
+    if (!ltype.size) return
+    walkPost(fn, (node) => {
+      if (!Array.isArray(node) || node[0] !== 'if' || node.length !== 4) return
+      const { cond, thenBranch, elseBranch } = parseIf(node)
+      if (!Array.isArray(cond) || thenBranch?.length !== 2 || elseBranch?.length !== 2) return
+      const a = thenBranch[1], b = elseBranch[1]
+      if (!Array.isArray(a) || a[0] !== 'local.set' || a.length !== 3 || !Array.isArray(a[2])) return
+      if (!Array.isArray(b) || b[0] !== 'local.set' || b.length !== 3 || b[1] !== a[1] || !Array.isArray(b[2])) return
+      const t = ltype.get(a[1])
+      if (typeof t !== 'string' || !/^([if](32|64)|v128)$/.test(t)) return
+      return ['local.set', a[1], ['if', ['result', t], cond, ['then', a[2]], ['else', b[2]]]]
+    })
+  })
   return walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
@@ -4378,20 +4409,6 @@ const mayInline = (ast) => {
 // artifact (e.g. a top-level `1 + 2;` whose dropped value the dead-code pass
 // removed). Drop both. Header nodes (param/result/local/export/type) don't count
 // as a body — a function carrying only locals still does nothing.
-const START_HEAD = new Set(['export', 'type', 'param', 'result', 'local'])
-function pruneEmptyStart(ast) {
-  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
-  const fn = ast.find(n => Array.isArray(n) && n[0] === 'func' && n[1] === '$__start')
-  if (!fn) return ast
-  // Skip the name (index 1) and header nodes; a bare-string node past them is a
-  // real instruction (`drop`/`nop`/`unreachable`), so it stops the scan.
-  let b = 2
-  while (b < fn.length && Array.isArray(fn[b]) && START_HEAD.has(fn[b][0])) b++
-  if (b < fn.length) return ast  // real instructions remain
-  return ast.filter(n => !(Array.isArray(n) &&
-    ((n[0] === 'func' && n[1] === '$__start') || (n[0] === 'start' && n[1] === '$__start'))))
-}
-
 export default function optimize(ast, opts = true) {
   if (typeof ast === 'string') ast = parse(ast)   // accept WAT source directly
   const strictGuard = opts === true  // default: zero tolerance for bloat
@@ -4448,6 +4465,11 @@ export default function optimize(ast, opts = true) {
     }
   })
 
+  // Mandatory NaN-payload canonicalization, ONCE before the rounds: these folds may
+  // grow bytes yet must never revert — hoisting keeps the rounds size-monotone, so
+  // the guard below can compare entry vs exit without penalizing required folds.
+  if (opts.fold) walkPost(ast, nanFoldNode)
+
   // licm runs ONCE after the rounds + inline: its invariants only exist after inlining, and a
   // later propagate round would forward a single-use hoist back into the loop, undoing it.
   // devirt must run BEFORE licm: its collector pattern-matches the in-loop closure-const
@@ -4457,7 +4479,6 @@ export default function optimize(ast, opts = true) {
     a = runInline(a)
     if (opts.devirt) a = devirt(a)
     if (opts.licm) a = licm(a)
-    a = pruneEmptyStart(a)
     return wrapper ? (wrapper[slot] = a, wrapper) : a
   }
 
@@ -4485,15 +4506,17 @@ export default function optimize(ast, opts = true) {
     return finish(ast)
   }
 
-  // Guarded path: inlining can inflate (a body bigger than the call it replaces),
-  // so score each round on encoded bytes and revert any that grows the binary.
-  // `binarySize` returns Infinity for invalid wat, so a broken round reverts too.
-  // A round's starting size equals the prior round's ending size, so carry it
-  // forward and compile once per round.
+  // Guarded path: inlining can inflate (a body bigger than the call it replaces).
+  // Rounds run unmeasured — every non-inline pass is size-monotone (NaN folds were
+  // hoisted above) — and a single exit encode compares against the entry size.
+  // Net growth unwinds the last round, then everything: two encodes in the common
+  // case instead of one per round; `binarySize` returns Infinity for invalid wat,
+  // so a broken round unwinds the same way.
+  const pristine = clone(ast)
+  const sizeBefore = binarySize(ast)
   let beforeRound = null
-  let sizeBefore = binarySize(ast)
   for (let round = 0; round < 3; round++) {
-    beforeRound = clone(ast)
+    const snapshot = clone(ast)
 
     let fused = false
     for (const [key, fn] of PASSES) {
@@ -4502,27 +4525,22 @@ export default function optimize(ast, opts = true) {
       ast = fn(ast, opts)
     }
     // Second propagate sweep: `inlineOnce`/`inline` (above) leave fresh
-    // `(local.set $p arg) … (local.get $p)` wrappers around each inlined call;
-    // re-running propagation collapses them within this same round, so the size
-    // guard scores the cleaned result.
+    // `(local.set $p arg) … (local.get $p)` wrappers around each inlined call —
+    // collapse them within the same round.
     if (opts.propagate && (opts.inlineOnce || opts.inline)) ast = propagate(ast)
 
-    // A round that changed nothing can't have inflated — check convergence
-    // before compiling so the fixpoint-confirming round costs zero compiles.
-    if (equal(beforeRound, ast)) break
+    if (equal(snapshot, ast)) break // fixpoint
+    beforeRound = snapshot
+  }
 
-    const sizeAfter = binarySize(ast)
-    const delta = sizeAfter - sizeBefore
-    if (verbose || delta !== 0) log(`  round ${round + 1}: ${delta > 0 ? '+' : ''}${delta} bytes`, delta)
-
-    // Default optimize must never inflate; explicit passes get slight leniency.
-    const tolerance = strictGuard ? 0 : 16
-    if (delta > tolerance) {
-      if (verbose) log(`  ⚠ round ${round + 1} inflated by ${delta} bytes, reverting`, delta)
-      ast = beforeRound
-      break
-    }
-    sizeBefore = sizeAfter
+  // Default optimize must never inflate; explicit passes get slight leniency.
+  const tolerance = strictGuard ? 0 : 16
+  let sizeAfter = binarySize(ast)
+  if (sizeAfter - sizeBefore > tolerance && beforeRound) {
+    if (verbose) log(`  ⚠ net +${sizeAfter - sizeBefore} bytes — unwinding last round`, sizeAfter - sizeBefore)
+    ast = beforeRound
+    sizeAfter = binarySize(ast)
+    if (sizeAfter - sizeBefore > tolerance) ast = pristine
   }
 
   return finish(ast)

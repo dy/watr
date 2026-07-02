@@ -398,26 +398,34 @@ test('treeshake: keeps called func', () => {
 
 test('treeshake: keeps start func', () => {
   const ast = parse(`(module
-    (func $init)
+    (global $g (mut i32) (i32.const 0))
+    (func $init (global.set $g (i32.const 1)))
     (func $unused)
     (start $init)
+    (func (export "f") (result i32) (global.get $g))
   )`)
   const opt = optimize(ast, 'treeshake')
   const src = print(opt)
-  assert(src.includes('$init'), 'should keep start func')
+  assert(src.includes('$init'), 'should keep effectful start func')
   assert(!src.includes('$unused'), 'should remove unused')
+})
+
+test('treeshake: empty start func is a no-op and drops with its root', () => {
+  const src = print(optimize(parse('(module (func $init) (start $init))'), 'treeshake'))
+  assert(!src.includes('start') && !src.includes('$init'), 'empty start + func removed')
 })
 
 test('treeshake: keeps elem-referenced', () => {
   const ast = parse(`(module
-    (table 1 funcref)
+    (table (export "t") 1 funcref)
     (func $indirect)
     (func $unused)
     (elem (i32.const 0) $indirect)
   )`)
   const opt = optimize(ast, 'treeshake')
   const src = print(opt)
-  assert(src.includes('$indirect'), 'should keep elem-referenced func')
+  assert(src.includes('$indirect'), 'should keep elem-referenced func of a live table')
+  assert(!src.includes('$unused'), 'unreferenced func removed')
 })
 
 test('treeshake: transitive deps', () => {
@@ -722,7 +730,7 @@ test('optimize compiles correctly', () => {
 })
 
 test('optimize accepts string', () => {
-  const opt = optimize('(module (func (result i32) (i32.add (i32.const 1) (i32.const 2))))')
+  const opt = optimize('(module (func (export "f") (result i32) (i32.add (i32.const 1) (i32.const 2))))')
   const src = print(opt)
   assert(src.includes('i32.const 3'), 'should accept and optimize string')
 })
@@ -743,13 +751,12 @@ test('optimize: empty module', () => {
   assert(src.includes('module'), 'should handle empty module')
 })
 
-test('optimize: no exports keeps all', () => {
+test('optimize: unexported funcs are unreachable and removed', () => {
+  // Export-rooted liveness (wasm-opt's model): with no export/start/live-elem root,
+  // nothing can ever invoke these — the module reduces to its shell.
   const ast = parse('(module (func $a) (func $b))')
-  const opt = optimize(ast, 'treeshake')
-  const src = print(opt)
-  // No exports means keep everything (library module)
-  assert(src.includes('$a'), 'should keep func a')
-  assert(src.includes('$b'), 'should keep func b')
+  const src = print(optimize(ast, 'treeshake'))
+  assert(!src.includes('$a') && !src.includes('$b'), 'unreachable funcs removed')
 })
 
 test('optimize: i64 identity', () => {
@@ -1257,7 +1264,7 @@ test('vacuum: select identical IMPURE arms is NOT collapsed (side effect runs tw
   // select evaluates BOTH arms, so identical arms with a side effect run it twice. Collapsing
   // `select(tee, tee, c) → tee` would run it once — a semantics change. Keep the select unless
   // the arm is pure. (Sibling of the constant-select side-effect guard above.)
-  const ast = parse('(module (func (param $x i32) (param $c i32) (result i32) (select (local.tee $x (i32.const 7)) (local.tee $x (i32.const 7)) (local.get $c))))')
+  const ast = parse('(module (func (export "f") (param $x i32) (param $c i32) (result i32) (select (local.tee $x (i32.const 7)) (local.tee $x (i32.const 7)) (local.get $c))))')
   const src = print(optimize(ast))
   assert(src.includes('select'), 'select with identical impure (tee) arms must be kept')
 })
@@ -1850,7 +1857,7 @@ test('stripmut: preserves mut on written global', () => {
 })
 
 test('stripmut: enables global const propagation', () => {
-  const ast = parse('(module (global $g (mut i32) (i32.const 7)) (func (result i32) (global.get $g)))')
+  const ast = parse('(module (global $g (mut i32) (i32.const 7)) (func (export "f") (result i32) (global.get $g)))')
   const opt = optimize(ast)
   const src = print(opt)
   assert(src.includes('i32.const 7'), 'should propagate after stripping mut')
@@ -2281,7 +2288,7 @@ test('integration: stripmut + globals + fold', () => {
 })
 
 test('integration: brif + unbranch + vacuum', () => {
-  const ast = parse(`(module (func (param $c i32) (result i32)
+  const ast = parse(`(module (func (export "f") (param $c i32) (result i32)
     (block $done
       (if (local.get $c)
         (then (br $done))
