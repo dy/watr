@@ -2579,17 +2579,16 @@ test('module passes fire under a leading top-level comment', () => {
   assert.equal(run(src).f(), 2)
 })
 
-test('treeshake: bare-numeric refs cap removal below them', () => {
+test('treeshake: numeric refs renumber across removals', () => {
   const src = `(module (global $g (mut i32) (i32.const 0))
     (func $dead0 (result i32) (i32.const 9))
     (func $init (global.set $g (i32.const 7)))
     (start 1)
     (func $dead2 (result i32) (i32.const 8))
     (func (export "get") (result i32) (global.get $g)))`
-  const opt = optimize(parse(src))
-  const txt = print(opt)
-  assert(txt.includes('$dead0'), 'index below the numeric (start 1) ref must stay — removal would shift it')
-  assert(!txt.includes('$dead2'), 'index above the numeric ref is safely removable')
+  const txt = print(optimize(parse(src)))
+  assert(!txt.includes('$dead0') && !txt.includes('$dead2'), 'both dead funcs removed')
+  assert(txt.includes('start 0') || txt.includes('start $init'), 'numeric start ref renumbered past the removal')
   assert.equal(run(src).get(), 7, 'start still reaches $init')
 })
 

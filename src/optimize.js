@@ -8,7 +8,7 @@
  */
 
 import { size } from './compile.js'
-import { IMM, resultType } from './const.js'
+import { IMM, OPCODE, resultType } from './const.js'
 import parse from './parse.js'
 import { clone, walk, walkPost } from './util.js'
 
@@ -227,6 +227,7 @@ const treeshake = (ast) => {
   // which index space an op's first immediate addresses — one source of truth
   // for call/ref.func/global.get/struct.new/call_ref/…, named or numeric.
   let elemIdxUsed = false // table.init/elem.drop consume element indices — forbids elem removal
+  let flatForm = false     // bare instruction tokens in bodies — operands unattributable
   const refFunced = new Set() // funcs referenced by ref.func in live code — they must STAY declared
   while (work.length) {
     const entry = work.pop()
@@ -240,9 +241,11 @@ const treeshake = (ast) => {
         else if (op === 'ref.func') refFunced.add(deref(funcs, 'func', n[1]))
       }
       // a bare token OUTSIDE op position is flat-form usage whose operands we can't
-      // attribute — freeze segment removal (op-position strings were handled above)
-      else if (typeof n === 'string' && idx !== 0 &&
-        (n === 'table.init' || n === 'elem.drop' || n === 'array.new_elem' || n === 'array.init_elem' || n === 'ref.func')) elemIdxUsed = true
+      // attribute — freeze segment removal and index renumbering
+      else if (typeof n === 'string' && idx !== 0 && OPCODE[n] !== undefined) {
+        flatForm = true
+        if (n === 'table.init' || n === 'elem.drop' || n === 'array.new_elem' || n === 'array.init_elem' || n === 'ref.func') elemIdxUsed = true
+      }
       if (!Array.isArray(n)) {
         // Bare $name (flat-form immediate, label, any position): the flat style
         // gives no structure to say which space it addresses — mark them all.
@@ -272,9 +275,17 @@ const treeshake = (ast) => {
     })
   }
 
-  // Removal gate: unused AND above the space's numeric-ref cap (nothing numeric shifts).
+  // Removal gate. func/global/table indices are RENUMBERED after filtering, so their
+  // numeric refs don't gate removal — unless bodies use flat tokens (operands
+  // unattributable) or inline imports skew declaration order vs binary order. Types
+  // keep the cap: type refs embed in type definitions, ref annotations and field
+  // types, far beyond what the renumberer rewrites.
+  const renumberable = (space) => (space === 'func' || space === 'global' || space === 'table') && !flatForm && !inlineImport[space]
   const cap = (space) => inlineImport[space] && numRef[space] >= 0 ? Infinity : numRef[space]
-  const droppable = (sub, space) => { const e = nodeMap.get(sub); return e && !e.used && e.idx > cap(space) }
+  const droppable = (sub, space) => {
+    const e = nodeMap.get(sub)
+    return e && !e.used && (renumberable(space) || e.idx > cap(space))
+  }
 
   // Dead tables: never read by code or exports — their active elem segments only fill
   // unobservable slots, so table + segments go together (funcs those segments pinned
@@ -327,6 +338,47 @@ const treeshake = (ast) => {
   if (deadGlobals.size) walkPost(result, n => {
     if (Array.isArray(n) && n[0] === 'global.set' && deadGlobals.has(n[1])) return ['drop', n[2]]
   })
+
+  // Renumber surviving bare-numeric refs for the shifted spaces. New indices come
+  // from the RESULT's declaration order (imports interleave in watr's index model);
+  // named refs re-resolve on their own.
+  const remap = { func: new Map(), global: new Map(), table: new Map() }
+  const counters = { func: 0, global: 0, table: 0 }
+  const note = (node, space) => { const e = nodeMap.get(node); e ? remap[space].set(e.idx, counters[space]++) : counters[space]++ }
+  for (const node of result.slice(1)) {
+    if (!Array.isArray(node)) continue
+    const k = node[0]
+    if (k === 'func' || k === 'global' || k === 'table') note(node, k)
+    else if (k === 'import') for (const sub of node)
+      if (Array.isArray(sub) && (sub[0] === 'func' || sub[0] === 'global' || sub[0] === 'table')) note(sub, sub[0])
+  }
+  const shifted = (space) => renumberable(space) && [...remap[space]].some(([o, n]) => o !== n)
+  if (shifted('func') || shifted('global') || shifted('table')) {
+    const isNum = (r) => typeof r === 'number' || (typeof r === 'string' && r !== '' && r[0] !== '$' && !isNaN(r))
+    const renum = (space, ref) => {
+      if (!renumberable(space) || !isNum(ref)) return ref
+      const n = remap[space].get(+ref)
+      return n === undefined ? ref : typeof ref === 'number' ? n : String(n)
+    }
+    walkPost(result, n => {
+      if (!Array.isArray(n)) return
+      const op = n[0]
+      if (op === 'start' || op === 'ref.func' || op === 'call' || op === 'return_call') n[1] = renum('func', n[1])
+      else if (op === 'global.get' || op === 'global.set') n[1] = renum('global', n[1])
+      else if (op === 'export' && Array.isArray(n[2]) && remap[n[2][0]]) n[2][1] = renum(n[2][0], n[2][1])
+      else if (op === 'elem') for (let i = 1; i < n.length; i++) {
+        const part = n[i]
+        if (Array.isArray(part) && part[0] === 'table') part[1] = renum('table', part[1])
+        else if (typeof part === 'string' && part !== 'func' && part !== 'declare' && isNum(part)) n[i] = renum('func', part)
+      }
+      else if (op === 'call_indirect' || op === 'return_call_indirect') { if (isNum(n[1])) n[1] = renum('table', n[1]) }
+      else if (op === 'table.init') { if (n.length > 2) n[1] = renum('table', n[1]) }
+      else if (typeof op === 'string' && IMM[op] && IMM[op].startsWith('tableidx')) {
+        n[1] = renum('table', n[1])
+        if (IMM[op] === 'tableidx_tableidx') n[2] = renum('table', n[2])
+      }
+    })
+  }
   return result
 }
 
@@ -1566,6 +1618,12 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       continue
     }
 
+    // An if's TEST evaluates before the branch is entered — substitute into it
+    // with the pre-branch knowledge before invalidating.
+    if (op === 'if') {
+      const { condIdx, cond } = parseIf(instr)
+      if (Array.isArray(cond)) { const r = substGets(cond, known); if (r !== cond) instr[condIdx] = r, changed = true }
+    }
     // Invalidate at control-flow boundaries
     if (isBranchScope(op)) known.clear()
     // Calls invalidate tracked values that read state a callee can mutate
@@ -1636,11 +1694,17 @@ const sinkSets = (funcNode, params, useCounts) => {
     const name = setNode[1]
     if (params.has(name)) continue
     // the get may BE the whole next statement (the classic adjacent pair), or sit
-    // on its first-evaluated path
-    const nxt = funcNode[i + 1]
+    // on its first-evaluated path (benign leaf operands may precede it)
+    const nxt = funcNode[i + 1], skipped = new Set()
     const hit = Array.isArray(nxt) && nxt[0] === 'local.get' && nxt[1] === name && nxt.length === 2
-      ? [funcNode, i + 1] : firstEvalGet(nxt, name)
+      ? [funcNode, i + 1] : firstEvalGet(nxt, name, skipped)
     if (!hit) continue
+    // the sunk value now evaluates AFTER the skipped leaves — it must not write them
+    if (skipped.size) {
+      let writes = false
+      walk(setNode[2], n => { if (Array.isArray(n) && (n[0] === 'local.set' || n[0] === 'local.tee') && skipped.has(n[1])) writes = true })
+      if (writes) continue
+    }
     const uses = useCounts.get(name) || { gets: 0, sets: 0, tees: 0 }
     // Sole set+get pair → substitute the value outright (decl dies next sweep);
     // otherwise fuse into a tee at the get site. Either way the value's evaluation
@@ -1662,7 +1726,7 @@ const sinkSets = (funcNode, params, useCounts) => {
  * skipped; bodies that are entered conditionally or repeatedly (then/else arms,
  * loops, try_table) are opaque — descent stops there. → [parent, idx] or null.
  */
-const firstEvalGet = (stmt, name) => {
+const firstEvalGet = (stmt, name, skipped) => {
   let cur = stmt
   while (Array.isArray(cur)) {
     // Bodies (re-)entered conditionally or repeatedly are opaque — checked on the
@@ -1676,6 +1740,11 @@ const firstEvalGet = (stmt, name) => {
       if (!Array.isArray(c)) continue // strings/numbers: immediates, labels, memargs
       const ch = c[0]
       if (ch === 'result' || ch === 'param' || ch === 'type' || ch === 'local' || ch === 'export') continue
+      // A benign leaf operand (another local's get, a const) may evaluate before the
+      // sunk value without observing it — record it so the caller can verify the
+      // value doesn't WRITE that local, and keep scanning right.
+      if (ch === 'local.get' && c.length === 2 && c[1] !== name) { skipped?.add(c[1]); continue }
+      if (ch.endsWith?.('.const')) continue
       child = c, ci = i; break
     }
     if (!child) return null
@@ -1695,6 +1764,16 @@ const firstEvalGet = (stmt, name) => {
 const eliminateDeadStores = (funcNode, params, useCounts) => {
   let changed = false
   const getPostUseCount = name => useCounts.get(name) || { gets: 0, sets: 0, tees: 0 }
+
+  // Dead tee (statement-level or nested): written but never read back — the value on
+  // the stack is all that matters, so unwrap it (the decl dies via the unused sweep).
+  walkPost(funcNode, n => {
+    if (Array.isArray(n) && n[0] === 'local.tee' && n.length === 3 &&
+        typeof n[1] === 'string' && !params.has(n[1]) && getPostUseCount(n[1]).gets === 0) {
+      changed = true
+      return n[2]
+    }
+  })
 
   for (let i = funcNode.length - 1; i >= 1; i--) {
     const sub = funcNode[i]
@@ -3472,6 +3551,7 @@ const hashFunc = (node, localNames) => {
   while (stack.length) {
     const v = stack.pop()
     if (Array.isArray(v)) {
+      if (v[0] === 'export') continue // export names are identity, not body
       stack.push('|')
       for (let i = v.length - 1; i >= 0; i--) stack.push(v[i])
       stack.push('[')
@@ -3537,6 +3617,20 @@ const dedupe = (ast) => {
 
   if (redirects.size === 0) return ast
 
+  // A duplicate's inline exports move to standalone exports of the canonical —
+  // the husk loses its pin and treeshake collects it next sweep.
+  for (const node of ast.slice(1)) {
+    if (!Array.isArray(node) || node[0] !== 'func') continue
+    const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
+    if (!name || !redirects.has(name)) continue
+    for (let i = node.length - 1; i >= 2; i--) {
+      if (Array.isArray(node[i]) && node[i][0] === 'export') {
+        ast.push(['export', node[i][1], ['func', redirects.get(name)]])
+        node.splice(i, 1)
+      }
+    }
+  }
+
   // Rewrite all references: calls, ref.func, elem segments, call_indirect type
   walkPost(ast, (node) => {
     if (!Array.isArray(node)) return
@@ -3548,10 +3642,11 @@ const dedupe = (ast) => {
       return ['ref.func', redirects.get(node[1])]
     }
     if (op === 'elem') {
-      const funcs = node[node.length - 1]
-      if (Array.isArray(funcs)) {
-        return [...node.slice(0, -1), funcs.map(f => redirects.get(f) || f)]
-      }
+      return node.map(p => typeof p === 'string' && redirects.has(p) ? redirects.get(p) : p)
+    }
+    if (op === 'start' && redirects.has(node[1])) return ['start', redirects.get(node[1])]
+    if (op === 'export' && Array.isArray(node[2]) && node[2][0] === 'func' && redirects.has(node[2][1])) {
+      return ['export', node[1], ['func', redirects.get(node[2][1])]]
     }
     if (op === 'call_indirect' && node.length >= 3) {
       const typeRef = node[1]
@@ -4341,6 +4436,17 @@ export default function optimize(ast, opts = true) {
     const i = ast.findIndex(n => Array.isArray(n) && n[0] === 'module')
     if (i >= 0) wrapper = ast, slot = i, ast = ast[i]
   }
+
+  // Strip comment trivia inside the module: parse keeps `;;`/`(;` as string children,
+  // which blocks every adjacency-windowed pass (set→get fusion, dead-store pairs).
+  // Top-level banner comments survive in the wrapper above.
+  walkPost(ast, n => {
+    if (!Array.isArray(n)) return
+    for (let i = n.length - 1; i >= 0; i--) {
+      const c = n[i]
+      if (typeof c === 'string' && (c[0] === ';' || (c[0] === '(' && c[1] === ';'))) n.splice(i, 1)
+    }
+  })
 
   // licm runs ONCE after the rounds + inline: its invariants only exist after inlining, and a
   // later propagate round would forward a single-use hoist back into the loop, undoing it.
