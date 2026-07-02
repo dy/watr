@@ -1743,6 +1743,86 @@ const forwardPropagate = (funcNode, params, useCounts) => {
 }
 
 /**
+ * A `(local.set $x V)` (pure V) immediately before a `loop` is dead when the write can
+ * never be observed: (a) inside the loop, every path from the top reaches a write of $x
+ * before any read — checked by an evaluation-order scan where if-arms fork (a read
+ * counts against EITHER arm, a def only when BOTH arms guarantee it), nested loops and
+ * try_table are opaque (reads fail, defs aren't credited), br/br_table/return end their
+ * path, br_if falls through, and any br inside a block resets the def state after it —
+ * and (b) $x is read NOWHERE outside that loop body, so the loop's exit-time value is
+ * unobservable regardless of which exit path ran (the counterexample class: a zero-trip
+ * inner loop leaking the previous outer iteration's value to a post-loop read).
+ */
+const deadThroughLoop = (funcNode, name, loop) => {
+  let total = 0, inside = 0
+  walk(funcNode, n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) total++ })
+  walk(loop, n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) inside++ })
+  if (total !== inside) return false // (b) — read outside the loop may observe it
+  const readsAny = (n) => { let r = false; walk(n, c => { if (Array.isArray(c) && c[0] === 'local.get' && c[1] === name) r = true }); return r }
+  const hasBr = (n) => { let r = false; walk(n, c => { const o = Array.isArray(c) ? c[0] : c; if (o === 'br' || o === 'br_if' || o === 'br_table') r = true }); return r }
+  const scanList = (list, from, def) => {
+    for (let i = from; i < list.length; i++) {
+      const r = scanExpr(list[i], def)
+      if (!r.ok) return r
+      def = r.def
+      if (r.end) return { ok: true, def, end: true }
+    }
+    return { ok: true, def }
+  }
+  const scanExpr = (n, def) => {
+    if (!Array.isArray(n)) {
+      if (typeof n === 'string' && OPCODE[n] !== undefined) return { ok: false } // flat token — order unattributable
+      return { ok: true, def }
+    }
+    const op = n[0]
+    if (op === 'param' || op === 'result' || op === 'type' || op === 'local' || op === 'export') return { ok: true, def }
+    if (op === 'local.get') return n[1] === name && !def ? { ok: false } : { ok: true, def }
+    if (op === 'local.set' || op === 'local.tee') {
+      const r = n.length > 2 ? scanExpr(n[2], def) : { ok: true, def }
+      if (!r.ok || r.end) return r
+      return { ok: true, def: r.def || n[1] === name }
+    }
+    if (op === 'if') {
+      const { condIdx, thenBranch, elseBranch } = parseIf(n)
+      let d = def
+      for (let k = 1; k <= condIdx && k < n.length; k++) {
+        if (n[k] === thenBranch || n[k] === elseBranch) continue
+        const r = scanExpr(n[k], d)
+        if (!r.ok || r.end) return r
+        d = r.def
+      }
+      const t = thenBranch ? scanList(thenBranch, 1, d) : { ok: true, def: d }
+      if (!t.ok) return t
+      const e = elseBranch ? scanList(elseBranch, 1, d) : { ok: true, def: d }
+      if (!e.ok) return e
+      return { ok: true, def: (t.end ? d : t.def) && (e.end ? d : e.def) }
+    }
+    if (op === 'loop' || op === 'try_table') return readsAny(n) ? { ok: false } : { ok: true, def }
+    if (op === 'block') {
+      const r = scanList(n, 1, def)
+      if (!r.ok) return r
+      // brs inside a block reconverge after it: a def already made before the block
+      // survives; one made inside only counts when nothing could jump around it
+      return { ok: true, def: def || (r.def && !hasBr(n)) }
+    }
+    if (op === 'br' || op === 'br_table' || op === 'return' || op === 'unreachable' || op === 'throw' ||
+        op === 'return_call' || op === 'return_call_indirect') {
+      let d = def
+      for (let k = 1; k < n.length; k++) { const r = scanExpr(n[k], d); if (!r.ok) return r; d = r.def }
+      return { ok: true, def: d, end: true }
+    }
+    let d = def
+    for (let k = 1; k < n.length; k++) {
+      const r = scanExpr(n[k], d)
+      if (!r.ok || r.end) return r
+      d = r.def
+    }
+    return { ok: true, def: d }
+  }
+  return scanList(loop, 1, false).ok
+}
+
+/**
  * Sink (local.set $x V) into the next statement when that statement's FIRST-evaluated
  * instruction is (local.get $x): sole-use pairs substitute V outright, multi-use ones
  * fuse into (local.tee $x V). Subsumes the old adjacent-only set/get-pair and tee
@@ -1890,10 +1970,26 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
     const uses = getPostUseCount(name)
     // Dead store: set but never read.
     if (sub[0] === 'local.set' && uses.gets === 0 && uses.tees === 0) {
+      // `(local.set $D (CMP (local.tee $L X) CONST))` with $D never read: the
+      // comparison is non-trapping and its other operand a literal — only the
+      // tee's store matters. Collapse to `(local.set $L X)`.
+      if (sub.length === 3 && Array.isArray(sub[2]) && sub[2].length === 3 &&
+          /\.(eq|ne|[lg][te](_[su])?)$/.test(sub[2][0])) {
+        const [, a, b] = sub[2]
+        const tee = Array.isArray(a) && a[0] === 'local.tee' ? a : Array.isArray(b) && b[0] === 'local.tee' ? b : null
+        const other = tee === a ? b : a
+        if (tee && tee.length === 3 && tee[1] !== name && Array.isArray(other) && other[0]?.endsWith?.('.const')) {
+          funcNode[i] = ['local.set', tee[1], tee[2]]
+          changed = true
+          continue
+        }
+      }
       // `(local.set $x VALUE)` — drop the store with its value, but only when
-      // VALUE is pure (its side effects would otherwise still need to run).
+      // VALUE is pure (its side effects would otherwise still need to run);
+      // an impure but trap-free VALUE reduces to its side-effect core.
       if (sub.length === 3) {
         if (isPure(sub[2])) { funcNode.splice(i, 1); changed = true }
+        else if (!hasTrap(sub[2])) { funcNode.splice(i, 1, ...dropEffects(sub[2])); changed = true }
       }
       // Bare `(local.set $x)` — the value is implicit on the stack (e.g. an
       // exception payload landing from a `try_table` catch). Demote to `drop`
@@ -2173,6 +2269,29 @@ const propagate = (ast) => {
       for (const scope of scopes) if (forwardPropagate(scope, params, useCounts)) progressed = true
       const counts = progressed ? countLocalUses(funcNode) : useCounts
       for (const scope of scopes) {
+        // pure set feeding a loop (possibly through a run of other pure sets that
+        // don't read it) which provably clobbers it on every path before any read,
+        // with no reads outside the loop: dead
+        for (let i = 1; i < scope.length - 1; i++) {
+          const st = scope[i]
+          if (!(Array.isArray(st) && st[0] === 'local.set' && st.length === 3 && typeof st[1] === 'string' &&
+                Array.isArray(st[2]) && isPure(st[2]) && !hasTrap(st[2]))) continue
+          let j = i + 1, blocked = false
+          while (j < scope.length) {
+            const nx = scope[j]
+            if (Array.isArray(nx) && nx[0] === 'loop') break
+            // an intervening statement may only be another pure set that neither
+            // reads nor writes this local
+            if (!(Array.isArray(nx) && nx[0] === 'local.set' && nx.length === 3 && nx[1] !== st[1] &&
+                  Array.isArray(nx[2]) && isPure(nx[2]))) { blocked = true; break }
+            let touches = false
+            walk(nx[2], c => { if (Array.isArray(c) && (c[0] === 'local.get' || c[0] === 'local.tee') && c[1] === st[1]) touches = true })
+            if (touches) { blocked = true; break }
+            j++
+          }
+          if (blocked || j >= scope.length || !Array.isArray(scope[j]) || scope[j][0] !== 'loop') continue
+          if (deadThroughLoop(funcNode, st[1], scope[j])) { scope.splice(i, 1); i--; progressed = true }
+        }
         if (sinkSets(scope, params, counts)) progressed = true
         if (eliminateDeadStores(scope, params, counts)) progressed = true
         if (eliminateAdjacentDeadStores(scope, params)) progressed = true

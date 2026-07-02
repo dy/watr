@@ -2713,3 +2713,49 @@ test('dedupe: canonical positional hash — merges naming clones, never operand 
   const txt = print(optimize(parse(src)))
   assert((txt.match(/i32\.sub/g) || []).length <= 3, 'naming clones merged')
 })
+
+test('loop-entry DSE: dead pre-loop init dies; zero-trip-observable init survives', () => {
+  // every path through the loop rewrites $s before reading it, and $s is never read
+  // outside — the pre-loop init is unobservable
+  const dead = `(module (func (export "f") (param $n i32) (result i32) (local $i i32) (local $s i32) (local $r i32)
+    (local.set $s (i32.const 7))
+    (loop $l
+      (local.set $s (i32.add (local.get $i) (i32.const 1)))
+      (local.set $r (i32.add (local.get $r) (local.get $s)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $l (i32.lt_s (local.get $i) (local.get $n))))
+    (local.get $r)))`
+  assert(!print(optimize(parse(dead))).includes('i32.const 7'), 'unobservable pre-loop init removed')
+  assert.equal(run(dead).f(3), 6)
+  // the verifier counterexample: an inner zero-trip loop can skip the write while the
+  // value is read after — the reset is OBSERVABLE and must survive
+  const live = `(module (func (export "f") (result i32) (local $x i32) (local $i i32) (local $j i32)
+    (loop $outer
+      (local.set $j (i32.sub (i32.const 1) (local.get $i)))
+      (local.set $x (i32.const 0))
+      (loop $inner
+        (if (i32.gt_s (local.get $j) (i32.const 0))
+          (then (local.set $x (i32.const 1))
+                (local.set $j (i32.sub (local.get $j) (i32.const 1)))
+                (br $inner))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $outer (i32.lt_s (local.get $i) (i32.const 3))))
+    (local.get $x)))`
+  assert.equal(run(live).f(), 0, 'zero-trip-observable reset preserved')
+})
+
+test('dead comparison around a live tee collapses to the bare store', () => {
+  const src = `(module (memory 1) (func (export "f") (result i32) (local $d i32) (local $l i32)
+    (local.set $d (i32.eq (local.tee $l (i32.const 42)) (i32.const 5)))
+    (local.get $l)))`
+  const out = print(optimize(parse(src)))
+  assert(!out.includes('i32.eq'), 'dead comparison dropped, tee store kept')
+  assert.equal(run(src).f(), 42)
+})
+
+test('impure trap-free dead store reduces to its side-effect core', () => {
+  const src = `(module (global $g (mut i32) (i32.const 0)) (func (export "f") (result i32) (local $d i32)
+    (local.set $d (i32.add (local.tee $d (i32.const 1)) (block (result i32) (global.set $g (i32.const 9)) (i32.const 2))))
+    (global.get $g)))`
+  assert.equal(run(src).f(), 9, 'global.set inside the dead store still runs')
+})
