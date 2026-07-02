@@ -5146,21 +5146,69 @@ export default function optimize(ast, opts = true) {
   // nothing can inflate, so we skip watr's per-round `binarySize` re-compile
   // guard — up to four full encodes per call — and iterate to a fixpoint with
   // zero compiles. A round that changes nothing is the natural exit.
+  // Per-function convergence: passes that look only inside one function run over a
+  // DIRTY set — a function untouched since the previous round is skipped (on a large
+  // module the bulk converges in round one, so later rounds cost almost nothing).
+  // Module-scoped passes always run; their mutations re-dirty functions through the
+  // per-func snapshots.
+  const MODULE_SCOPE = new Set(['stripmut', 'globals', 'guardRefine', 'macro', 'spec', 'inlineOnce',
+    'dedupe', 'dedupTypes', 'packData', 'treeshake', 'minifyImports', 'reorder', 'unbranch'])
+  const collectFuncs = () => { const out = []; for (const n of ast) if (Array.isArray(n) && n[0] === 'func') out.push(n); return out }
+  const snapshots = new Map()
+  let dirty = null // null = everything
+  const runRounds = (skipInline, onRoundStart) => {
+    // dirty sets make extra rounds nearly free — the cap is a safety net, not a cost
+    let prevLen = -1
+    for (let round = 0; round < 6; round++) {
+      onRoundStart?.()
+      const funcsNow = collectFuncs()
+      const work = dirty ? funcsNow.filter(f => dirty.has(f)) : funcsNow
+      // a walkPost-shaped pass may rebuild the func ROOT (e.g. vacuum cleaning the
+      // body list) — write the replacement back and carry the identity forward
+      const per = (fn) => {
+        for (let wi = 0; wi < work.length; wi++) {
+          const f = work[wi], r = fn(f, opts)
+          if (r && r !== f && Array.isArray(r)) {
+            const i = ast.indexOf(f)
+            if (i >= 0) ast[i] = r
+            work[wi] = r
+            if (dirty?.has(f)) { dirty.delete(f); dirty.add(r) }
+            const snap = snapshots.get(f)
+            if (snap !== undefined) { snapshots.delete(f); snapshots.set(r, snap) }
+          }
+        }
+      }
+      let fused = false
+      for (const [key, fn] of PASSES) {
+        if (!opts[key] || key === 'inline' || key === 'devirt' || key === 'licm' || key === 'cse' ||
+            (skipInline && key === 'inlineOnce')) continue
+        if (SIMPLIFY_KEYS.has(key)) {
+          if (!fused) {
+            fused = true
+            per((f) => simplify(f, opts))
+            for (const n of ast) if (Array.isArray(n) && n[0] !== 'func') simplify(n, opts)
+          }
+          continue
+        }
+        if (MODULE_SCOPE.has(key)) { ast = fn(ast, opts); continue }
+        per(fn)
+      }
+      const next = new Set()
+      for (const f of collectFuncs()) { const snap = snapshots.get(f); if (!snap || !equal(snap, f)) next.add(f) }
+      const topStable = ast.length === prevLen
+      prevLen = ast.length
+      for (const f of next) snapshots.set(f, clone(f))
+      dirty = next
+      if (verbose) log(`  round ${round + 1}: ${next.size} dirty funcs`)
+      if (!next.size && topStable) break
+    }
+  }
+
   if (!((opts.inlineOnce || opts.inline) && mayInline(ast))) {
     // inlineOnce/inline can't fire here, so skip them — their candidate scan
     // (a 16-round whole-module walk) is the second-costliest thing after
     // propagate, and it would only confirm what `mayInline` already proved.
-    for (let round = 0; round < 3; round++) {
-      const beforeRound = clone(ast)
-      let fused = false
-      for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inlineOnce' || key === 'inline' || key === 'devirt' || key === 'licm' || key === 'cse') continue
-        if (SIMPLIFY_KEYS.has(key)) { if (!fused) ast = simplify(ast, opts), fused = true; continue }
-        ast = fn(ast, opts)
-      }
-      if (equal(beforeRound, ast)) break // fixpoint
-      if (verbose) log(`  round ${round + 1} applied`)
-    }
+    runRounds(true)
     // treeshake/dedupe can EXPOSE single-caller candidates mid-rounds (dropping the
     // other callers) — the entry check was a snapshot; recheck before finishing
     if (!((opts.inlineOnce || opts.inline) && mayInline(ast))) return finish(ast)
@@ -5174,24 +5222,15 @@ export default function optimize(ast, opts = true) {
   // so a broken round unwinds the same way.
   const pristine = clone(ast)
   const sizeBefore = binarySize(ast)
-  let beforeRound = null
-  for (let round = 0; round < 3; round++) {
-    const snapshot = clone(ast)
+  let beforeRound = null, cur = null
+  runRounds(false, () => { beforeRound = cur; cur = clone(ast) })
+  // `cur` is the clone taken at the LAST round's start; if that round changed
+  // nothing (converged), unwinding to it is identity — beforeRound covers the case
+  if (cur && !equal(cur, ast)) beforeRound = cur
 
-    let fused = false
-    for (const [key, fn] of PASSES) {
-      if (!opts[key] || key === 'devirt' || key === 'inline' || key === 'licm' || key === 'cse') continue
-      if (SIMPLIFY_KEYS.has(key)) { if (!fused) ast = simplify(ast, opts), fused = true; continue }
-      ast = fn(ast, opts)
-    }
-    // Second propagate sweep: `inlineOnce`/`inline` (above) leave fresh
-    // `(local.set $p arg) … (local.get $p)` wrappers around each inlined call —
-    // collapse them within the same round.
-    if (opts.propagate && (opts.inlineOnce || opts.inline)) ast = propagate(ast)
-
-    if (equal(snapshot, ast)) break // fixpoint
-    beforeRound = snapshot
-  }
+  // Second propagate sweep on whatever remained dirty: inlineOnce leaves fresh
+  // (local.set $p arg) … (local.get $p) wrappers around each inlined call
+  if (opts.propagate && dirty) for (const f of dirty) propagate(f)
 
   // Default optimize must never inflate; explicit passes get slight leniency.
   const tolerance = strictGuard ? 0 : 16
