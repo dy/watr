@@ -59,11 +59,11 @@ npx watr input.wat --polyfill   # newer features → MVP
 
 ## Metrics
 
-* **watr** — ~43 KB minified (~14 KB gzipped), 4,460 op/s
-* [spec/wast.js](https://github.com/WebAssembly/spec) — 216 KB, 2,185 op/s
-* [wabt](https://github.com/WebAssembly/wabt) — 282 KB, 1,273 op/s
-* [binaryen](https://github.com/WebAssembly/binaryen) — 1,100 KB, 718 op/s
-* [wat-compiler](https://github.com/stagas/wat-compiler) — ~152 KB (+ wabt dep), 539 op/s
+* **watr** — ~44 KB minified (~14 KB gzipped), 3,123 op/s
+* [spec/wast.js](https://github.com/WebAssembly/spec) — 216 KB, 1,509 op/s
+* [wabt](https://github.com/WebAssembly/wabt) — 282 KB, 859 op/s
+* [binaryen](https://github.com/WebAssembly/binaryen) — 1,100 KB, 473 op/s
+* [wat-compiler](https://github.com/stagas/wat-compiler) — ~152 KB (+ wabt dep), 355 op/s
 
 ### Optimizer vs binaryen (wasm-opt 128)
 
