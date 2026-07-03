@@ -4045,24 +4045,27 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
   const bodyStart = inlBodyStart, callsSelf = inlCallsSelf, unsafe = inlUnsafe, isBranch = inlIsBranch
   const zeroFor = inlZeroFor, needsReset = inlNeedsReset
 
-  for (let round = 0; round < MAX_INLINE_ROUNDS; round++) {
-    const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
-    const funcByName = new Map()
-    for (const n of funcs) if (typeof n[1] === 'string') funcByName.set(n[1], n)
+  // Count plain-call references across the WHOLE module ONCE (anonymous exported
+  // funcs call helpers too); flag any non-call reference (return_call etc.).
+  // Splicing one callee into its lone caller MOVES the callee's own calls — the
+  // module-wide counts are unchanged except the dissolved call itself, so the
+  // maps are maintained incrementally instead of re-walked per round.
+  const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
+  const funcByName = new Map()
+  for (const n of funcs) if (typeof n[1] === 'string') funcByName.set(n[1], n)
+  const callRefs = new Map(), otherRef = new Set()
+  const countRefs = (n) => {
+    if (!Array.isArray(n)) return
+    const op = n[0]
+    if (op === 'call' && typeof n[1] === 'string') callRefs.set(n[1], (callRefs.get(n[1]) || 0) + 1)
+    else if (op === 'return_call' && typeof n[1] === 'string') otherRef.add(n[1])
+    for (let i = 1; i < n.length; i++) countRefs(n[i])
+  }
+  countRefs(ast)
+  const pinned = inlBuildPinned(ast)
+  // a func may carry its own (export "name") — the signature scan below rejects those too
 
-    // Count plain-call references across the WHOLE module (anonymous exported funcs
-    // call helpers too); flag any non-call reference (return_call etc.).
-    const callRefs = new Map(), otherRef = new Set()
-    const countRefs = (n) => {
-      if (!Array.isArray(n)) return
-      const op = n[0]
-      if (op === 'call' && typeof n[1] === 'string') callRefs.set(n[1], (callRefs.get(n[1]) || 0) + 1)
-      else if (op === 'return_call' && typeof n[1] === 'string') otherRef.add(n[1])
-      for (let i = 1; i < n.length; i++) countRefs(n[i])
-    }
-    countRefs(ast)
-    const pinned = inlBuildPinned(ast)
-    // a func may carry its own (export "name") — the signature scan below rejects those too
+  for (let round = 0; round < MAX_INLINE_ROUNDS; round++) {
 
     // Pick a callee.
     let calleeName = null
@@ -4182,6 +4185,10 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
 
     const idx = ast.indexOf(callee)
     if (idx >= 0) ast.splice(idx, 1)
+    funcByName.delete(calleeName)
+    callRefs.delete(calleeName)
+    const fi = funcs.indexOf(callee)
+    if (fi >= 0) funcs.splice(fi, 1)
   }
 
   return ast
