@@ -2655,12 +2655,20 @@ const cse = (ast) => {
   let uid = 0
   walk(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
-    const scopes = []
-    walkPost(fn, n => { if (isScopeNode(n)) scopes.push(n) })
-    const decls = []
-    for (const scope of scopes) {
-      const live = new Map(), all = []
-      for (let si = 1; si < scope.length; si++) {
+    const all = []
+    // Scope tree with availability inheritance: an if's arms and a block's body
+    // are entered with everything still live at that point — a group tee'd in the
+    // parent DOMINATES its arm sites, so cross-block repeats share one local.
+    // A loop body starts FRESH: a tee outside the loop goes stale on iteration 2
+    // if anything the expression reads is rewritten later in the body (linear
+    // invalidation can't see the back edge). try_table bodies likewise fresh.
+    const processScope = (scope, inherited) => {
+      const live = new Map(inherited)
+      let si = 1
+      // leading label of a block/loop is structure, not a flat token — skip
+      // without clearing what was inherited
+      if (typeof scope[si] === 'string' && scope[si][0] === '$') si++
+      for (; si < scope.length; si++) {
         const stmt = scope[si]
         if (!Array.isArray(stmt)) { live.clear(); continue } // flat token — unknown order
         const h = stmt[0]
@@ -2680,13 +2688,23 @@ const cse = (ast) => {
           if (!Array.isArray(n)) return
           const o = n[0]
           // an if's CONDITION evaluates unconditionally — candidates there are as
-          // dominant as any statement's; the arms stay opaque (own scopes)
+          // dominant as any statement's; the arms stay opaque here (recursed below
+          // for top-level statements, fresh for expression-nested ifs)
           if (o === 'if') {
-            const { condIdx, cond } = parseIf(n)
+            const { condIdx, cond, thenBranch, elseBranch } = parseIf(n)
             if (Array.isArray(cond)) collect(cond, n, condIdx)
+            if (n !== stmt) { // expression-nested arms: own fresh scopes (the
+              // statement-level branch below owns top-level arms, with inheritance)
+              if (thenBranch) processScope(thenBranch, EMPTY_MAP)
+              if (elseBranch) processScope(elseBranch, EMPTY_MAP)
+            }
             return
           }
-          if (o === 'block' || o === 'loop' || o === 'then' || o === 'else' || o === 'try_table') return
+          if (o === 'block' || o === 'loop' || o === 'try_table') {
+            if (n !== stmt) processScope(n, EMPTY_MAP)
+            return
+          }
+          if (o === 'then' || o === 'else') return
           if (typeof o === 'string' && resultType(o) && isPure(n)) {
             const est = estBytes(n)
             if (est >= 4) {
@@ -2710,33 +2728,70 @@ const cse = (ast) => {
           for (let i = 1; i < n.length; i++) collect(n[i], n, i)
         }
         collect(stmt, scope, si)
-        // invalidate against this statement's writes
+        // recurse structured bodies. An arm enters with what was live AFTER the
+        // condition evaluated: the condition may tee a local or call out (jz
+        // emits `(if (tee …) …)` pervasively), and an arm site reusing the
+        // parent's pre-condition value would read stale state — fence the
+        // inherited copy with the CONDITION's effects only (an arm's own writes
+        // are handled by its linear scan; the sibling arm never ran first). A
+        // block has no condition: its body inherits everything as-is.
+        if (h === 'if') {
+          const { cond, thenBranch, elseBranch } = parseIf(stmt)
+          const cw = new Set(); let cGlob = false, cMemCall = false
+          walk(cond, n => {
+            if (!Array.isArray(n)) return
+            const o = n[0]
+            if ((o === 'local.set' || o === 'local.tee') && typeof n[1] === 'string') cw.add(n[1])
+            else if (o === 'global.set') cGlob = true
+            else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') { cGlob = true; cMemCall = true }
+            else if (typeof o === 'string' && (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' ||
+                     o === 'memory.init' || o === 'memory.grow' || (o.includes('.atomic.') && !o.endsWith('.load')))) cMemCall = true
+          })
+          const armLive = new Map()
+          for (const [k, g] of live) {
+            if (g.mem && cMemCall) continue
+            if (g.glob && cGlob) continue
+            let stale = false
+            for (const l of cw) if (g.reads.has(l)) { stale = true; break }
+            if (!stale) armLive.set(k, g)
+          }
+          if (thenBranch) processScope(thenBranch, armLive)
+          if (elseBranch) processScope(elseBranch, armLive)
+        } else if (h === 'block') {
+          processScope(stmt, live)
+        } else if (h === 'loop' || h === 'try_table') {
+          processScope(stmt, EMPTY_MAP)
+        }
+        // invalidate against this statement's writes (arms included — a
+        // conditional write still poisons everything after the statement)
         for (const [k, g] of live) {
           if (g.mem && (wMem || call)) { live.delete(k); continue }
           if (g.glob && (call || wGlobals.size)) { live.delete(k); continue }
           for (const l of wLocals) if (g.reads.has(l)) { live.delete(k); break }
         }
       }
-      // A fresh local appended to the locals vector costs 2 B (new count+type run) —
-      // unless its type matches the run it lands after, where the count just
-      // increments for free. Track the run tail (locals only — params aren't in the
-      // binary locals vector) so the gate prices each candidate exactly.
-      let tailType = null
-      for (let i = 1; i < fn.length; i++) if (Array.isArray(fn[i]) && fn[i][0] === 'local') {
-        const t = fn[i][fn[i].length - 1]
-        tailType = typeof t === 'string' ? t : null
-      }
-      for (const g of all) {
-        const n = g.sites.length
-        const declCost = g.type === tailType ? 0 : 2
-        if (n < 2 || (n - 1) * (g.est - 2) <= 2 + declCost) continue
-        const name = '$cse' + uid++
-        decls.push(['local', name, g.type])
-        tailType = g.type
-        const [p0, i0] = g.sites[0]
-        p0[i0] = ['local.tee', name, g.expr]
-        for (let k = 1; k < n; k++) { const [p, i] = g.sites[k]; p[i] = ['local.get', name] }
-      }
+    }
+    processScope(fn, EMPTY_MAP)
+    const decls = []
+    // A fresh local appended to the locals vector costs 2 B (new count+type run) —
+    // unless its type matches the run it lands after, where the count just
+    // increments for free. Track the run tail (locals only — params aren't in the
+    // binary locals vector) so the gate prices each candidate exactly.
+    let tailType = null
+    for (let i = 1; i < fn.length; i++) if (Array.isArray(fn[i]) && fn[i][0] === 'local') {
+      const t = fn[i][fn[i].length - 1]
+      tailType = typeof t === 'string' ? t : null
+    }
+    for (const g of all) {
+      const n = g.sites.length
+      const declCost = g.type === tailType ? 0 : 2
+      if (n < 2 || (n - 1) * (g.est - 2) <= 2 + declCost) continue
+      const name = '$cse' + uid++
+      decls.push(['local', name, g.type])
+      tailType = g.type
+      const [p0, i0] = g.sites[0]
+      p0[i0] = ['local.tee', name, g.expr]
+      for (let k = 1; k < n; k++) { const [p, i] = g.sites[k]; p[i] = ['local.get', name] }
     }
     if (decls.length) {
       let at = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1

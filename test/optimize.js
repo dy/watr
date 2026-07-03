@@ -3006,3 +3006,40 @@ test('outline: repeated pure expressions extract into one shared helper', () => 
                (i32.add (local.tee $t (i32.const 6)) (i32.const 300009)))))`
   assert.equal(run(impure).h(0), 5 + 300009 + 6 + 300009)
 })
+
+test('cse: a value live before an if is reused inside both arms (cross-block GVN)', () => {
+  const src = `(module (memory 1)
+    (func (export "f") (param $p i32) (param $q i32) (result i32)
+      (i32.store (i32.const 0) (i32.mul (i32.add (local.get $p) (i32.const 12345)) (i32.const 7)))
+      (if (result i32) (local.get $q)
+        (then (i32.mul (i32.add (local.get $p) (i32.const 12345)) (i32.const 7)))
+        (else (i32.sub (i32.const 0) (i32.mul (i32.add (local.get $p) (i32.const 12345)) (i32.const 7)))))))`
+  const { f } = run(src)
+  const v = (p) => Math.imul((p + 12345) | 0, 7)
+  assert.equal(f(3, 1), v(3))
+  assert.equal(f(3, 0), -v(3))
+  const txt = print(optimize(parse(src)))
+  assert.equal((txt.match(/i32\.mul/g) || []).length, 1, 'the repeated expression computes once, arms reuse it')
+  // a loop body must NOT inherit: the tee'd value goes stale on iteration 2
+  const loop = `(module (func (export "g") (param $n i32) (result i32) (local $x i32) (local $s i32)
+    (local.set $s (i32.add (i32.mul (local.get $x) (i32.const 33333)) (i32.const 5)))
+    (loop $L
+      (local.set $s (i32.add (local.get $s) (i32.add (i32.mul (local.get $x) (i32.const 33333)) (i32.const 5))))
+      (local.set $x (i32.add (local.get $x) (i32.const 1)))
+      (br_if $L (i32.lt_s (local.get $x) (local.get $n))))
+    (local.get $s)))`
+  assert.equal(run(loop).g(3), 5 + (0 * 33333 + 5) + (1 * 33333 + 5) + (2 * 33333 + 5))
+})
+
+test('cse inheritance: a condition that rewrites a local kills the inherited value', () => {
+  const src = `(module (memory 1)
+    (func (export "f") (param $p i32) (result i32) (local $x i32)
+      (local.set $x (i32.const 2))
+      (i32.store (i32.const 0) (i32.mul (i32.add (local.get $x) (i32.const 30000)) (i32.const 7)))
+      (if (result i32) (i32.eqz (local.tee $x (local.get $p)))
+        (then (i32.mul (i32.add (local.get $x) (i32.const 30000)) (i32.const 7)))
+        (else (i32.const -1)))))`
+  const { f } = run(src)
+  assert.equal(f(0), (0 + 30000) * 7, 'arm recomputes with the post-tee value, never reuses pre-cond')
+  assert.equal(f(9), -1)
+})
