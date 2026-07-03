@@ -1536,6 +1536,75 @@ const isPure = (node) => {
   return true
 }
 
+// ==================== INTERPROCEDURAL EFFECT SUMMARY ====================
+// Transitive per-function write effects: does calling $f (and everything it can
+// reach) write linear memory, or which globals can it set? Any escape from the
+// analyzable world — an imported func, call_indirect, a table/exception op, a
+// numeric or unresolvable callee — marks the function unknown (= writes
+// everything). Computed once per optimize() entry; passes only ever use it to
+// RELAX a conservative default, and optimization never adds effects to a body
+// that didn't have them, so a stale summary stays sound.
+let CALLFX = null
+
+const computeCallEffects = (ast) => {
+  const fx = new Map() // name → { wMem, wGlob:Set, unknown, calls:Set }
+  if (!Array.isArray(ast) || ast[0] !== 'module') return fx
+  for (const n of ast.slice(1)) {
+    if (!Array.isArray(n)) continue
+    if (n[0] === 'import') {
+      const f = n.find(c => Array.isArray(c) && c[0] === 'func')
+      if (f && typeof f[1] === 'string' && f[1][0] === '$')
+        fx.set(f[1], { wMem: true, rMem: true, wGlob: new Set(), rGlob: new Set(), unknown: true, calls: new Set() })
+      continue
+    }
+    if (n[0] !== 'func' || typeof n[1] !== 'string' || n[1][0] !== '$') continue
+    const e = { wMem: false, rMem: false, wGlob: new Set(), rGlob: new Set(), unknown: false, calls: new Set() }
+    const op = (o, tgt) => {
+      if (o === 'call' || o === 'return_call') { typeof tgt === 'string' && tgt[0] === '$' ? e.calls.add(tgt) : e.unknown = true }
+      else if (o === 'call_indirect' || o === 'return_call_indirect' || o === 'throw' || o === 'throw_ref') e.unknown = true
+      else if (o === 'global.set') { typeof tgt === 'string' ? e.wGlob.add(tgt) : e.unknown = true }
+      else if (o === 'global.get') { typeof tgt === 'string' ? e.rGlob.add(tgt) : e.unknown = true }
+      else if (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' ||
+               o === 'memory.init' || o === 'memory.grow' || o.includes('table.') || o.includes('.atomic')) e.wMem = e.rMem = true
+      else if (o.includes('.load') || o === 'memory.size') e.rMem = true
+    }
+    walk(n, (c, parent, idx) => {
+      if (!Array.isArray(c)) {
+        // bare flat tokens carry the same effects as their folded forms
+        if (idx === 0 || typeof c !== 'string' || OPCODE[c] === undefined) return
+        op(c, parent[idx + 1])
+        return
+      }
+      if (typeof c[0] === 'string') op(c[0], c[1])
+    })
+    fx.set(n[1], e)
+  }
+  // propagate through call edges to a fixpoint (effects only grow — terminates)
+  for (let dirty = true; dirty;) {
+    dirty = false
+    for (const e of fx.values()) {
+      if (e.unknown) continue
+      for (const callee of e.calls) {
+        const t = fx.get(callee)
+        if (!t) { e.unknown = true; dirty = true; break }
+        if (t.unknown && !e.unknown) { e.unknown = true; dirty = true; break }
+        if (t.wMem && !e.wMem) { e.wMem = true; dirty = true }
+        if (t.rMem && !e.rMem) { e.rMem = true; dirty = true }
+        for (const g of t.wGlob) if (!e.wGlob.has(g)) { e.wGlob.add(g); dirty = true }
+        for (const g of t.rGlob) if (!e.rGlob.has(g)) { e.rGlob.add(g); dirty = true }
+      }
+    }
+  }
+  return fx
+}
+
+/** Effect summary for a call NODE — null when the callee can't be summarized. */
+const callFx = (n) => {
+  if (!CALLFX || !Array.isArray(n) || (n[0] !== 'call' && n[0] !== 'return_call') || typeof n[1] !== 'string') return null
+  const e = CALLFX.get(n[1])
+  return e && !e.unknown ? e : null
+}
+
 // Structured / control-flow forms: they do NOT evaluate all children eagerly
 // (an `if` runs one arm; a `block`/`loop` scopes branches), so their side effects
 // can't be flattened to the children's — they stay whole under a drop. (`br*`,
@@ -1572,11 +1641,22 @@ const dropEffects = (node) => {
 const countLocalUses = (node) => {
   const counts = new Map()
   const ensure = name => { if (!counts.has(name)) counts.set(name, { gets: 0, sets: 0, tees: 0 }); return counts.get(name) }
-  walk(node, n => {
-    if (!Array.isArray(n) || n.length < 2 || typeof n[1] !== 'string') return
-    if (n[0] === 'local.get') ensure(n[1]).gets++
-    else if (n[0] === 'local.set') ensure(n[1]).sets++
-    else if (n[0] === 'local.tee') ensure(n[1]).tees++
+  walk(node, (n, parent, idx) => {
+    if (Array.isArray(n)) {
+      if (n.length < 2 || typeof n[1] !== 'string') return
+      if (n[0] === 'local.get') ensure(n[1]).gets++
+      else if (n[0] === 'local.set') ensure(n[1]).sets++
+      else if (n[0] === 'local.tee') ensure(n[1]).tees++
+      return
+    }
+    // bare flat form: `local.get` `$x` as sibling tokens (idx 0 is a folded
+    // node's own head). Uncounted refs would let exact-occurrence passes treat
+    // a flat-referenced local as dead.
+    if (idx > 0 && (n === 'local.get' || n === 'local.set' || n === 'local.tee')) {
+      const tgt = parent[idx + 1]
+      if (typeof tgt === 'string' && tgt[0] === '$')
+        ensure(tgt)[n === 'local.get' ? 'gets' : n === 'local.set' ? 'sets' : 'tees']++
+    }
   })
   return counts
 }
@@ -1990,6 +2070,108 @@ const deadThroughLoop = (funcNode, name, loop) => {
  * @param {Set<string>} params
  * @param {Map<string,{gets:number,sets:number,tees:number}>} useCounts
  */
+/** True if any conditionally- or repeatedly-entered construct appears anywhere in `n`
+ *  — a `local.tee` found inside one does not dominate its following siblings. */
+const hasConditional = (n) => {
+  let found = false
+  walk(n, x => { if (Array.isArray(x) && (x[0] === 'if' || x[0] === 'loop' || x[0] === 'block' ||
+    x[0] === 'then' || x[0] === 'else' || x[0] === 'try_table')) found = true })
+  return found
+}
+
+/**
+ * Sink a pure, trap-free `(local.set $X Expr)` into the sole `if`-arm that reads it,
+ * when it sits immediately before that `if`. An eagerly-computed pre-branch value that
+ * only one arm ever consumes gains nothing from running on the other path — moving it
+ * to be the arm's first statement is execution-order-neutral (it was already the next
+ * thing to run on that path) and lets a later `sinkSets` sweep fuse it with the arm's
+ * first use into a `tee`. Requires: a PURE condition (Expr crosses its evaluation — a
+ * cond that writes state Expr reads would change the sunk value); exactly one arm
+ * (not both, not neither) references $X; and $X has no other occurrence anywhere in
+ * the function (so nothing after the `if`, and no other arm, needs it).
+ */
+const sinkIntoBranch = (scope, params, counts) => {
+  let changed = false
+  for (let i = 1; i < scope.length - 1; i++) {
+    const st = scope[i]
+    if (!(Array.isArray(st) && st[0] === 'local.set' && st.length === 3 && typeof st[1] === 'string' &&
+          Array.isArray(st[2]) && isPure(st[2]) && !hasTrap(st[2]))) continue
+    const name = st[1]
+    const nxt = scope[i + 1]
+    if (!(Array.isArray(nxt) && nxt[0] === 'if')) continue
+    const { cond, thenBranch, elseBranch } = parseIf(nxt)
+    if (!Array.isArray(cond) || !isPure(cond)) continue
+    let condTouches = false
+    walk(cond, n => { if (Array.isArray(n) && typeof n[1] === 'string' && n[1] === name &&
+      (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')) condTouches = true })
+    if (condTouches) continue
+    const touchCount = (branch) => {
+      if (!branch) return 0
+      let c = 0
+      walk(branch, n => { if (Array.isArray(n) && typeof n[1] === 'string' && n[1] === name &&
+        (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')) c++ })
+      return c
+    }
+    const inThen = touchCount(thenBranch), inElse = touchCount(elseBranch)
+    if ((inThen > 0) === (inElse > 0)) continue // must be exactly one arm
+    const target = inThen ? thenBranch : elseBranch
+    // total occurrences in the whole function must equal exactly this set + the
+    // uses inside the target arm — nothing else anywhere reads/writes $X
+    const total = counts.get(name)
+    const totalOccur = total ? total.gets + total.sets + total.tees : 0
+    if (totalOccur !== 1 + (inThen || inElse)) continue
+    scope.splice(i, 1)
+    target.splice(1, 0, st)
+    changed = true
+    i--
+  }
+  return changed
+}
+
+/**
+ * Fuse a plain copy `(local.set $A (local.get $B))` into an earlier, dominating
+ * `(local.tee $B V)` found by scanning backward through a short run of straight-line
+ * (branch-free) sibling statements: rename that tee's target to $A and drop the copy.
+ * Sound when — $B is a non-param written exactly once (that tee) and read exactly
+ * once (this copy, so nothing survives $B's name afterward); the scan never crosses
+ * a statement containing a conditional/loop (a tee inside one wouldn't dominate);
+ * and NOTHING between the tee and the copy touches $A — including the tee's own
+ * statement (an $A operand evaluated after the tee would read the renamed write).
+ */
+const mergeCopyThroughTee = (scope, params, counts) => {
+  let changed = false
+  for (let i = 1; i < scope.length; i++) {
+    const st = scope[i]
+    if (!(Array.isArray(st) && st[0] === 'local.set' && st.length === 3 &&
+          Array.isArray(st[2]) && st[2][0] === 'local.get' && st[2].length === 2)) continue
+    const A = st[1], B = st[2][1]
+    if (typeof A !== 'string' || typeof B !== 'string' || A === B) continue
+    if (params.has(B)) continue
+    const cb = counts.get(B)
+    if (!cb || cb.sets !== 0 || cb.tees !== 1 || cb.gets !== 1) continue
+    let teeNode = null
+    for (let j = i - 1; j >= 1 && j >= i - 5; j--) {
+      const prev = scope[j]
+      if (!Array.isArray(prev) || hasConditional(prev)) break
+      let touchesA = false, tee = null
+      walk(prev, n => {
+        if (!Array.isArray(n)) return
+        if (n[0] === 'local.tee' && n.length === 3 && n[1] === B) tee = n
+        else if (typeof n[1] === 'string' && n[1] === A &&
+          (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')) touchesA = true
+      })
+      if (tee) { if (!touchesA) teeNode = tee; break }
+      if (touchesA) break
+    }
+    if (!teeNode) continue
+    teeNode[1] = A
+    scope.splice(i, 1)
+    changed = true
+    i--
+  }
+  return changed
+}
+
 // Two adjacent sets whose reads sit under one commutative integer node in
 // ANTI-order can never both sink — each value would have to cross the other's
 // effects. Swapping the node's (pure, trap-free) operands reorders the reads to
@@ -2224,44 +2406,56 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
   // reads the teed value), no sibling may touch the local or branch (recursively,
   // bare flat tokens included) before the kill.
   if (funcNode[0] === 'func') {
-    for (let i = 1; i < funcNode.length; i++) {
+    // One summary pass over the body (per-statement local-touch counts, branch/flat
+    // flags, tee sites), then candidate scans are index lookups — the naive version
+    // re-walked the whole tail of the function per candidate tee.
+    const info = []
+    let anyTee = false
+    for (let i = 0; i < funcNode.length; i++) {
       const stmt = funcNode[i]
-      if (!Array.isArray(stmt)) continue
-      walk(stmt, (n, parent, idx) => {
-        if (!parent || !Array.isArray(n) || n[0] !== 'local.tee' || n.length !== 3 || typeof n[1] !== 'string') return
+      if (!Array.isArray(stmt)) { info.push(null); continue }
+      const touches = new Map()
+      let branchy = false, flat = false, tees = null
+      walk(stmt, (c, p2, i2) => {
+        if (!Array.isArray(c)) { if (i2 !== 0 && typeof c === 'string' && OPCODE[c] !== undefined) flat = true; return }
+        const o = c[0]
+        if ((o === 'local.get' || o === 'local.set' || o === 'local.tee') && typeof c[1] === 'string') {
+          touches.set(c[1], (touches.get(c[1]) || 0) + 1)
+          if (o === 'local.tee' && c.length === 3 && p2) (tees ??= []).push([c, p2, i2])
+        }
+        else if (o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' ||
+                 o === 'throw' || o === 'return_call' || o === 'return_call_indirect' || o === 'try_table') branchy = true
+      })
+      if (tees) anyTee = true
+      info.push({ touches, branchy, flat, tees,
+        setTarget: stmt[0] === 'local.set' && stmt.length === 3 && typeof stmt[1] === 'string' ? stmt[1] : null })
+    }
+    if (anyTee) for (let i = 1; i < funcNode.length; i++) {
+      const inf = info[i]
+      if (!inf?.tees || inf.flat) continue
+      for (const [n, parent, idx] of inf.tees) {
+        if (parent[idx] !== n) continue // an earlier replacement rewrote this slot
         const x = n[1]
-        let refs = 0, flat = false
-        walk(stmt, (c, p2, i2) => {
-          if (!Array.isArray(c)) { if (i2 !== 0 && typeof c === 'string' && OPCODE[c] !== undefined) flat = true; return }
-          if ((c[0] === 'local.get' || c[0] === 'local.set' || c[0] === 'local.tee') && c[1] === x) refs++
-        })
-        if (flat || refs !== 1) return
+        if (inf.touches.get(x) !== 1) continue
         let kill = false, unsafe = false
         for (let j = i + 1; j < funcNode.length && !kill && !unsafe; j++) {
-          const sib = funcNode[j]
-          if (!Array.isArray(sib)) { if (typeof sib === 'string' && OPCODE[sib] !== undefined) unsafe = true; continue }
-          if (sib[0] === 'local.set' && sib[1] === x && sib.length === 3) {
-            let readsX = false
-            walk(sib[2], (c, p2, i2) => {
-              if (!Array.isArray(c)) { if (i2 !== 0 && typeof c === 'string' && OPCODE[c] !== undefined) readsX = true; return }
-              if ((c[0] === 'local.get' || c[0] === 'local.tee') && c[1] === x) readsX = true
-            })
-            readsX ? unsafe = true : kill = true
+          const jn = info[j]
+          if (!jn) {
+            const t = funcNode[j]
+            if (typeof t === 'string' && OPCODE[t] !== undefined) unsafe = true
             continue
           }
-          let bad = false
-          walk(sib, (c, p2, i2) => {
-            if (!Array.isArray(c)) { if (i2 !== 0 && typeof c === 'string' && OPCODE[c] !== undefined) bad = true; return }
-            const o = c[0]
-            if ((o === 'local.get' || o === 'local.tee' || o === 'local.set') && c[1] === x) bad = true
-            else if (o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' ||
-                     o === 'throw' || o === 'return_call' || o === 'return_call_indirect' || o === 'try_table') bad = true
-          })
-          if (bad) unsafe = true
+          if (jn.flat) { unsafe = true; continue }
+          if (jn.setTarget === x) {
+            // the rewrite's RHS must not read x (its own touch is the 1)
+            jn.touches.get(x) > 1 ? unsafe = true : kill = true
+            continue
+          }
+          if (jn.branchy || jn.touches.has(x)) unsafe = true
         }
         // reaching the function's end without a read is a kill too — the frame dies
         if (!unsafe) { parent[idx] = n[2]; changed = true }
-      })
+      }
     }
   }
 
@@ -2468,7 +2662,10 @@ const cse = (ast) => {
 const inlineMacro = (ast, { pin = EMPTY_SET } = {}) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
   // expansion trades ~2B call for the body's own bytes per site — profitable only
-  // below a small call count (the def's fixed ~9B amortizes)
+  // below a small call count (the def's fixed ~9B amortizes). Empirical, not
+  // byte-exact: expansion profit is dominated by post-expansion folding of the
+  // substituted args, which no static body-size model sees (a byte-exact static
+  // gate measures 20B+ WORSE on wax modules).
   const CAP = 3
   const callCount = new Map()
   walk(ast, n => { if (Array.isArray(n) && n[0] === 'call' && typeof n[1] === 'string') callCount.set(n[1], (callCount.get(n[1]) || 0) + 1) })
@@ -2911,6 +3108,8 @@ const propagate = (ast) => {
           if (deadThroughLoop(funcNode, st[1], scope[j])) { scope.splice(i, 1); i--; progressed = true }
         }
         if (commuteForSink(scope)) progressed = true
+        if (sinkIntoBranch(scope, params, counts)) progressed = true
+        if (mergeCopyThroughTee(scope, params, counts)) progressed = true
         if (sinkSets(scope, params, counts)) progressed = true
         if (eliminateDeadStores(scope, params, counts)) progressed = true
         if (eliminateAdjacentDeadStores(scope, params)) progressed = true
@@ -5627,6 +5826,7 @@ const mayInline = (ast) => {
 // removed). Drop both. Header nodes (param/result/local/export/type) don't count
 // as a body — a function carrying only locals still does nothing.
 export default function optimize(ast, opts = true) {
+  CALLFX = null
   if (typeof ast === 'string') ast = parse(ast)   // accept WAT source directly
   const strictGuard = opts === true  // default: zero tolerance for bloat
   opts = normalize(opts)
@@ -5639,6 +5839,7 @@ export default function optimize(ast, opts = true) {
   const verbose = opts.verbose || opts.log
 
   ast = clone(ast)
+  CALLFX = computeCallEffects(ast)
 
   // devirt trades bytes for speed by design (guards + duplicated args), so it
   // runs ONCE after the rounds — its candidate shape (select of two i64 closure

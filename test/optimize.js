@@ -2876,3 +2876,53 @@ test('data zero-trim fences: overlap, OOB trap, imported memory all preserved', 
   new WebAssembly.Instance(new WebAssembly.Module(bin), { env: { mem } })
   assert.deepEqual([...new Uint8Array(mem.buffer, 10, 5)], [1, 2, 0, 0, 0], 'zero bytes still overwrite host content')
 })
+
+test('sinkIntoBranch: pre-branch value moves into its sole consuming arm', () => {
+  const src = `(module (memory 1)
+    (func $ro (param $p i32) (result i32) (i32.load (local.get $p)))
+    (func (export "f") (param $a i32) (result i32) (local $x i32)
+      (local.set $x (i32.add (local.get $a) (i32.const 100)))
+      (if (result i32) (call $ro (local.get $a))
+        (then (local.get $x))
+        (else (i32.const -1)))))`
+  const { f } = run(src)
+  assert.equal(f(0), -1, 'zero at address 0: else arm')
+  // a condition CALL that writes memory the value reads must block the sink
+  const clash = `(module (memory 1) (global $g (mut i32) (i32.const 0))
+    (func $w (param $p i32) (result i32) (i32.store (local.get $p) (i32.const 7)) (i32.const 1))
+    (func (export "f") (result i32) (local $x i32)
+      (local.set $x (i32.load (i32.const 0)))
+      (if (result i32) (call $w (i32.const 0))
+        (then (local.get $x))
+        (else (i32.const -1)))))`
+  assert.equal(run(clash).f(), 0, 'x captures the PRE-call load, not the stored 7')
+})
+
+test('mergeCopyThroughTee: copy fuses into a dominating tee; same-statement reads block', () => {
+  const src = `(module (memory 1)
+    (func (export "f") (param $p i32) (result i32) (local $a i32) (local $b i32)
+      (i32.store (i32.const 0) (local.tee $b (i32.add (local.get $p) (i32.const 5))))
+      (local.set $a (local.get $b))
+      (i32.add (local.get $a) (i32.load (i32.const 0)))))`
+  assert.equal(run(src).f(10), 30)
+  // $a read within the tee's own statement AFTER the tee — renaming would corrupt it
+  const evalOrder = `(module (memory 1)
+    (func (export "g") (param $p i32) (result i32) (local $a i32) (local $b i32)
+      (local.set $a (i32.const 3))
+      (i32.store (local.tee $b (local.get $p)) (local.get $a))
+      (local.set $a (local.get $b))
+      (i32.add (local.get $a) (i32.load (local.get $p)))))`
+  assert.equal(run(evalOrder).g(8), 11, 'store writes 3 (old $a), not the renamed value')
+})
+
+test('call effect summary is transitive through the call graph', () => {
+  // h→g→store: sinking h's result across a load must NOT happen
+  const src = `(module (memory 1)
+    (func $g (i32.store (i32.const 0) (i32.const 9)))
+    (func $h (result i32) (call $g) (i32.const 1))
+    (func (export "f") (result i32) (local $x i32) (local $y i32)
+      (local.set $x (call $h))
+      (local.set $y (i32.load (i32.const 0)))
+      (i32.sub (local.get $y) (local.get $x))))`
+  assert.equal(run(src).f(), 8, 'y loads post-call 9: 9 - 1')
+})
