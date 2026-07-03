@@ -1,5 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert'
+import { readdirSync, readFileSync } from 'node:fs'
+import { clone } from '../src/util.js'
 import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 import srcCompile, { size } from '../src/compile.js'
@@ -2555,6 +2557,15 @@ test('size(nodes) equals full compile(nodes).length across features', () => {
     const exact = srcCompile(parse(src)).length                // full materialize
     const measured = size(parse(src))                          // size-only peer function
     assert.equal(measured, exact, `measure ${measured} !== compile().length ${exact} for ${src.slice(0, 50)}`)
+  }
+  // the whole example corpus, raw and optimized — the strongest drift guard for
+  // the width-only size handlers
+  const dir = new URL('./example/', import.meta.url)
+  for (const f of readdirSync(dir).filter(f => f.endsWith('.wat'))) {
+    const src = readFileSync(new URL(f, dir), 'utf8')
+    for (const ast of [parse(src), optimize(parse(src))]) {
+      assert.equal(size(clone(ast)), srcCompile(clone(ast)).length, `size↔compile drift on ${f}`)
+    }
   }
 })
 

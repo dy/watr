@@ -1076,8 +1076,73 @@ const instr = (nodes, ctx) => {
   return out.push(0x0b), out
 }
 
-// LEB128 byte-width of a non-negative number (7 bits per byte).
-const ulebSize = (n) => { let k = 1; n >>>= 7; while (n) k++, n >>>= 7; return k }
+// LEB128 byte-width of a non-negative number (7 bits per byte). Non-number
+// input (BigInt, numeric string) falls back to the real encoder's length.
+const ulebSize = (n) => {
+  if (typeof n !== 'number' || n < 0) return uleb(n).length
+  let k = 1; n >>>= 7
+  while (n) k++, n >>>= 7
+  return k
+}
+
+// Signed-LEB byte-width of an i32 immediate (mirrors encode.i32's loop).
+const slebSize32 = (n) => {
+  if (typeof n === 'string') n = i32.parse(n)
+  let k = 1
+  while (true) {
+    const byte = n & 0x7F
+    n >>= 7
+    if ((n === 0 && (byte & 0x40) === 0) || (n === -1 && (byte & 0x40) !== 0)) return k
+    k++
+  }
+}
+
+// Width of a memarg (align + optional memidx + offset) without building it.
+const memargSize = (nodes, op, memIdx = 0) => {
+  const [a, o] = memarg(nodes), alignVal = (a ?? align(op)) | (memIdx && 0x40)
+  return memIdx ? ulebSize(alignVal) + ulebSize(memIdx) + ulebSize(o ?? 0) : ulebSize(alignVal) + ulebSize(o ?? 0)
+}
+
+// Width-only twins of the HOT immediate handlers: identical token consumption
+// and ctx side effects (block stack, string interning), integer widths instead
+// of materialized byte arrays — immediate allocation dominates instrSize on
+// multi-MB modules. Cold immtypes fall back to the real handler's .length, so
+// the tables cannot drift; equality with compile().length is invariant-tested.
+const SIZE_HANDLER = {}
+for (const k in HANDLER) SIZE_HANDLER[k] = (n, c, op) => HANDLER[k](n, c, op).length
+Object.assign(SIZE_HANDLER, {
+  i32: (n) => slebSize32(n.shift()),
+  f32: (n) => (n.shift(), 4),
+  f64: (n) => (n.shift(), 8),
+  localidx: (n, c) => ulebSize(id(n.shift(), c.local)),
+  funcidx: (n, c) => ulebSize(id(n.shift(), c.func)),
+  typeidx: (n, c) => ulebSize(id(n.shift(), c.type)),
+  tableidx: (n, c) => ulebSize(id(n.shift(), c.table)),
+  memoryidx: (n, c) => ulebSize(id(n.shift(), c.memory)),
+  globalidx: (n, c) => ulebSize(id(n.shift(), c.global)),
+  dataidx: (n, c) => ulebSize(id(n.shift(), c.data)),
+  elemidx: (n, c) => ulebSize(id(n.shift(), c.elem)),
+  tagidx: (n, c) => ulebSize(id(n.shift(), c.tag)),
+  labelidx: (n, c) => ulebSize(blockid(n.shift(), c.block)),
+  laneidx: (n) => (parseUint(n.shift(), 0xff), 1),
+  memarg: (n, c, op) => memargSize(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0),
+  opt_memory: (n, c) => ulebSize(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
+  'memoryidx?': (n, c) => ulebSize(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
+  call_indirect: (n, c) => { const t = n.shift(), [, ti] = n.shift(); return ulebSize(id(ti, c.type)) + ulebSize(id(t, c.table)) },
+  block: (n, c) => {
+    c.block.push(1)
+    isId(n[0]) && (c.block[n.shift()] = c.block.length)
+    const t = n.shift()
+    return !t ? 1 : t[0] === 'result' ? reftype(t[1], c).length : ulebSize(id(t[1], c.type))
+  },
+  end: (_n, c) => (c.block.pop(), 0),
+  stringidx: (n, c) => {
+    const str = n.shift(), key = str.valueOf()
+    let idx = c.strings.findIndex(x => x.valueOf() === key)
+    if (idx < 0) idx = c.strings.push(str) - 1
+    return ulebSize(idx)
+  },
+})
 
 // Size-only twin of instr(): the byte LENGTH of the encoded instruction stream,
 // WITHOUT building the (multi-MB) byte array. Reuses every HANDLER for exact
@@ -1095,7 +1160,7 @@ const instrSize = (nodes, ctx) => {
     const code = OPCODE[op]
     if (typeof code !== 'number') err(`Unknown instruction ${op}`)
     let n = code > 0xffff ? 1 + ulebSize(code & 0xffff) : 1
-    if (IMM[op]) n += HANDLER[IMM[op]](nodes, ctx, op).length
+    if (IMM[op]) n += SIZE_HANDLER[IMM[op]](nodes, ctx, op)
     if (meta.length) { for (const [type, data] of meta) ((ctx.meta[type] ??= []).push([size, data])); meta = [] }
     size += n
   }
