@@ -148,7 +148,7 @@ i64.parse = n => {
 }
 
 const F32_SIGN = 0x80000000, F32_NAN = 0x7f800000, F32_QUIET = 0x400000
-export function f32(input, value, idx) {
+export function f32(input, out, value, idx) {
   // Plain `nan` / `-nan` (with optional `:0xPAYLOAD`) — set the bit pattern explicitly.
   if (typeof input === 'string' && (idx = input.indexOf('nan')) >= 0) {
     if (input[idx + 3] === ':') {
@@ -164,11 +164,12 @@ export function f32(input, value, idx) {
     _f32[0] = value
   }
 
+  if (out) { out.push(_u8[0], _u8[1], _u8[2], _u8[3]); return }
   return [_u8[0], _u8[1], _u8[2], _u8[3]]
 }
 
 const F64_SIGN = 0x8000000000000000n, F64_NAN = 0x7ff0000000000000n, F64_QUIET = 0x8000000000000n
-export function f64(input, value, idx) {
+export function f64(input, out, value, idx) {
   // Plain `nan` / `-nan` (with optional `:0xPAYLOAD`) — set the bit pattern explicitly.
   if (typeof input === 'string' && (idx = input.indexOf('nan')) >= 0) {
     if (input[idx + 3] === ':') {
@@ -184,6 +185,7 @@ export function f64(input, value, idx) {
     _f64[0] = value
   }
 
+  if (out) { out.push(_u8[0], _u8[1], _u8[2], _u8[3], _u8[4], _u8[5], _u8[6], _u8[7]); return }
   return [_u8[0], _u8[1], _u8[2], _u8[3], _u8[4], _u8[5], _u8[6], _u8[7]]
 }
 

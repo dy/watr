@@ -257,7 +257,15 @@ function assemble(nodes, sizeOnly) {
   // inline bin(code) so the per-function item bytes survive — with ctx.codeSizePrefix
   // they let us lift code-metadata positions to absolute binary offsets below
   const codeItems = ctx.code.filter(Boolean).map(item => build[SECTION.code](item, ctx)).filter(Boolean)
-  const codeSection = codeItems.length ? [SECTION.code, ...vec(vec(codeItems))] : []
+  // fused vec(vec(items)): count + items appended once, then the section frame —
+  // the generic path copies the multi-MB stream twice more
+  let codeSection = []
+  if (codeItems.length) {
+    const inner = uleb(codeItems.length)
+    for (const it of codeItems) for (let i = 0; i < it.length; i++) inner.push(it[i])
+    codeSection = [SECTION.code, ...uleb(inner.length)]
+    for (let i = 0; i < inner.length; i++) codeSection.push(inner[i])
+  }
   const metaSection = binMeta()
   const dataSection = bin(SECTION.data)
   const stringsSection = ctx.strings.length ? [SECTION.strings, ...vec([0x00, ...vec(ctx.strings.map(s => vec(s)))])] : []
@@ -282,12 +290,14 @@ function assemble(nodes, sizeOnly) {
     dataSection
   ]
 
-  // build final binary
-  const wasm = Uint8Array.from([
-    0x00, 0x61, 0x73, 0x6d, // magic
-    0x01, 0x00, 0x00, 0x00, // version
-    ...sections.flat()
-  ])
+  // build final binary — sections are flat byte arrays; copy them into place
+  // instead of flattening a multi-MB nested array through Uint8Array.from
+  let total = 8
+  for (const sec of sections) total += sec.length
+  const wasm = new Uint8Array(total)
+  wasm.set([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+  let off = 8
+  for (const sec of sections) { if (sec.length) { wasm.set(sec, off); off += sec.length } }
 
   // Lift any (@metadata.code.*) annotations to absolute binary offsets and hang
   // them off the result, so a source-map emitter can correlate wasm back to
@@ -819,10 +829,10 @@ const build = [
     ctx.local = ctx.block = ctx.meta = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    const item = vec([...locals, ...bytes])
-    // size-prefix length (item minus its body) lets the now function-body-relative
-    // metadata positions be lifted to absolute binary offsets
-    ;(ctx.codeSizePrefix ??= [])[codeIdx] = item.length - locals.length - bytes.length
+    const item = uleb(locals.length + bytes.length)
+    ;(ctx.codeSizePrefix ??= [])[codeIdx] = item.length // = vec prefix width
+    for (let i = 0; i < locals.length; i++) item.push(locals[i])
+    for (let i = 0; i < bytes.length; i++) item.push(bytes[i])
     return item
   },
 
@@ -897,11 +907,13 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 // Immediate encoders, keyed by immediate type (IMM in const.js maps op name → immediate type)
 const HANDLER = {
   reversed: (n, c) => { let t = n.shift(), e = n.shift(); return [...uleb(id(e, c.elem)), ...uleb(id(t, c.table))] },
-  block: (n, c) => {
+  block: (n, c, op, out) => {
     c.block.push(1)
     isId(n[0]) && (c.block[n.shift()] = c.block.length)
     let t = n.shift()
-    return !t ? [TYPE.void] : t[0] === 'result' ? reftype(t[1], c) : uleb(id(t[1], c.type))
+    const b = !t ? [TYPE.void] : t[0] === 'result' ? reftype(t[1], c) : uleb(id(t[1], c.type))
+    if (out) { for (let i = 0; i < b.length; i++) out.push(b[i]); return }
+    return b
   },
   try_table: (n, c) => {
     isId(n[0]) && (c.block[n.shift()] = c.block.length + 1)
@@ -920,7 +932,11 @@ const HANDLER = {
     return [...result, ...uleb(count), ...catches]
   },
   end: (_n, c) => (c.block.pop(), []),
-  call_indirect: (n, c) => { let t = n.shift(), [, idx] = n.shift(); return [...uleb(id(idx, c.type)), ...uleb(id(t, c.table))] },
+  call_indirect: (n, c, op, out) => {
+    let t = n.shift(), [, idx] = n.shift()
+    if (out) { uleb(id(idx, c.type), out); uleb(id(t, c.table), out); return }
+    return [...uleb(id(idx, c.type)), ...uleb(id(t, c.table))]
+  },
   br_table: (n, c) => {
     let labels = [], count = 0
     while (n[0] && (!isNaN(n[0]) || isId(n[0]))) (labels.push(...uleb(blockid(n.shift(), c.block))), count++)
@@ -928,8 +944,8 @@ const HANDLER = {
   },
   select: (n, c) => { let r = n.shift() || []; return r.length ? vec(r.map(t => reftype(t, c))) : [] },
   ref_null: (n, c) => { let t = n.shift(); return Array.isArray(t) && t[0] === 'exact' ? [0x62, ...uleb(id(t[1], c.type))] : TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)) },
-  memarg: (n, c, op) => memargEnc(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0),
-  opt_memory: (n, c) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
+  memarg: (n, c, op, out) => memargEnc(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0, out),
+  opt_memory: (n, c, op, out) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory), out),
   reftype: (n, c) => { let ht = reftype(n.shift(), c); return ht.length > 1 ? ht.slice(1) : ht },
   reftype2: (n, c) => { let b = blockid(n.shift(), c.block), h1 = reftype(n.shift(), c), h2 = reftype(n.shift(), c), ht = h => h.length > 1 ? h.slice(1) : h; return [((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), ...ht(h1), ...ht(h2)] },
   v128const: (n) => {
@@ -954,26 +970,26 @@ const HANDLER = {
     const memIdx = isId(n[0]) || (isIdx(n[0]) && (isMemParam(n[1]) || isIdx(n[1]))) ? id(n.shift(), c.memory) : 0
     return [...memargEnc(n, op, memIdx), ...uleb(parseUint(n.shift()))]
   },
-  // *idx types
-  labelidx: (n, c) => uleb(blockid(n.shift(), c.block)),
-  laneidx: (n) => [parseUint(n.shift(), 0xff)],
-  funcidx: (n, c) => uleb(id(n.shift(), c.func)),
-  typeidx: (n, c) => uleb(id(n.shift(), c.type)),
-  tableidx: (n, c) => uleb(id(n.shift(), c.table)),
-  memoryidx: (n, c) => uleb(id(n.shift(), c.memory)),
-  globalidx: (n, c) => uleb(id(n.shift(), c.global)),
-  localidx: (n, c) => uleb(id(n.shift(), c.local)),
-  dataidx: (n, c) => uleb(id(n.shift(), c.data)),
-  elemidx: (n, c) => uleb(id(n.shift(), c.elem)),
-  tagidx: (n, c) => uleb(id(n.shift(), c.tag)),
-  'memoryidx?': (n, c) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
-  stringidx: (n, c) => { let s = n.shift(), key = s.valueOf(), idx = c.strings.findIndex(x => x.valueOf() === key); if (idx < 0) idx = c.strings.push(s) - 1; return uleb(idx) },
+  // *idx types — write-mode: immediates land directly in the instruction stream
+  labelidx: (n, c, op, out) => uleb(blockid(n.shift(), c.block), out),
+  laneidx: (n, c, op, out) => { const v = parseUint(n.shift(), 0xff); if (out) { out.push(v); return } return [v] },
+  funcidx: (n, c, op, out) => uleb(id(n.shift(), c.func), out),
+  typeidx: (n, c, op, out) => uleb(id(n.shift(), c.type), out),
+  tableidx: (n, c, op, out) => uleb(id(n.shift(), c.table), out),
+  memoryidx: (n, c, op, out) => uleb(id(n.shift(), c.memory), out),
+  globalidx: (n, c, op, out) => uleb(id(n.shift(), c.global), out),
+  localidx: (n, c, op, out) => uleb(id(n.shift(), c.local), out),
+  dataidx: (n, c, op, out) => uleb(id(n.shift(), c.data), out),
+  elemidx: (n, c, op, out) => uleb(id(n.shift(), c.elem), out),
+  tagidx: (n, c, op, out) => uleb(id(n.shift(), c.tag), out),
+  'memoryidx?': (n, c, op, out) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory), out),
+  stringidx: (n, c, op, out) => { let s = n.shift(), key = s.valueOf(), idx = c.strings.findIndex(x => x.valueOf() === key); if (idx < 0) idx = c.strings.push(s) - 1; return uleb(idx, out) },
 
   // Value type
-  i32: (n) => encode.i32(n.shift()),
-  i64: (n) => encode.i64(n.shift()),
-  f32: (n) => encode.f32(n.shift()),
-  f64: (n) => encode.f64(n.shift()),
+  i32: (n, c, op, out) => encode.i32(n.shift(), out),
+  i64: (n, c, op, out) => encode.i64(n.shift(), out),
+  f32: (n, c, op, out) => encode.f32(n.shift(), out),
+  f64: (n, c, op, out) => encode.f64(n.shift(), out),
   v128: (n) => encode.v128(n.shift()),
 
   // Combinations
@@ -1026,7 +1042,8 @@ const HANDLER = {
 };
 
 
-// instruction encoder
+// instruction encoder — bytes land DIRECTLY in the output stream (write-mode
+// handlers push immediates themselves; cold handlers still return small arrays)
 const instr = (nodes, ctx) => {
   let out = [], meta = []
 
@@ -1048,20 +1065,6 @@ const instr = (nodes, ctx) => {
 
     const code = OPCODE[op]
     if (typeof code !== 'number') err(`Unknown instruction ${op}`)
-    // unpack: top byte is the page prefix (0xfb-0xfe), low bits the uleb-encoded subopcode
-    let bytes = code > 0xffff ? [code >>> 16, ...uleb(code & 0xffff)] : [code]
-
-    // immediate encoding
-    const imm = IMM[op]
-    if (imm) {
-      // select: becomes typed select (opcode+1) if next node is an array with result types
-      if (op === 'select' && nodes[0]?.length) bytes[0]++
-      // ref.type|cast: opcode+1 if type is nullable: (ref null $t) or (funcref, anyref, etc.)
-      else if (imm === 'reftype' && !op.endsWith('_null') && (nodes[0][1] === 'null' || nodes[0][0] !== 'ref')) {
-        bytes[bytes.length - 1]++
-      }
-      bytes.push(...HANDLER[imm](nodes, ctx, op))
-    }
 
     // Attach any pending annotations to this instruction's byte position, then
     // clear — a (@metadata.code.*) annotation applies to the next instruction only
@@ -1070,7 +1073,25 @@ const instr = (nodes, ctx) => {
       meta = []
     }
 
-    out.push(...bytes)
+    const at = out.length
+    // unpack: top byte is the page prefix (0xfb-0xfe), low bits the uleb-encoded subopcode
+    if (code > 0xffff) { out.push(code >>> 16); uleb(code & 0xffff, out) }
+    else out.push(code)
+
+    // immediate encoding
+    const imm = IMM[op]
+    if (imm) {
+      // select: becomes typed select (opcode+1) if next node is an array with result types
+      if (op === 'select' && nodes[0]?.length) out[at]++
+      // ref.type|cast: opcode+1 if type is nullable: (ref null $t) or (funcref, anyref, etc.)
+      else if (imm === 'reftype' && !op.endsWith('_null') && (nodes[0][1] === 'null' || nodes[0][0] !== 'ref')) {
+        out[out.length - 1]++
+      }
+      const b = HANDLER[imm](nodes, ctx, op, out)
+      // write-mode handlers hand back `out` itself (uleb returns its buffer) —
+      // only a DISTINCT array is a cold handler's immediate bytes to append
+      if (b && b !== out) for (let i = 0; i < b.length; i++) out.push(b[i])
+    }
   }
 
   return out.push(0x0b), out
@@ -1221,8 +1242,14 @@ const memarg = (args) => {
 
 // Encode memarg (align + offset) with default values based on instruction
 // If memIdx is non-zero, set bit 6 in alignment flags and insert memIdx after align
-const memargEnc = (nodes, op, memIdx = 0) => {
+const memargEnc = (nodes, op, memIdx = 0, out) => {
   const [a, o] = memarg(nodes), alignVal = (a ?? align(op)) | (memIdx && 0x40)
+  if (out) {
+    uleb(alignVal, out)
+    if (memIdx) uleb(memIdx, out)
+    uleb(o ?? 0, out)
+    return
+  }
   return memIdx ? [...uleb(alignVal), ...uleb(memIdx), ...uleb(o ?? 0)] : [...uleb(alignVal), ...uleb(o ?? 0)]
 }
 
