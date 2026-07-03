@@ -70,8 +70,19 @@ export function uleb5(value) {
  * @param {number[]} [buffer=[]] - Output buffer
  * @returns {number[]} Encoded bytes
  */
+// repeated literal strings (a self-hosted module reuses the same constants
+// thousands of times) parse once — the memo resets when it grows unbounded
+const I32_MEMO = new Map()
 export function i32(n, buffer = []) {
-  if (typeof n === 'string') n = i32.parse(n)
+  if (typeof n === 'string') {
+    let v = I32_MEMO.get(n)
+    if (v === undefined) {
+      v = i32.parse(n)
+      if (I32_MEMO.size > 65536) I32_MEMO.clear()
+      I32_MEMO.set(n, v)
+    }
+    n = v
+  }
 
   while (true) {
     const byte = Number(n & 0x7F)
@@ -169,7 +180,15 @@ export function f32(input, out, value, idx) {
 }
 
 const F64_SIGN = 0x8000000000000000n, F64_NAN = 0x7ff0000000000000n, F64_QUIET = 0x8000000000000n
+const F64_MEMO = new Map()
 export function f64(input, out, value, idx) {
+  if (typeof input === 'string') {
+    const m = F64_MEMO.get(input)
+    if (m !== undefined) {
+      if (out) { out.push(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]); return }
+      return m.slice()
+    }
+  }
   // Plain `nan` / `-nan` (with optional `:0xPAYLOAD`) — set the bit pattern explicitly.
   if (typeof input === 'string' && (idx = input.indexOf('nan')) >= 0) {
     if (input[idx + 3] === ':') {
@@ -185,6 +204,10 @@ export function f64(input, out, value, idx) {
     _f64[0] = value
   }
 
+  if (typeof input === 'string') {
+    if (F64_MEMO.size > 65536) F64_MEMO.clear()
+    F64_MEMO.set(input, [_u8[0], _u8[1], _u8[2], _u8[3], _u8[4], _u8[5], _u8[6], _u8[7]])
+  }
   if (out) { out.push(_u8[0], _u8[1], _u8[2], _u8[3], _u8[4], _u8[5], _u8[6], _u8[7]); return }
   return [_u8[0], _u8[1], _u8[2], _u8[3], _u8[4], _u8[5], _u8[6], _u8[7]]
 }

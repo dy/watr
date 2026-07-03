@@ -370,38 +370,61 @@ const isMemParam = n => n?.[0] === 'a' || n?.[0] === 'o'
  * @param {Object} ctx - Compilation context with type info
  * @returns {Array} Flattened instruction sequence
  */
-function normalize(nodes, ctx) {
-  const out = []
-  nodes = [...nodes]
+// bare-token classification — one lookup replaces a six-way string-scan chain
+// (built lazily over OPCODE's key set; unknown tokens fall through untouched)
+let NCLS = null
+const nclsOf = (op) => {
+  if (!NCLS) {
+    NCLS = Object.create(null)
+    for (const k in OPCODE) {
+      if (k === 'block' || k === 'if' || k === 'loop') NCLS[k] = 1
+      else if (k === 'else' || k === 'end') NCLS[k] = 2
+      else if (k === 'select') NCLS[k] = 3
+      else if (k.endsWith('call_indirect')) NCLS[k] = 4
+      else if (k === 'table.init') NCLS[k] = 5
+      else if (k === 'table.copy' || k === 'memory.copy') NCLS[k] = 6
+      else if (k.startsWith('table.')) NCLS[k] = 7
+      else if (k === 'memory.init') NCLS[k] = 8
+      else if (k === 'data.drop' || k === 'array.new_data' || k === 'array.init_data') NCLS[k] = 9
+      else if (k.startsWith('memory.') || k.endsWith('load') || k.endsWith('store')) NCLS[k] = 10
+    }
+  }
+  return NCLS[op]
+}
+
+function normalize(nodes, ctx, out = [], owned = false) {
+  if (!owned) nodes = [...nodes]
   while (nodes.length) {
     let node = nodes.shift()
     if (typeof node === 'string') {
       out.push(node)
-      if (node === 'block' || node === 'if' || node === 'loop') {
+      const cls = nclsOf(node)
+      if (cls === undefined) continue
+      if (cls === 1) {
         if (isId(nodes[0])) out.push(nodes.shift())
         out.push(blocktype(nodes, ctx))
       }
-      else if (node === 'else' || node === 'end') {
+      else if (cls === 2) {
         if (isId(nodes[0])) nodes.shift()
       }
-      else if (node === 'select') out.push(paramres(nodes)[1])
-      else if (node.endsWith('call_indirect')) {
+      else if (cls === 3) out.push(paramres(nodes)[1])
+      else if (cls === 4) {
         let tableidx = isIdx(nodes[0]) ? nodes.shift() : 0, [idx, param, result] = typeuse(nodes, ctx)
         out.push(tableidx, ['type', idx ?? regtype(param, result, ctx)])
       }
-      else if (node === 'table.init') out.push(isIdx(nodes[1]) ? nodes.shift() : 0, nodes.shift())
-      else if (node === 'table.copy' || node === 'memory.copy') out.push(isIdx(nodes[0]) ? nodes.shift() : 0, isIdx(nodes[0]) ? nodes.shift() : 0)
-      else if (node.startsWith('table.')) out.push(isIdx(nodes[0]) ? nodes.shift() : 0)
-      else if (node === 'memory.init') {
+      else if (cls === 5) out.push(isIdx(nodes[1]) ? nodes.shift() : 0, nodes.shift())
+      else if (cls === 6) out.push(isIdx(nodes[0]) ? nodes.shift() : 0, isIdx(nodes[0]) ? nodes.shift() : 0)
+      else if (cls === 7) out.push(isIdx(nodes[0]) ? nodes.shift() : 0)
+      else if (cls === 8) {
         out.push(...(isIdx(nodes[1]) ? [nodes.shift(), nodes.shift()].reverse() : [nodes.shift(), 0]))
         ctx.datacount && (ctx.datacount[0] = true)
       }
-      else if (node === 'data.drop' || node === 'array.new_data' || node === 'array.init_data') {
+      else if (cls === 9) {
         node === 'data.drop' && out.push(nodes.shift())
         ctx.datacount && (ctx.datacount[0] = true)
       }
       // memory.* instructions and load/store with optional memory index
-      else if ((node.startsWith('memory.') || node.endsWith('load') || node.endsWith('store')) && isIdx(nodes[0])) out.push(nodes.shift())
+      else if (isIdx(nodes[0])) out.push(nodes.shift())
     }
     else if (Array.isArray(node)) {
       let op = node[0]
@@ -421,17 +444,23 @@ function normalize(nodes, ctx) {
       if (op === 'block' || op === 'loop') {
         out.push(op)
         if (isId(parts[0])) out.push(parts.shift())
-        out.push(blocktype(parts, ctx), ...normalize(parts, ctx), 'end')
+        out.push(blocktype(parts, ctx))
+        normalize(parts, ctx, out, true)
+        out.push('end')
       }
       else if (op === 'if') {
+        // then/else normalize BEFORE the condition but EMIT after it — the temp
+        // arrays preserve the original type-registration order exactly
         let then = [], els = []
-        if (parts.at(-1)?.[0] === 'else') els = normalize(parts.pop().slice(1), ctx)
-        if (parts.at(-1)?.[0] === 'then') then = normalize(parts.pop().slice(1), ctx)
+        if (parts.at(-1)?.[0] === 'else') els = normalize(parts.pop().slice(1), ctx, [], true)
+        if (parts.at(-1)?.[0] === 'then') then = normalize(parts.pop().slice(1), ctx, [], true)
         let immed = [op]
         if (isId(parts[0])) immed.push(parts.shift())
         immed.push(blocktype(parts, ctx))
-        out.push(...normalize(parts, ctx), ...immed, ...then)
-        els.length && out.push('else', ...els)
+        normalize(parts, ctx, out, true)
+        for (let i = 0; i < immed.length; i++) out.push(immed[i])
+        for (let i = 0; i < then.length; i++) out.push(then[i])
+        if (els.length) { out.push('else'); for (let i = 0; i < els.length; i++) out.push(els[i]) }
         out.push('end')
       }
       else if (op === 'try_table') {
@@ -442,20 +471,23 @@ function normalize(nodes, ctx) {
         while (parts[0]?.[0] === 'catch' || parts[0]?.[0] === 'catch_ref' || parts[0]?.[0] === 'catch_all' || parts[0]?.[0] === 'catch_all_ref') {
           out.push(parts.shift())
         }
-        out.push(...normalize(parts, ctx), 'end')
+        normalize(parts, ctx, out, true)
+        out.push('end')
       }
       else if (op === 'ref.test' || op === 'ref.cast') {
         const type = parts[0]
         const isNullable = !Array.isArray(type) || type[1] === 'null' || type[0] !== 'ref'
         if (isNullable) op += '_null'
-        out.push(...normalize(parts.slice(1), ctx), op, type)
+        normalize(parts.slice(1), ctx, out, true)
+        out.push(op, type)
         nodes.unshift(...out.splice(out.length - 2))
       }
       else {
         const imm = []
         // Collect immediate operands (non-arrays or special forms like type/param/result/ref)
         while (parts.length && (!Array.isArray(parts[0]) || parts[0].valueOf !== Array.prototype.valueOf || 'type,param,result,ref,exact,on'.includes(parts[0][0]))) imm.push(parts.shift())
-        out.push(...normalize(parts, ctx), op, ...imm)
+        normalize(parts, ctx, out, true)
+        out.push(op, ...imm)
         nodes.unshift(...out.splice(out.length - 1 - imm.length))
       }
     } else out.push(node)
@@ -1220,7 +1252,9 @@ const codeItemSize = (body, ctx) => {
 const expr = (node, ctx) => instr(normalize([node], ctx), ctx)
 
 // deref id node to numeric idx
-const id = (nm, list, n) => (n = isId(nm) ? list[nm] : +nm, n in list ? n : err(`Unknown ${list.name} ${nm}`))
+// dense index spaces: a resolved name or an in-range number needs no second
+// dictionary hit — `n in list` only arbitrates the miss path
+const id = (nm, list, n) => (n = isId(nm) ? list[nm] : +nm, n >= 0 && n < list.length ? n : n in list ? n : err(`Unknown ${list.name} ${nm}`))
 
 // block id - same as id but for block
 // index indicates how many block items to pop
