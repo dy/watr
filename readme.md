@@ -76,7 +76,7 @@ Measured on [test/example](./test/example) (21 modules, `optimize(src)` defaults
 | `wasm-opt -O3` | 22,302 B | — | — |
 
 Smaller than `-O3` on every module and than `-Oz` in aggregate (19,734 vs 19,852 B); ties or beats `-Oz` on 18 of 20 files.
-On a 5.5 MB module watr's output is 1.5% SMALLER than `-Oz` (261,985 vs 265,977 B — cross-function outlining);
+On a 5.5 MB module watr's output is 1.6% SMALLER than `-Oz` (261,770 vs 265,977 B — cross-function outlining);
 binaryen's native core is ~5× faster there (0.4 s vs 2.4 s) — watr's edge is output size, batch/in-process use
 with no process spawn, and a ~25× smaller footprint.
 
