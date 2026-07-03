@@ -71,13 +71,13 @@ Measured on [test/example](./test/example) (21 modules, `optimize(src)` defaults
 
 |  | size (total) | time (batch) | footprint |
 |---|---|---|---|
-| **watr/optimize** | **19,810 B** | **127 ms** in-process | 130 KB min (40 KB gz) |
+| **watr/optimize** | **19,737 B** | **138 ms** in-process | 143 KB min (44 KB gz) |
 | `wasm-opt -Oz` | 19,852 B | 990 ms CLI | ~1.1 MB js / native binary |
 | `wasm-opt -O3` | 22,302 B | — | — |
 
-Smaller than `-O3` on every module and than `-Oz` in aggregate (19,810 vs 19,852 B); ties or beats `-Oz` on 16 of 20 files.
-Binaryen's native core outruns watr on multi-MB single modules (a 5.5 MB module: 0.3 s vs 2.4 s, sizes within 4%) —
-watr's edge is batch/in-process use with no process spawn and a ~30× smaller footprint.
+Smaller than `-O3` on every module and than `-Oz` in aggregate (19,737 vs 19,852 B); ties or beats `-Oz` on 18 of 20 files.
+Binaryen's native core outruns watr on multi-MB single modules (a 5.5 MB module: 0.4 s vs 2.5 s, sizes within 3%) —
+watr's edge is batch/in-process use with no process spawn and a ~25× smaller footprint.
 
 
 ## Used by
