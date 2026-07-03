@@ -2670,6 +2670,29 @@ test('packData: interior zero runs split without changing memory image', () => {
   assert.equal(b[20], 0)
 })
 
+test('packData: a split segment whose content starts with ";" is not mistaken for a comment', () => {
+  // jz self-host repro (2026-07): packData splits a zero run inside jz's interned static-
+  // string table (src/compile/index.js buildInternTable, self-host scale only), and the
+  // surviving byte run of one split-off segment happened to start with ';' — a WAT-text
+  // stdlib template's own embedded comment, interned as static data. compile.js's
+  // isDroppable() treated ANY string with n[1]===';' as a `(;` block-comment token without
+  // also checking n[0]==='(' — a plain data string always starts with n[0]==='"', so this
+  // matched it too and cleanup() silently dropped the whole segment's content, corrupting
+  // the kernel's own OPCODE table lookups ("Unknown instruction f64.nearest") at runtime.
+  // packData's own trim/merge/split logic is not at fault (proven via a memory-image diff
+  // against the real self-host kernel, both single-pass-isolated and full-pipeline) — this
+  // pins the true root cause at the encoder layer that packData's fragmentation exposes.
+  const src = `(module (memory (export "m") 1)
+    (data (i32.const 0) "ab${'\\00'.repeat(40)}; cd"))`
+  const base = compile(parse(src)).length
+  assert(compile(optimize(parse(src))).length < base, 'zero run replaced by a second segment')
+  const b = new Uint8Array(run(src).m.buffer)
+  assert.equal(String.fromCharCode(b[0], b[1]), 'ab', 'first segment intact')
+  assert.equal(b[20], 0, 'interior zero run still reads zero')
+  assert.equal(String.fromCharCode(b[42], b[43], b[44], b[45]), '; cd',
+    'second segment, starting with ";", is NOT dropped as a comment token')
+})
+
 test('inlineOnce: callee with bare trailing return inlines correctly', () => {
   const src = `(module
     (func $inc (param $p i32) (result i32) (i32.add (local.get $p) (i32.const 1)) return)

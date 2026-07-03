@@ -17,8 +17,16 @@ import { err, unescape, str, setErrLoc, setErrSrc, getErrLoc, getErrSrc } from '
 // load past parse — strip them. Predicate stays separate from `cleanup` so
 // neither has to invent a "drop me" sentinel and risk colliding with a
 // legitimate `null`/`undefined` immediate in the AST.
+// A block-comment token is `(;…` (parse.js: `buf = '(' + ';'`) — checking n[1]===';'
+// ALONE (without also requiring n[0]==='(') also matches an ordinary quoted STRING
+// whose CONTENT happens to start with ';' (a string token always starts with n[0]==='"',
+// so n[1] is its first content byte). A data-segment string is exactly this shape once
+// packData splits a segment at a zero run and the surviving byte run starts with ';'
+// (e.g. a WAT-text stdlib template's own comment, interned as static data) — cleanup()
+// then silently drops that segment's whole content as if it were a comment. Mirrors the
+// already-correct guard in optimize.js's own comment-strip (`c[0]==='(' && c[1]===';'`).
 const isDroppable = (n) =>
-  (typeof n === 'string' && (n[0] === ';' || n[1] === ';')) ||
+  (typeof n === 'string' && (n[0] === ';' || (n[0] === '(' && n[1] === ';'))) ||
   (Array.isArray(n) && n[0]?.[0] === '@' && n[0] !== '@custom' && !n[0]?.startsWith?.('@metadata.code.'))
 
 const cleanup = (node, result) => {

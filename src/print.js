@@ -28,7 +28,10 @@ export default function print(tree, options = {}) {
     .join(newline)
 
   function isComment(node) {
-    return typeof node === 'string' && node[1] === ';'
+    // node[1]===';' alone also matches a plain string starting with ';' (n[0] is
+    // always '"' for a real string token, so n[1] is its first content byte) — a
+    // block comment is '(;…', so also require n[0]==='(' to disambiguate.
+    return typeof node === 'string' && (node[0] === ';' || (node[0] === '(' && node[1] === ';'))
   }
 
   function printNode(node, level = 0) {
@@ -60,8 +63,10 @@ export default function print(tree, options = {}) {
     for (let i = 1; i < node.length; i++) {
       const sub = node[i]?.valueOf?.() ?? node[i] // "\00abc\ff" strings are stored as arrays but have ._ with original value
 
-      // comments - skip if not enabled
-      if (typeof sub === 'string' && sub[1] === ';') {
+      // comments - skip if not enabled. sub[1]===';' alone would also match a plain
+      // string starting with ';' (n[0] is always '"' for a real string; block comments
+      // are '(;…', so n[0]==='(' must hold too) — see isComment above.
+      if (typeof sub === 'string' && (sub[0] === ';' || (sub[0] === '(' && sub[1] === ';'))) {
         if (!comments) continue
         // line comments (;;) - MUST end with newline to avoid consuming following elements
         if (sub[0] === ';') {
