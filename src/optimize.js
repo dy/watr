@@ -3125,23 +3125,19 @@ const rettail = (ast) => {
 // number at 2 (an f64.const is really 9), which flips boundary calls. Index
 // widths use the small-index optimism (1 byte): that UNDER-counts a site's
 // bytes, so gains are under- not over-estimated — refusals stay safe.
-const exprBytes = (n) => {
-  if (!Array.isArray(n)) return 1
+// per-node immediate width (children excluded) — the facts pass sums bottom-up
+const ownBytes = (n) => {
   const op = n[0], code = OPCODE[op]
   let b = typeof code === 'number' ? (code > 0xffff ? ((code & 0xffff) > 127 ? 3 : 2) : 1) : 1
   if (op === 'i32.const' || op === 'i64.const') return b + slebSize(n[1])
   if (op === 'f32.const') return b + 4
   if (op === 'f64.const') return b + 8
-  if (op === 'local.get' || op === 'local.set' || op === 'local.tee' || op === 'global.get') {
-    b += 1
-    for (let i = 2; i < n.length; i++) if (Array.isArray(n[i])) b += exprBytes(n[i])
-    return b
-  }
+  if (op === 'local.get' || op === 'local.set' || op === 'local.tee' || op === 'global.get') return b + 1
   let alignTok = false, offTok = false
   for (let i = 1; i < n.length; i++) {
     const c = n[i]
-    if (Array.isArray(c)) b += exprBytes(c)
-    else if (typeof c === 'string' && c.startsWith('offset=')) { offTok = true; b += ulebBytes(+c.slice(7)) }
+    if (Array.isArray(c)) continue
+    if (typeof c === 'string' && c.startsWith('offset=')) { offTok = true; b += ulebBytes(+c.slice(7)) }
     else if (typeof c === 'string' && c.startsWith('align=')) { alignTok = true; b += 1 }
     else b += 1 // name/label/small immediate — optimistic
   }
@@ -3153,20 +3149,22 @@ const ulebBytes = (v) => { let k = 1; v = v >>> 7; while (v) k++, v >>>= 7; retu
 let outUid = 0
 const outline = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
-  const EMPTY = new Map()
+  let rescan = null // functions containing applied sites — later rounds rescan only these
   for (let round = 0; round < 3; round++) {
     let funcCount = 0
     for (const n of ast) if (Array.isArray(n) && (n[0] === 'func' ||
       (n[0] === 'import' && n.some(c => Array.isArray(c) && c[0] === 'func')))) funcCount++
     const callB = funcCount > 127 ? 3 : 2
-    // One bottom-up pass per function computes composable facts (purity, encoded
-    // size, name-blind hash) for every subtree — candidates group first by the
-    // cheap name-blind hash, and only colliding groups pay for exact positional
-    // canonicalization. Facts live in a Map keyed by node identity (no expandos).
+    // One bottom-up pass per function computes composable facts — purity, encoded
+    // size (own width + children, no per-root re-recursion), name-blind hash —
+    // for every subtree. Candidates group by the cheap hash; exact positional
+    // canonicalization is DEFERRED to apply time (once per chosen group), and
+    // param collection to groups that actually collided.
     const facts = new Map()
-    const weak = new Map()
+    const groups = new Map()
     for (const fn of ast) {
       if (!Array.isArray(fn) || fn[0] !== 'func') continue
+      if (rescan && !rescan.has(fn)) continue
       const ltype = new Map()
       for (const c of fn) if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'local') &&
         typeof c[1] === 'string' && typeof c[2] === 'string') ltype.set(c[1], c[2])
@@ -3175,7 +3173,7 @@ const outline = (ast) => {
         const op = n[0]
         let pure = !IMPURE_OPS.has(op) && !IMPURE_SUBSTRINGS.some(sub => op.includes(sub)) &&
           op !== 'if' && op !== 'block' && op !== 'loop' && op !== 'then' && op !== 'else' && op !== 'try_table'
-        let b = exprBytes(n) - 0 // own frame; children sizes folded below
+        let b = ownBytes(n)
         let h = op
         for (let i = 1; i < n.length; i++) {
           const c = n[i]
@@ -3183,59 +3181,54 @@ const outline = (ast) => {
             const f = facts.get(c)
             if (!f) { pure = false; continue }
             pure &&= f.pure
+            b += f.b
             h += ',' + (c[0] === 'local.get' && c.length === 2 ? 'L' : f.h)
           } else h += ',' + c
         }
-        // exprBytes already recursed for size — reuse as-is (cheap enough), keep hash composable
-        const rec = { pure, h: h.length > 64 ? 'H' + hash32(h) : h, b: 0 }
+        const rec = { pure, b, h: h.length > 64 ? 'H' + hash32(h) : h }
         facts.set(n, rec)
-        if (!parent || !pure) return
-        if (!resultType(op)) return
-        const bytes = exprBytes(n)
-        if (bytes < 10) return
-        rec.b = bytes
-        let g = weak.get(rec.h)
-        if (!g) weak.set(rec.h, g = [])
-        g.push({ node: n, parent, idx, fn, ltype, bytes })
+        if (!parent || !pure || rec.b < 10 || !resultType(op)) return
+        let g = groups.get(rec.h)
+        if (!g) groups.set(rec.h, g = [])
+        g.push({ node: n, parent, idx, fn, ltype, bytes: rec.b })
       })
     }
-    // exact grouping within weak collisions
-    const groups = new Map()
-    for (const cands of weak.values()) {
+    // exact grouping only within collisions: params + types collected per site,
+    // canonical body built once per chosen group at apply time
+    const exact = new Map()
+    for (const cands of groups.values()) {
       if (cands.length < 2) continue
       for (const cand of cands) {
         const params = []
         let ok = true
-        const canon = walkPost(clone(cand.node), (c) => {
+        walk(cand.node, (c) => {
           if (!ok || !Array.isArray(c)) return
           if (c[0] === 'local.get') {
             if (typeof c[1] !== 'string') { ok = false; return }
-            let i = params.findIndex(p => p.name === c[1])
-            if (i < 0) {
+            if (!params.some(p => p.name === c[1])) {
               const t = cand.ltype.get(c[1])
               if (!t) { ok = false; return }
               params.push({ name: c[1], type: t })
-              i = params.length - 1
             }
-            return ['local.get', '$' + i]
           }
-          if (c[0] === 'local.tee' || c[0] === 'local.set') ok = false
+          else if (c[0] === 'local.tee' || c[0] === 'local.set') ok = false
         })
         if (!ok || params.length > 4) continue
         const rt = resultType(cand.node[0])
-        const key = hashFunc(canon, EMPTY) + '|' + params.map(p => p.type).join(',') + '|' + rt
-        let g = groups.get(key)
-        if (!g) groups.set(key, g = { canon, ptypes: params.map(p => p.type), rt, bytes: cand.bytes, arity: params.length, sites: [] })
-        g.sites.push({ node: cand.node, parent: cand.parent, idx: cand.idx, args: params.map(p => p.name) })
+        const key = facts.get(cand.node).h + '|' + params.map(p => p.type).join(',') + '|' + rt
+        let g = exact.get(key)
+        if (!g) exact.set(key, g = { first: cand, ptypes: params.map(p => p.type), rt, bytes: cand.bytes, arity: params.length, sites: [] })
+        g.sites.push({ node: cand.node, parent: cand.parent, idx: cand.idx, fn: cand.fn, args: params.map(p => p.name) })
       }
     }
     // apply every profitable group, best first, skipping consumed overlaps
-    const chosen = [...groups.values()]
+    const chosen = [...exact.values()]
       .map(g => ({ g, net: g.sites.length * (g.bytes - callB - 2 * g.arity) - (g.bytes + 5 + 3) }))
       .filter(x => x.g.sites.length >= 2 && x.net >= 4)
       .sort((a, b) => b.net - a.net)
     let applied = 0
     const consumed = new Set()
+    const touched = new Set()
     for (const { g } of chosen) {
       const live = g.sites.filter(st => {
         if (st.parent[st.idx] !== st.node) return false // ancestor already replaced this slot
@@ -3246,19 +3239,31 @@ const outline = (ast) => {
       })
       const net = live.length * (g.bytes - callB - 2 * g.arity) - (g.bytes + 5 + 3)
       if (live.length < 2 || net < 4) continue
+      // canonicalize the FIRST live site once: positional params, shared body
+      const params = []
+      const canon = walkPost(clone(live[0].node), (c) => {
+        if (!Array.isArray(c)) return
+        if (c[0] === 'local.get') {
+          let i = params.indexOf(c[1])
+          if (i < 0) { params.push(c[1]); i = params.length - 1 }
+          return ['local.get', '$' + i]
+        }
+      })
       const name = '$__out' + outUid++
       ast.push(['func', name,
         ...g.ptypes.map((t, i) => ['param', '$' + i, t]),
-        ['result', g.rt], clone(g.canon)])
+        ['result', g.rt], canon])
       for (const st of live) {
         // mark the WHOLE subtree: a smaller candidate nested inside this site
         // still passes the parent-slot identity check on the detached tree
         walk(st.node, c => { if (Array.isArray(c)) consumed.add(c) })
         st.parent[st.idx] = ['call', name, ...st.args.map(a => ['local.get', a])]
+        touched.add(st.fn)
       }
       applied++
     }
     if (!applied) break
+    rescan = touched
   }
   return ast
 }
