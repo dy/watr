@@ -1101,7 +1101,32 @@ const branch = (ast) => {
         if (thenBranch?.length !== 2 || elseBranch?.length !== 2) return
         const a = thenBranch[1], b = elseBranch[1]
         if (!isPure(a) || !isPure(b) || count(a) > 6 || count(b) > 6) return
-        if (hasTrap(a) || hasTrap(b)) return
+        // speculation gate: the if ran only the TAKEN arm — select runs both, so a
+        // trap-capable op in either arm (int div/rem, float trunc, and LOADS — an
+        // out-of-bounds address on the untaken path is a brand-new trap) is out
+        if (hasTrap(a) || hasTrap(b) || readsMemory(a) || readsMemory(b)) return
+        // evaluation-order gate: the if evaluated its CONDITION first, select
+        // evaluates it LAST — an arm must not read anything the condition writes
+        // (a tee'd local, a set global, memory a callee stores to), else the arm
+        // sees pre-condition state (a NaN-boxed local read before its tee fed the
+        // kernel a stale pointer — one wrong byte in a self-hosted compile)
+        if (!isPure(cond)) {
+          const aw = scanVal(a), bw = scanVal(b)
+          let clash = false
+          walk(cond, (n, p2, i2) => {
+            if (!Array.isArray(n)) { if (i2 !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) clash = true; return }
+            const o = n[0]
+            if (typeof o !== 'string') return
+            if ((o === 'local.set' || o === 'local.tee') && (aw.refs.has(n[1]) || bw.refs.has(n[1]))) clash = true
+            else if (o === 'global.set' && (aw.grefs.has(n[1]) || bw.grefs.has(n[1]))) clash = true
+            else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') {
+              const e = callFx(n)
+              if (!e) { if (aw.grefs.size || bw.grefs.size) clash = true }
+              else if ([...aw.grefs, ...bw.grefs].some(g => e.wGlob.has(g))) clash = true
+            }
+          })
+          if (clash) return
+        }
         return ['select', a, b, cond]
       }
       const taken = c.value !== 0 && c.value !== ZERO64 ? thenBranch : elseBranch
@@ -1926,10 +1951,20 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     }
 
     // An if's TEST evaluates before the branch is entered — substitute into it
-    // with the pre-branch knowledge before invalidating.
+    // with the pre-branch knowledge before invalidating. substGets mutates
+    // INTERIOR nodes in place and returns the same root — a root compare misses
+    // those, and an unreported substitution skips the driver's use-count refresh,
+    // handing sinkSets stale counts (its single-use substitute then deletes a
+    // store whose second, freshly-substituted read still exists: an orphaned get
+    // reading zero — one wrong NaN-boxed byte in a self-hosted compile).
     if (op === 'if') {
       const { condIdx, cond } = parseIf(instr)
-      if (Array.isArray(cond)) { const r = substGets(cond, known); if (r !== cond) instr[condIdx] = r, changed = true }
+      if (Array.isArray(cond)) {
+        const prev = clone(cond)
+        const r = substGets(cond, known)
+        if (r !== cond) instr[condIdx] = r, changed = true
+        else if (!equal(prev, cond)) changed = true
+      }
     }
     // Invalidate at control-flow boundaries
     if (isBranchScope(op)) known.clear()
@@ -2226,7 +2261,7 @@ const sinkSets = (funcNode, params, useCounts) => {
     })
     const vMem = readsMemory(val)
     const vPure = isPure(val)
-    let hit = null, skipped = null
+    let hit = null, skipped = null, hitJ = -1
     for (let j = i + 1; j < funcNode.length && j <= i + 5; j++) {
       const stmt = funcNode[j]
       if (!Array.isArray(stmt)) break // flat token — order unattributable
@@ -2237,6 +2272,7 @@ const sinkSets = (funcNode, params, useCounts) => {
         (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')) touches = true })
       if (touches) {
         skipped = new Set()
+        hitJ = j
         const state = { reads: false }
         hit = stmt[0] === 'local.get' && stmt[1] === name && stmt.length === 2
           ? [funcNode, j] : firstEvalGet(stmt, name, skipped, state)
@@ -2269,7 +2305,15 @@ const sinkSets = (funcNode, params, useCounts) => {
     // Sole set+get pair → substitute the value outright (decl dies next sweep);
     // otherwise fuse into a tee at the get site. Either way the value's evaluation
     // point is unchanged — the get was the first instruction executed after the set.
-    const single = uses.sets === 1 && uses.gets === 1 && uses.tees === 0
+    let single = uses.sets === 1 && uses.gets === 1 && uses.tees === 0
+    // defense in depth against stale counts: the landing statement itself may hold
+    // a SECOND read of the local beyond the hit (the exact shape a missed count
+    // refresh produces) — a substitute would orphan it, a tee stays correct
+    if (single) {
+      let extra = 0
+      walk(funcNode[hitJ], n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) extra++ })
+      if (extra > 1) single = false
+    }
     hit[0][hit[1]] = single ? clone(setNode[2]) : ['local.tee', name, clone(setNode[2])]
     funcNode.splice(i, 1)
     changed = true
@@ -2987,17 +3031,24 @@ const tailmerge = (ast) => {
       const key = hashFunc(['b', ...body], EMPTY_MAP)
       let g = groups.get(key)
       if (!g) groups.set(key, g = { body, sites: [] })
-      g.sites.push([parent, idx])
+      g.sites.push(st)
     })
     // every qualifying group wraps its own labeled block (inner groups nest inside
-    // the earlier wrappers; br_if targets by name, so depth is irrelevant)
+    // the earlier wrappers; br_if targets by name, so depth is irrelevant).
+    // Sites are replaced by NODE IDENTITY: each wrap below splices the whole body
+    // into a fresh block, so positions recorded during collection go stale — a
+    // stale [parent, idx] would rewrite whatever statement NOW sits there into a
+    // br_if with this group's label (silent misdirection, or a crash on a hole).
     const chosen = [...groups.values()].filter(g => g.sites.length >= 2)
     for (const g of chosen) {
       const label = '$__tm' + tmUid++
-      for (const [parent, idx] of g.sites) {
-        const { cond } = parseIf(parent[idx])
-        parent[idx] = ['br_if', label, cond]
-      }
+      const siteSet = new Set(g.sites)
+      walk(fn, (n, parent, idx) => {
+        if (parent && siteSet.has(n)) {
+          const { cond } = parseIf(n)
+          parent[idx] = ['br_if', label, cond]
+        }
+      })
       let at = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
       while (at < fn.length && Array.isArray(fn[at]) &&
         (fn[at][0] === 'export' || fn[at][0] === 'type' || fn[at][0] === 'param' || fn[at][0] === 'result' || fn[at][0] === 'local')) at++
@@ -4478,17 +4529,23 @@ const globals = (ast) => {
   // Pricing every read at a flat const size misses this — clone each read's small
   // enclosing subtree, splice in the literal, fold it locally, and measure the
   // REAL shape instead of guessing. One walk collects every global's sites.
-  const ANCESTOR_DEPTH = 2
+  // BOUNDED: a widely-read global (a kernel NaN-box constant with thousands of
+  // reads) or a huge anchor prices flat — unbounded per-read clones of a multi-MB
+  // module held at once ran a self-host build out of memory.
+  const ANCESTOR_DEPTH = 2, MAX_PRICED_READS = 64, MAX_ANCHOR_NODES = 256
   const gsites = new Map()
   {
     const stack = []
     const visit = (node) => {
       if (!Array.isArray(node)) return
       if (node[0] === 'global.get' && typeof node[1] === 'string' && constGlobals.has(node[1])) {
-        const anchor = stack.length >= ANCESTOR_DEPTH ? stack[stack.length - ANCESTOR_DEPTH] : stack[0]
-        let a = gsites.get(node[1])
-        if (!a) gsites.set(node[1], a = [])
-        a.push(clone(anchor ?? node))
+        if ((reads.get(node[1]) || 0) <= MAX_PRICED_READS) {
+          const anchor = stack.length >= ANCESTOR_DEPTH ? stack[stack.length - ANCESTOR_DEPTH] : stack[0]
+          const site = anchor ?? node
+          let a = gsites.get(node[1])
+          if (!a) gsites.set(node[1], a = [])
+          a.push(count(site) <= MAX_ANCHOR_NODES ? clone(site) : ['global.get', node[1]])
+        }
         return
       }
       stack.push(node)
@@ -4504,13 +4561,20 @@ const globals = (ast) => {
     if (r === 0) continue // dead anyway — leave to treeshake
     const cs = constInstrSize(init)
     const declSize = cs + 2 // valtype + mutability byte + init expr + `end`
-    let before = declSize, after = exported.has(name) ? declSize : 0
-    for (const site of gsites.get(name) || []) {
-      before += estSize(site)
-      const spliced = walkPost(clone(site), (n) => {
-        if (Array.isArray(n) && n[0] === 'global.get' && n[1] === name) return clone(init)
-      })
-      after += estSize(fold(spliced))
+    const sites = gsites.get(name)
+    let before, after
+    if (sites && sites.length === r) {
+      before = declSize; after = exported.has(name) ? declSize : 0
+      for (const site of sites) {
+        before += estSize(site)
+        const spliced = walkPost(clone(site), (n) => {
+          if (Array.isArray(n) && n[0] === 'global.get' && n[1] === name) return clone(init)
+        })
+        after += estSize(fold(spliced))
+      }
+    } else { // beyond the pricing bounds — flat model
+      before = r * GLOBAL_GET_SIZE + declSize
+      after = r * cs + (exported.has(name) ? declSize : 0)
     }
     if (after <= before) propagate.add(name)
   }
@@ -5321,10 +5385,9 @@ const packData = (ast) => {
   // fit the memory's INITIAL size (a shrunk segment must not un-trap an
   // out-of-bounds write); and no other active segment may touch this one's range
   // (a later zero run may deliberately overwrite an earlier segment's bytes).
-  trim: {
+  {
     const fence = zeroFence(ast)
-    if (!fence) break trim
-    for (const seg of fence.segs) {
+    for (const seg of fence ? fence.segs : []) {
       if (!segSafe(fence, seg.node)) continue
       const node = seg.node
       let contentStart = 1

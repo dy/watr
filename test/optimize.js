@@ -2926,3 +2926,51 @@ test('call effect summary is transitive through the call graph', () => {
       (i32.sub (local.get $y) (local.get $x))))`
   assert.equal(run(src).f(), 8, 'y loads post-call 9: 9 - 1')
 })
+
+test('if→select: arm must not read state the condition writes; no speculated loads', () => {
+  // the if evaluated its CONDITION first; select evaluates arms first — an arm
+  // reading a local the condition tees would see the stale pre-tee value
+  // (jz self-host kernel: a NaN-boxed pointer read before its tee → one wrong byte)
+  const teeCond = `(module
+    (func $id (param $v i32) (result i32) (local.get $v))
+    (func (export "f") (result i32) (local $x i32)
+      (if (result i32) (local.tee $x (call $id (i32.const 7)))
+        (then (local.get $x))
+        (else (i32.const -1)))))`
+  assert.equal(run(teeCond).f(), 7, 'arm reads the post-tee value')
+  // select runs BOTH arms — an out-of-bounds load in the untaken arm is a new trap
+  const specLoad = `(module (memory 1) (func (export "g") (param $p i32) (result i32)
+    (if (result i32) (local.get $p)
+      (then (i32.load (i32.const 500000)))
+      (else (i32.const -1)))))`
+  assert.equal(run(specLoad).g(0), -1, 'untaken OOB load must not trap')
+})
+
+test('propagate: in-place if-cond substitution reports change — no stale-count orphan', () => {
+  // jz self-host kernel reduction: FP substitutes a copy into an if CONDITION
+  // (interior mutation, same root — a root compare misses it and skips the
+  // use-count refresh), then sinkSets judged the copy source single-use on stale
+  // counts and deleted its store, orphaning the freshly-substituted read (which
+  // then read 0 — the kernel dispatched a numeric key as a string key).
+  const src = `(module (memory 1)
+    (func $k (param $v f64) (result i32) (i32.store (i32.const 4) (i32.const 1)) (f64.lt (local.get $v) (f64.const 5)))
+    (func $ga (param $v f64) (result f64) (i32.store (i32.const 8) (i32.const 1)) (f64.add (local.get $v) (f64.const 10)))
+    (func $gb (param $v f64) (result f64) (f64.load (i32.const 0)))
+    (func (export "f") (param $av f64) (result f64)
+      (local $inl f64) (local $t f64) (local $r f64)
+      (block $exit
+        (loop $L
+          (if (call $k
+                (block (result f64)
+                  (local.set $inl (local.get $av))
+                  (block (result f64)
+                    (local.set $t (local.get $inl))
+                    (if (result f64) (call $k (local.get $t))
+                      (then (call $ga (local.get $t)))
+                      (else (call $gb (local.get $t)))))))
+            (then (local.set $r (f64.const 100)) (br $exit))
+            (else (local.set $r (f64.const 200))))
+          (br $exit)))
+      (local.get $r)))`
+  assert.equal(run(src).f(7), 100, 'k(7)=0 → gb → load(0)=0 → k(0)=1 → then-arm')
+})
