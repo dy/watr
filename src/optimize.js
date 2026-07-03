@@ -3401,6 +3401,7 @@ const propagate = (ast) => {
 // `(block $__inlN (result T)? …)`. Only the SELECTION policy differs (one caller vs
 // every caller of a small body), so the lift lives here once.
 
+const EMPTY_MAP = new Map()
 let inlineUid = 0
 // Bumped by every splice that can GROW the binary (inline / inlineOnce /
 // inlineMacro expansion). The driver's exit size-guard exists solely for these —
@@ -6246,10 +6247,18 @@ export default function optimize(ast, opts = true) {
         per(fn)
       }
       const next = new Set()
-      for (const f of collectFuncs()) { const snap = snapshots.get(f); if (!snap || !equal(snap, f)) next.add(f) }
+      // convergence via content hash, not clone+equal: one pass per function, no
+      // retained deep copies. A collision only marks a changed function clean —
+      // it skips further rounds, never alters what already-applied passes did.
+      const nextHash = new Map()
+      for (const f of collectFuncs()) {
+        const h = hashFunc(f, EMPTY_MAP)
+        nextHash.set(f, h)
+        if (snapshots.get(f) !== h) next.add(f)
+      }
       const topStable = ast.length === prevLen
       prevLen = ast.length
-      for (const f of next) snapshots.set(f, clone(f))
+      for (const [f, h] of nextHash) snapshots.set(f, h)
       dirty = next
       if (verbose) log(`  round ${round + 1}: ${next.size} dirty funcs`)
       if (!next.size && topStable) break
@@ -6277,7 +6286,11 @@ export default function optimize(ast, opts = true) {
   const inflBefore = inflations
   let sizeBefore = null
   let beforeRound = null, cur = null
-  runRounds(false, () => { beforeRound = cur; cur = clone(ast) })
+  // round-start clones exist only so the guard can unwind ONE round instead of
+  // all of them — worth taking only once an inflating splice has actually fired
+  // (before that, every executed pass was size-monotone; if inflation first
+  // fires mid-round the unwind falls back to pristine, which is still correct)
+  runRounds(false, () => { beforeRound = cur; cur = inflations !== inflBefore ? clone(ast) : null })
   // `cur` is the clone taken at the LAST round's start; if that round changed
   // nothing (converged), unwinding to it is identity — beforeRound covers the case
   if (cur && !equal(cur, ast)) beforeRound = cur
