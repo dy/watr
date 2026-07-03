@@ -937,6 +937,9 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 
 
 // Immediate encoders, keyed by immediate type (IMM in const.js maps op name → immediate type)
+// leb into `out` (returning undefined — the write-mode sentinel) or a fresh array
+const wleb = (v, out) => { if (out) { uleb(v, out); return } return uleb(v) }
+
 const HANDLER = {
   reversed: (n, c) => { let t = n.shift(), e = n.shift(); return [...uleb(id(e, c.elem)), ...uleb(id(t, c.table))] },
   block: (n, c, op, out) => {
@@ -977,7 +980,7 @@ const HANDLER = {
   select: (n, c) => { let r = n.shift() || []; return r.length ? vec(r.map(t => reftype(t, c))) : [] },
   ref_null: (n, c) => { let t = n.shift(); return Array.isArray(t) && t[0] === 'exact' ? [0x62, ...uleb(id(t[1], c.type))] : TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)) },
   memarg: (n, c, op, out) => memargEnc(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0, out),
-  opt_memory: (n, c, op, out) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory), out),
+  opt_memory: (n, c, op, out) => wleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory), out),
   reftype: (n, c) => { let ht = reftype(n.shift(), c); return ht.length > 1 ? ht.slice(1) : ht },
   reftype2: (n, c) => { let b = blockid(n.shift(), c.block), h1 = reftype(n.shift(), c), h2 = reftype(n.shift(), c), ht = h => h.length > 1 ? h.slice(1) : h; return [((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), ...ht(h1), ...ht(h2)] },
   v128const: (n) => {
@@ -1002,24 +1005,26 @@ const HANDLER = {
     const memIdx = isId(n[0]) || (isIdx(n[0]) && (isMemParam(n[1]) || isIdx(n[1]))) ? id(n.shift(), c.memory) : 0
     return [...memargEnc(n, op, memIdx), ...uleb(parseUint(n.shift()))]
   },
-  // *idx types — write-mode: immediates land directly in the instruction stream
-  labelidx: (n, c, op, out) => uleb(blockid(n.shift(), c.block), out),
+  // *idx types — write-mode (out present) pushes in place and returns undefined;
+  // return-mode hands back a fresh array. The sentinel is EXPLICIT: a boxed-
+  // pointer identity compare (`returned !== out`) misfires under the jz kernel.
+  labelidx: (n, c, op, out) => wleb(blockid(n.shift(), c.block), out),
   laneidx: (n, c, op, out) => { const v = parseUint(n.shift(), 0xff); if (out) { out.push(v); return } return [v] },
-  funcidx: (n, c, op, out) => uleb(id(n.shift(), c.func), out),
-  typeidx: (n, c, op, out) => uleb(id(n.shift(), c.type), out),
-  tableidx: (n, c, op, out) => uleb(id(n.shift(), c.table), out),
-  memoryidx: (n, c, op, out) => uleb(id(n.shift(), c.memory), out),
-  globalidx: (n, c, op, out) => uleb(id(n.shift(), c.global), out),
-  localidx: (n, c, op, out) => uleb(id(n.shift(), c.local), out),
-  dataidx: (n, c, op, out) => uleb(id(n.shift(), c.data), out),
-  elemidx: (n, c, op, out) => uleb(id(n.shift(), c.elem), out),
-  tagidx: (n, c, op, out) => uleb(id(n.shift(), c.tag), out),
-  'memoryidx?': (n, c, op, out) => uleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory), out),
-  stringidx: (n, c, op, out) => { let s = n.shift(), key = s.valueOf(), idx = c.strings.findIndex(x => x.valueOf() === key); if (idx < 0) idx = c.strings.push(s) - 1; return uleb(idx, out) },
+  funcidx: (n, c, op, out) => wleb(id(n.shift(), c.func), out),
+  typeidx: (n, c, op, out) => wleb(id(n.shift(), c.type), out),
+  tableidx: (n, c, op, out) => wleb(id(n.shift(), c.table), out),
+  memoryidx: (n, c, op, out) => wleb(id(n.shift(), c.memory), out),
+  globalidx: (n, c, op, out) => wleb(id(n.shift(), c.global), out),
+  localidx: (n, c, op, out) => wleb(id(n.shift(), c.local), out),
+  dataidx: (n, c, op, out) => wleb(id(n.shift(), c.data), out),
+  elemidx: (n, c, op, out) => wleb(id(n.shift(), c.elem), out),
+  tagidx: (n, c, op, out) => wleb(id(n.shift(), c.tag), out),
+  'memoryidx?': (n, c, op, out) => wleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory), out),
+  stringidx: (n, c, op, out) => { let s = n.shift(), key = s.valueOf(), idx = c.strings.findIndex(x => x.valueOf() === key); if (idx < 0) idx = c.strings.push(s) - 1; return wleb(idx, out) },
 
   // Value type
-  i32: (n, c, op, out) => encode.i32(n.shift(), out),
-  i64: (n, c, op, out) => encode.i64(n.shift(), out),
+  i32: (n, c, op, out) => { if (out) { encode.i32(n.shift(), out); return } return encode.i32(n.shift()) },
+  i64: (n, c, op, out) => { if (out) { encode.i64(n.shift(), out); return } return encode.i64(n.shift()) },
   f32: (n, c, op, out) => encode.f32(n.shift(), out),
   f64: (n, c, op, out) => encode.f64(n.shift(), out),
   v128: (n) => encode.v128(n.shift()),
@@ -1120,9 +1125,7 @@ const instr = (nodes, ctx) => {
         out[out.length - 1]++
       }
       const b = HANDLER[imm](nodes, ctx, op, out)
-      // write-mode handlers hand back `out` itself (uleb returns its buffer) —
-      // only a DISTINCT array is a cold handler's immediate bytes to append
-      if (b && b !== out) for (let i = 0; i < b.length; i++) out.push(b[i])
+      if (b) for (let i = 0; i < b.length; i++) out.push(b[i])
     }
   }
 

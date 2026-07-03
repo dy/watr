@@ -59,7 +59,7 @@
   "scripts": {
     "build": "npm run build:js && npm run build:wasm",
     "build:js": "esbuild watr.js --bundle --format=esm --outfile=dist/watr.js && esbuild watr.js --bundle --format=esm --minify --outfile=dist/watr.min.js",
-    "build:wasm": "npx jz watr.js -O3 -o dist/watr.wasm",
+    "build:wasm": "npx jz watr.js -O3 --memory 4096 -o dist/watr.wasm",
     "test": "node test",
     "test:wasm": "WATR_WASM=1 node test",
     "test:repl": "npx playwright test",
@@ -107,7 +107,7 @@
   "devDependencies": {
     "@playwright/test": "^1.57.0",
     "esbuild": "^0.24.2",
-    "jz": "^0.7.0",
+    "jz": "^0.8.1",
     "tst": "^9.0.0"
   }
 }

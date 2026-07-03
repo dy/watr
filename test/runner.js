@@ -28,7 +28,8 @@ const isWasm = !!(
 let compile, parse, print, watr
 
 if (isWasm) {
-  const { instantiate } = await import('../../jz/interop.js')
+  // the PACKAGED jz interop — its ABI must match the jz that built dist/watr.wasm
+  const { instantiate } = await import('jz/interop')
   const wasmBytes = readFileSync(new URL('../dist/watr.wasm', import.meta.url))
   const { exports } = instantiate(wasmBytes, { memory: 4096 })
 
