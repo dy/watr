@@ -2240,6 +2240,38 @@ const commuteForSink = (scope) => {
 const sinkSets = (funcNode, params, useCounts) => {
   let changed = false
 
+  // Per-statement interference summaries, memoized by statement IDENTITY (splice-
+  // proof): each candidate's bounded lookahead re-examined the same statements —
+  // one walk per statement now serves every candidate that crosses it.
+  const SINFO = new Map()
+  const sinfo = (stmt) => {
+    let S = SINFO.get(stmt)
+    if (S) return S
+    S = { flat: false, touch: new Set(), wL: new Set(), gS: new Set(), gSAny: false, gG: new Set(),
+          calls: false, branchy: false, wMem: false, loadish: false, storeish: false }
+    walk(stmt, (n, p2, i2) => {
+      if (!Array.isArray(n)) { if (i2 !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) S.flat = true; return }
+      const o = n[0]
+      if (typeof o !== 'string') return
+      if (o === 'local.get' || o === 'local.set' || o === 'local.tee') {
+        if (typeof n[1] === 'string') { S.touch.add(n[1]); if (o !== 'local.get') S.wL.add(n[1]) }
+      }
+      else if (o === 'global.set') { S.gSAny = true; if (typeof n[1] === 'string') S.gS.add(n[1]) }
+      else if (o === 'global.get') { if (typeof n[1] === 'string') S.gG.add(n[1]) }
+      else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') S.calls = true
+      else if (isBranchScope(o) || o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' || o === 'throw') S.branchy = true
+      else {
+        if (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' || o === 'memory.init' || o === 'memory.grow' ||
+            (o.includes('.atomic.') && !o.endsWith('.load'))) S.wMem = true
+        if (o.includes('.load') || o === 'memory.size') S.loadish = true
+        if (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' || o === 'memory.init' || o === 'memory.grow' ||
+            o.includes('.atomic') || o.includes('table.')) S.storeish = true
+      }
+    })
+    SINFO.set(stmt, S)
+    return S
+  }
+
   for (let i = 1; i < funcNode.length - 1; i++) {
     const setNode = funcNode[i]
     // node[2] must be the folded value EXPRESSION — a bare string there is a
@@ -2261,37 +2293,58 @@ const sinkSets = (funcNode, params, useCounts) => {
     })
     const vMem = readsMemory(val)
     const vPure = isPure(val)
+    // A value impure ONLY through calls with a known read-only-ish summary may
+    // still cross local-only statements — collect the union of callee effects,
+    // or null when anything unsummarizable makes the value opaque.
+    let vFx = null
+    if (!vPure) {
+      const u = { wMem: false, rMem: false, wGlob: new Set(), rGlob: new Set() }
+      let opaque = false
+      walk(val, (n, parent, idx) => {
+        if (!Array.isArray(n)) { if (idx !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) opaque = true; return }
+        const o = n[0]
+        if (typeof o !== 'string') { opaque = true; return }
+        if (o === 'call' || o === 'return_call') {
+          const e = callFx(n)
+          if (!e) { opaque = true; return }
+          u.wMem ||= e.wMem; u.rMem ||= e.rMem
+          for (const g of e.wGlob) u.wGlob.add(g)
+          for (const g of e.rGlob) u.rGlob.add(g)
+        }
+        else if (IMPURE_OPS.has(o) || IMPURE_SUBSTRINGS.some(sub => o.includes(sub))) opaque = true
+      })
+      if (!opaque) vFx = u
+    }
     let hit = null, skipped = null, hitJ = -1
     for (let j = i + 1; j < funcNode.length && j <= i + 5; j++) {
       const stmt = funcNode[j]
       if (!Array.isArray(stmt)) break // flat token — order unattributable
       const h0 = stmt[0]
       if (h0 === 'param' || h0 === 'result' || h0 === 'local' || h0 === 'type' || h0 === 'export') continue
-      let touches = false
-      walk(stmt, n => { if (Array.isArray(n) && typeof n[1] === 'string' && n[1] === name &&
-        (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')) touches = true })
-      if (touches) {
+      const S = sinfo(stmt)
+      if (S.touch.has(name)) {
         skipped = new Set()
         hitJ = j
         const state = { reads: false }
         hit = stmt[0] === 'local.get' && stmt[1] === name && stmt.length === 2
           ? [funcNode, j] : firstEvalGet(stmt, name, skipped, state)
         // crossed pure subtrees may read globals/memory — an effectful value must
-        // not move past them
-        if (hit && state.reads && !vPure) hit = null
+        // not move past them unless its summarized callees write neither
+        if (hit && state.reads && !vPure && !(vFx && !vFx.wMem && !vFx.wGlob.size)) hit = null
         break
       }
-      // only a PURE value crosses; interference blocks
-      let bad = !vPure || (vMem && writesMemory(stmt))
-      if (!bad) walk(stmt, (n, parent, idx) => {
-        // op-position strings are the folded node's own mnemonic, not flat tokens
-        if (!Array.isArray(n)) { if (idx !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) bad = true; return }
-        const o = n[0]
-        if ((o === 'local.set' || o === 'local.tee') && vLocals.has(n[1])) bad = true
-        else if (o === 'global.set' && vGlobals.has(n[1])) bad = true
-        else if ((o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') && (vMem || vGlobals.size)) bad = true
-        else if (isBranchScope(o) || o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' || o === 'throw') bad = true
-      })
+      // a PURE value crosses on interference rules alone; a summarized call-valued
+      // one additionally requires the crossed statement to be free of OBSERVABLE
+      // writes and calls (the call may trap — a skipped store would be visible
+      // post-trap), with reads disjoint from the callee-side writes
+      let bad = (!vPure && !vFx) || (vMem && S.wMem) || S.flat || S.branchy ||
+        (S.calls && (vMem || vGlobals.size))
+      if (!bad) for (const x of vLocals) if (S.wL.has(x)) { bad = true; break }
+      if (!bad && S.gS.size) for (const x of vGlobals) if (S.gS.has(x)) { bad = true; break }
+      if (!bad && !vPure) {
+        bad = S.calls || S.gSAny || S.storeish || (vFx.wMem && S.loadish)
+        if (!bad && vFx.wGlob.size) for (const g of S.gG) if (vFx.wGlob.has(g)) { bad = true; break }
+      }
       if (bad) break
     }
     if (!hit) continue
@@ -2315,6 +2368,7 @@ const sinkSets = (funcNode, params, useCounts) => {
       if (extra > 1) single = false
     }
     hit[0][hit[1]] = single ? clone(setNode[2]) : ['local.tee', name, clone(setNode[2])]
+    SINFO.delete(funcNode[hitJ]) // the landing statement changed under its summary
     funcNode.splice(i, 1)
     changed = true
     i--
