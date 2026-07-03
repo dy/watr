@@ -159,9 +159,14 @@ const TABLE = [
 // fresh dictionaries, no mutation of TABLE, no function values — the shape a static
 // evaluator (jz self-host) folds to plain data at compile time.
 export const OPCODE = {}, IMM = {}
-for (let i = 0, code = 0, item, nm, imm; i < TABLE.length; i++)
-  typeof (item = TABLE[i]) === 'number' ? code = item
-    : ([nm, imm] = item.split(' '), OPCODE[nm] = code++, imm && (IMM[nm] = imm))
+for (let i = 0, code = 0; i < TABLE.length; i++) {
+  const item = TABLE[i]
+  if (typeof item === 'number') { code = item; continue }
+  const sp = item.indexOf(' ')
+  const nm = sp < 0 ? item : item.slice(0, sp)
+  if (sp >= 0) IMM[nm] = item.slice(sp + 1)
+  OPCODE[nm] = code++
+}
 
 /**
  * Result value-type of an instruction, inferred from its name — the single
