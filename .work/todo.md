@@ -208,9 +208,9 @@
 
 * [x] ~~compile wasm component~~ -> low ROI
 * [x] ~~wat-based wat-compiler~~ -> done, but no direct interop value.
+* [x] jz-based watr
 
 ## Future
 
 * [ ] VSCode formatter plugin
 * [ ] twgl with collection of wasm-rendered webgl tweets
-* [ ] jz-based watr

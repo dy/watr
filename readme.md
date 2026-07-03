@@ -67,18 +67,18 @@ npx watr input.wat --polyfill   # newer features → MVP
 
 ### Optimizer vs binaryen (wasm-opt 128)
 
-Measured on [test/example](./test/example) (21 modules, `optimize(src)` defaults vs `wasm-opt -all`):
-
 |  | size (total) | time (batch) | footprint |
 |---|---|---|---|
 | **watr/optimize** | **19,734 B** | **~110 ms** in-process | 149 KB min (46 KB gz) |
 | `wasm-opt -Oz` | 19,852 B | 990 ms CLI | ~1.1 MB js / native binary |
 | `wasm-opt -O3` | 22,302 B | — | — |
 
+<sup>
+Measured on [test/example](./test/example) (21 modules, `optimize(src)` defaults vs `wasm-opt -all`).<br>
 Smaller than `-O3` on every module and than `-Oz` in aggregate (19,734 vs 19,852 B); ties or beats `-Oz` on 18 of 20 files.
 On a 5.5 MB module watr's output is 1.7% SMALLER than `-Oz` (261,345 vs 265,977 B — cross-function outlining);
 binaryen's native core is faster there (0.44 s vs ~2.6 s optimize + 0.19 s compile) — watr's edge is output size, batch/in-process use
-with no process spawn, and a ~25× smaller footprint.
+with no process spawn, and a ~25× smaller footprint.</sup>
 
 
 ## Used by
