@@ -1663,15 +1663,16 @@ const dropEffects = (node) => {
 }
 
 /** Count all local.get/set/tee occurrences in one walk */
-const countLocalUses = (node) => {
-  const counts = new Map()
-  const ensure = name => { if (!counts.has(name)) counts.set(name, { gets: 0, sets: 0, tees: 0 }); return counts.get(name) }
+// One tally walker serves the from-scratch count AND the maintained-count
+// deltas — a second implementation would drift.
+const tallyLocals = (node, counts, d) => {
+  const ensure = name => { let c = counts.get(name); if (!c) counts.set(name, c = { gets: 0, sets: 0, tees: 0 }); return c }
   walk(node, (n, parent, idx) => {
     if (Array.isArray(n)) {
       if (n.length < 2 || typeof n[1] !== 'string') return
-      if (n[0] === 'local.get') ensure(n[1]).gets++
-      else if (n[0] === 'local.set') ensure(n[1]).sets++
-      else if (n[0] === 'local.tee') ensure(n[1]).tees++
+      if (n[0] === 'local.get') ensure(n[1]).gets += d
+      else if (n[0] === 'local.set') ensure(n[1]).sets += d
+      else if (n[0] === 'local.tee') ensure(n[1]).tees += d
       return
     }
     // bare flat form: `local.get` `$x` as sibling tokens (idx 0 is a folded
@@ -1680,10 +1681,32 @@ const countLocalUses = (node) => {
     if (idx > 0 && (n === 'local.get' || n === 'local.set' || n === 'local.tee')) {
       const tgt = parent[idx + 1]
       if (typeof tgt === 'string' && tgt[0] === '$')
-        ensure(tgt)[n === 'local.get' ? 'gets' : n === 'local.set' ? 'sets' : 'tees']++
+        ensure(tgt)[n === 'local.get' ? 'gets' : n === 'local.set' ? 'sets' : 'tees'] += d
     }
   })
   return counts
+}
+const countLocalUses = (node) => tallyLocals(node, new Map(), 1)
+
+// Maintained whole-function use-counts for the propagate family: every mutation
+// site reports the removed/inserted subtree instead of the driver re-counting
+// the function each round. Null outside propagate — the helpers no-op. The
+// recount ORACLE (globalThis.__CNT_ORACLE) re-derives from scratch after every
+// sub-pass and throws on divergence; the test battery runs with it enabled.
+let CNT = null, CNT_FN = null
+const cntSub = (node) => { if (CNT) tallyLocals(node, CNT, -1) }
+const cntAdd = (node) => { if (CNT) tallyLocals(node, CNT, 1) }
+const cntOracle = (funcNode, site) => {
+  if (!CNT || !globalThis.__CNT_ORACLE) return
+  const fresh = countLocalUses(funcNode)
+  const names = new Set([...fresh.keys(), ...CNT.keys()])
+  for (const k of names) {
+    const a = fresh.get(k) || { gets: 0, sets: 0, tees: 0 }
+    const b = CNT.get(k) || { gets: 0, sets: 0, tees: 0 }
+    if (a.gets !== b.gets || a.sets !== b.sets || a.tees !== b.tees) {
+      throw Error(`counts drift after ${site} in ${funcNode[1]}: ${k} fresh ${JSON.stringify(a)} maintained ${JSON.stringify(b)}`)
+    }
+  }
 }
 
 /** A constant whose inlined form (opcode + immediate) is no wider than the ~2 B
@@ -1824,7 +1847,7 @@ const substGets = (node, known) => {
   }
   for (let i = 1; i < node.length; i++) {
     const r = substGets(node[i], inner)
-    if (r !== node[i]) node[i] = r
+    if (r !== node[i]) { cntSub(node[i]); cntAdd(r); node[i] = r }
     // WASM evaluates operands left-to-right. A `local.set`/`local.tee` in this
     // child updates the local before the next sibling reads it — drop tracked
     // entries that are now stale, else a pre-tee constant leaks into the next
@@ -1920,7 +1943,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       // resolves to a substitution (bare `(local.get $x)` root case) — assign
       // back so the bare-RHS pattern actually propagates.
       const sr = substGets(instr[2], known)
-      if (sr !== instr[2]) { instr[2] = sr; changed = true }
+      if (sr !== instr[2]) { cntSub(instr[2]); cntAdd(sr); instr[2] = sr; changed = true }
       // Nested `local.set`/`local.tee` inside the RHS already ran when the next
       // statement begins — drop tracked values that read those locals, else a
       // later `local.get` substitutes a stale expression (e.g. `$ptr`'s
@@ -1962,7 +1985,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       if (Array.isArray(cond)) {
         const prev = clone(cond)
         const r = substGets(cond, known)
-        if (r !== cond) instr[condIdx] = r, changed = true
+        if (r !== cond) { cntSub(cond); cntAdd(r); instr[condIdx] = r; changed = true }
         else if (!equal(prev, cond)) changed = true
       }
     }
@@ -1979,7 +2002,9 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       const tracked = known.get(instr[1])
       if (tracked && canSubst(tracked)) {
         const replacement = clone(tracked.val)
+        cntSub(instr)
         instr.length = 0; instr.push(...(Array.isArray(replacement) ? replacement : [replacement]))
+        cntAdd(instr)
         changed = true; continue
       }
     }
@@ -2199,7 +2224,8 @@ const mergeCopyThroughTee = (scope, params, counts) => {
       if (touchesA) break
     }
     if (!teeNode) continue
-    teeNode[1] = A
+    cntSub(teeNode); teeNode[1] = A; cntAdd(teeNode)
+    cntSub(st)
     scope.splice(i, 1)
     changed = true
     i--
@@ -2367,8 +2393,11 @@ const sinkSets = (funcNode, params, useCounts) => {
       walk(funcNode[hitJ], n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) extra++ })
       if (extra > 1) single = false
     }
+    cntSub(hit[0][hit[1]])
     hit[0][hit[1]] = single ? clone(setNode[2]) : ['local.tee', name, clone(setNode[2])]
+    cntAdd(hit[0][hit[1]])
     SINFO.delete(funcNode[hitJ]) // the landing statement changed under its summary
+    cntSub(setNode)
     funcNode.splice(i, 1)
     changed = true
     i--
@@ -2479,6 +2508,7 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
       if (op === 'param' || op === 'result' || op === 'local' || op === 'type' || op === 'export') continue
       if (depth === 0 && op === 'local.set' && n.length === 3 && typeof n[1] === 'string' &&
           !params.has(n[1]) && !touched.has(n[1]) && isZero(n[2])) {
+        cntSub(n)
         funcNode.splice(i, 1); i--; changed = true
         continue
       }
@@ -2492,6 +2522,7 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
     if (Array.isArray(n) && n[0] === 'local.tee' && n.length === 3 &&
         typeof n[1] === 'string' && getPostUseCount(n[1]).gets === 0) {
       changed = true
+      if (CNT) { const c = CNT.get(n[1]); if (c) c.tees-- }
       return n[2]
     }
   })
@@ -2552,7 +2583,10 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
           if (jn.branchy || jn.touches.has(x)) unsafe = true
         }
         // reaching the function's end without a read is a kill too — the frame dies
-        if (!unsafe) { parent[idx] = n[2]; changed = true }
+        if (!unsafe) {
+          if (CNT) { const c = CNT.get(x); if (c) c.tees-- }
+          parent[idx] = n[2]; changed = true
+        }
       }
     }
   }
@@ -2574,7 +2608,9 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
         const tee = Array.isArray(a) && a[0] === 'local.tee' ? a : Array.isArray(b) && b[0] === 'local.tee' ? b : null
         const other = tee === a ? b : a
         if (tee && tee.length === 3 && tee[1] !== name && Array.isArray(other) && other[0]?.endsWith?.('.const')) {
+          cntSub(funcNode[i])
           funcNode[i] = ['local.set', tee[1], tee[2]]
+          cntAdd(funcNode[i])
           changed = true
           continue
         }
@@ -2583,13 +2619,20 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
       // VALUE is pure (its side effects would otherwise still need to run);
       // an impure but trap-free VALUE reduces to its side-effect core.
       if (sub.length === 3) {
-        if (isPure(sub[2])) { funcNode.splice(i, 1); changed = true }
-        else if (!hasTrap(sub[2])) { funcNode.splice(i, 1, ...dropEffects(sub[2])); changed = true }
+        if (isPure(sub[2])) { cntSub(sub); funcNode.splice(i, 1); changed = true }
+        else if (!hasTrap(sub[2])) {
+          cntSub(sub)
+          const eff = dropEffects(sub[2])
+          for (const e of eff) cntAdd(e)
+          funcNode.splice(i, 1, ...eff)
+          changed = true
+        }
       }
       // Bare `(local.set $x)` — the value is implicit on the stack (e.g. an
       // exception payload landing from a `try_table` catch). Demote to `drop`
       // so the dead store goes away without unbalancing the stack.
       else if (sub.length === 2) {
+        cntSub(sub)
         funcNode[i] = ['drop']; changed = true
       }
     }
@@ -2626,6 +2669,7 @@ const eliminateAdjacentDeadStores = (funcNode, params) => {
     let reads = false
     walk(b[2], n => { if (Array.isArray(n) && (n[0] === 'local.get' || n[0] === 'local.tee') && n[1] === a[1]) reads = true })
     if (reads) continue
+    cntSub(a)
     funcNode.splice(i, 1); changed = true; i--
   }
   return changed
@@ -3399,8 +3443,6 @@ const propagate = (ast) => {
     // first so inner simplifications shrink the use-counts the outer scopes see.
     // Use-counts are always whole-function — a set/get pair or dead store is only
     // touched when it's globally the sole occurrence, so per-scope work stays sound.
-    const scopes = []
-    walkPost(funcNode, n => { if (isScopeNode(n)) scopes.push(n) })
 
     // One use-count per propagation sweep: for the cautious sub-passes a stale count
     // only over-counts (skip a not-yet-provably-dead store) — never wrongly. The
@@ -3408,11 +3450,24 @@ const propagate = (ast) => {
     // of a copy's source local, so an under-count there would orphan a surviving get —
     // recount once after the propagation sweep before sinking. (Recounting per
     // sub-pass per scope is O(scopes·funcSize) and crippling on big modules.)
+    // Maintained counts: one from-scratch tally per FUNCTION, then every mutation
+    // in the family reports its delta — the old per-round double recount (and its
+    // missed-refresh bug class) goes away. The oracle flag re-derives and compares
+    // after every sub-pass; the test battery runs with it on.
+    CNT = countLocalUses(funcNode)
+    CNT_FN = funcNode
     for (let round = 0; round < MAX_PROP_ROUNDS; round++) {
-      const useCounts = countLocalUses(funcNode)
+      // Scopes RE-COLLECT each round: a spliced statement detaches any scope
+      // nested in its value — the once-collected list kept mutating dead trees
+      // (wasted work always; corrupted counts once they were maintained) and
+      // never saw scopes newly created by substitution clones.
+      const scopes = []
+      walkPost(funcNode, n => { if (isScopeNode(n)) scopes.push(n) })
+      const useCounts = CNT
       let progressed = false
       for (const scope of scopes) if (forwardPropagate(scope, params, useCounts)) progressed = true
-      const counts = progressed ? countLocalUses(funcNode) : useCounts
+      cntOracle(funcNode, 'forwardPropagate')
+      const counts = CNT
       for (const scope of scopes) {
         // pure set feeding a loop (possibly through a run of other pure sets that
         // don't read it) which provably clobbers it on every path before any read,
@@ -3435,17 +3490,20 @@ const propagate = (ast) => {
             j++
           }
           if (blocked || j >= scope.length || !Array.isArray(scope[j]) || scope[j][0] !== 'loop') continue
-          if (deadThroughLoop(funcNode, st[1], scope[j])) { scope.splice(i, 1); i--; progressed = true }
+          if (deadThroughLoop(funcNode, st[1], scope[j])) { cntSub(st); scope.splice(i, 1); i--; progressed = true }
         }
-        if (commuteForSink(scope)) progressed = true
-        if (sinkIntoBranch(scope, params, counts)) progressed = true
-        if (mergeCopyThroughTee(scope, params, counts)) progressed = true
-        if (sinkSets(scope, params, counts)) progressed = true
-        if (eliminateDeadStores(scope, params, counts)) progressed = true
-        if (eliminateAdjacentDeadStores(scope, params)) progressed = true
+        cntOracle(funcNode, 'deadThroughLoop')
+        if (commuteForSink(scope)) { progressed = true; cntOracle(funcNode, 'commuteForSink') }
+        if (sinkIntoBranch(scope, params, counts)) { progressed = true; cntOracle(funcNode, 'sinkIntoBranch') }
+        if (mergeCopyThroughTee(scope, params, counts)) { progressed = true; cntOracle(funcNode, 'mergeCopyThroughTee') }
+        if (sinkSets(scope, params, counts)) { progressed = true; cntOracle(funcNode, 'sinkSets') }
+        if (eliminateDeadStores(scope, params, counts)) { progressed = true; cntOracle(funcNode, 'eliminateDeadStores') }
+        if (eliminateAdjacentDeadStores(scope, params)) { progressed = true; cntOracle(funcNode, 'adjacentDSE') }
       }
       if (!progressed) break
     }
+    CNT = null
+    CNT_FN = null
   })
 
   return ast
