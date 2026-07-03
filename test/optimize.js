@@ -2985,3 +2985,24 @@ test('propagate: in-place if-cond substitution reports change — no stale-count
       (local.get $r)))`
   assert.equal(run(src).f(7), 100, 'k(7)=0 → gb → load(0)=0 → k(0)=1 → then-arm')
 })
+
+test('outline: repeated pure expressions extract into one shared helper', () => {
+  const H = '(i32.xor (i32.mul (i32.and (local.get $$) (i32.const 16777215)) (i32.const 2654435761)) (i32.const 40503))'
+  const at = (v) => H.replaceAll('$$', v)
+  const src = `(module (memory 1)
+    (func (export "f") (param $a i32) (param $b i32) (result i32)
+      (i32.add ${at('$a')} ${at('$b')}))
+    (func (export "g") (param $x i32) (result i32) ${at('$x')}))`
+  const { f, g } = run(src)
+  const h = (v) => (Math.imul(v & 16777215, 2654435761) ^ 40503) | 0
+  assert.equal(f(2, 3), (h(2) + h(3)) | 0)
+  assert.equal(g(300), h(300))
+  const txt = print(optimize(parse(src)))
+  assert((txt.match(/i32\.mul/g) || []).length <= 1, 'the repeated hash shape computes in one place')
+  // an effectful expression must never be shared — each site's tee is its own
+  const impure = `(module
+    (func (export "h") (param $a i32) (result i32) (local $t i32)
+      (i32.add (i32.add (local.tee $t (i32.const 5)) (i32.const 300009))
+               (i32.add (local.tee $t (i32.const 6)) (i32.const 300009)))))`
+  assert.equal(run(impure).h(0), 5 + 300009 + 6 + 300009)
+})
