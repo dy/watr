@@ -2693,6 +2693,48 @@ test('packData: a split segment whose content starts with ";" is not mistaken fo
     'second segment, starting with ";", is NOT dropped as a comment token')
 })
 
+test('packData: many-segment split with varied first-byte shapes stays byte-exact (self-host-density regression)', () => {
+  // The class-1 fix above was found via a memory-image diff at REAL self-host scale
+  // (~600KB, ~1800 segments split from jz's interned-string table) — a lone small repro
+  // doesn't reproduce density-dependent encoder bugs by chance (jz self-host groundtruth,
+  // "packData-on residual": a 20/20-passing scratch-mirror kernel and a from-scratch
+  // isolated packData run over the REAL ~600KB/1827-segment pre-watr kernel AST both come
+  // back byte-image-identical against current watr HEAD — root-caused instead to jz's
+  // package.json pinning a published watr release cut BEFORE this fix, so a plain `npm
+  // install` silently reinstalled the pre-fix isDroppable). This test generalizes the
+  // minimal ';'-prefix repro into a many-segment, many-shape regression, so a future
+  // packData change gets caught locally instead of needing a multi-minute self-host
+  // rebuild to notice: islands separated by long zero runs (forces the split path), each
+  // island's surviving content deliberately shaped to look like a comment ('; …', the
+  // original repro), a non-comment paren token ('(a…' — must NOT match the same '(' + ';'
+  // guard), a bare WAT keyword ('i32.const …'), a bare number ('1234567890 …'), and a raw
+  // escape-needing byte run (a literal backslash byte immediately followed by literal '0'
+  // '0' text) — every "unguarded token-shape assumption" the encoder could plausibly
+  // mistake a plain data string for. Asserts the FULL reconstructed memory image (not
+  // hand-picked offsets) is byte-identical with packData on vs off.
+  const islands = [
+    '; not a comment, a literal data string',
+    '(a fake-paren token, no leading ;',
+    'i32.const 4 looks like an opcode+immediate',
+    '1234567890 looks like a bare number',
+    '\\5c00 raw backslash byte then literal zero-zero text',
+  ]
+  const gap = '\\00'.repeat(24) // well over packData's split-worth threshold at these offsets
+  const content = islands.join(gap)
+  const src = `(module (memory (export "m") 1) (data (i32.const 0) "${content}"))`
+
+  const opt = optimize(parse(src))
+  const segCount = opt.filter(n => Array.isArray(n) && n[0] === 'data').length
+  assert.equal(segCount, islands.length, `one lone segment split into one per island (got ${segCount})`)
+
+  const rawBytes = new Uint8Array(run(src, false).m.buffer)
+  const optBytes = new Uint8Array(run(src, true).m.buffer)
+  assert.equal(optBytes.length, rawBytes.length, 'memory size unchanged')
+  for (let i = 0; i < rawBytes.length; i++) {
+    assert.equal(optBytes[i], rawBytes[i], `byte ${i}: raw ${rawBytes[i]} vs optimized ${optBytes[i]}`)
+  }
+})
+
 test('inlineOnce: callee with bare trailing return inlines correctly', () => {
   const src = `(module
     (func $inc (param $p i32) (result i32) (i32.add (local.get $p) (i32.const 1)) return)
