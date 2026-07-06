@@ -28,6 +28,7 @@
 //   node test/jz-kernel-perf.mjs                      # this working tree, ratio only
 //   JZ_HELPER_COUNTERS=1 node test/jz-kernel-perf.mjs  # + __hc_ helper counters
 //   WATR_ROOT=/path/to/other/watr node test/jz-kernel-perf.mjs   # A/B vs another checkout
+//   JZ_ROOT=/path/to/frozen/jz node test/jz-kernel-perf.mjs      # pin jz (else: live ../../jz/)
 //   JZ_BENCH_RUNS=6 node test/jz-kernel-perf.mjs       # fewer timed runs (faster iteration)
 //   JZ_BENCH_CASE=json node test/jz-kernel-perf.mjs    # any bench-selfhost.mjs corpus name
 //   JZ_BENCH_CASE=mat4,json,tokenizer node test/jz-kernel-perf.mjs  # one kernel BUILD (the
@@ -39,7 +40,11 @@ import { pathToFileURL } from 'node:url'
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 
-const JZ = new URL('../../jz/', import.meta.url).pathname
+// JZ_ROOT: pin the jz checkout used for the build (default: the sibling ../../jz/
+// working tree). jz is developed concurrently by another agent — its working tree
+// is a moving target (uncommitted edits land mid-sweep). Point JZ_ROOT at a frozen
+// worktree/checkout to keep a whole A/B sweep measured against one fixed jz snapshot.
+const JZ = process.env.JZ_ROOT ? resolve(process.env.JZ_ROOT) + '/' : new URL('../../jz/', import.meta.url).pathname
 const WATR_ROOT = resolve(process.env.WATR_ROOT || new URL('../', import.meta.url).pathname)
 const WANT_COUNTERS = /^(1|true|yes)$/i.test(process.env.JZ_HELPER_COUNTERS || '')
 const LEVEL = process.env.JZ_LEVEL ?? '0'
@@ -75,7 +80,11 @@ const { compile } = await import(JZ + 'index.js')
 const { resolveModuleGraph } = await import(JZ + 'src/resolve.js')
 const g = resolveModuleGraph(resolve(JZ, 'scripts/self.js'), { resolveNode: true })
 const t0 = performance.now()
-const wasm = compile(g.code, { modules: g.modules, memory: 8192, optimize: 2, helperCounters: WANT_COUNTERS })
+// JZ_WATR_OPTS: JSON watr-config override for the kernel build — the speed-vs-size
+// sweep knob (e.g. '{"inline":true}', '{"licm":true,"devirt":true}').
+const WATR_CFG = process.env.JZ_WATR_OPTS ? JSON.parse(process.env.JZ_WATR_OPTS) : null
+const wasm = compile(g.code, { modules: g.modules, memory: 8192,
+  optimize: WATR_CFG ? { level: 2, watr: WATR_CFG } : 2, helperCounters: WANT_COUNTERS })
 const buildMs = performance.now() - t0
 new WebAssembly.Module(wasm) // validate, same gate selfhost-build.mjs applies
 
