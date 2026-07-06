@@ -6216,18 +6216,51 @@ const PASSES = [
 const OPTS = Object.fromEntries(PASSES.map(p => [p[0], p[2]]))
 
 /**
+ * Named presets bundling pass overrides for a goal beyond "default size",
+ * layered under the caller's own opts (an explicit key always wins over the
+ * profile — same override rule as `pin`). Never consulted by `optimize(ast)`/
+ * `optimize(ast, true)`: profiles are opt-in, so default behavior is unchanged.
+ *
+ * `speed` — keep repeated pure expressions inline instead of sharing them
+ * behind an extra dispatch: `outline` (default ON) extracts a repeated pure
+ * expression across function boundaries into a shared helper — a size win
+ * that costs a `call` at every occurrence; `tailmerge`/`rettail` (default ON)
+ * similarly share byte-identical early-exit epilogues behind a `block`+`br_if`.
+ * Turning the three off keeps every occurrence inline: more bytes, no shared-
+ * code dispatch on the hot path. Measured on a helper-call-dispatch-heavy
+ * self-hosted-compiler wasm module (22-case corpus, jz compiling itself):
+ * geomean compile-time ratio 1.43x → 1.32x (≈8% faster) for ≈19% more bytes —
+ * `outline:false` alone captures ~99% of that; `tailmerge`/`rettail:false`
+ * add negligible bytes but let one more corpus case compile without OOMing
+ * (fewer surviving shared-epilogue jump targets keeping otherwise-dead code
+ * reachable). `licm`/`devirt` were measured too and did NOT make the cut:
+ * `licm` regressed this workload (its hoisted-invariant locals cost more at
+ * this loop trip count than they save); `devirt` found zero candidates on
+ * this codebase's call_indirect shape (a no-op, not a loss). Not a claim
+ * about every workload — a profile the caller opts into, not a default.
+ */
+const PROFILES = {
+  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false }),
+}
+
+/**
  * Normalize options to a { passName: bool } map. An explicit object is kept
  * as-is (preserving `log`/`verbose`), with any unmentioned pass filled to its
  * default; `true` selects the defaults; a string selects only the named
- * passes (or all of them via `'all'`).
+ * passes (or all of them via `'all'`) — or, alone, a named profile (`'speed'`).
+ * `{ profile: 'speed' }` selects the same preset in object form, overridable
+ * per-pass like any other opts key.
  *
  * @param {boolean|string|Object} opts
  * @returns {Object}
  */
 const normalize = (opts) => {
   if (opts === false) return {}
+  // A lone recognized profile name ('speed') is not a pass-selector string —
+  // no pass is ever named after a profile, so this can never shadow one.
+  if (typeof opts === 'string' && PROFILES[opts.trim()]) opts = { profile: opts.trim() }
   if (opts !== true && typeof opts !== 'string') {
-    const m = { ...opts }
+    const m = { ...(opts.profile != null ? PROFILES[opts.profile] : null), ...opts }
     for (const p of PASSES) if (m[p[0]] === undefined) m[p[0]] = p[2]
     return m
   }
@@ -6485,8 +6518,11 @@ export default function optimize(ast, opts = true) {
   if (inflations === inflBefore && count(ast) <= countBefore) return finish(ast)
 
   // Default optimize must never inflate; explicit passes get slight leniency.
-  const tolerance = strictGuard ? 0 : 16
+  // `opts.tolerance` (fraction of the pristine size, e.g. 0.05 = 5%) overrides both
+  // defaults for callers — e.g. the 'speed' profile — that accept bounded growth in
+  // exchange for a faster shape (default behavior is unchanged when unset).
   sizeBefore = binarySize(pristine)
+  const tolerance = opts.tolerance != null ? Math.round(sizeBefore * opts.tolerance) : (strictGuard ? 0 : 16)
   let sizeAfter = binarySize(ast)
   if (sizeAfter - sizeBefore > tolerance && beforeRound) {
     if (verbose) log(`  ⚠ net +${sizeAfter - sizeBefore} bytes — unwinding last round`, sizeAfter - sizeBefore)

@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import { readdirSync, readFileSync } from 'node:fs'
 import { clone } from '../src/util.js'
-import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize } from '../src/optimize.js'
+import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize, normalize } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 import srcCompile, { size } from '../src/compile.js'
 
@@ -754,6 +754,48 @@ test('optimize with specific options', () => {
   const opt = optimize(ast, { fold: true, treeshake: false })
   const src = print(opt)
   assert(src.includes('i32.const 3'), 'should fold with explicit option')
+})
+
+// ==================== PROFILES ====================
+
+test('profile: speed disables outline/tailmerge/rettail, overridable, opt-in only', () => {
+  const speed = normalize('speed')
+  assert.equal(speed.outline, false, 'speed disables outline')
+  assert.equal(speed.tailmerge, false, 'speed disables tailmerge')
+  assert.equal(speed.rettail, false, 'speed disables rettail')
+  assert.equal(speed.treeshake, true, 'unrelated passes still fill to their normal default')
+
+  const objForm = normalize({ profile: 'speed' })
+  assert.equal(objForm.outline, false, 'object form selects the same preset')
+  assert.equal(objForm.tailmerge, false, 'object form selects the same preset')
+
+  const overridden = normalize({ profile: 'speed', outline: true })
+  assert.equal(overridden.outline, true, 'an explicit key overrides the profile')
+  assert.equal(overridden.tailmerge, false, 'the rest of the profile still applies')
+
+  assert.equal(normalize(true).outline, true, 'plain optimize(ast) never consults a profile (outline stays on)')
+  assert.equal(normalize(true).tailmerge, true, 'plain optimize(ast) never consults a profile (tailmerge stays on)')
+})
+
+test('profile: speed keeps a repeated pure expression inline instead of sharing it', () => {
+  // Same shape as 'outline: repeated pure expressions extract into one shared
+  // helper' above — three occurrences across two functions, big enough for
+  // outline's byte-profit heuristic to fire under the default pipeline.
+  const H = '(i32.xor (i32.mul (i32.and (local.get $$) (i32.const 16777215)) (i32.const 2654435761)) (i32.const 40503))'
+  const at = (v) => H.replaceAll('$$', v)
+  const src = `(module (memory 1)
+    (func (export "f") (param $a i32) (param $b i32) (result i32)
+      (i32.add ${at('$a')} ${at('$b')}))
+    (func (export "g") (param $x i32) (result i32) ${at('$x')}))`
+  const h = (v) => (Math.imul(v & 16777215, 2654435761) ^ 40503) | 0
+  const { f, g } = run(src, 'speed')
+  assert.equal(f(2, 3), (h(2) + h(3)) | 0, 'speed-profiled output stays correct')
+  assert.equal(g(300), h(300), 'speed-profiled output stays correct')
+
+  const plainTxt = print(optimize(parse(src)))
+  const speedTxt = print(optimize(parse(src), 'speed'))
+  assert.equal((plainTxt.match(/i32\.mul/g) || []).length, 1, 'default optimize shares the repeated expression into one helper (outline is on)')
+  assert.equal((speedTxt.match(/i32\.mul/g) || []).length, 3, 'speed profile keeps every occurrence inline (outline is off)')
 })
 
 // ==================== EDGE CASES ====================

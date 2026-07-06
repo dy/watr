@@ -212,6 +212,32 @@ mirrors after `optimize` runs. Keeps the no-inline policy with the caller, not h
 optimize(ast, { pin: ['$math.exp', '$math.log'] })   // these calls survive inlining
 ```
 
+**Profiles** — named presets that layer pass overrides under your own opts (an explicit
+key always wins over the profile, same rule as `pin`). Never consulted by `optimize(ast)`
+or `optimize(ast, true)` — profiles are opt-in, so default behavior is unchanged.
+
+| Profile | Trade | Passes |
+|---------|-------|--------|
+| `speed` | a little size for less per-call dispatch overhead | `outline`, `tailmerge`, `rettail` off |
+
+```js
+optimize(ast, { profile: 'speed' })                  // object form
+optimize(ast, 'speed')                               // string form
+optimize(ast, { profile: 'speed', outline: true })   // override one pass on top
+```
+
+`speed` turns off three passes that trade an inline computation for a shared call/branch:
+`outline` extracts a repeated pure expression across function boundaries into one helper
+(a `call` at every occurrence instead of the computation); `tailmerge`/`rettail` share
+byte-identical early-exit epilogues behind a `block`+`br_if`. Keeping everything inline
+costs bytes but removes that dispatch from every hot call site. Measured on a helper-call-
+heavy self-hosted-compiler wasm module (jz compiling itself, 22-program corpus): geomean
+compile-time ratio 1.43x → 1.32x (~8% faster) for ~19% more bytes — `outline` alone drives
+~99% of it; `tailmerge`/`rettail` add negligible bytes but let one more corpus case compile
+without exhausting its bump allocator. Not every workload shares this shape (`licm` and
+`devirt` were measured on the same corpus and didn't help — a regression and a no-op,
+respectively) — `speed` is an opt-in trade, not a replacement default.
+
 ### `parse(source, options?)`
 
 Parse to AST.
