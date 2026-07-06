@@ -2791,6 +2791,45 @@ test('dedupe: canonical positional hash — merges naming clones, never operand 
   assert((txt.match(/i32\.sub/g) || []).length <= 3, 'naming clones merged')
 })
 
+test('dedupe: defers a single-caller duplicate pair to inlineOnce instead of merging', () => {
+  // helperA/helperB differ only in a param that specializeParams (spec) bakes in as
+  // the same constant (7) at their one respective call site — spec then makes the
+  // two bodies byte-identical. dedupe must NOT redirect one to the other here: both
+  // are some other function's SOLE caller, so inlineOnce (which runs right after
+  // dedupe in the same round) can dissolve each into its own call site for free.
+  // Merging first would leave one shared function with two surviving `call`s —
+  // strictly worse than zero.
+  const src = `(module
+    (func $helperA (param $x i32) (param $tag i32) (result i32)
+      (i32.add (i32.mul (local.get $x) (local.get $x)) (local.get $tag)))
+    (func $helperB (param $y i32) (param $tag i32) (result i32)
+      (i32.add (i32.mul (local.get $y) (local.get $y)) (local.get $tag)))
+    (func (export "f") (param $a i32) (param $b i32) (result i32)
+      (i32.add (call $helperA (local.get $a) (i32.const 7)) (call $helperB (local.get $b) (i32.const 7)))))`
+  assert.equal(run(src).f(3, 4), 39, '3*3+7 + 4*4+7 = 16 + 23')
+  const txt = print(optimize(parse(src)))
+  assert(!/\bcall\s+\$helper/.test(txt), `both calls should fully inline away, got:\n${txt}`)
+})
+
+test('dedupe: still merges a duplicate when NOT every member is single-caller', () => {
+  // helperA/helperB are identical from the start (no specializeParams involved) —
+  // helperA already has TWO callers (f and g), so it was never an inlineOnce
+  // candidate on its own; deferring the pair would just leave two duplicate bodies
+  // unmerged for no benefit. dedupe must still merge this pair.
+  const src = `(module
+    (func $helperA (param $x i32) (result i32) (i32.mul (local.get $x) (local.get $x)))
+    (func $helperB (param $y i32) (result i32) (i32.mul (local.get $y) (local.get $y)))
+    (func (export "f") (param $a i32) (param $b i32) (result i32)
+      (i32.add (call $helperA (local.get $a)) (call $helperB (local.get $b))))
+    (func (export "g") (param $a i32) (result i32) (call $helperA (local.get $a))))`
+  const x = run(src)
+  assert.equal(x.f(3, 4), 25, '3*3 + 4*4')
+  assert.equal(x.g(5), 25, '5*5')
+  const txt = print(optimize(parse(src)))
+  assert(!txt.includes('$helperB'), 'helperB should merge into helperA (treeshaken away as a dead duplicate)')
+  assert.equal((txt.match(/call \$helperA/g) || []).length, 3, 'f (x2, its own + the redirected helperB call) and g (x1) all call the merged canonical')
+})
+
 test('loop-entry DSE: dead pre-loop init dies; zero-trip-observable init survives', () => {
   // every path through the loop rewrites $s before reading it, and $s is never read
   // outside — the pre-loop init is unobservable

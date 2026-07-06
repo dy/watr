@@ -3654,6 +3654,26 @@ const inlBodySize = (fn) => {
   return n
 }
 
+// Shared with dedupe: would inlineOnce actually dissolve this function into its lone
+// caller? Composes the same lift-safety primitives inlineOnce/inline already use
+// (never duplicated here) so dedupe's single-caller guard below can't drift from what
+// inlineOnce actually accepts — an over-eager guard would leave a genuinely
+// un-inlinable duplicate unmerged, a pure size loss with no offsetting speed win.
+// Deliberately NO size cap here (unlike `inline`'s INLINE_MAX_NODES): inlineOnce
+// itself never caps a genuine single-caller splice — one copy into one lone caller
+// is size-neutral-ish by construction, capped-or-not — and the round-level pristine/
+// tolerance guard (the one general safety net for every inlineOnce/inline-shaped
+// growth) already reverts this exact pass if the deferred group's combined splices
+// ever net-inflate the module. A local cap here would just be a second, redundant,
+// arbitrarily-tuned gate on top of that one.
+const inlSoleCallerCandidate = (fn, name, pinned, otherRef, pin) => {
+  if (pinned.has(name) || otherRef.has(name) || pin.has(name)) return false
+  if (inlCallsSelf(fn, name)) return false
+  if (!inlParse(fn)) return false
+  for (let i = inlBodyStart(fn); i < fn.length; i++) if (inlUnsafe(fn[i])) return false
+  return true
+}
+
 /**
  * Lift one callee into ONE `(call …)` node. Returns `{ block, decls }` — `block`
  * replaces the call; `decls` are the renamed param+local declarations to splice into
@@ -5368,17 +5388,21 @@ const hashFunc = (node, localNames) => {
  * @param {Array} ast
  * @returns {Array}
  */
-const dedupe = (ast) => {
+const dedupe = (ast, { pin = EMPTY_SET } = {}) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
-  // Hash function bodies (normalize local/param names to avoid false negatives)
-  const signatures = new Map() // hash → canonical $name
+  // Hash function bodies (normalize local/param names to avoid false negatives).
+  // Group by hash (not just first-occurrence) — the single-caller guard below needs
+  // every member sharing a hash before it can decide whether the group should merge.
+  const groups = new Map()     // hash → every $name sharing it, first-seen order
+  const funcByName = new Map()
   const redirects = new Map()  // duplicate $name → canonical $name
 
   for (const node of ast.slice(1)) {
     if (!Array.isArray(node) || node[0] !== 'func') continue
     const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
     if (!name) continue
+    funcByName.set(name, node)
 
     // Canonical positional identity: params/locals map to their INDEX ('L0', 'L1'…
     // — bare-numeric refs land on the same tokens), labels to first-occurrence
@@ -5404,11 +5428,42 @@ const dedupe = (ast) => {
     })
     const hash = types.join(' ') + '#' + hashFunc(body, canon)
 
-    if (signatures.has(hash)) {
-      redirects.set(name, signatures.get(hash))
-    } else {
-      signatures.set(hash, name)
+    const g = groups.get(hash)
+    if (g) g.push(name); else groups.set(hash, [name])
+  }
+
+  // A duplicate GROUP where every member is some OTHER function's sole caller is
+  // better left to inlineOnce (the very next pass in the module round) than merged
+  // here: specializeParams (spec, just before this pass) routinely makes two
+  // otherwise-distinct single-caller helpers byte-identical by baking in the one
+  // constant each call site happens to share — merging them here would turn two
+  // zero-overhead inlined call sites into one shared function with TWO surviving
+  // `call`s. Only defer whole groups: a group with any multi-caller/exported/pinned/
+  // unsafe member still merges as before (that member was never inlineOnce material
+  // anyway, so sharing its body is the smaller move).
+  let callRefs = null, otherRef = null, pinned = null
+  const ensureRefs = () => {
+    if (callRefs) return
+    callRefs = new Map(); otherRef = new Set(); pinned = inlBuildPinned(ast)
+    const count = (n) => {
+      if (!Array.isArray(n)) return
+      if (n[0] === 'call' && typeof n[1] === 'string') callRefs.set(n[1], (callRefs.get(n[1]) || 0) + 1)
+      else if (n[0] === 'return_call' && typeof n[1] === 'string') otherRef.add(n[1])
+      for (let i = 1; i < n.length; i++) count(n[i])
     }
+    count(ast)
+  }
+  const soleCaller = (name) => {
+    ensureRefs()
+    if (callRefs.get(name) !== 1) return false
+    const fn = funcByName.get(name)
+    return !!fn && inlSoleCallerCandidate(fn, name, pinned, otherRef, pin)
+  }
+
+  for (const names of groups.values()) {
+    if (names.length < 2 || names.every(soleCaller)) continue // singleton, or deferred to inlineOnce
+    const canonical = names[0]
+    for (let i = 1; i < names.length; i++) redirects.set(names[i], canonical)
   }
 
   if (redirects.size === 0) return ast
