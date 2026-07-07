@@ -2700,6 +2700,24 @@ const cse = (ast) => {
   walk(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const all = []
+    // Evaluation-order write clock. The statement-level invalidation below runs
+    // AFTER a whole statement's candidates were collected, so it cannot see writes
+    // BETWEEN two sites of one statement: `(f64.add (select … (tee $c EXPR)) (select
+    // (… tee $t …) … EXPR))` — the second EXPR reads $t re-tee'd by its own sibling
+    // arm, yet both sites grouped and the stale $c was reused (jz's Math.round pair
+    // miscompiled to bump-misrouting). Candidates are pure (tee/set are IMPURE_OPS),
+    // so writes only occur at non-candidate nodes — collect's descent visits each
+    // exactly once in evaluation order: stamp every write with a monotone tick, and
+    // a repeat site may only JOIN a group whose read/mem/global stamp is unchanged
+    // since its first site; otherwise it RESEEDS the group at this site.
+    let tick = 0, mTick = 0, gTick = 0
+    const lastW = new Map()
+    const stampOf = (g) => {
+      let s = g.mem ? mTick : 0
+      if (g.glob && gTick > s) s = gTick
+      for (const r of g.reads) { const t = lastW.get(r); if (t > s) s = t }
+      return s
+    }
     // Scope tree with availability inheritance: an if's arms and a block's body
     // are entered with everything still live at that point — a group tee'd in the
     // parent DOMINATES its arm sites, so cross-block repeats share one local.
@@ -2754,6 +2772,9 @@ const cse = (ast) => {
             if (est >= 4) {
               const key = hashFunc(n, EMPTY_SET)
               let g = live.get(key)
+              // a write to anything this expression reads landed since the group's
+              // first site (write clock above) — the values differ; reseed here
+              if (g && stampOf(g) !== g.stamp) g = null
               if (!g) {
                 g = { expr: n, sites: [], est, type: resultType(o), reads: new Set(), mem: readsMemory(n), glob: false }
                 walk(n, c => {
@@ -2761,6 +2782,7 @@ const cse = (ast) => {
                   if (c[0] === 'local.get' && typeof c[1] === 'string') g.reads.add(c[1])
                   else if (c[0] === 'global.get') g.glob = true
                 })
+                g.stamp = stampOf(g)
                 live.set(key, g); all.push(g)
               }
               g.sites.push([parent, idx])
@@ -2770,6 +2792,14 @@ const cse = (ast) => {
             }
           }
           for (let i = 1; i < n.length; i++) collect(n[i], n, i)
+          // this node's OWN write effect ticks AFTER its children (operands
+          // evaluate first) — pure candidates above never carry writes, so every
+          // write is stamped exactly once, in evaluation order
+          if (o === 'local.set' || o === 'local.tee') { if (typeof n[1] === 'string') lastW.set(n[1], ++tick) }
+          else if (o === 'global.set') gTick = ++tick
+          else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') gTick = mTick = ++tick
+          else if (typeof o === 'string' && (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' ||
+                   o === 'memory.init' || o === 'memory.grow' || (o.includes('.atomic.') && !o.endsWith('.load')))) mTick = ++tick
         }
         collect(stmt, scope, si)
         // recurse structured bodies. An arm enters with what was live AFTER the

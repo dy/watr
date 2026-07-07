@@ -3189,3 +3189,27 @@ test('cse inheritance: a condition that rewrites a local kills the inherited val
   assert.equal(f(0), (0 + 30000) * 7, 'arm recomputes with the post-tee value, never reuses pre-cond')
   assert.equal(f(9), -1)
 })
+
+test('cse: a re-tee between two sites of one statement kills the group (intra-statement write order)', () => {
+  // jz's Math.round(x) + Math.round(-x) shape after local coalescing: ONE statement
+  // holds two textually-identical `(f64.eq (get $n) (f64.sub (get $t) 0.5))` subtrees,
+  // but the second select's own true-arm RE-TEES $t/$n between them. Statement-level
+  // invalidation runs after the whole statement, so only the evaluation-order write
+  // clock can see it — grouping the two would reuse the FIRST comparison for the
+  // second (bump-misrouting: round(3.5)+round(-3.5) returned 0/2, never 1).
+  const src = `(module
+    (func (export "f") (param $x f64) (result f64) (local $t f64) (local $n f64)
+      (f64.add
+        (select
+          (f64.add (local.tee $n (f64.nearest (local.tee $t (local.get $x)))) (f64.const 1))
+          (local.get $n)
+          (f64.eq (local.get $n) (f64.sub (local.get $t) (f64.const 0.5))))
+        (select
+          (f64.add (local.tee $n (f64.nearest (local.tee $t (f64.neg (local.get $x))))) (f64.const 1))
+          (local.get $n)
+          (f64.eq (local.get $n) (f64.sub (local.get $t) (f64.const 0.5)))))))`
+  const { f } = run(src)
+  assert.equal(f(3.5), 1, 'round-half-up pair: 4 + -3 (stale shared condition gives 0 or 2)')
+  assert.equal(f(2), 0, 'integer input: 2 + -2, no bumps')
+  assert.equal(f(-3.5), 1, 'sign-flipped pair: -3 + 4')
+})
