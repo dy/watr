@@ -4041,10 +4041,24 @@ const devirt = (ast) => {
 
   for (const fn of allFuncs) {   // rewrite call_indirect in EVERY func, named or not
     // Candidate sets: local → Map<bits, constNode>, or null once poisoned.
-    // Params are poisoned (incoming value unknown).
+    // Params START EMPTY rather than poisoned: the rewrite is a guard LADDER with
+    // the original call_indirect as the fallback arm, so an unknown incoming
+    // value (param call boundary, zero-init) simply takes the fallback — only
+    // the WRITES seen in the body need collecting. (Producer register reuse can
+    // coalesce a closure select onto a param — jz does — and hard-poisoning lost
+    // those candidates for no soundness gain.)
     const cands = new Map()
-    for (const part of fn)
-      if (Array.isArray(part) && part[0] === 'param' && typeof part[1] === 'string') cands.set(part[1], null)
+    // Locals that hold a HOISTED slot extraction (LICM'd by the producer:
+    // `$idx := i32.wrap_i64(...(local.get $f)...)` once, loop reads `$idx`).
+    // Single-assignment only; the call-site rewrite guards on the INDEX value
+    // itself, so soundness never depends on the source local staying stable.
+    const setsCount = new Map(), hoistSrc = new Map()
+    walk(fn, n => {
+      if (!Array.isArray(n) || (n[0] !== 'local.set' && n[0] !== 'local.tee') || typeof n[1] !== 'string') return
+      setsCount.set(n[1], (setsCount.get(n[1]) || 0) + 1)
+      const src = matchSlotOfLocal(n[2])
+      if (src) hoistSrc.set(n[1], src)
+    })
     walk(fn, n => {
       if (!Array.isArray(n) || (n[0] !== 'local.set' && n[0] !== 'local.tee') || typeof n[1] !== 'string') return
       if (cands.get(n[1]) === null) return
@@ -4091,22 +4105,39 @@ const devirt = (ast) => {
         const name = slots.get(Number(idx[1]))
         return name && sigOk(name) ? ['call', name, ...args] : undefined
       }
-      const f = matchSlotOfLocal(idx)
+      let f = matchSlotOfLocal(idx)
+      let idxLocal = null
+      if (!f && Array.isArray(idx) && idx[0] === 'local.get' && typeof idx[1] === 'string'
+          && setsCount.get(idx[1]) === 1 && hoistSrc.get(idx[1])) {
+        // Hoisted extraction: the index was computed once into a local (producer
+        // LICM). Candidates come from the SOURCE closure local/global; the guard
+        // compares the INDEX LOCAL against each candidate's slot — the exact
+        // value the original call_indirect dispatches on, so the rewrite is
+        // behavior-identical for every value, known or not.
+        f = hoistSrc.get(idx[1])
+        idxLocal = idx[1]
+      }
       if (!f) return
       const m = f.local != null ? cands.get(f.local) : globalCands.get(f.global)
       if (!m || m.size === 0 || m.size > 4) return
       const arms = []
+      const seenSlot = new Set()
       for (const cNode of m.values()) {
-        const name = slots.get(_i64HiU(_i64Canon(cNode[1])) & 32767)
+        const slot = _i64HiU(_i64Canon(cNode[1])) & 32767
+        const name = slots.get(slot)
         if (!name || !sigOk(name)) return
-        arms.push([cNode, name])
+        if (idxLocal != null && seenSlot.has(slot)) continue  // index-guard dedupes by slot
+        seenSlot.add(slot)
+        arms.push([cNode, name, slot])
       }
       const readBack = f.local != null ? ['local.get', f.local] : ['global.get', f.global]
       let out = n
       for (let i = arms.length - 1; i >= 0; i--) {
-        const [cNode, name] = arms[i]
+        const [cNode, name, slot] = arms[i]
         out = ['if', ...(results.length ? [['result', ...results]] : []),
-          ['i64.eq', ['i64.reinterpret_f64', clone(readBack)], clone(cNode)],
+          idxLocal != null
+            ? ['i32.eq', ['local.get', idxLocal], ['i32.const', String(slot)]]
+            : ['i64.eq', ['i64.reinterpret_f64', clone(readBack)], clone(cNode)],
           ['then', ['call', name, ...args.map(clone)]],
           ['else', out]]
       }

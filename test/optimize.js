@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import { readdirSync, readFileSync } from 'node:fs'
 import { clone } from '../src/util.js'
-import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize, normalize } from '../src/optimize.js'
+import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize, normalize, devirt } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 import srcCompile, { size } from '../src/compile.js'
 
@@ -3188,6 +3188,44 @@ test('cse inheritance: a condition that rewrites a local kills the inherited val
   const { f } = run(src)
   assert.equal(f(0), (0 + 30000) * 7, 'arm recomputes with the post-tee value, never reuses pre-cond')
   assert.equal(f(9), -1)
+})
+
+test('devirt: hoisted slot extraction (producer LICM) + param-coalesced closure local', () => {
+  // jz -O3 shape: the closure select is register-coalesced onto a PARAM, and the
+  // slot extraction is LICM-hoisted into a single-assignment local the loop reads.
+  // Devirt must resolve the index local through its one assignment and guard on
+  // INDEX equality (the exact dispatch value) — behavior-identical for any value.
+  const src = `(module
+    (type $sig (func (param f64) (result f64)))
+    (func $dbl (param $x f64) (result f64) (f64.mul (local.get $x) (f64.const 2)))
+    (func $sqr (param $x f64) (result f64) (f64.mul (local.get $x) (local.get $x)))
+    (table 2 funcref)
+    (elem (i32.const 0) func $dbl $sqr)
+    (func (export "main") (param $n i32) (param $m f64) (result f64)
+      (local $i i32) (local $s f64) (local $idx i32)
+      (local.set $m (f64.reinterpret_i64 (select
+        (i64.const 0x7ffd000000000000) (i64.const 0x7ffd000100000000)
+        (f64.gt (local.get $m) (f64.const 0)))))
+      (local.set $idx (i32.wrap_i64 (i64.and (i64.shr_u
+        (i64.reinterpret_f64 (local.get $m)) (i64.const 32)) (i64.const 32767))))
+      (block $brk (loop $l
+        (br_if $brk (i32.ge_s (local.get $i) (local.get $n)))
+        (local.set $s (f64.add (local.get $s)
+          (call_indirect (type $sig) (f64.convert_i32_s (local.get $i)) (local.get $idx))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $l)))
+      (local.get $s)))`
+  // devirt in isolation: the full pipeline's propagate may fold the select into
+  // the extraction before devirt sees it (a different, conservative-skip shape);
+  // the producer-real split shape is what this pins.
+  const opt = devirt(parse(src))
+  const txt = print(opt)
+  assert.ok(/\(call \$dbl/.test(txt) && /\(call \$sqr/.test(txt), 'both candidates direct-called under index guards')
+  assert.ok(/call_indirect/.test(txt), 'original call_indirect kept as the fallback arm')
+  const { main } = run(print(opt))
+  assert.equal(main(100, 1), 9900, 'dbl arm: 2*(0+..+99)')
+  assert.equal(main(100, -1), 328350, 'sqr arm: sum of squares 0..99')
+  assert.equal(main(0, 1), 0)
 })
 
 test('cse: a re-tee between two sites of one statement kills the group (intra-statement write order)', () => {
