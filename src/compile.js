@@ -379,26 +379,26 @@ const isMemParam = n => n?.[0] === 'a' || n?.[0] === 'o'
  * @returns {Array} Flattened instruction sequence
  */
 // bare-token classification — one lookup replaces a six-way string-scan chain
-// (built lazily over OPCODE's key set; unknown tokens fall through untouched)
-let NCLS = null
-const nclsOf = (op) => {
-  if (!NCLS) {
-    NCLS = Object.create(null)
-    for (const k in OPCODE) {
-      if (k === 'block' || k === 'if' || k === 'loop') NCLS[k] = 1
-      else if (k === 'else' || k === 'end') NCLS[k] = 2
-      else if (k === 'select') NCLS[k] = 3
-      else if (k.endsWith('call_indirect')) NCLS[k] = 4
-      else if (k === 'table.init') NCLS[k] = 5
-      else if (k === 'table.copy' || k === 'memory.copy') NCLS[k] = 6
-      else if (k.startsWith('table.')) NCLS[k] = 7
-      else if (k === 'memory.init') NCLS[k] = 8
-      else if (k === 'data.drop' || k === 'array.new_data' || k === 'array.init_data') NCLS[k] = 9
-      else if (k.startsWith('memory.') || k.endsWith('load') || k.endsWith('store')) NCLS[k] = 10
-    }
-  }
-  return NCLS[op]
+// (unknown tokens fall through untouched). Built EAGERLY at module load like
+// OPCODE/IMM/SIZE_HANDLER: it derives purely from the static table, eagerness
+// drops the rebuild branch from the per-token hot path, and a lazily-built
+// module-level cache is a landmine for warm embeddings that reset their heap
+// between compiles (self-hosted jz: round 2 saw the stale truthy handle, read
+// garbage classes, and mis-consumed `end` as a memory idx — "Unknown memory end").
+const NCLS = Object.create(null)
+for (const k in OPCODE) {
+  if (k === 'block' || k === 'if' || k === 'loop') NCLS[k] = 1
+  else if (k === 'else' || k === 'end') NCLS[k] = 2
+  else if (k === 'select') NCLS[k] = 3
+  else if (k.endsWith('call_indirect')) NCLS[k] = 4
+  else if (k === 'table.init') NCLS[k] = 5
+  else if (k === 'table.copy' || k === 'memory.copy') NCLS[k] = 6
+  else if (k.startsWith('table.')) NCLS[k] = 7
+  else if (k === 'memory.init') NCLS[k] = 8
+  else if (k === 'data.drop' || k === 'array.new_data' || k === 'array.init_data') NCLS[k] = 9
+  else if (k.startsWith('memory.') || k.endsWith('load') || k.endsWith('store')) NCLS[k] = 10
 }
+const nclsOf = (op) => NCLS[op]
 
 function normalize(nodes, ctx, out = [], owned = false) {
   if (!owned) nodes = [...nodes]
