@@ -2695,8 +2695,44 @@ const estBytes = (n) => {
  * @param {Array} ast
  * @returns {Array}
  */
+// A call node CSE can treat as a value: the callee's transitive effects prove it
+// writes nothing (reads of memory/globals are fine — the group invalidation
+// clocks below fence them like any load). Single-result only: the shared local
+// carries exactly one value.
+const cseCallOk = (n, sigT) =>
+  n[0] === 'call' && typeof n[1] === 'string' && sigT.get(n[1]) != null &&
+  (() => { const e = CALLFX?.get(n[1]); return !!e && !e.unknown && !e.wMem && e.wGlob.size === 0 })()
+
+// isPure extended with effect-clean calls — the CSE candidate predicate.
+// (`return_call` diverges and is never a value; only plain `call` qualifies.)
+const csePureNode = (n, sigT) => {
+  if (typeof n === 'string') return isPure(n)
+  if (!Array.isArray(n)) return true
+  const op = n[0]
+  if (typeof op !== 'string') return false
+  if (op === 'call') { if (!cseCallOk(n, sigT)) return false }
+  else {
+    if (IMPURE_OPS.has(op)) return false
+    for (const sub of IMPURE_SUBSTRINGS) if (op.includes(sub)) return false
+  }
+  for (let i = 1; i < n.length; i++) if (Array.isArray(n[i]) && !csePureNode(n[i], sigT)) return false
+  return true
+}
+
 const cse = (ast) => {
   let uid = 0
+  // name → single result type (null for 0/multi-result) — the type of a call
+  // candidate's shared local comes from the callee signature.
+  const sigT = new Map()
+  if (Array.isArray(ast)) for (const n of ast) {
+    if (!Array.isArray(n)) continue
+    let f = null
+    if (n[0] === 'func') f = n
+    else if (n[0] === 'import') f = n.find(c => Array.isArray(c) && c[0] === 'func')
+    if (!f || typeof f[1] !== 'string') continue
+    const results = f.filter(c => Array.isArray(c) && c[0] === 'result')
+    sigT.set(f[1], results.length === 1 && results[0].length === 2 && typeof results[0][1] === 'string' ? results[0][1] : null)
+  }
   walk(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const all = []
@@ -2743,6 +2779,7 @@ const cse = (ast) => {
           const o = n[0]
           if ((o === 'local.set' || o === 'local.tee') && typeof n[1] === 'string') wLocals.add(n[1])
           else if (o === 'global.set' && typeof n[1] === 'string') wGlobals.add(n[1])
+          else if (o === 'call' && cseCallOk(n, sigT)) { /* effect-clean: not an invalidating call */ }
           else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') call = true
         })
         // candidates from the unconditional spine of the statement
@@ -2767,7 +2804,8 @@ const cse = (ast) => {
             return
           }
           if (o === 'then' || o === 'else') return
-          if (typeof o === 'string' && resultType(o) && isPure(n)) {
+          const candType = typeof o === 'string' ? (o === 'call' ? (cseCallOk(n, sigT) ? sigT.get(n[1]) : null) : resultType(o)) : null
+          if (candType && csePureNode(n, sigT)) {
             const est = estBytes(n)
             if (est >= 4) {
               const key = hashFunc(n, EMPTY_SET)
@@ -2776,11 +2814,17 @@ const cse = (ast) => {
               // first site (write clock above) — the values differ; reseed here
               if (g && stampOf(g) !== g.stamp) g = null
               if (!g) {
-                g = { expr: n, sites: [], est, type: resultType(o), reads: new Set(), mem: readsMemory(n), glob: false }
+                g = { expr: n, sites: [], est, type: candType, reads: new Set(), mem: readsMemory(n), glob: false }
                 walk(n, c => {
                   if (!Array.isArray(c)) return
                   if (c[0] === 'local.get' && typeof c[1] === 'string') g.reads.add(c[1])
                   else if (c[0] === 'global.get') g.glob = true
+                  // an admitted call's reads live in its BODY, not this subtree's
+                  // text — surface them onto the group so the mem/glob clocks fence
+                  else if (c[0] === 'call' && typeof c[1] === 'string') {
+                    const e = CALLFX?.get(c[1])
+                    if (e) { if (e.rMem) g.mem = true; if (e.rGlob.size) g.glob = true }
+                  }
                 })
                 g.stamp = stampOf(g)
                 live.set(key, g); all.push(g)
@@ -2797,6 +2841,7 @@ const cse = (ast) => {
           // write is stamped exactly once, in evaluation order
           if (o === 'local.set' || o === 'local.tee') { if (typeof n[1] === 'string') lastW.set(n[1], ++tick) }
           else if (o === 'global.set') gTick = ++tick
+          else if (o === 'call' && cseCallOk(n, sigT)) { /* effect-clean: writes nothing, no tick */ }
           else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') gTick = mTick = ++tick
           else if (typeof o === 'string' && (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' ||
                    o === 'memory.init' || o === 'memory.grow' || (o.includes('.atomic.') && !o.endsWith('.load')))) mTick = ++tick
@@ -2817,6 +2862,7 @@ const cse = (ast) => {
             const o = n[0]
             if ((o === 'local.set' || o === 'local.tee') && typeof n[1] === 'string') cw.add(n[1])
             else if (o === 'global.set') cGlob = true
+            else if (o === 'call' && cseCallOk(n, sigT)) { /* effect-clean */ }
             else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') { cGlob = true; cMemCall = true }
             else if (typeof o === 'string' && (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' ||
                      o === 'memory.init' || o === 'memory.grow' || (o.includes('.atomic.') && !o.endsWith('.load')))) cMemCall = true

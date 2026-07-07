@@ -3153,6 +3153,52 @@ test('outline: repeated pure expressions extract into one shared helper', () => 
   assert.equal(run(impure).h(0), 5 + 300009 + 6 + 300009)
 })
 
+test('cse: an effect-clean call dedupes like any pure subtree', () => {
+  // The callee reads only its args — the interprocedural summary proves it
+  // writes nothing, so two identical calls compute once (colorpq's duplicated
+  // spow(L/10000, nv) numerator/denominator pair).
+  const src = `(module
+    (func $sq (param $x f64) (result f64) (f64.mul (local.get $x) (local.get $x)))
+    (func (export "f") (param $a f64) (result f64)
+      (f64.div
+        (f64.add (f64.const 1) (call $sq (f64.mul (local.get $a) (f64.const 0.0001))))
+        (f64.add (f64.const 2) (call $sq (f64.mul (local.get $a) (f64.const 0.0001)))))))`
+  const { f } = run(src)
+  const ref = (a) => { const s = (a * 0.0001) * (a * 0.0001); return (1 + s) / (2 + s) }
+  assert.equal(f(3), ref(3))
+  const txt = print(optimize(parse(src)))
+  const calls = (txt.match(/call \$sq/g) || []).length
+  assert.ok(calls <= 1, `identical effect-clean calls compute once (got ${calls})`)
+})
+
+test('cse: a global-writing callee never dedupes (each call observes state)', () => {
+  const src = `(module
+    (global $n (mut i32) (i32.const 0))
+    (func $next (result i32)
+      (global.set $n (i32.add (global.get $n) (i32.const 1)))
+      (global.get $n))
+    (func (export "f") (result i32)
+      (i32.add (call $next) (call $next))))`
+  const { f } = run(src)
+  assert.equal(f(), 3, 'two distinct calls: 1 + 2')
+  const opt = run(print(optimize(parse(src))))
+  assert.equal(opt.f(), 3, 'still 3 after optimize — the pair must NOT collapse')
+})
+
+test('cse: a memory-reading callee is fenced by an intervening store', () => {
+  const src = `(module (memory 1)
+    (func $rd (param $p i32) (result i32) (i32.load (local.get $p)))
+    (func (export "f") (param $p i32) (result i32)
+      (local $a i32)
+      (local.set $a (call $rd (local.get $p)))
+      (i32.store (local.get $p) (i32.add (i32.load (local.get $p)) (i32.const 5)))
+      (i32.add (local.get $a) (call $rd (local.get $p)))))`
+  const { f } = run(src)
+  assert.equal(f(0), 5, '0 + (0+5)')
+  const opt = run(print(optimize(parse(src))))
+  assert.equal(opt.f(0), 5, 'the second read sees the store — no stale reuse')
+})
+
 test('cse: a value live before an if is reused inside both arms (cross-block GVN)', () => {
   const src = `(module (memory 1)
     (func (export "f") (param $p i32) (param $q i32) (result i32)
