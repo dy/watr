@@ -2575,6 +2575,29 @@ test('guard:false equals an unbounded-tolerance guarded run, and stays correct',
   assert.equal(gOn(), 68)
 })
 
+// ── inlineWrappers: adapter frames dissolve into their target ────────────────
+test('inlineWrappers: conversion-wrapped forward inlines; standalone target survives', () => {
+  const src = `(module
+    (func $work (param $x i32) (param $y i32) (result i32)
+      (i32.add (i32.mul (local.get $x) (i32.const 3)) (local.get $y)))
+    ;; closure-ABI-style trampoline: f64 slots in, i32 worker, f64 rebox out
+    (func $tramp (export "t") (param $a f64) (param $b f64) (result f64)
+      (f64.convert_i32_s (call $work
+        (i32.trunc_sat_f64_s (local.get $a))
+        (i32.trunc_sat_f64_s (local.get $b)))))
+    ;; a second, direct caller keeps $work alive standalone
+    (func (export "d") (param $x i32) (result i32) (call $work (local.get $x) (i32.const 5))))`
+  // structural: the pass alone (selector string) — wrapper stops calling, target stays
+  const solo = print(optimize(parse(src), 'inlineWrappers'))
+  const trampBody = solo.slice(solo.indexOf('$tramp'), solo.indexOf('(func', solo.indexOf('$tramp') + 1))
+  assert(!trampBody.includes('call $work'), 'wrapper must not call the target anymore')
+  assert(solo.includes('func $work'), 'standalone target survives for its direct caller')
+  // semantic: full defaults + the pass (inlineOnce may then dissolve the worker — fine)
+  const x = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), { inlineWrappers: true })))).exports
+  assert.equal(x.t(4, 2), 14, 'inlined wrapper computes 4*3+2')
+  assert.equal(x.d(4), 17, 'direct path computes 4*3+5')
+})
+
 // ── guardRefine: arm-local ne-facts must not leak past the join ──────────────
 // Regression (found via jz's valueOf-override corpus): restore() handed the
 // snapshot's inner neFact Sets back as the live sets; an else-arm's addFacts

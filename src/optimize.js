@@ -4000,6 +4000,84 @@ const inline = (ast, { simdOnly = false, pin = EMPTY_SET } = {}) => {
   return ast
 }
 
+// ==================== WRAPPER ELISION ====================
+
+/**
+ * Inline a callee into WRAPPER functions — callers whose whole body is one
+ * statement wrapping exactly one spine call (a plain forward, or a forward
+ * under value conversions: `(f64.convert_i32_s (call $f …))`). Such wrappers
+ * are adapter frames — closure-ABI trampolines for functions used as values,
+ * thin dispatch heads over a fat worker (`__dyn_get_expr` → `__dyn_get_expr_t`)
+ * — and the frame is pure per-call overhead on hot dispatch paths (a Pratt
+ * parser pays one per token). Unlike `inline`, the callee may be LARGE and may
+ * have other callers: each wrapper duplicates its target once (bounded by
+ * WRAPPER_INLINE_MAX), the standalone target survives for its other callers,
+ * and treeshake collects whichever ends up unreferenced.
+ *
+ * The spine descent goes through single-expression wrappers only; a node with
+ * two array children (e.g. a `__mkptr` rebox with const args plus the call)
+ * ends the descent and disqualifies — v1 keeps the shape conservative. The
+ * callee must pass the same liftability gates as `inline` (inlParse — which
+ * also enforces zeroable local types — no inlUnsafe body, no self/mutual
+ * recursion into the wrapper, exact arity at the site).
+ *
+ * Size-for-speed and opt-in (`inlineWrappers: true`), OUTSIDE the size guard
+ * like `inline`/`devirt` — every splice bumps `inflations` so guarded callers
+ * still measure the growth.
+ */
+const WRAPPER_INLINE_MAX = 360
+const inlineWrappers = (ast, { pin = EMPTY_SET } = {}) => {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
+  const byName = new Map()
+  for (const f of funcs) if (typeof f[1] === 'string') byName.set(f[1], f)
+
+  for (const w of funcs) {
+    const start = inlBodyStart(w)
+    if (start !== w.length - 1) continue                    // exactly one body statement
+    const stmt = w[start]
+    if (!Array.isArray(stmt)) continue
+    // spine descent: conversions have exactly one array child; stop at a call
+    let call = null, cur = stmt
+    for (let d = 0; d < 5 && Array.isArray(cur); d++) {
+      if (cur[0] === 'call') { call = cur; break }
+      if (cur[0] === 'return') { cur = cur[1]; continue }
+      const kids = cur.slice(1).filter(Array.isArray)
+      if (kids.length !== 1) break
+      cur = kids[0]
+    }
+    if (!call || typeof call[1] !== 'string') continue
+    const calleeName = call[1]
+    if (calleeName === w[1] || pin.has(calleeName)) continue
+    const callee = byName.get(calleeName)
+    if (!callee) continue                                    // import / intrinsic
+    if (inlBodySize(callee) > WRAPPER_INLINE_MAX) continue
+    if (inlCallsSelf(callee, calleeName)) continue           // recursive worker
+    if (typeof w[1] === 'string' && inlCallsSelf(callee, w[1])) continue  // would re-enter the wrapper
+    const p = inlParse(callee)
+    if (!p) continue
+    let bad = false
+    for (let i = inlBodyStart(callee); i < callee.length; i++) if (inlUnsafe(callee[i])) { bad = true; break }
+    if (bad) continue
+    const args = call.slice(2)
+    if (args.length !== p.params.length) continue            // arity mismatch — leave it
+    const { block, decls } = buildInline(p.params, p.locals, p.inlResult, callee.slice(inlBodyStart(callee)), args)
+    // graft: replace the call node in place (the wrapper keeps its conversions)
+    const graft = (n) => {
+      if (!Array.isArray(n)) return false
+      for (let i = 1; i < n.length; i++) {
+        if (n[i] === call) { n[i] = block; return true }
+        if (graft(n[i])) return true
+      }
+      return false
+    }
+    if (stmt === call) w[start] = block
+    else if (!graft(stmt)) continue
+    if (decls.length) w.splice(inlBodyStart(w), 0, ...decls)
+  }
+  return ast
+}
+
 // ==================== INLINE-ONCE ====================
 
 /**
@@ -6396,6 +6474,7 @@ const PASSES = [
   ['dedupe',        dedupe,         true,  'eliminate duplicate functions (before inlineOnce dissolves identical single-caller helpers)'],
   ['inlineOnce',    inlineOnce,     true,  'inline single-call functions into their lone caller (never duplicates)'],
   ['inline',        inline,         false, 'inline tiny functions — can duplicate bodies'],
+  ['inlineWrappers', inlineWrappers, false, 'inline a callee into single-call wrapper functions (trampolines, thin dispatch heads) — grows bytes for speed'],
   ['licm',          licm,           false, 'hoist loop-invariant pure arithmetic out of loops — adds locals (speed-for-size); runs once after rounds'],
   ['offset',        offset,         true,  'fold add+const into load/store offset'],
   ['cse',           cse,            true,  'reuse repeated pure subexpressions via a tee\'d local — runs once after rounds (byte-profit gated)'],
@@ -6593,6 +6672,11 @@ export default function optimize(ast, opts = true) {
   // (block (local.set $p arg) … body) wrappers it leaves with the same cleanup passes
   // a normal round would. opt-in (speed level); a no-op when no small callee qualifies.
   const runInline = (a) => {
+    if (opts.inlineWrappers) {
+      a = inlineWrappers(a, { pin: opts.pin })
+      if (opts.propagate) a = propagate(a)
+      if (opts.coalesceLocals) a = coalesceLocals(a)
+    }
     if (!opts.inline) return a
     // `inline: 'simd'` → SIMD-helper-only (jz's speed tier, avoids general bloat);
     // `inline: true` / `'all'` → general inlining of tiny functions.
@@ -6689,7 +6773,7 @@ export default function optimize(ast, opts = true) {
       }
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inline' || key === 'devirt' || key === 'licm' || key === 'cse' ||
+        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' ||
             (skipInline && key === 'inlineOnce')) continue
         if (SIMPLIFY_KEYS.has(key)) {
           if (!fused) {
