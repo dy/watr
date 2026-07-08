@@ -6517,6 +6517,43 @@ const mayInline = (ast) => {
 // artifact (e.g. a top-level `1 + 2;` whose dropped value the dead-code pass
 // removed). Drop both. Header nodes (param/result/local/export/type) don't count
 // as a body — a function carrying only locals still does nothing.
+// Rolling 2×32-bit structural hash for the round-convergence check — compares
+// a function to ITSELF across rounds, so no name canonicalization is needed
+// (that's hashFunc's job, for dedupe's cross-function grouping). No serialized
+// string is built: hashFunc's parts.push/join on every func every round was
+// the convergence loop's whole cost (and GC churn) on large modules. A
+// collision only marks a changed function clean — it skips further rounds,
+// never alters what already-applied passes did (same tolerance the string
+// hash documented).
+const hashNode = (node) => {
+  let h1 = 0x811c9dc5, h2 = 0x1000193
+  const mixN = (x) => { h1 = Math.imul(h1 ^ x, 2654435761) >>> 0; h2 = (Math.imul(h2 + x, 1597334677) ^ (h2 >>> 13)) >>> 0 }
+  const mixS = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) } mixN(h >>> 0) }
+  // Token stream replicates hashFunc(node, EMPTY_MAP) exactly — export nodes
+  // skipped, numbers/strings stringified identically, bare-numeric refs after
+  // a local op canonicalized to 'L<n>' — so the swap changes only hashing
+  // cost, never WHICH funcs a round considers dirty (output stays identical).
+  const visit = (v, prevLocalOp) => {
+    if (Array.isArray(v)) {
+      if (v[0] === 'export') return
+      mixN(0x5b)
+      for (let i = 0; i < v.length; i++)
+        visit(v[i], i === 1 && (v[0] === 'local.get' || v[0] === 'local.set' || v[0] === 'local.tee'))
+      mixN(0x7c)
+      return
+    }
+    if (typeof v === 'string') mixS(prevLocalOp && v !== '' && !isNaN(v) ? 'L' + +v : v)
+    else if (typeof v === 'bigint') mixS(v.toString() + 'n')
+    else if (typeof v === 'number') mixS(prevLocalOp ? 'L' + v : String(v))
+    else if (v === null) mixS('null')
+    else if (v === true) mixS('t')
+    else if (v === false) mixS('f')
+    else mixS(String(v))
+  }
+  visit(node, false)
+  return h1 * 2097152 + (h2 >>> 11)   // 32+21 = 53 bits, exact in a float64
+}
+
 export default function optimize(ast, opts = true) {
   CALLFX = null
   if (typeof ast === 'string') ast = parse(ast)   // accept WAT source directly
@@ -6658,9 +6695,12 @@ export default function optimize(ast, opts = true) {
       // convergence via content hash, not clone+equal: one pass per function, no
       // retained deep copies. A collision only marks a changed function clean —
       // it skips further rounds, never alters what already-applied passes did.
+      // hashNode, not hashFunc: self-comparison across rounds needs no name
+      // canonicalization and no serialized string (the string build dominated
+      // the convergence cost on large modules).
       const nextHash = new Map()
       for (const f of collectFuncs()) {
-        const h = hashFunc(f, EMPTY_MAP)
+        const h = hashNode(f)
         nextHash.set(f, h)
         if (snapshots.get(f) !== h) next.add(f)
       }
