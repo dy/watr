@@ -1825,6 +1825,23 @@ const writesMemory = (node) => {
  *  of `V`). Mostly latent until something — typically coalesceLocals — reuses
  *  one slot for the outer and inner roles, after which it surfaces as silent
  *  memory corruption. */
+// Substitutions this substGets call tree performed on INTERIOR nodes (root
+// replacements are visible to the caller by identity; interior swaps are not).
+// Callers snapshot/compare the counter instead of deep clone+equal per
+// statement — same detection, none of the copies.
+let substHits = 0
+// Write log for the current root substGets call: every ARRAY-form local write
+// it traverses ('\0g'+name marks a global.set), plus a memory-write flag.
+// Recording rides the recursion substGets already does, replacing the three
+// extra full-subtree walks the old code paid per statement: the per-sibling
+// staleness walk here, and forwardPropagate's `known`-map staleness walk +
+// writesMemory scan after each root call. Substituted values never add writes
+// (canSubst admits only pure values / tiny consts / copies, and IMPURE_OPS
+// makes every write op impure), so logging the pre-substitution traversal is
+// exact. Flat (bare-token) writes are NOT logged — matching the array-only
+// walks this replaces; forwardPropagate's flat-token barrier handles those.
+const SW = []
+let SW_MEM = false
 const substGets = (node, known) => {
   if (!Array.isArray(node)) return node
   const op = node[0]
@@ -1832,6 +1849,12 @@ const substGets = (node, known) => {
     const k = typeof node[1] === 'string' && known.get(node[1])
     if (k && canSubst(k)) return clone(k.val)
     return node
+  }
+  if (typeof op === 'string') {
+    if ((op === 'local.set' || op === 'local.tee') && typeof node[1] === 'string') SW.push(node[1])
+    else if (op === 'global.set' && typeof node[1] === 'string') SW.push('\0g' + node[1])
+    else if (op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow' ||
+             (op.includes('.atomic.') && !op.endsWith('.load'))) SW_MEM = true
   }
   let inner = known
   if (isBranchScope(op)) {
@@ -1846,26 +1869,23 @@ const substGets = (node, known) => {
     if (cloned) inner = cloned
   }
   for (let i = 1; i < node.length; i++) {
+    const w0 = SW.length
     const r = substGets(node[i], inner)
-    if (r !== node[i]) { cntSub(node[i]); cntAdd(r); node[i] = r }
+    if (r !== node[i]) { cntSub(node[i]); cntAdd(r); node[i] = r; substHits++ }
     // WASM evaluates operands left-to-right. A `local.set`/`local.tee` in this
     // child updates the local before the next sibling reads it — drop tracked
     // entries that are now stale, else a pre-tee constant leaks into the next
     // sibling's `local.get` (visible after `coalesceLocals` aliases the tee'd
     // local with a sibling-read local, e.g. `alloc($x<<3, $x)` collapsing to
-    // `alloc(BIG, SMALL)`).
-    if (i + 1 < node.length && Array.isArray(node[i])) {
-      walk(node[i], n => {
-        if (!Array.isArray(n)) return
-        if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string') {
-          if (inner === known) inner = new Map(known)
-          inner.delete(n[1])
-          purgeRefs(inner, n[1])
-        } else if (n[0] === 'global.set' && typeof n[1] === 'string') {   // same staleness as a local write — a sibling operand's
-          if (inner === known) inner = new Map(known)                     // global write invalidates a later operand's global-sourced copy
-          purgeGlobalRefs(inner, n[1])
-        }
-      })
+    // `alloc(BIG, SMALL)`). The child's writes are exactly SW[w0..] — logged
+    // during its own recursion, no re-walk.
+    if (SW.length > w0 && i + 1 < node.length) {
+      if (inner === known) inner = new Map(known)
+      for (let k = w0; k < SW.length; k++) {
+        const w = SW[k]
+        if (w.charCodeAt(0) === 0) purgeGlobalRefs(inner, w.slice(2))
+        else { inner.delete(w); purgeRefs(inner, w) }
+      }
     }
   }
   return node
@@ -1942,24 +1962,24 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       // substGets returns its argument unchanged unless the whole subtree
       // resolves to a substitution (bare `(local.get $x)` root case) — assign
       // back so the bare-RHS pattern actually propagates.
+      SW.length = 0; SW_MEM = false
       const sr = substGets(instr[2], known)
       if (sr !== instr[2]) { cntSub(instr[2]); cntAdd(sr); instr[2] = sr; changed = true }
       // Nested `local.set`/`local.tee` inside the RHS already ran when the next
       // statement begins — drop tracked values that read those locals, else a
       // later `local.get` substitutes a stale expression (e.g. `$ptr`'s
       // `(local.get $ai0)` after a nested `(local.tee $ai0 …)` overwrites it).
-      walk(instr[2], n => {
-        if (!Array.isArray(n)) return
-        if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string')
-          { known.delete(n[1]); purgeRefs(known, n[1]) }
-        else if (n[0] === 'global.set' && typeof n[1] === 'string') purgeGlobalRefs(known, n[1])
-      })
+      // The RHS's writes are the SW log substGets just filled — no re-walk.
+      for (const w of SW) {
+        if (w.charCodeAt(0) === 0) purgeGlobalRefs(known, w.slice(2))
+        else { known.delete(w); purgeRefs(known, w) }
+      }
       const uses = getUseCount(instr[1])
       purgeRefs(known, instr[1]) // entries that read this local just went stale
       // Any tracked value whose RHS reads memory must be invalidated by the
       // RHS itself if it writes memory (rare — only via nested store/copy/etc.,
       // which would also pass through the post-statement purge below).
-      if (writesMemory(instr[2])) {
+      if (SW_MEM) {
         for (const [key, tracked] of known) if (tracked.readsMem) known.delete(key)
       }
       const facts = scanVal(instr[2])
@@ -1983,10 +2003,11 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     if (op === 'if') {
       const { condIdx, cond } = parseIf(instr)
       if (Array.isArray(cond)) {
-        const prev = clone(cond)
+        const h0 = substHits
+        SW.length = 0; SW_MEM = false   // log unused: the branch-scope clear below covers cond writes
         const r = substGets(cond, known)
         if (r !== cond) { cntSub(cond); cntAdd(r); instr[condIdx] = r; changed = true }
-        else if (!equal(prev, cond)) changed = true
+        else if (substHits !== h0) changed = true
       }
     }
     // Invalidate at control-flow boundaries
@@ -2011,26 +2032,26 @@ const forwardPropagate = (funcNode, params, useCounts) => {
 
     // Substitute nested local.gets (skip control-flow nodes — locals may be reassigned inside)
     if (op !== 'block' && op !== 'loop' && op !== 'if') {
-      const prev = clone(instr)
+      const h0 = substHits
+      SW.length = 0; SW_MEM = false
       substGets(instr, known)
-      if (!equal(prev, instr)) changed = true
+      if (substHits !== h0) changed = true
       // Invalidate tracking for any names written by a nested set/tee — those
       // writes happened mid-expression and the substGets above used the
       // pre-write tracked value (correct), but later reads must see the new
-      // (untracked) value, not the stale constant.
-      walk(instr, n => {
-        if (!Array.isArray(n)) return
-        if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string')
-          { known.delete(n[1]); purgeRefs(known, n[1]) }
-        else if (n[0] === 'global.set' && typeof n[1] === 'string') purgeGlobalRefs(known, n[1])
-      })
+      // (untracked) value, not the stale constant. The statement's writes are
+      // the SW log substGets just filled — no re-walk.
+      for (const w of SW) {
+        if (w.charCodeAt(0) === 0) purgeGlobalRefs(known, w.slice(2))
+        else { known.delete(w); purgeRefs(known, w) }
+      }
       // Memory write in this statement (any nested store / memory.copy / etc.)
       // invalidates every tracked value whose RHS reads memory: inlining one
       // later would substitute a now-stale load. Without this, a swap idiom
       //   (local.set $t (f64.load $p)) (f64.store $p (f64.load $q)) (f64.store $q (local.get $t))
       // collapses to two stores that round-trip the same value:
       //   (f64.store $p (f64.load $q)) (f64.store $q (f64.load $p))   ;; bug
-      if (writesMemory(instr)) {
+      if (SW_MEM) {
         for (const [key, tracked] of known) if (tracked.readsMem) known.delete(key)
       }
     }
@@ -6593,6 +6614,18 @@ export default function optimize(ast, opts = true) {
     // treeshake/dedupe can EXPOSE single-caller candidates mid-rounds (dropping the
     // other callers) — the entry check was a snapshot; recheck before finishing
     if (!((opts.inlineOnce || opts.inline) && mayInline(ast))) return finish(ast)
+  }
+
+  // `guard: false` — caller explicitly waives the size-revert guard: no pristine
+  // clone, no round-start clones, no exit encodes. For speed-profile callers whose
+  // own pipeline gates output size (e.g. a compiler with corpus-wide size checks):
+  // inlining-driven growth is the shape they asked for, and the two guard encodes
+  // are the optimizer's costliest fixed overhead on large modules. Default (guard
+  // on) is unchanged: optimize never inflates past tolerance.
+  if (opts.guard === false) {
+    runRounds(false)
+    if (opts.propagate && dirty) for (const f of dirty) propagate(f)
+    return finish(ast)
   }
 
   // Guarded path: inlining can inflate (a body bigger than the call it replaces).

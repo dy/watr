@@ -2540,6 +2540,41 @@ test('optimize never inflates the binary (default size contract)', () => {
   }
 })
 
+// ── guard: false — caller waives the size-revert guard ───────────────────────
+// Contract: `guard: false` produces byte-for-byte what a guarded run that never
+// unwinds produces (i.e. unbounded tolerance) — it only skips the guard's
+// bookkeeping (pristine clone, round-start clones, the two exit encodes).
+test('guard:false equals an unbounded-tolerance guarded run, and stays correct', () => {
+  // Inlining-heavy shape: single-caller callee with conditionally-initialized
+  // locals, called from a loop — inlineOnce must emit per-entry re-zeroes, the
+  // classic (small) inflation source the guard exists to police.
+  const src = `(module
+    (func $f (param $p i32) (result i32)
+      (local $a i32) (local $b i32) (local $c i32) (local $d i32)
+      (if (local.get $p) (then
+        (local.set $a (i32.const 7)) (local.set $b (i32.const 8))
+        (local.set $c (i32.const 9)) (local.set $d (i32.const 10))))
+      (i32.add (i32.add (local.get $a) (local.get $b)) (i32.add (local.get $c) (local.get $d))))
+    (func (export "g") (result i32)
+      (local $i i32) (local $s i32)
+      (loop $L
+        (local.set $s (i32.add (local.get $s) (call $f (i32.and (local.get $i) (i32.const 1)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $L (i32.lt_u (local.get $i) (i32.const 4))))
+      (local.get $s)))`
+  const O = { inline: true }
+  const binOff = compile(optimize(parse(src), { ...O, guard: false }))
+  const binBig = compile(optimize(parse(src), { ...O, tolerance: 1e9 }))
+  assert.deepEqual([...binOff], [...binBig], 'guard:false must match a never-unwinding guarded run byte-for-byte')
+  // Semantics: iterations 3 and 4 re-enter the (inlined) callee — its locals
+  // must read as freshly zeroed, not carry iteration-2 residue. 0+34+0+34.
+  const g = new WebAssembly.Instance(new WebAssembly.Module(binOff)).exports.g
+  assert.equal(g(), 68, 'inlined callee locals must re-zero on loop re-entry')
+  // And the guarded default still yields the same observable result.
+  const gOn = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), O)))).exports.g
+  assert.equal(gOn(), 68)
+})
+
 // ── devirt: general constant-index call_indirect → direct call ───────────────
 test('devirt: constant-index call_indirect becomes a direct call', () => {
   const src = `(module
