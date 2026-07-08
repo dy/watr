@@ -2740,6 +2740,50 @@ const csePureNode = (n, sigT) => {
   return true
 }
 
+// Per-node candidate facts for cse, computed ONCE bottom-up and memoized by
+// node identity: purity (csePureNode), byte estimate (estBytes), and a
+// composable 2×32-bit content hash replicating hashFunc's canonicalization
+// (numeric local refs normalize to 'L<n>'; number/string leaves stringify the
+// same way). Replaces the per-candidate hashFunc/estBytes/csePureNode subtree
+// walks — O(n·depth) on jz's deep expression trees — with O(n) total. Group
+// joins deep-`equal` against the seed expr, so a hash collision can only
+// MISS a share, never mis-group (stricter than the old full-string keys).
+const cseLeafH = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) } return h >>> 0 }
+const cseMix = (f, h) => {
+  f.h1 = (Math.imul(f.h1 ^ h, 2654435761) >>> 0)
+  f.h2 = (Math.imul(f.h2 + h ^ 0x9e3779b9, 1597334677) >>> 0)
+}
+const cseFactsOf = (n, sigT, memo) => {
+  let f = memo.get(n)
+  if (f) return f
+  const op = n[0]
+  f = { pure: true, est: OPCODE[op] > 0xffff ? 2 : 1, h1: 0x811c9dc5, h2: 0x1000193 }
+  if (typeof op !== 'string') f.pure = false
+  else if (op === 'call') { if (!cseCallOk(n, sigT)) f.pure = false }
+  else if (IMPURE_OPS.has(op)) f.pure = false
+  else { for (const sub of IMPURE_SUBSTRINGS) if (op.includes(sub)) { f.pure = false; break } }
+  cseMix(f, cseLeafH(String(op)))
+  const localOp = op === 'local.get' || op === 'local.set' || op === 'local.tee'
+  for (let i = 1; i < n.length; i++) {
+    const c = n[i]
+    if (Array.isArray(c)) {
+      if (c[0] === 'export') continue          // hashFunc skips export names
+      const cf = cseFactsOf(c, sigT, memo)
+      if (!cf.pure) f.pure = false
+      f.est += cf.est
+      cseMix(f, cf.h1); cseMix(f, cf.h2)
+    } else {
+      f.est += typeof c === 'number' ? 2 : 1
+      // csePureNode leaves non-array children unjudged — replicate exactly
+      const s = typeof c === 'string' && localOp && i === 1 && c !== '' && !isNaN(c) ? 'L' + +c : String(c) + (typeof c === 'bigint' ? 'n' : '')
+      cseMix(f, cseLeafH(s))
+    }
+  }
+  f.key = f.h1.toString(36) + '.' + f.h2.toString(36)
+  memo.set(n, f)
+  return f
+}
+
 const cse = (ast) => {
   let uid = 0
   // name → single result type (null for 0/multi-result) — the type of a call
@@ -2757,6 +2801,9 @@ const cse = (ast) => {
   walk(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const all = []
+    // node → {pure, est, key} memo for this function's collection phase — valid
+    // because nothing mutates the tree until conversion below.
+    const factsMemo = new Map()
     // Evaluation-order write clock. The statement-level invalidation below runs
     // AFTER a whole statement's candidates were collected, so it cannot see writes
     // BETWEEN two sites of one statement: `(f64.add (select … (tee $c EXPR)) (select
@@ -2792,9 +2839,10 @@ const cse = (ast) => {
         if (!Array.isArray(stmt)) { live.clear(); continue } // flat token — unknown order
         const h = stmt[0]
         if (h === 'param' || h === 'result' || h === 'local' || h === 'type' || h === 'export') continue
-        // this statement's write effects
+        // this statement's write effects (one walk — memory writes included,
+        // matching writesMemory's array-form predicate)
         const wLocals = new Set(), wGlobals = new Set()
-        let wMem = writesMemory(stmt), call = false
+        let wMem = false, call = false
         walk(stmt, n => {
           if (!Array.isArray(n)) return
           const o = n[0]
@@ -2802,6 +2850,8 @@ const cse = (ast) => {
           else if (o === 'global.set' && typeof n[1] === 'string') wGlobals.add(n[1])
           else if (o === 'call' && cseCallOk(n, sigT)) { /* effect-clean: not an invalidating call */ }
           else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') call = true
+          else if (typeof o === 'string' && (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' ||
+                   o === 'memory.init' || o === 'memory.grow' || (o.includes('.atomic.') && !o.endsWith('.load')))) wMem = true
         })
         // candidates from the unconditional spine of the statement
         const collect = (n, parent, idx) => {
@@ -2826,16 +2876,19 @@ const cse = (ast) => {
           }
           if (o === 'then' || o === 'else') return
           const candType = typeof o === 'string' ? (o === 'call' ? (cseCallOk(n, sigT) ? sigT.get(n[1]) : null) : resultType(o)) : null
-          if (candType && csePureNode(n, sigT)) {
-            const est = estBytes(n)
-            if (est >= 4) {
-              const key = hashFunc(n, EMPTY_SET)
+          if (candType) {
+            const facts = cseFactsOf(n, sigT, factsMemo)
+            if (facts.pure && facts.est >= 4) {
+              const key = facts.key
               let g = live.get(key)
+              // hash collision (different expr, same key): never mis-group —
+              // deep-verify against the seed. A miss only forfeits a share.
+              if (g && !equal(g.expr, n)) g = null
               // a write to anything this expression reads landed since the group's
               // first site (write clock above) — the values differ; reseed here
               if (g && stampOf(g) !== g.stamp) g = null
               if (!g) {
-                g = { expr: n, sites: [], est, type: candType, reads: new Set(), mem: readsMemory(n), glob: false }
+                g = { expr: n, sites: [], est: facts.est, type: candType, reads: new Set(), mem: readsMemory(n), glob: false }
                 walk(n, c => {
                   if (!Array.isArray(c)) return
                   if (c[0] === 'local.get' && typeof c[1] === 'string') g.reads.add(c[1])
