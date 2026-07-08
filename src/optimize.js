@@ -3854,6 +3854,20 @@ const isV128SimdHelper = (params, inlResult) =>
 const inline = (ast, { simdOnly = false, pin = EMPTY_SET } = {}) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
+  // simdOnly prefilter: a candidate must have an all-v128 signature, a pure
+  // header property no amount of inlining can create. When no such func exists
+  // (every non-SIMD module), skip the rounds entirely — each one pays a
+  // full-module countRefs walk just to re-confirm there is nothing to do.
+  if (simdOnly) {
+    let any = false
+    for (const n of ast) {
+      if (!Array.isArray(n) || n[0] !== 'func') continue
+      const p = inlParse(n)   // header-only scan — stops at the first body statement
+      if (p && isV128SimdHelper(p.params, p.inlResult)) { any = true; break }
+    }
+    if (!any) return ast
+  }
+
   const skip = new Set()  // callees with a non-inlinable site (arity mismatch) — don't re-pick
   for (let round = 0; round < MAX_INLINE_ROUNDS; round++) {
     const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
