@@ -1272,7 +1272,18 @@ const refineGuards = (fn) => {
   }
   const snap = () => [new Map(eqFact), new Map([...neFact].map(([k, s]) => [k, new Set(s)])), new Map(ptrAlias), new Map(tagAlias)]
   const reset = (m, src) => { m.clear(); for (const [k, v] of src) m.set(k, v) }
-  const restore = ([e, n, p, t]) => { reset(eqFact, e); reset(neFact, n); reset(ptrAlias, p); reset(tagAlias, t) }
+  // restore must hand out FRESH copies of neFact's inner Sets: the live map's
+  // sets are mutated in place by addFacts, so aliasing the snapshot's sets in
+  // would let an arm's fact mutate the snapshot itself — the SECOND restore of
+  // the same snapshot then resurrects the arm-local fact past the join, and a
+  // sibling's tag compare folds on a fact that only held inside one arm
+  // (miscompile: an array receiver's tag==ARRAY folded to false because an
+  // UNRELATED else-arm had recorded ne{ARRAY} into the aliased set).
+  const restore = ([e, n, p, t]) => {
+    reset(eqFact, e)
+    neFact.clear(); for (const [k, s] of n) neFact.set(k, new Set(s))
+    reset(ptrAlias, p); reset(tagAlias, t)
+  }
 
   // Facts implied by `cond` being truthy (sense=true) / falsy (sense=false).
   const condFacts = (cond, sense, out) => {

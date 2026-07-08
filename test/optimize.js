@@ -2575,6 +2575,34 @@ test('guard:false equals an unbounded-tolerance guarded run, and stays correct',
   assert.equal(gOn(), 68)
 })
 
+// ── guardRefine: arm-local ne-facts must not leak past the join ──────────────
+// Regression (found via jz's valueOf-override corpus): restore() handed the
+// snapshot's inner neFact Sets back as the live sets; an else-arm's addFacts
+// then mutated the snapshot itself, and the second restore resurrected the
+// arm-local fact after the if — a SIBLING tag compare folded on a fact that
+// only held inside one arm. For a tag-1 input the final compare below is true
+// (42); the aliasing bug folded it to 0 (7).
+test('guardRefine: else-arm fact does not leak to a sibling compare', () => {
+  const src = `(module
+    (func (export "f") (param $bits i64) (result i32)
+      (local $o f64) (local $t i32)
+      (local.set $o (f64.reinterpret_i64 (local.get $bits)))
+      (local.set $t (i32.and (i32.wrap_i64 (i64.shr_u (i64.reinterpret_f64 (local.get $o)) (i64.const 47))) (i32.const 15)))
+      (if (i32.eqz (i32.eq (local.get $t) (i32.const 4)))   ;; pre-existing ne{4} on $o
+        (then
+          (if (i32.eq (local.get $t) (i32.const 1))          ;; else-arm records ne{1}
+            (then (nop))
+            (else (nop)))
+          (if (i32.eq (local.get $t) (i32.const 1))          ;; sibling AFTER the join
+            (then (return (i32.const 42))))
+          (return (i32.const 7))))
+      (i32.const 9)))`
+  const f = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), { guardRefine: true })))).exports.f
+  assert.equal(f(1n << 47n), 42, 'tag-1 input must reach the folded-away branch')
+  assert.equal(f(4n << 47n), 9, 'tag-4 input takes the outer else')
+  assert.equal(f(7n << 47n), 7, 'tag-7 input falls through both')
+})
+
 // ── devirt: general constant-index call_indirect → direct call ───────────────
 test('devirt: constant-index call_indirect becomes a direct call', () => {
   const src = `(module
