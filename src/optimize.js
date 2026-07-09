@@ -1454,6 +1454,109 @@ const intguard = (ast) => {
   return ast
 }
 
+/** Branchless dispatch: a small DENSE br_table whose arms are cheap speculable
+ *  values br'ing one shared exit lowers to a select TREE — every arm computes,
+ *  bit-tests on the index pick one. An unpredictable index costs a mispredict
+ *  (~15–20 cycles) per br_table hit; N tiny arms + ceil(log2 N) select levels
+ *  run branch-free in less (arm latencies overlap on a superscalar core). The
+ *  matched shape is the ladder devirt-style dispatchers emit:
+ *    (block $out (result T) …pre
+ *      (block $dflt (block $lN-1 … (block $l0 (br_table $l0 … $lN-1 $dflt IDX))
+ *        (br $out V0)) … (br $out VN-1))
+ *      GENERIC)
+ *  Gates: 4 ≤ N ≤ 8 and dense (the br_table's labels are exactly the chain, in
+ *  order, once each); every arm speculable — pure never-trapping ops (sat-truncs
+ *  yes; div/rem/memory/calls/control no; a local.tee only when every use of the
+ *  teed name lives inside that same arm); per-arm token cap. GENERIC stays
+ *  behind the one in-range branch — always taken for real streams, so predicted.
+ *  Holes, impure arms, or oversized arms keep the br_table. */
+const SELTREE_OK = /^(i32|i64|f64|f32)\.(const|add|sub|mul|min|max|abs|neg|sqrt|ceil|floor|nearest|copysign|and|or|xor|shl|shr_[su]|rotl|rotr|eqz|eq|ne|[lg][te](_[su])?|clz|ctz|popcnt|extend(8|16|32)_s|extend_i32_[su]|wrap_i64|convert_i32_[su]|convert_i64_[su]|trunc_sat_f(32|64)_[su]|reinterpret_(i32|i64|f32|f64)|promote_f32|demote_f64)$/
+const seltree = (ast) => {
+  let uid = 0
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    let fnCounts = null
+    const speculable = (n, teed) => {
+      // immediates (const values incl. NaN-as-null, names, memarg strings) are data,
+      // not instructions — the ladder matcher only ever feeds nested (folded) arms
+      if (!Array.isArray(n)) return true
+      const op = n[0]
+      if (op === 'local.get') return typeof n[1] === 'string'
+      if (op === 'local.tee' || op === 'local.set') {
+        if (typeof n[1] !== 'string') return false
+        teed.add(n[1])                       // written unconditionally once speculated — locality-gated below
+        return speculable(n[2], teed)
+      }
+      if (op === 'drop') return n.length === 2 && speculable(n[1], teed)
+      if (op === 'block') {
+        // label-less value block only — a label could be a br target from inside
+        if (!Array.isArray(n[1]) || n[1][0] !== 'result') return false
+        for (let i = 2; i < n.length; i++) if (!speculable(n[i], teed)) return false
+        return true
+      }
+      if (op === 'select') return n.length === 4 && n.slice(1).every(c => speculable(c, teed))
+      if (typeof op !== 'string' || !SELTREE_OK.test(op)) return false
+      for (let i = 1; i < n.length; i++) if (!speculable(n[i], teed)) return false
+      return true
+    }
+    const rec = (b) => {
+      if (!Array.isArray(b)) return
+      for (let i = 1; i < b.length; i++) rec(b[i])
+      if (b[0] !== 'block' || typeof b[1] !== 'string' || !Array.isArray(b[2]) || b[2][0] !== 'result' || b.length < 5) return
+      const out = b[1], T = b[2][1]
+      const ladder = b[b.length - 2], generic = b[b.length - 1]
+      // unwind the ladder outside-in: labels [dflt, lN-1 … l1], arms [VN-1 … V0]
+      const labels = [], arms = []
+      let cur = ladder
+      while (Array.isArray(cur) && cur[0] === 'block' && typeof cur[1] === 'string' && cur.length === 4 &&
+             Array.isArray(cur[3]) && cur[3][0] === 'br' && cur[3][1] === out && cur[3].length === 3) {
+        labels.push(cur[1]); arms.push(cur[3][2]); cur = cur[2]
+      }
+      if (!Array.isArray(cur) || cur[0] !== 'block' || typeof cur[1] !== 'string' ||
+          cur.length !== 3 || !Array.isArray(cur[2]) || cur[2][0] !== 'br_table') return
+      const N = arms.length
+      if (N < 4 || N > 8) return
+      arms.reverse()
+      const dfltLabel = labels[0]
+      const armLabels = [cur[1], ...labels.slice(1).reverse()]
+      const bt = cur[2], idx = bt[bt.length - 1], btLabels = bt.slice(1, -1)
+      if (!Array.isArray(idx) || btLabels.length !== N + 1 || btLabels[N] !== dfltLabel) return
+      for (let k = 0; k < N; k++) if (btLabels[k] !== armLabels[k]) return   // dense, in order, no holes
+      // idx needs NO speculation gate: it evaluated unconditionally before the
+      // br_table and still does (teed once as the in-range cond) — any expression,
+      // loads included, keeps its exact original evaluation.
+      for (const arm of arms) {
+        const teed = new Set()
+        if (!speculable(arm, teed) || count(arm) > 96) return
+        for (const t of teed) {
+          fnCounts ??= tallyLocals(fn, new Map(), 1)
+          const u = fnCounts.get(t), a = tallyLocals(arm, new Map(), 1).get(t)
+          if (!u || !a || u.gets !== a.gets || u.tees !== a.tees || (u.sets || 0) !== (a.sets || 0)) return
+        }
+      }
+      const st = `$__st${uid++}`
+      let declEnd = 1
+      for (let i = 1; i < fn.length; i++) {
+        const c = fn[i]
+        if (!Array.isArray(c)) { if (typeof c === 'string' && c[0] === '$') declEnd = i + 1; continue }
+        if (c[0] === 'param' || c[0] === 'local' || c[0] === 'result' || c[0] === 'export' || c[0] === 'type') declEnd = i + 1
+      }
+      fn.splice(declEnd, 0, ['local', st, 'i32'])
+      const bits = N > 4 ? 3 : 2   // ceil(log2 N) for the gated 4…8 range
+      const tree = (bit, base) => bit < 0
+        ? (base < N ? arms[base] : clone(arms[N - 1]))
+        : ['select', tree(bit - 1, base | (1 << bit)), tree(bit - 1, base), ['i32.and', ['local.get', st], ['i32.const', 1 << bit]]]
+      b.length -= 2
+      b.push(['if', ['result', T],
+        ['i32.lt_u', ['local.tee', st, idx], ['i32.const', N]],
+        ['then', tree(bits - 1, 0)],
+        ['else', generic]])
+    }
+    rec(fn)
+  })
+  return ast
+}
+
 // ==================== GUARD-AWARE TAG REFINEMENT ====================
 
 /**
@@ -1488,8 +1591,63 @@ const intguard = (ast) => {
  *     no goto, so execution between branch points is linear
  */
 const guardRefine = (ast) => {
-  if (Array.isArray(ast)) for (const node of ast) if (Array.isArray(node) && node[0] === 'func') refineGuards(node)
+  if (Array.isArray(ast)) for (const node of ast) if (Array.isArray(node) && node[0] === 'func') { refineGuards(node); foldStrProbes(node) }
   return ast
+}
+
+// jz NaN-box contract: `__is_str_key(reinterpret_f64(V))` asks "is V an SSO/heap
+// string box?" — a value produced by f64.convert_i32_* or a finite (non-NaN)
+// numeric const is a plain number, never a box: statically 0. This is what lets
+// an inlined polymorphic `+` arm drop its cold string-concat branch once the
+// caller proved the args int (devirt's i32 spills).
+const foldStrProbes = (fn) => {
+  const numericF64 = (n) => {
+    if (!Array.isArray(n)) return false
+    if (n[0] === 'local.tee') return numericF64(n[2])   // tee passes the value through
+    if (n[0] === 'f64.convert_i32_s' || n[0] === 'f64.convert_i32_u') return true
+    if (n[0] === 'f64.const') {
+      const v = f64ConstValue(n[1])
+      return typeof v === 'number' && Number.isFinite(v)
+    }
+    return false
+  }
+  const foldableProbe = (n) => Array.isArray(n) && n[0] === 'call' && n[1] === '$__is_str_key' &&
+    Array.isArray(n[2]) && n[2][0] === 'i64.reinterpret_f64' && numericF64(n[2][1])
+  // collect the reinterpret operands of an or-tree made ONLY of foldable probes
+  const probeOps = (n, out) => {
+    if (foldableProbe(n)) { out.push(n[2]); return true }
+    if (Array.isArray(n) && n[0] === 'i32.or' && n.length === 3) return probeOps(n[1], out) && probeOps(n[2], out)
+    return false
+  }
+  const rec = (n) => {
+    if (!Array.isArray(n)) return
+    for (let i = 1; i < n.length; i++) {
+      let c = n[i]
+      if (!Array.isArray(c)) continue
+      // Whole polymorphic dispatch — matched PRE-order, before the per-probe
+      // fallback below turns the cond's calls into effect-blocks the or/if can
+      // never const-fold through: `if (is_str(a) || is_str(b)) STRING-arm else
+      // NUMERIC-arm` with every probe statically 0 → the numeric arm, with the
+      // probes' operand tees (live defs the arm reads back) preserved as drops.
+      if (c[0] === 'if') {
+        const ops = []
+        const { cond, thenBranch, elseBranch } = parseIf(c)
+        const resultDecl = c.find(x => Array.isArray(x) && x[0] === 'result')
+        if (cond && thenBranch && elseBranch && resultDecl && probeOps(cond, ops)) {
+          const elseVal = elseBranch.length === 2 ? elseBranch[1] : ['block', resultDecl, ...elseBranch.slice(1)]
+          const drops = ops.filter(o => !isPure(o)).map(o => ['drop', o])
+          c = n[i] = drops.length ? ['block', resultDecl, ...drops, elseVal] : elseVal
+          if (!Array.isArray(c)) continue
+        }
+      }
+      rec(c)
+      // NO standalone-probe fold: a half-folded cond (one probe an effect-block,
+      // one a call — narrowing may qualify the second only a round later) is a
+      // shape the if-match above can never reclaim. Untouched probes stay pristine
+      // for whichever LATER round can fold the whole dispatch.
+    }
+  }
+  rec(fn)
 }
 
 const EMPTY_SET = new Set()
@@ -6753,23 +6911,30 @@ const licm = (ast) => {
 const PASSES = [
   ['stripmut',      stripmut,       true,  'strip mut from never-written globals'],
   ['globals',       globals,        true,  'propagate immutable global constants'],
-  ['guardRefine',   guardRefine,    false, 'fold NaN-box tag reads under dominating tag guards (jz NaN-box-specific; opt-in)'],
   ['fold',          fold,           true,  'constant folding'],
   ['identity',      identity,       true,  'remove identity ops (x + 0 → x)'],
   ['peephole',      peephole,       true,  'x-x→0, x&0→0, etc.'],
   ['strength',      strength,       true,  'strength reduction (x * 2 → x << 1)'],
-  // narrow AFTER identity (its label-less block-hoist surfaces the convert defs
-  // narrow gates on) and BEFORE intguard/merge: intguard must see the re-boxed
-  // guard tees while their temps are still distinct — `merge` unifies the
-  // identical-valued guard temps of a devirt'd dispatch in the same round, after
-  // which the one-reader count gate can never pass.
+  // ORDER IS LOAD-BEARING through this stretch, so a devirt'd dispatch resolves
+  // fully in ONE round (coalesce at round end shares temp slots across arms —
+  // any counted locality gate below can never pass on round-2 shapes):
+  //   narrow AFTER identity (its label-less block-hoist surfaces the convert
+  //   defs narrow gates on) → guardRefine (its string-probe if-fold needs the
+  //   narrowed reads) → intguard (needs distinct pre-`merge` guard temps) →
+  //   … → seltree (needs collapsed arms, pre-coalesce temps).
   ['narrow',        narrowLocals,   true,  'retype f64 locals written only by exact i32 converts — reads re-box, ToInt32 chains then fold'],
+  ['guardRefine',   guardRefine,    false, 'fold NaN-box tag reads under dominating tag guards (jz NaN-box-specific; opt-in)'],
   ['intguard',      intguard,       true,  'ToInt32 guard select over an exact i32 convert → the raw value'],
   ['branch',        branch,         true,  'simplify constant branches'],
   ['zeroinit',      zeroinit,       true,  'drop local.set of zero when the local provably still holds its spec zero'],
   ['ifset',         ifset,          false, 'one-armed conditional update \u2192 branchless select \u2014 unconditional-update trade (speed profile)'],
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
   ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
+  // default OFF: on a PREDICTABLE index stream the br_table hits (~1 cycle) and
+  // the tree still pays every arm — a regression; on unpredictable streams the
+  // tree wins the mispredict back. A static compiler can't know the stream —
+  // profiles opt in where dispatch-heavy code is the target.
+  ['seltree',       seltree,        false, 'small dense br_table of cheap pure arms → branchless select tree'],
   ['macro',         inlineMacro,    true,  'expand single-expression functions at call sites (positional, zero wrapper)'],
   ['spec',          specializeParams, true, 'drop parameters every call site passes the same constant'],
   ['devirt',        devirt,         false, 'call_indirect with a constant or known closure-const index → direct/guarded calls — grows bytes for speed'],
@@ -6827,7 +6992,7 @@ const OPTS = Object.fromEntries(PASSES.map(p => [p[0], p[2]]))
  * about every workload — a profile the caller opts into, not a default.
  */
 const PROFILES = {
-  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true }),
+  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true, seltree: true }),
 }
 
 /**

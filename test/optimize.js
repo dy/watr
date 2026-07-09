@@ -272,6 +272,33 @@ test('narrow: f64 local written only by exact i32 converts retypes to i32', () =
   assert(print(optimize(parse(src4), 'narrow')).includes('(local $w f64)'), 'f64-consumed reads outweigh the write — no churn')
 })
 
+test('seltree: dense br_table of cheap pure arms → branchless select tree', () => {
+  const ladder = (arm2 = '(i32.xor (local.get $a) (local.get $b))') => `(module (func $d (export "d") (param $i i32) (param $a i32) (param $b i32) (result i32)
+    (block $out (result i32)
+      (block $dflt
+        (block $l3
+          (block $l2
+            (block $l1
+              (block $l0
+                (br_table $l0 $l1 $l2 $l3 $dflt (local.get $i)))
+              (br $out (i32.add (local.get $a) (local.get $b))))
+            (br $out (i32.sub (local.get $a) (local.get $b))))
+          (br $out ${arm2}))
+        (br $out (i32.and (i32.add (local.get $a) (i32.const 7)) (local.get $b))))
+      (i32.const 99))))`
+  const out = print(optimize(parse(ladder()), 'seltree'))
+  assert(!out.includes('br_table'), 'br_table replaced')
+  assert((out.match(/select/g) || []).length === 3, 'three selects for four arms')
+  assert(out.includes('i32.lt_u'), 'in-range test guards the generic path')
+  // trapping arm (div) keeps the br_table
+  const out2 = print(optimize(parse(ladder('(i32.div_s (local.get $a) (local.get $b))')), 'seltree'))
+  assert(out2.includes('br_table'), 'trapping arm keeps the branchy form')
+  // behavioral: compile both forms and compare results across all indices
+  const mod = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(ladder()), 'seltree'))), {}).exports
+  const ref = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(ladder()))), {}).exports
+  for (let i = 0; i < 6; i++) assert.equal(mod.d(i, 29, 13), ref.d(i, 29, 13), `idx ${i}`)
+})
+
 test('intguard: ToInt32 guard select over exact i32 convert → raw value', () => {
   const guarded = (tail = '') => `(module (func (param $e i32) (result ${tail ? 'f64' : 'i32'})
     (local $t f64)
