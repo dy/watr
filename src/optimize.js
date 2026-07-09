@@ -1676,25 +1676,34 @@ const dropEffects = (node) => {
 /** Count all local.get/set/tee occurrences in one walk */
 // One tally walker serves the from-scratch count AND the maintained-count
 // deltas — a second implementation would drift.
+// Specialized direct recursion (not util.walk): this is the optimizer's
+// hottest traversal — a generic walker pays a megamorphic callback call per
+// node INCLUDING every leaf, which profiling put at ~1/3 of walk's total
+// self-time across a jz compile. The flat-form sibling check happens in the
+// parent's child loop (same coverage as walk's (n, parent, idx) leaf visits:
+// child position i ≥ 1 ⇔ idx > 0 — idx 0 is a folded node's own head).
 const tallyLocals = (node, counts, d) => {
   const ensure = name => { let c = counts.get(name); if (!c) counts.set(name, c = { gets: 0, sets: 0, tees: 0 }); return c }
-  walk(node, (n, parent, idx) => {
-    if (Array.isArray(n)) {
-      if (n.length < 2 || typeof n[1] !== 'string') return
-      if (n[0] === 'local.get') ensure(n[1]).gets += d
-      else if (n[0] === 'local.set') ensure(n[1]).sets += d
-      else if (n[0] === 'local.tee') ensure(n[1]).tees += d
-      return
+  const rec = (n) => {
+    const op = n[0]
+    if (typeof n[1] === 'string' && n.length >= 2) {
+      if (op === 'local.get') ensure(n[1]).gets += d
+      else if (op === 'local.set') ensure(n[1]).sets += d
+      else if (op === 'local.tee') ensure(n[1]).tees += d
     }
-    // bare flat form: `local.get` `$x` as sibling tokens (idx 0 is a folded
-    // node's own head). Uncounted refs would let exact-occurrence passes treat
-    // a flat-referenced local as dead.
-    if (idx > 0 && (n === 'local.get' || n === 'local.set' || n === 'local.tee')) {
-      const tgt = parent[idx + 1]
-      if (typeof tgt === 'string' && tgt[0] === '$')
-        ensure(tgt)[n === 'local.get' ? 'gets' : n === 'local.set' ? 'sets' : 'tees'] += d
+    for (let i = 1; i < n.length; i++) {
+      const c = n[i]
+      if (Array.isArray(c)) rec(c)
+      // bare flat form: `local.get` `$x` as sibling tokens. Uncounted refs
+      // would let exact-occurrence passes treat a flat-referenced local as dead.
+      else if (c === 'local.get' || c === 'local.set' || c === 'local.tee') {
+        const tgt = n[i + 1]
+        if (typeof tgt === 'string' && tgt[0] === '$')
+          ensure(tgt)[c === 'local.get' ? 'gets' : c === 'local.set' ? 'sets' : 'tees'] += d
+      }
     }
-  })
+  }
+  if (Array.isArray(node)) rec(node)
   return counts
 }
 const countLocalUses = (node) => tallyLocals(node, new Map(), 1)
