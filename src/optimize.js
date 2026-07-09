@@ -916,6 +916,21 @@ const impossibleForConvert = (convOp, v) => {
   if (v !== v || !Number.isFinite(v) || !Number.isInteger(v)) return true
   return convOp === 'f64.convert_i32_u' ? (v < 0 || v > 4294967295) : (v < I32S_MIN || v > I32S_MAX)
 }
+// Recognized f64.const payload for the impossible-compare rules — plain numbers and
+// the explicit text forms only. Hex-float text (Number() can't parse it) must NOT
+// alias into NaN and misfold an integral value like 0x1p3.
+const f64ConstValue = (raw) => {
+  const s = typeof raw === 'string' ? raw.replaceAll('_', '') : raw
+  return typeof s === 'number' ? s
+    : s === 'inf' ? Infinity : s === '-inf' ? -Infinity
+    : typeof s === 'string' && s.startsWith('nan') ? NaN
+    : typeof s === 'string' && /^-?\d+\.?\d*([eE][-+]?\d+)?$/.test(s) ? Number(s)
+    : undefined
+}
+const impossibleConvertCompare = (convOp, raw) => {
+  const v = f64ConstValue(raw)
+  return v !== undefined && impossibleForConvert(convOp, v)
+}
 
 /**
  * Remove identity operations.
@@ -938,6 +953,17 @@ const identityNode = (node) => {
     // (i32.eqz (REL a b)) → (INVREL a b) — one byte, same operands, same order
     if (node[0] === 'i32.eqz' && node.length === 2 && Array.isArray(node[1]) && INVERT[node[1][0]] && node[1].length === 3)
       return [INVERT[node[1][0]], node[1][1], node[1][2]]
+    // Hoist a trailing convert out of a LABEL-LESS block:
+    //   (block (result f64) … (f64.convert_i32_s X)) → (f64.convert_i32_s (block (result i32) … X))
+    // No label ⇒ no br can produce the block's result, so the tail IS its only value;
+    // a br to an OUTER label abandons this block and types against that outer one.
+    // Byte-neutral, but it surfaces the convert to def positions — local-narrowing's
+    // all-defs-convert gate then sees through emit wrapper blocks.
+    if (node[0] === 'block' && Array.isArray(node[1]) && node[1][0] === 'result' && node[1][1] === 'f64') {
+      const tail = node[node.length - 1]
+      if (Array.isArray(tail) && (tail[0] === 'f64.convert_i32_s' || tail[0] === 'f64.convert_i32_u') && node.length > 2)
+        return [tail[0], ['block', ['result', 'i32'], ...node.slice(2, -1), tail[1]]]
+    }
     // Unary cast round-trip: outer(inner(x)) → x (post-order, so an inner pair already
     // collapsed before the outer op sees it — the whole box/unbox chain unwinds in one walk).
     if (node.length === 2 && Array.isArray(node[1]) && node[1].length === 2) {
@@ -952,23 +978,13 @@ const identityNode = (node) => {
     }
     if (node.length !== 3) return
     // f64 eq/ne of a convert_i32 result against an impossible constant — statically
-    // unequal. The convert operand is dropped, so it must be pure. Only explicitly
-    // recognized const forms qualify — hex-float text (Number() can't parse it)
-    // must NOT alias into NaN and misfold an integral value like 0x1p3.
+    // unequal. The convert operand is dropped, so it must be pure.
     if (node[0] === 'f64.eq' || node[0] === 'f64.ne') {
       for (const [conv, cst] of [[node[1], node[2]], [node[2], node[1]]]) {
         if (Array.isArray(conv) && (conv[0] === 'f64.convert_i32_s' || conv[0] === 'f64.convert_i32_u') &&
-            Array.isArray(cst) && cst[0] === 'f64.const' && isPure(conv[1])) {
-          const raw = cst[1]
-          const s = typeof raw === 'string' ? raw.replaceAll('_', '') : raw
-          const v = typeof s === 'number' ? s
-            : s === 'inf' ? Infinity : s === '-inf' ? -Infinity
-            : typeof s === 'string' && s.startsWith('nan') ? NaN
-            : typeof s === 'string' && /^-?\d+\.?\d*([eE][-+]?\d+)?$/.test(s) ? Number(s)
-            : undefined
-          if (v !== undefined && impossibleForConvert(conv[0], v))
-            return ['i32.const', node[0] === 'f64.ne' ? 1 : 0]
-        }
+            Array.isArray(cst) && cst[0] === 'f64.const' && isPure(conv[1]) &&
+            impossibleConvertCompare(conv[0], cst[1]))
+          return ['i32.const', node[0] === 'f64.ne' ? 1 : 0]
       }
     }
     const fn = IDENTITIES[node[0]]
@@ -1322,6 +1338,99 @@ const zeroinit = (ast) => {
       }
     }
     for (let i = 1; i < fn.length; i++) rec(fn[i], 0)
+  })
+  return ast
+}
+
+/** f64→i32 local narrowing: a non-param f64 local whose EVERY write stores a
+ *  `f64.convert_i32_s(E)` holds an exact-i32 value for its whole life. Retype it
+ *  i32: writes store E directly (tees re-box around the i32 tee), every read
+ *  re-materializes the convert — value-identical at each use (the convert is
+ *  exact both ways) — and the now-SYNTACTIC converts at the reads let
+ *  trunc∘convert, ne-vs-impossible and intguard collapse the ToInt32 machinery
+ *  consuming the local (the loop-carried `x = ops[i](x, k)` accumulator being
+ *  the canonical shape). Signed only; functions with numeric (index-form) local
+ *  refs are skipped — narrowing renumbers nothing but tracks by name. */
+const narrowLocals = (ast) => {
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    const decls = new Map()
+    for (const c of fn)
+      if (Array.isArray(c) && c[0] === 'local' && typeof c[1] === 'string' && c[2] === 'f64') decls.set(c[1], c)
+    if (!decls.size) return
+    const bad = new Set(), written = new Set()
+    let indexRefs = false
+    const scan = (n) => {
+      if (!Array.isArray(n) || indexRefs) return
+      if ((n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] !== 'string') { indexRefs = true; return }
+      if ((n[0] === 'local.set' || n[0] === 'local.tee') && decls.has(n[1])) {
+        written.add(n[1])
+        if (!(Array.isArray(n[2]) && n[2][0] === 'f64.convert_i32_s')) bad.add(n[1])
+      }
+      for (let i = 1; i < n.length; i++) scan(n[i])
+    }
+    for (let i = 1; i < fn.length; i++) scan(fn[i])
+    if (indexRefs) return
+    const targets = new Set([...written].filter(x => !bad.has(x)))
+    if (!targets.size) return
+    for (const t of targets) decls.get(t)[2] = 'i32'
+    const rw = (n) => {
+      if (!Array.isArray(n)) return
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i]
+        if (!Array.isArray(c)) continue
+        if (c[0] === 'local.get' && targets.has(c[1])) { n[i] = ['f64.convert_i32_s', c]; continue }
+        if (c[0] === 'local.set' && targets.has(c[1])) { c[2] = c[2][1]; rw(c); continue }
+        if (c[0] === 'local.tee' && targets.has(c[1])) { c[2] = c[2][1]; n[i] = ['f64.convert_i32_s', c]; rw(c); continue }
+        rw(c)
+      }
+    }
+    rw(fn)
+  })
+  return ast
+}
+
+/** ToInt32-guard collapse over a provably-i32 value. The canonical `|0` lowering
+ *  wraps a non-leaf value V as
+ *    (select (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t V)))
+ *            (i32.const 0)
+ *            (f64.ne (local.get $t) (f64.const inf)))
+ *  — exact ToInt32 with a +inf guard, V evaluated once via the tee. When V is
+ *  `f64.convert_i32_*(E)` the round-trip is exact and the guard unsatisfiable, so
+ *  the whole select IS E — but node-local identities can't fire through the tee
+ *  (the guard reads $t back), and dropping the tee is only sound when $t has no
+ *  other reader: a per-function counted rewrite. (The tee-less leaf variant of the
+ *  same idiom collapses via the plain trunc∘convert / ne-vs-impossible identities.) */
+const intguard = (ast) => {
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    let counts = null   // lazy — most functions contain no matching select
+    const rec = (n) => {
+      if (!Array.isArray(n)) return
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i]
+        if (!Array.isArray(c)) continue
+        rec(c)
+        if (c[0] !== 'select' || c.length !== 4) continue
+        const [, arm, zero, cond] = c
+        if (!Array.isArray(arm) || arm[0] !== 'i32.wrap_i64' ||
+            !Array.isArray(arm[1]) || arm[1][0] !== 'i64.trunc_sat_f64_s' ||
+            !Array.isArray(arm[1][1]) || arm[1][1][0] !== 'local.tee') continue
+        const tee = arm[1][1], t = tee[1], V = tee[2]
+        if (!Array.isArray(V) || (V[0] !== 'f64.convert_i32_s' && V[0] !== 'f64.convert_i32_u')) continue
+        const z = getConst(zero)
+        if (!z || z.value !== 0) continue
+        if (!Array.isArray(cond) || cond[0] !== 'f64.ne' ||
+            !Array.isArray(cond[1]) || cond[1][0] !== 'local.get' || cond[1][1] !== t ||
+            !Array.isArray(cond[2]) || cond[2][0] !== 'f64.const' ||
+            !impossibleConvertCompare(V[0], cond[2][1])) continue
+        counts ??= tallyLocals(fn, new Map(), 1)
+        const u = counts.get(t)
+        if (!u || u.gets !== 1 || u.tees !== 1 || (u.sets || 0) !== 0) continue
+        n[i] = V[1]
+      }
+    }
+    rec(fn)
   })
   return ast
 }
@@ -6630,6 +6739,13 @@ const PASSES = [
   ['identity',      identity,       true,  'remove identity ops (x + 0 → x)'],
   ['peephole',      peephole,       true,  'x-x→0, x&0→0, etc.'],
   ['strength',      strength,       true,  'strength reduction (x * 2 → x << 1)'],
+  // narrow AFTER identity (its label-less block-hoist surfaces the convert defs
+  // narrow gates on) and BEFORE intguard/merge: intguard must see the re-boxed
+  // guard tees while their temps are still distinct — `merge` unifies the
+  // identical-valued guard temps of a devirt'd dispatch in the same round, after
+  // which the one-reader count gate can never pass.
+  ['narrow',        narrowLocals,   true,  'retype f64 locals written only by exact i32 converts — reads re-box, ToInt32 chains then fold'],
+  ['intguard',      intguard,       true,  'ToInt32 guard select over an exact i32 convert → the raw value'],
   ['branch',        branch,         true,  'simplify constant branches'],
   ['zeroinit',      zeroinit,       true,  'drop local.set of zero when the local provably still holds its spec zero'],
   ['ifset',         ifset,          false, 'one-armed conditional update \u2192 branchless select \u2014 unconditional-update trade (speed profile)'],

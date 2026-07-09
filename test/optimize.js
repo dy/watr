@@ -221,6 +221,71 @@ test('identity: f64 eq/ne of convert_i32 vs impossible const → known', () => {
   assert(impure.includes('f64.ne'), 'impure convert operand stays')
 })
 
+test('identity: trailing convert hoists out of a label-less block', () => {
+  const src = `(module (func (param $n i32) (result f64)
+    (local $s f64)
+    (block (result f64)
+      (local.set $s (f64.const 1))
+      (f64.convert_i32_s (local.get $n)))))`
+  const out = print(optimize(parse(src), 'identity')).replace(/\s+/g, ' ')
+  assert(out.includes('(f64.convert_i32_s (block (result i32)'), 'convert hoisted, block retyped i32')
+  // labeled block: a br could produce the result — must NOT hoist
+  const src2 = `(module (func (param $n i32) (param $c i32) (result f64)
+    (block $B (result f64)
+      (br_if $B (f64.const 2.5) (local.get $c))
+      (f64.convert_i32_s (local.get $n)))))`
+  const out2 = print(optimize(parse(src2), 'identity')).replace(/\s+/g, ' ')
+  assert(out2.includes('(block $B (result f64)'), 'labeled block keeps its type')
+})
+
+test('narrow: f64 local written only by exact i32 converts retypes to i32', () => {
+  const src = `(module (func (param $n i32) (result f64)
+    (local $x f64)
+    (local.set $x (f64.convert_i32_s (i32.const 7)))
+    (local.set $x (f64.convert_i32_s (i32.add (i32.trunc_sat_f64_s (local.get $x)) (local.get $n))))
+    (local.get $x)))`
+  const out = print(optimize(optimize(parse(src), 'narrow'), 'identity'))
+  assert(out.includes('(local $x i32)'), 'x retyped i32')
+  assert(!out.match(/trunc_sat/), 'trunc of the re-boxed read folds away')
+  assert(out.includes('f64.convert_i32_s (local.get $x)'), 'f64-context read re-boxes')
+  // a single non-convert writer keeps the local f64
+  const src2 = `(module (func (param $v f64) (result f64)
+    (local $y f64)
+    (local.set $y (f64.convert_i32_s (i32.const 1)))
+    (local.set $y (local.get $v))
+    (local.get $y)))`
+  assert(print(optimize(parse(src2), 'narrow')).includes('(local $y f64)'), 'mixed writers keep f64')
+  // tee form: the i32 tee re-boxes for its f64 expression context
+  const src3 = `(module (func (result f64)
+    (local $z f64)
+    (f64.add (local.tee $z (f64.convert_i32_s (i32.const 3))) (local.get $z))))`
+  const out3 = print(optimize(parse(src3), 'narrow')).replace(/\s+/g, ' ')
+  assert(out3.includes('(local $z i32)') && out3.includes('(f64.convert_i32_s (local.tee $z (i32.const 3)'), 'tee re-boxes around the i32 tee')
+})
+
+test('intguard: ToInt32 guard select over exact i32 convert → raw value', () => {
+  const guarded = (tail = '') => `(module (func (param $e i32) (result ${tail ? 'f64' : 'i32'})
+    (local $t f64)
+    ${tail ? '(drop ' : ''}(select
+      (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t (f64.convert_i32_s (local.get $e)))))
+      (i32.const 0)
+      (f64.ne (local.get $t) (f64.const inf)))${tail ? ')' : ''}
+    ${tail}))`
+  const out = print(optimize(parse(guarded()), 'intguard'))
+  assert(!out.includes('select') && !out.includes('trunc'), 'collapses to the raw i32')
+  // $t read elsewhere → the tee must survive, guard stays
+  const out2 = print(optimize(parse(guarded('(local.get $t)')), 'intguard'))
+  assert(out2.includes('select'), 'extra reader keeps the guard')
+  // non-convert teed value → not provably int, guard stays
+  const raw = `(module (func (param $v f64) (result i32)
+    (local $t f64)
+    (select
+      (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t (f64.mul (local.get $v) (f64.const 2)))))
+      (i32.const 0)
+      (f64.ne (local.get $t) (f64.const inf)))))`
+  assert(print(optimize(parse(raw), 'intguard')).includes('select'), 'non-convert value keeps the guard')
+})
+
 // ==================== STRENGTH REDUCTION ====================
 
 test('strength: x * 2 → x << 1', () => {
