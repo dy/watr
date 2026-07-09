@@ -171,6 +171,56 @@ test('identity: wrap∘extend and boxPtr round-trip → x', () => {
   assert.equal(print(box).match(/wrap_i64|reinterpret|extend_i32/), null, 'boxPtr round-trip collapses to (local.get $x)')
 })
 
+test('identity: trunc∘convert exact round-trips through f64', () => {
+  // i32 result: same-sign pairs vanish entirely
+  for (const [outer, inner] of [
+    ['i32.trunc_sat_f64_s', 'f64.convert_i32_s'], ['i32.trunc_f64_s', 'f64.convert_i32_s'],
+    ['i32.trunc_sat_f64_u', 'f64.convert_i32_u'], ['i32.trunc_f64_u', 'f64.convert_i32_u'],
+  ]) {
+    const opt = optimize(parse(`(module (func (param $x i32) (result i32) (${outer} (${inner} (local.get $x)))))`), 'identity')
+    assert(!print(opt).match(/trunc|convert/), `${outer}∘${inner} folds to x`)
+  }
+  // i64 result: drops to a register extend (incl. the trunc_s∘convert_u mix — u-converted
+  // values are non-negative and fit i64 signed)
+  for (const [outer, inner, ext] of [
+    ['i64.trunc_sat_f64_s', 'f64.convert_i32_s', 'i64.extend_i32_s'],
+    ['i64.trunc_sat_f64_s', 'f64.convert_i32_u', 'i64.extend_i32_u'],
+    ['i64.trunc_sat_f64_u', 'f64.convert_i32_u', 'i64.extend_i32_u'],
+  ]) {
+    const opt = optimize(parse(`(module (func (param $x i32) (result i64) (${outer} (${inner} (local.get $x)))))`), 'identity')
+    const src = print(opt)
+    assert(!src.match(/trunc|convert/) && src.includes(ext), `${outer}∘${inner} → ${ext}`)
+  }
+  // NOT identities: sign mixes that saturate/clamp
+  for (const [outer, inner] of [
+    ['i32.trunc_sat_f64_s', 'f64.convert_i32_u'],   // 0xffffffff would clamp to INT32_MAX
+    ['i64.trunc_sat_f64_u', 'f64.convert_i32_s'],   // negative would clamp to 0
+    ['i32.trunc_sat_f32_s', 'f32.convert_i32_s'],   // f32 mantissa loses wide i32s
+  ]) {
+    const opt = optimize(parse(`(module (func (param $x i32) (result ${outer.slice(0, 3)}) (${outer} (${inner} (local.get $x)))))`), 'identity')
+    assert(print(opt).match(/trunc/), `${outer}∘${inner} must stay`)
+  }
+})
+
+test('identity: f64 eq/ne of convert_i32 vs impossible const → known', () => {
+  const F = (cst, op = 'f64.ne', conv = 'f64.convert_i32_s') =>
+    print(optimize(parse(`(module (func (param $x i32) (result i32) (${op} (${conv} (local.get $x)) (f64.const ${cst}))))`), 'identity'))
+  for (const cst of ['inf', '-inf', 'nan', '5.5', '4294967296', '-2147483649']) {
+    assert(F(cst).includes('i32.const 1'), `ne vs ${cst} → 1`)
+    assert(F(cst, 'f64.eq').includes('i32.const 0'), `eq vs ${cst} → 0`)
+  }
+  // representable values and hex-float text must NOT fold
+  for (const cst of ['8', '0', '-2147483648', '0x1p3']) {
+    assert(F(cst).includes('f64.ne'), `ne vs ${cst} stays`)
+  }
+  // u-converted range differs: 4e9 is reachable via convert_i32_u
+  assert(F('4000000000', 'f64.ne', 'f64.convert_i32_u').includes('f64.ne'), 'u: 4e9 reachable, stays')
+  assert(F('-1', 'f64.ne', 'f64.convert_i32_u').includes('i32.const 1'), 'u: -1 impossible → 1')
+  // impure operand keeps the compare (the operand would be dropped)
+  const impure = print(optimize(parse('(module (func (result i32) (f64.ne (f64.convert_i32_s (call $g)) (f64.const inf))) (func $g (result i32) (i32.const 1)))'), 'identity'))
+  assert(impure.includes('f64.ne'), 'impure convert operand stays')
+})
+
 // ==================== STRENGTH REDUCTION ====================
 
 test('strength: x * 2 → x << 1', () => {

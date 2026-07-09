@@ -889,6 +889,34 @@ const ROUNDTRIP = {
   'i32.wrap_i64': new Set(['i64.extend_i32_u', 'i64.extend_i32_s']),
 }
 
+// Exact numeric round-trips through f64: every i32 converts to f64 EXACTLY, so
+// truncating back is the identity — the value is always in range, so the sat and
+// trapping forms behave alike and both qualify. Same-signedness only, except
+// trunc_s∘convert_u for the i64 result (u-converted values are non-negative and
+// fit i64 signed). f32 is excluded (a 24-bit mantissa loses wide i32s). Value is
+// either the operand itself (i32 result) or a pure register extend (i64 result).
+const TRUNC_OF_CONVERT = {
+  'i32.trunc_sat_f64_s': { 'f64.convert_i32_s': null },
+  'i32.trunc_f64_s': { 'f64.convert_i32_s': null },
+  'i32.trunc_sat_f64_u': { 'f64.convert_i32_u': null },
+  'i32.trunc_f64_u': { 'f64.convert_i32_u': null },
+  'i64.trunc_sat_f64_s': { 'f64.convert_i32_s': 'i64.extend_i32_s', 'f64.convert_i32_u': 'i64.extend_i32_u' },
+  'i64.trunc_f64_s': { 'f64.convert_i32_s': 'i64.extend_i32_s', 'f64.convert_i32_u': 'i64.extend_i32_u' },
+  'i64.trunc_sat_f64_u': { 'f64.convert_i32_u': 'i64.extend_i32_u' },
+  'i64.trunc_f64_u': { 'f64.convert_i32_u': 'i64.extend_i32_u' },
+}
+
+// An f64 compare of a convert_i32 result against a constant NO i32 can convert to
+// (NaN, ±inf, fractional, outside the i32 range) has one statically-known outcome:
+// unequal. eq → 0, ne → 1. The convert's operand is untouched (stays evaluated via
+// the replacement only when pure — the caller checks).
+const I32S_MIN = -2147483648, I32S_MAX = 2147483647
+const impossibleForConvert = (convOp, v) => {
+  if (typeof v !== 'number') return false        // hex-string payloads: leave to fold
+  if (v !== v || !Number.isFinite(v) || !Number.isInteger(v)) return true
+  return convOp === 'f64.convert_i32_u' ? (v < 0 || v > 4294967295) : (v < I32S_MIN || v > I32S_MAX)
+}
+
 /**
  * Remove identity operations.
  * @param {Array} ast
@@ -915,9 +943,34 @@ const identityNode = (node) => {
     if (node.length === 2 && Array.isArray(node[1]) && node[1].length === 2) {
       const inv = ROUNDTRIP[node[0]]
       if (inv && (typeof inv === 'string' ? node[1][0] === inv : inv.has(node[1][0]))) return node[1][1]
+      const toc = TRUNC_OF_CONVERT[node[0]]
+      if (toc && node[1][0] in toc) {
+        const ext = toc[node[1][0]]
+        return ext ? [ext, node[1][1]] : node[1][1]
+      }
       return
     }
     if (node.length !== 3) return
+    // f64 eq/ne of a convert_i32 result against an impossible constant — statically
+    // unequal. The convert operand is dropped, so it must be pure. Only explicitly
+    // recognized const forms qualify — hex-float text (Number() can't parse it)
+    // must NOT alias into NaN and misfold an integral value like 0x1p3.
+    if (node[0] === 'f64.eq' || node[0] === 'f64.ne') {
+      for (const [conv, cst] of [[node[1], node[2]], [node[2], node[1]]]) {
+        if (Array.isArray(conv) && (conv[0] === 'f64.convert_i32_s' || conv[0] === 'f64.convert_i32_u') &&
+            Array.isArray(cst) && cst[0] === 'f64.const' && isPure(conv[1])) {
+          const raw = cst[1]
+          const s = typeof raw === 'string' ? raw.replaceAll('_', '') : raw
+          const v = typeof s === 'number' ? s
+            : s === 'inf' ? Infinity : s === '-inf' ? -Infinity
+            : typeof s === 'string' && s.startsWith('nan') ? NaN
+            : typeof s === 'string' && /^-?\d+\.?\d*([eE][-+]?\d+)?$/.test(s) ? Number(s)
+            : undefined
+          if (v !== undefined && impossibleForConvert(conv[0], v))
+            return ['i32.const', node[0] === 'f64.ne' ? 1 : 0]
+        }
+      }
+    }
     const fn = IDENTITIES[node[0]]
     if (!fn) return
     const result = fn(node[1], node[2])
