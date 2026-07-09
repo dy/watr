@@ -1813,13 +1813,14 @@ const countLocalUses = (node) => tallyLocals(node, new Map(), 1)
 // Maintained whole-function use-counts for the propagate family: every mutation
 // site reports the removed/inserted subtree instead of the driver re-counting
 // the function each round. Null outside propagate — the helpers no-op. The
-// recount ORACLE (globalThis.__CNT_ORACLE) re-derives from scratch after every
-// sub-pass and throws on divergence; the test battery runs with it enabled.
+// recount ORACLE (set globalThis.__CNT_ORACLE in a debug session) re-derives
+// from scratch after every sub-pass and throws on divergence. The typeof guard
+// keeps the read out of hosts with no globalThis (self-host wasm builds).
 let CNT = null, CNT_FN = null
 const cntSub = (node) => { if (CNT) tallyLocals(node, CNT, -1) }
 const cntAdd = (node) => { if (CNT) tallyLocals(node, CNT, 1) }
 const cntOracle = (funcNode, site) => {
-  if (!CNT || !globalThis.__CNT_ORACLE) return
+  if (!CNT || typeof globalThis === 'undefined' || !globalThis.__CNT_ORACLE) return
   const fresh = countLocalUses(funcNode)
   const names = new Set([...fresh.keys(), ...CNT.keys()])
   for (const k of names) {
