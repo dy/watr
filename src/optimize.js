@@ -1171,6 +1171,53 @@ const branch = (ast) => {
   })
 }
 
+/**
+ * One-armed conditional update → branchless select (speed profile):
+ *   (if C (then (local.set $X V))) → (local.set $X (select V (local.get $X) C))
+ * The dominant if-shape wasm-opt still converted in watr output (bit-test
+ * power-scaling chains, conditional accumulators, heapsort child-picks).
+ * `select` runs V unconditionally and evaluates C LAST, so:
+ *   - V must be pure, trap-free, memory-read-free and cheap (token cap 12 —
+ *     a couple of ALU ops; count() counts tokens, a 2-op expr is ~8);
+ *   - V's head must be a typed numeric op so the untyped select validates
+ *     (no func-local table here to type a bare local/global head);
+ *   - an impure C must not write $X or anything V reads (both V and the
+ *     synthesized `local.get $X` would see pre-condition state).
+ * Default OFF: converting makes the update unconditional — a latency-for-
+ * predictability trade that belongs to the speed profile (mirrors jz's
+ * boolConvertToSelect tiering); it is also a small size win (~2 B/site).
+ */
+const ifset = (ast) => walkPost(ast, (node) => {
+  if (!Array.isArray(node) || node[0] !== 'if') return
+  const { cond, thenBranch, elseBranch } = parseIf(node)
+  if (!Array.isArray(cond) || elseBranch || thenBranch?.length !== 2) return
+  if (node.some(p => Array.isArray(p) && p[0] === 'result')) return
+  const st = thenBranch[1]
+  if (!(Array.isArray(st) && st[0] === 'local.set' && st.length === 3 &&
+        typeof st[1] === 'string' && Array.isArray(st[2]))) return
+  const X = st[1], v = st[2]
+  if (!(typeof v[0] === 'string' && /^[if](32|64)\./.test(v[0]))) return
+  if (!isPure(v) || count(v) > 12 || hasTrap(v) || readsMemory(v)) return
+  if (!isPure(cond)) {
+    const vw = scanVal(v)
+    let clash = false
+    walk(cond, (n, p2, i2) => {
+      if (!Array.isArray(n)) { if (i2 !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) clash = true; return }
+      const o = n[0]
+      if (typeof o !== 'string') return
+      if ((o === 'local.set' || o === 'local.tee') && (n[1] === X || vw.refs.has(n[1]))) clash = true
+      else if (o === 'global.set' && vw.grefs.has(n[1])) clash = true
+      else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') {
+        const e = callFx(n)
+        if (!e) { if (vw.grefs.size) clash = true }
+        else if ([...vw.grefs].some(g => e.wGlob.has(g))) clash = true
+      }
+    })
+    if (clash) return
+  }
+  return ['local.set', X, ['select', v, ['local.get', X], cond]]
+})
+
 // ==================== GUARD-AWARE TAG REFINEMENT ====================
 
 /**
@@ -6475,6 +6522,7 @@ const PASSES = [
   ['peephole',      peephole,       true,  'x-x→0, x&0→0, etc.'],
   ['strength',      strength,       true,  'strength reduction (x * 2 → x << 1)'],
   ['branch',        branch,         true,  'simplify constant branches'],
+  ['ifset',         ifset,          false, 'one-armed conditional update \u2192 branchless select \u2014 unconditional-update trade (speed profile)'],
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
   ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
   ['macro',         inlineMacro,    true,  'expand single-expression functions at call sites (positional, zero wrapper)'],
@@ -6534,7 +6582,7 @@ const OPTS = Object.fromEntries(PASSES.map(p => [p[0], p[2]]))
  * about every workload — a profile the caller opts into, not a default.
  */
 const PROFILES = {
-  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false }),
+  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true }),
 }
 
 /**
