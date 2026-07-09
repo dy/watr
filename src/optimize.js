@@ -1359,19 +1359,38 @@ const narrowLocals = (ast) => {
       if (Array.isArray(c) && c[0] === 'local' && typeof c[1] === 'string' && c[2] === 'f64') decls.set(c[1], c)
     if (!decls.size) return
     const bad = new Set(), written = new Set()
+    // Profit gate: narrowing strips a convert at every WRITE but adds one at every
+    // f64-context READ. A read only pays off when it feeds the int machinery this
+    // pass family retires — a trunc-family consumer (directly or through the
+    // ToInt32-guard tee that intguard collapses) or an eq/ne compare (folds against
+    // impossible consts). Narrow only when wins ≥ costs and something is won —
+    // op-neutral at worst, never churn (op-count ratchets caught the unconditional
+    // version adding converts to stores/f64 math in hot loops).
+    const TRUNC_PARENT = new Set(['i64.trunc_sat_f64_s', 'i32.trunc_sat_f64_s', 'i64.trunc_f64_s', 'i32.trunc_f64_s',
+      'i64.trunc_sat_f64_u', 'i32.trunc_sat_f64_u', 'i64.trunc_f64_u', 'i32.trunc_f64_u', 'f64.ne', 'f64.eq'])
+    const wins = new Map(), costs = new Map()
+    const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1)
     let indexRefs = false
-    const scan = (n) => {
+    const scan = (n, up, upup) => {
       if (!Array.isArray(n) || indexRefs) return
       if ((n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] !== 'string') { indexRefs = true; return }
       if ((n[0] === 'local.set' || n[0] === 'local.tee') && decls.has(n[1])) {
         written.add(n[1])
-        if (!(Array.isArray(n[2]) && n[2][0] === 'f64.convert_i32_s')) bad.add(n[1])
+        if (Array.isArray(n[2]) && n[2][0] === 'f64.convert_i32_s') bump(wins, n[1])
+        else bad.add(n[1])
       }
-      for (let i = 1; i < n.length; i++) scan(n[i])
+      if (n[0] === 'local.get' && decls.has(n[1])) {
+        // classify by consumer; a tee is transparent — it passes the value through
+        // (the ToInt32 guard idiom tees into a temp before trunc/ne read it back)
+        const consumer = up && up[0] === 'local.tee' ? upup : up
+        bump(TRUNC_PARENT.has(consumer?.[0]) ? wins : costs, n[1])
+      }
+      for (let i = 1; i < n.length; i++) scan(n[i], n, up)
     }
-    for (let i = 1; i < fn.length; i++) scan(fn[i])
+    for (let i = 1; i < fn.length; i++) scan(fn[i], null, null)
     if (indexRefs) return
-    const targets = new Set([...written].filter(x => !bad.has(x)))
+    const targets = new Set([...written].filter(x =>
+      !bad.has(x) && (wins.get(x) || 0) > 0 && (wins.get(x) || 0) >= (costs.get(x) || 0)))
     if (!targets.size) return
     for (const t of targets) decls.get(t)[2] = 'i32'
     const rw = (n) => {

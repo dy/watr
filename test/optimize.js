@@ -261,6 +261,15 @@ test('narrow: f64 local written only by exact i32 converts retypes to i32', () =
     (f64.add (local.tee $z (f64.convert_i32_s (i32.const 3))) (local.get $z))))`
   const out3 = print(optimize(parse(src3), 'narrow')).replace(/\s+/g, ' ')
   assert(out3.includes('(local $z i32)') && out3.includes('(f64.convert_i32_s (local.tee $z (i32.const 3)'), 'tee re-boxes around the i32 tee')
+  // profit gate: reads consumed as plain f64 (stores, arithmetic) outnumber the
+  // single stripped write — narrowing would ADD converts in the hot path; skip
+  const src4 = `(module (memory 1) (func (param $p i32) (result f64)
+    (local $w f64)
+    (local.set $w (f64.convert_i32_s (i32.const 5)))
+    (f64.store (local.get $p) (local.get $w))
+    (f64.store offset=8 (local.get $p) (local.get $w))
+    (f64.mul (local.get $w) (f64.const 2))))`
+  assert(print(optimize(parse(src4), 'narrow')).includes('(local $w f64)'), 'f64-consumed reads outweigh the write — no churn')
 })
 
 test('intguard: ToInt32 guard select over exact i32 convert → raw value', () => {
