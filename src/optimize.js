@@ -1218,6 +1218,61 @@ const ifset = (ast) => walkPost(ast, (node) => {
   return ['local.set', X, ['select', v, ['local.get', X], cond]]
 })
 
+/**
+ * Drop redundant zero-initializations: wasm locals are spec-zeroed at entry,
+ * so `(local.set $x (T.const 0))` is a no-op when $x provably still holds
+ * zero — no earlier set/tee of $x in program order AND the set is not inside
+ * a loop (a back-edge could re-execute it after a later write; structured
+ * wasm has no other backward control flow, and a branch to an enclosing
+ * block only ever jumps forward/outward). Params are never zero-initialized
+ * and are excluded. Frontends emit these for `let x = 0` declarations whose
+ * zero is already the wasm default (~4 B/site).
+ */
+const zeroinit = (ast) => {
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    const params = new Set()
+    for (const c of fn) if (Array.isArray(c) && c[0] === 'param' && typeof c[1] === 'string') params.add(c[1])
+    const written = new Set()
+    const rec = (n, loopDepth) => {
+      if (!Array.isArray(n)) return
+      const op = n[0]
+      if ((op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string') {
+        // children first (a set's VALUE may itself contain sets)
+        for (let i = 2; i < n.length; i++) rec(n[i], loopDepth)
+        // Float -0 is NOT the spec default (+0): `-0 === 0` in JS, so an equality
+        // test would wrongly drop `f64.const -0` and flip the value's sign bit
+        // (caught by the jz sort -0-before-+0 pin). Integer zeros are bit-unique.
+        const zeroConst = (c) => Array.isArray(c) && typeof c[0] === 'string' && c[0].endsWith('.const') &&
+          (/^[i](32|64)\.const$/.test(c[0])
+            ? (c[1] === 0 || c[1] === '0' || c[1] === 0n)
+            : /^[f](32|64)\.const$/.test(c[0]) && (Object.is(c[1], 0) || c[1] === '0'))
+        if (op === 'local.set' && loopDepth === 0 && !written.has(n[1]) && !params.has(n[1]) &&
+            n.length === 3 && zeroConst(n[2])) {
+          n.length = 1
+          n[0] = 'nop'
+          return
+        }
+        written.add(n[1])
+        return
+      }
+      const ld = op === 'loop' ? loopDepth + 1 : loopDepth
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i]
+        // flat sibling form: `local.set` `$x` tokens (folded node heads sit at
+        // i 0) — must mark the write or a later nested zero-set is unsound.
+        if ((c === 'local.set' || c === 'local.tee') && typeof n[i + 1] === 'string' && n[i + 1][0] === '$') {
+          written.add(n[i + 1])
+          continue
+        }
+        rec(c, ld)
+      }
+    }
+    for (let i = 1; i < fn.length; i++) rec(fn[i], 0)
+  })
+  return ast
+}
+
 // ==================== GUARD-AWARE TAG REFINEMENT ====================
 
 /**
@@ -6522,6 +6577,7 @@ const PASSES = [
   ['peephole',      peephole,       true,  'x-x→0, x&0→0, etc.'],
   ['strength',      strength,       true,  'strength reduction (x * 2 → x << 1)'],
   ['branch',        branch,         true,  'simplify constant branches'],
+  ['zeroinit',      zeroinit,       true,  'drop local.set of zero when the local provably still holds its spec zero'],
   ['ifset',         ifset,          false, 'one-armed conditional update \u2192 branchless select \u2014 unconditional-update trade (speed profile)'],
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
   ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
