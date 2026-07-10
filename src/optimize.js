@@ -4004,6 +4004,222 @@ const tailmerge = (ast) => {
  * @param {Array} ast
  * @returns {Array}
  */
+// ==================== DEAD CONSTANT STORE ELIMINATION ====================
+/** Drop `local.set $x (T.const k)` whose stored value can never be READ:
+ *  every path from the store reaches another WRITE of $x, a return/
+ *  unreachable, or function end before any `local.get $x`. The motivating
+ *  shape: an inliner zero-initializes its temps at loop-body top while every
+ *  read sits inside the one dispatch arm that overwrites them first — dozens
+ *  of dead stores per iteration on schema-dispatch kernels. Locals are
+ *  function-private, so calls are transparent to the analysis.
+ *
+ *  First-x-op scan in evaluation order over structured control, with DATA
+ *  continuations (x-free; evaluated per query): statement lists thread
+ *  {list, i, k, env}; `br` follows its label's continuation — a loop label
+ *  re-enters the body top (cycle-guarded: revisiting a spinning loop reports
+ *  'get' = keep); `if`/`br_if`/`br_table` combine paths (any 'get' wins,
+ *  all-'set' clears); return/unreachable/function-end are 'set' (the local
+ *  is dead there). Unknown labels report 'get'. Dropping is confluent: a
+ *  killer store that is itself dropped was proven dead by a LATER write on
+ *  the same paths, so the earlier candidate's kill transfers transitively.
+ *  Runs before coalesce — slot sharing would alias liveness across names. */
+const deadset = (ast) => {
+  const DONE = { done: true }
+  const SETK = { set: true }
+  const isConstNode = (c) => Array.isArray(c) && typeof c[0] === 'string' && c[0].endsWith('.const')
+  walk(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    let steps = 0
+    const combine = (a, b) => (a === 'get' || b === 'get') ? 'get' : 'set'
+    // ITERATIVE evaluator: the sequential scan (thousands of straight-line
+    // nodes) is a while-loop over an explicit work state — only genuine FORKS
+    // (if-arms, br_if's two paths, br_table fan-out, loop re-entry) recurse,
+    // so stack depth is bounded by control NESTING, not code length (the CPS
+    // draft blew the stack on the watr-compiler corpus function).
+    const evalK = (x, k, spin, depth) => {
+      while (true) {
+        if (++steps > 200000 || depth > 512) return 'get'
+        if (k.done || k.set) return 'set'
+        if (k.brif) {
+          // taken path recurses (bounded by the depth cap); the not-taken
+          // fall-through CONTINUES this loop — keeps br_if chains linear.
+          if ((k.t ? followLabel(x, k.t, spin, depth + 1) : 'get') === 'get') return 'get'
+          k = k.k; continue
+        }
+        if (k.table) {
+          let st = 'set'
+          for (const l of k.labels) {
+            const t = k.env[l]
+            st = combine(st, t ? followLabel(x, t, spin, depth + 1) : 'get')
+            if (st === 'get') break
+          }
+          return st
+        }
+        if (k.arms) {
+          // an arm hitting neither get nor set falls through to the join and
+          // continues into k.k inside the recursion (depth-capped).
+          if ((k.thn ? S(x, { list: k.thn, i: 1, k: k.k, env: k.env }, spin, depth + 1) : evalK(x, k.k, spin, depth + 1)) === 'get') return 'get'
+          if (!k.els) { k = k.k; continue }
+          return S(x, { list: k.els, i: 1, k: k.k, env: k.env }, spin, depth + 1)
+        }
+        if (k.i >= k.list.length) { k = k.k; continue }
+        return S(x, k, spin, depth)
+      }
+    }
+    // S consumes a list-position continuation {list, i, k, env}: scan forward
+    // node by node, descending into node children by PUSHING list positions.
+    const S = (x, pos, spin, depth = 0) => {
+      let { list, i, k, env } = pos
+      // the current "rest" continuation as data (rebuilt lazily on descend)
+      const restK = () => ({ list, i: i + 1, k, env })
+      while (true) {
+        if (++steps > 200000 || depth > 512) return 'get'
+        if (i >= list.length) {
+          // unwind plain list-position continuations IN-LOOP — recursing per
+          // hop stacked one frame per scanned non-leaf node (kernel-size
+          // functions overflowed); only terminal/fork kinds leave the loop.
+          let u = k
+          while (!u.done && !u.set && !u.brif && !u.table && !u.arms && u.i >= u.list.length) u = u.k
+          if (u.done || u.set) return 'set'
+          if (u.brif || u.table || u.arms) return evalK(x, u, spin, depth)
+          list = u.list; i = u.i; env = u.env; k = u.k
+          continue
+        }
+        const n = list[i]
+        if (!Array.isArray(n)) { i++; continue }
+        const op = n[0]
+        if (op === 'local.get') {
+          if (n[1] === x) return 'get'
+          i++; continue
+        }
+        if (op === 'local.set' || op === 'local.tee') {
+          const k2 = n[1] === x ? SETK : restK()
+          if (n.length > 2 && Array.isArray(n[2])) { list = n; i = 2; k = k2; continue }
+          if (n[1] === x) return 'set'
+          i++; continue
+        }
+        if (op === 'return' || op === 'unreachable') {
+          if (n.length > 1 && Array.isArray(n[1])) { list = n; i = 1; k = SETK; continue }
+          return 'set'
+        }
+        if (op === 'br') {
+          const t = env[n[1]]
+          return t ? followLabel(x, t, spin, depth + 1) : 'get'
+        }
+        if (op === 'br_if') {
+          const t = env[n[1]]
+          const cont = { brif: true, t, k: restK(), env }
+          const cond = n.length > 2 && Array.isArray(n[2]) ? n[2] : null
+          if (cond) { list = [null, cond]; i = 1; k = cont; continue }
+          return evalK(x, cont, spin, depth)
+        }
+        if (op === 'br_table') {
+          const labels = []
+          let idx = null
+          for (let j = 1; j < n.length; j++) {
+            if (typeof n[j] === 'string') labels.push(n[j])
+            else if (Array.isArray(n[j])) idx = n[j]
+          }
+          const cont = { table: true, labels, env }
+          if (idx) { list = [null, idx]; i = 1; k = cont; continue }
+          return evalK(x, cont, spin, depth)
+        }
+        if (op === 'if') {
+          let j = 1, label = null
+          if (typeof n[1] === 'string' && n[1][0] === '$') { label = n[1]; j = 2 }
+          let cond = null, thn = null, els = null
+          for (; j < n.length; j++) {
+            const c = n[j]
+            if (!Array.isArray(c)) continue
+            if (c[0] === 'then') thn = c
+            else if (c[0] === 'else') els = c
+            else if (c[0] !== 'result') cond = c
+          }
+          const env2 = label ? { ...env, [label]: { exit: true, k: restK() } } : env
+          const cont = { arms: true, thn, els, k: restK(), env: env2 }
+          if (cond) { list = [null, cond]; i = 1; k = cont; env = env2; continue }
+          return evalK(x, cont, spin, depth)
+        }
+        if (op === 'block' || op === 'loop') {
+          let j = 1, label = null
+          if (typeof n[1] === 'string' && n[1][0] === '$') { label = n[1]; j = 2 }
+          while (j < n.length && Array.isArray(n[j]) && n[j][0] === 'result') j++
+          let env2 = env
+          if (label) {
+            env2 = { ...env }
+            env2[label] = op === 'block' ? { exit: true, k: restK() } : { loop: n, i: j, k: restK(), env: env2 }
+          }
+          k = restK(); list = n; i = j; env = env2; continue
+        }
+        // generic node: descend into children, rest of this list follows
+        k = restK(); list = n; i = 1; continue
+      }
+    }
+    const followLabel = (x, t, spin, depth) => {
+      if (t.exit) return evalK(x, t.k, spin, depth)
+      if (spin.has(t.loop)) return 'get'
+      spin.add(t.loop)
+      const r = S(x, { list: t.loop, i: t.i, k: t.k, env: t.env }, spin, depth)
+      spin.delete(t.loop)
+      return r
+    }
+
+    // Driver: mirror S's environment construction structurally; at each
+    // const-store candidate evaluate its continuation. Collect first, drop
+    // after (queries must all see the original tree).
+    const drops = []
+    const driveList = (list, i, k, env) => {
+      for (; i < list.length; i++) driveNode(list[i], { list, i: i + 1, k, env }, env)
+    }
+    const driveNode = (n, k, env) => {
+      if (!Array.isArray(n)) return
+      const op = n[0]
+      if (op === 'local.set' && n.length === 3 && isConstNode(n[2])) {
+        steps = 0
+        if (evalK(n[1], k, new Set(), 0) === 'set') drops.push(n)
+        return
+      }
+      if (op === 'if') {
+        let i = 1, label = null
+        if (typeof n[1] === 'string' && n[1][0] === '$') { label = n[1]; i = 2 }
+        const env2 = label ? { ...env, [label]: { exit: true, k } } : env
+        let thn = null, els = null
+        for (let j = i; j < n.length; j++) {
+          const c = n[j]
+          if (Array.isArray(c) && c[0] === 'then') thn = c
+          else if (Array.isArray(c) && c[0] === 'else') els = c
+        }
+        for (; i < n.length; i++) {
+          const c = n[i]
+          if (!Array.isArray(c)) continue
+          if (c[0] === 'then' || c[0] === 'else') driveList(c, 1, k, env2)
+          else if (c[0] !== 'result') driveNode(c, { arms: true, thn, els, k, env: env2 }, env2)
+        }
+        return
+      }
+      if (op === 'block' || op === 'loop') {
+        let i = 1, label = null
+        if (typeof n[1] === 'string' && n[1][0] === '$') { label = n[1]; i = 2 }
+        while (i < n.length && Array.isArray(n[i]) && n[i][0] === 'result') i++
+        let env2 = env
+        if (label) {
+          env2 = { ...env }
+          env2[label] = op === 'block' ? { exit: true, k } : { loop: n, i, k, env: env2 }
+        }
+        driveList(n, i, k, env2)
+        return
+      }
+      driveList(n, 1, k, env)
+    }
+    let bodyStart = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
+    while (bodyStart < fn.length && Array.isArray(fn[bodyStart]) &&
+      (fn[bodyStart][0] === 'param' || fn[bodyStart][0] === 'result' || fn[bodyStart][0] === 'local' || fn[bodyStart][0] === 'export' || fn[bodyStart][0] === 'type')) bodyStart++
+    driveList(fn, bodyStart, DONE, {})
+    for (const n of drops) { n.length = 1; n[0] = 'nop' }
+  })
+  return ast
+}
+
 const mergeLocals = (ast) => {
   walk(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
@@ -6930,6 +7146,7 @@ const PASSES = [
   ['ifset',         ifset,          false, 'one-armed conditional update \u2192 branchless select \u2014 unconditional-update trade (speed profile)'],
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
   ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
+  ['deadset',       deadset,        true,  'drop const local.set overwritten on every path before any read (ONCE pre-rounds: coalesced slots would alias liveness)'],
   // default OFF: on a PREDICTABLE index stream the br_table hits (~1 cycle) and
   // the tree still pays every arm — a regression; on unpredictable streams the
   // tree wins the mispredict back. A static compiler can't know the stream —
@@ -7179,6 +7396,13 @@ export default function optimize(ast, opts = true) {
   // the guard below can compare entry vs exit without penalizing required folds.
   if (opts.fold) walkPost(ast, nanFoldNode)
 
+  // deadset runs ONCE before the rounds: its per-NAME liveness is sound only
+  // while locals are un-coalesced — after a round's coalesce shares slots, a
+  // "dead" const store to one name could clobber the slot's OTHER user (a
+  // real "x"+1 → "x0" miscompile during development). Its target shape (an
+  // inliner's zero-inits) is input-borne, so pre-rounds loses nothing.
+  if (opts.deadset) deadset(ast)
+
   // licm runs ONCE after the rounds + inline: its invariants only exist after inlining, and a
   // later propagate round would forward a single-use hoist back into the loop, undoing it.
   // devirt must run BEFORE licm: its collector pattern-matches the in-loop closure-const
@@ -7240,7 +7464,7 @@ export default function optimize(ast, opts = true) {
       }
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' ||
+        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' ||
             (skipInline && key === 'inlineOnce')) continue
         if (SIMPLIFY_KEYS.has(key)) {
           if (!fused) {

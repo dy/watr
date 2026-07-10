@@ -3534,3 +3534,77 @@ test('cse: a re-tee between two sites of one statement kills the group (intra-st
   assert.equal(f(2), 0, 'integer input: 2 + -2, no bumps')
   assert.equal(f(-3.5), 1, 'sign-flipped pair: -3 + 4')
 })
+
+test('deadset: const store overwritten in every dispatch arm before any read drops', () => {
+  // the inliner zero-init shape: temps zeroed at loop-body top, every READ
+  // sits inside the one arm that overwrites them first
+  const src = `(module (func (export "f") (param $n i32) (result i32)
+    (local $t i32) (local $s i32) (local $i i32)
+    (block $B (loop $L
+      (br_if $B (i32.ge_s (local.get $i) (local.get $n)))
+      (local.set $t (i32.const 0))
+      (if (i32.and (local.get $i) (i32.const 1))
+        (then
+          (local.set $t (i32.mul (local.get $i) (i32.const 3)))
+          (local.set $s (i32.add (local.get $s) (local.get $t))))
+        (else
+          (local.set $t (i32.add (local.get $i) (i32.const 5)))
+          (local.set $s (i32.add (local.get $s) (local.get $t)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $L)))
+    (local.get $s)))`
+  const out = print(optimize(parse(src), 'deadset')).replace(/\s+/g, ' ')
+  assert(!out.includes('(local.set $t (i32.const 0))'), 'dead zero-init dropped')
+  // behavior: sum over 0..5 of (odd ? 3i : i+5)
+  const ref = (n) => { let s = 0; for (let i = 0; i < n; i++) s += (i & 1) ? i * 3 : i + 5; return s }
+  const run = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'deadset')))).exports
+  assert.equal(run.f(6), ref(6), 'values exact')
+})
+
+test('deadset: a read-first arm keeps the store (the zero IS the else-value)', () => {
+  const src = `(module (func (export "g") (param $n i32) (result i32)
+    (local $t i32)
+    (local.set $t (i32.const 0))
+    (if (i32.gt_s (local.get $n) (i32.const 2))
+      (then (local.set $t (i32.const 9))))
+    (local.get $t)))`
+  const out = print(optimize(parse(src), 'deadset')).replace(/\s+/g, ' ')
+  assert(out.includes('(local.set $t (i32.const 0))'), 'live zero kept — one arm never writes')
+  const run = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'deadset')))).exports
+  assert.equal(run.g(1), 0)
+  assert.equal(run.g(3), 9)
+})
+
+test('deadset: loop back-edge counts the body-top re-store as the killer', () => {
+  // t zeroed at body top, read AFTER the loop → the back-edge path is killed
+  // by the re-execution of the store itself, but the EXIT path reads t → keep
+  const src = `(module (func (export "h") (param $n i32) (result i32)
+    (local $t i32) (local $i i32)
+    (block $B (loop $L
+      (br_if $B (i32.ge_s (local.get $i) (local.get $n)))
+      (local.set $t (i32.const 0))
+      (local.set $t (local.get $i))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $L)))
+    (local.get $t)))`
+  const out = print(optimize(parse(src), 'deadset')).replace(/\s+/g, ' ')
+  // the zero-init IS dead: overwritten by the very next statement on every path
+  assert(!out.includes('(local.set $t (i32.const 0))'), 'zero killed by immediate overwrite')
+  const run = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'deadset')))).exports
+  assert.equal(run.h(4), 3, 'last iteration value survives')
+})
+
+test('deadset: store read through a br_if exit path stays', () => {
+  const src = `(module (func (export "k") (param $n i32) (result i32)
+    (local $t i32) (local $i i32)
+    (local.set $t (i32.const 7))
+    (block $B
+      (br_if $B (i32.eqz (local.get $n)))
+      (local.set $t (i32.const 1)))
+    (local.get $t)))`
+  const out = print(optimize(parse(src), 'deadset')).replace(/\s+/g, ' ')
+  assert(out.includes('(local.set $t (i32.const 7))'), 'exit path reads the 7')
+  const run = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'deadset')))).exports
+  assert.equal(run.k(0), 7)
+  assert.equal(run.k(2), 1)
+})
