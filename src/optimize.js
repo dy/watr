@@ -2321,13 +2321,21 @@ const substGets = (node, known) => {
   let inner = known
   if (isBranchScope(op)) {
     let cloned = null
-    walk(node, n => {
-      if (!Array.isArray(n)) return
+    // Direct recursion instead of walk(): fires on EVERY branch-scope node entered
+    // (if/loop/block/then/else) — profiled as substGets's single hottest traversal,
+    // dominant on deeply-nested control flow (each nesting level re-scans its own
+    // subtree). Array-only: a local.set/tee is never a flat-form leaf when it IS
+    // `n` (leaf/flat refs are bare op-mnemonic tokens, not `n[0]`), so walk's
+    // leaf-visit branch never matched here — skip it outright instead of paying
+    // the generic dispatch to discover that every time.
+    const rec = (n) => {
       if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string' && known.has(n[1])) {
         if (!cloned) cloned = new Map(known)
         cloned.delete(n[1])
       }
-    })
+      for (let i = 1; i < n.length; i++) if (Array.isArray(n[i])) rec(n[i])
+    }
+    rec(node)
     if (cloned) inner = cloned
   }
   for (let i = 1; i < node.length; i++) {
@@ -2978,6 +2986,15 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
         typeof tgt === 'string' ? touched.add(tgt) : touched.add('*') // numeric ref: give up
       }
     }
+    // Direct recursion instead of walk(n, mark): called once per top-level array
+    // statement, accumulating `touched` across the whole scope — profiled as this
+    // pass's hottest walk site (every statement, every scope, every propagate
+    // round). `mark` is unchanged and still serves the flat-token call below;
+    // this only replaces the generic per-node dispatch for descent into `n`.
+    const rec = (n) => {
+      mark(n, null, -1)
+      for (let i = 1; i < n.length; i++) { const c = n[i]; if (Array.isArray(c)) rec(c); else mark(c, n, i) }
+    }
     for (let i = 1; i < funcNode.length && !touched.has('*'); i++) {
       const n = funcNode[i]
       if (!Array.isArray(n)) {
@@ -2995,7 +3012,7 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
         funcNode.splice(i, 1); i--; changed = true
         continue
       }
-      walk(n, mark)
+      rec(n)
     }
   }
 
@@ -3028,16 +3045,26 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
       if (!Array.isArray(stmt)) { info.push(null); continue }
       const touches = new Map()
       let branchy = false, flat = false, tees = null
-      walk(stmt, (c, p2, i2) => {
-        if (!Array.isArray(c)) { if (i2 !== 0 && typeof c === 'string' && OPCODE[c] !== undefined) flat = true; return }
-        const o = c[0]
-        if ((o === 'local.get' || o === 'local.set' || o === 'local.tee') && typeof c[1] === 'string') {
-          touches.set(c[1], (touches.get(c[1]) || 0) + 1)
-          if (o === 'local.tee' && c.length === 3 && p2) (tees ??= []).push([c, p2, i2])
+      // Direct recursion instead of walk(): this per-statement summary already
+      // turned an O(candidates·tail) rescan into O(n) (see comment above), but
+      // still paid the generic walker's per-node callback dispatch on every node
+      // of every statement, every propagate round — profiled as this pass's
+      // largest single walk site.
+      const rec = (n, parent, idx) => {
+        const o = n[0]
+        if ((o === 'local.get' || o === 'local.set' || o === 'local.tee') && typeof n[1] === 'string') {
+          touches.set(n[1], (touches.get(n[1]) || 0) + 1)
+          if (o === 'local.tee' && n.length === 3 && parent) (tees ??= []).push([n, parent, idx])
         }
         else if (o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' ||
                  o === 'throw' || o === 'return_call' || o === 'return_call_indirect' || o === 'try_table') branchy = true
-      })
+        for (let i = 1; i < n.length; i++) {
+          const c = n[i]
+          if (Array.isArray(c)) rec(c, n, i)
+          else if (typeof c === 'string' && OPCODE[c] !== undefined) flat = true
+        }
+      }
+      rec(stmt, null, -1)
       if (tees) anyTee = true
       info.push({ touches, branchy, flat, tees,
         setTarget: stmt[0] === 'local.set' && stmt.length === 3 && typeof stmt[1] === 'string' ? stmt[1] : null })
