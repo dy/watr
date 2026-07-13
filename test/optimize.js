@@ -2099,6 +2099,26 @@ test('brif: keeps multi-instruction arms', () => {
   assert(src.includes('if'), 'should keep if when arm has extra instructions')
 })
 
+test('brif: merges adjacent same-label br_if pair when the second is pure and trap-free', () => {
+  const ast = parse('(module (func (param $a i32) (param $b i32) (block $done (br_if $done (local.get $a)) (br_if $done (local.get $b)) (i32.const 1) drop)))')
+  const opt = optimize(ast, 'brif')
+  const src = print(opt)
+  assert(src.includes('i32.or'), 'should merge the pair into one br_if (i32.or a b)')
+  assert((src.match(/br_if/g) || []).length === 1, 'one br_if after the merge')
+})
+
+test('brif: NEVER merges a br_if pair when the second condition loads — the first br_if is its bounds guard', () => {
+  // A dict/array scan: `br_if $exit (i >= cap)` guards `br_if $skip (load slot(i))`.
+  // Merging evaluates the load unconditionally — past the guard — and traps OOB
+  // (the jz for-in-over-dictionary miscompile). Loads are isPure (value-pure
+  // between stores) and hasTrap misses them; readsMemory must gate the merge.
+  const ast = parse('(module (memory 1) (func (param $i i32) (param $cap i32) (block $done (br_if $done (i32.ge_u (local.get $i) (local.get $cap))) (br_if $done (i32.load (local.get $i))) (i32.const 1) drop)))')
+  const opt = optimize(ast, 'brif')
+  const src = print(opt)
+  assert(!src.includes('i32.or'), 'must NOT merge across the bounds guard')
+  assert((src.match(/br_if/g) || []).length === 2, 'both br_ifs survive')
+})
+
 // ==================== MERGE IDENTICAL IF ARMS ====================
 
 test('foldarms: identical trailing instructions hoisted', () => {

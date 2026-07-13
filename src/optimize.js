@@ -1993,7 +1993,9 @@ const IMPURE_OPS = new Set([
   'data.drop', 'elem.drop',
 ])
 
-/** Substrings that flag an op as side-effecting (loads can trap, stores/atomics/memory ops mutate). */
+/** Substrings that flag an op as side-effecting (stores/atomics/memory ops mutate). Loads stay
+ * PURE here — value-pure between stores — so any site that SPECULATES evaluation (runs an expr
+ * on paths that didn't run it before) must pair isPure/hasTrap with readsMemory: loads trap OOB. */
 const IMPURE_SUBSTRINGS = ['.store', 'memory.', '.atomic.']
 
 /**
@@ -6227,13 +6229,18 @@ const brif = (ast) => {
   return walkPost(ast, (node) => {
     // (br_if $L A) (br_if $L B) → (br_if $L (i32.or A B)) — one branch instruction
     // instead of two. B now evaluates even when A already branches, so it must be
-    // pure and trap-free; evaluation order A-then-B is preserved.
+    // pure and trap-free INCLUDING loads: isPure admits loads (value-pure between
+    // stores) and hasTrap only covers div/rem/trunc, but a load traps OOB and the
+    // FIRST br_if is often its bounds guard (a dict-scan `br_if exit (i ≥ cap)`
+    // guarding `br_if skip (load slot(i))` merged into an unconditional probe —
+    // the jz for-in miscompile). Speculation sites pair hasTrap with readsMemory
+    // (see cse/licm above); evaluation order A-then-B is preserved.
     if (Array.isArray(node) && (isScopeNode(node) || node[0] === 'if')) {
       for (let i = 1; i < node.length - 1; i++) {
         const a = node[i], b = node[i + 1]
         if (Array.isArray(a) && a[0] === 'br_if' && a.length === 3 && Array.isArray(a[2]) &&
             Array.isArray(b) && b[0] === 'br_if' && b.length === 3 && b[1] === a[1] &&
-            Array.isArray(b[2]) && isPure(b[2]) && !hasTrap(b[2])) {
+            Array.isArray(b[2]) && isPure(b[2]) && !hasTrap(b[2]) && !readsMemory(b[2])) {
           node.splice(i, 2, ['br_if', a[1], ['i32.or', a[2], b[2]]])
           i--
         }
