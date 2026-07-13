@@ -121,6 +121,24 @@ export const walk = (node, fn, parent, idx) => {
 }
 
 /**
+ * walk, ARRAYS ONLY: fn sees every array node (pre-order); string/number leaves
+ * are skipped entirely. Most optimizer callbacks guard `!Array.isArray(node)`
+ * out as their first act — but in the self-host kernel every leaf visit still
+ * pays a full boxed closure call, and leaves are half of all nodes (profiled
+ * ~10% of self-host compile inside the walkers). Use plain `walk` when the
+ * callback scans FLAT-form tokens (bare string opcodes are leaves — the
+ * jump/trap scanners need them); use walkN when the callback only ever acts
+ * on arrays.
+ */
+export const walkN = (node, fn, parent, idx) => {
+  fn(node, parent, idx)
+  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) {
+    const c = node[i]
+    if (Array.isArray(c)) walkN(c, fn, node, i)
+  }
+}
+
+/**
  * Walk AST depth-first (post-order): children are visited before their parent.
  *
  * A node is replaced either way a callback chooses to express it:
@@ -144,3 +162,19 @@ export const walkPost = (node, fn, parent, idx) => {
   if (result !== undefined && parent) parent[idx] = result
   return result !== undefined ? result : node
 }
+
+/**
+ * walkPost, ARRAYS ONLY: children before parents, string/number leaves skipped
+ * (leaf REPLACEMENT is impossible here — use walkPost when a callback rewrites
+ * flat-form tokens). Same replace contract as walkPost for array nodes.
+ */
+export const walkPostN = (node, fn, parent, idx) => {
+  if (Array.isArray(node)) for (let i = 0; i < node.length; i++) {
+    const c = node[i]
+    if (Array.isArray(c)) walkPostN(c, fn, node, i)
+  }
+  const result = fn(node, parent, idx)
+  if (result !== undefined && parent) parent[idx] = result
+  return result !== undefined ? result : node
+}
+

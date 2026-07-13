@@ -10,7 +10,7 @@
 import { numdata, size } from './compile.js'
 import { IMM, OPCODE, resultType } from './const.js'
 import parse from './parse.js'
-import { clone, walk, walkPost } from './util.js'
+import { clone, walk, walkN, walkPost, walkPostN } from './util.js'
 
 // Fixpoint round caps — empirical convergence bounds, not correctness limits.
 // Each pass only makes monotonic progress, so hitting a cap merely leaves a few
@@ -206,7 +206,7 @@ const treeshake = (ast) => {
         if (part[0] === 'table') target = deref(tables, 'table', part[1])
         else {
           if (part[0] === 'offset' || (part[0] !== 'item' && typeof part[0] === 'string' && !part[0].startsWith('ref'))) active = true
-          walk(part, n => {
+          walkN(part, n => {
             if (Array.isArray(n) && n[0] === 'ref.func') markFunc(n[1])
             else if (Array.isArray(n) && n[0] === 'global.get') markGlobal(n[1])
             else if (typeof n === 'string' && n[0] === '$') markFunc(n)
@@ -223,7 +223,7 @@ const treeshake = (ast) => {
     if (Array.isArray(first) && first[0] === 'memory') markMemory(first[1])
     else if (typeof first === 'string' && first[0] === '$') markMemory(first)
     else if (Array.isArray(first)) markMemory(0)
-    walk(d, n => { if (Array.isArray(n) && n[0] === 'global.get') markGlobal(n[1]) })
+    walkN(d, n => { if (Array.isArray(n) && n[0] === 'global.get') markGlobal(n[1]) })
   }
   for (const m of [funcs, globals, tables, memories]) for (const e of m.values()) if (e.used) enqueue(e)
 
@@ -340,7 +340,7 @@ const treeshake = (ast) => {
   }
   // Neuter writes to dropped write-only globals: (global.set $dead V) → (drop V)
   // (vacuum erases the drop when V is pure).
-  if (deadGlobals.size) walkPost(result, n => {
+  if (deadGlobals.size) walkPostN(result, n => {
     if (Array.isArray(n) && n[0] === 'global.set' && deadGlobals.has(n[1])) return ['drop', n[2]]
   })
 
@@ -365,7 +365,7 @@ const treeshake = (ast) => {
       const n = remap[space].get(+ref)
       return n === undefined ? ref : typeof ref === 'number' ? n : String(n)
     }
-    walkPost(result, n => {
+    walkPostN(result, n => {
       if (!Array.isArray(n)) return
       const op = n[0]
       if (op === 'start' || op === 'ref.func' || op === 'call' || op === 'return_call') n[1] = renum('func', n[1])
@@ -818,7 +818,7 @@ const foldNode = (node) => {
     }
 }
 /** Constant folding as a standalone pass. */
-const fold = (ast) => walkPost(ast, foldNode)
+const fold = (ast) => walkPostN(ast, foldNode)
 
 // ==================== IDENTITY REMOVAL ====================
 
@@ -994,7 +994,7 @@ const identityNode = (node) => {
     return result
 }
 /** Identity elimination as a standalone pass. */
-const identity = (ast) => walkPost(ast, identityNode)
+const identity = (ast) => walkPostN(ast, identityNode)
 
 // ==================== STRENGTH REDUCTION ====================
 
@@ -1059,7 +1059,7 @@ const strengthNode = (node) => {
     }
 }
 /** Strength reduction as a standalone pass. */
-const strength = (ast) => walkPost(ast, strengthNode)
+const strength = (ast) => walkPostN(ast, strengthNode)
 
 // ==================== BRANCH SIMPLIFICATION ====================
 
@@ -1073,13 +1073,13 @@ const branch = (ast) => {
   // → (local.set $x (if (result T) C (then A) (else B))) — the set happens on both
   // paths anyway, and the value-form if is one select-promotion away from collapsing.
   // Needs the local's declared type for the result annotation, hence the per-func walk.
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const ltype = new Map()
     for (const c of fn)
       if (Array.isArray(c) && (c[0] === 'local' || c[0] === 'param') && typeof c[1] === 'string' && typeof c[2] === 'string') ltype.set(c[1], c[2])
     if (!ltype.size) return
-    walkPost(fn, (node) => {
+    walkPostN(fn, (node) => {
       if (!Array.isArray(node) || node[0] !== 'if' || node.length !== 4) return
       const { cond, thenBranch, elseBranch } = parseIf(node)
       if (!Array.isArray(cond) || !(thenBranch?.length >= 2) || !(elseBranch?.length >= 2)) return
@@ -1108,7 +1108,7 @@ const branch = (ast) => {
   // if-expression (explicit else = keep $x), dropping the local.set that fed the
   // trailing get. A `(i32.eqz Y)` condition additionally swaps arms to drop the eqz
   // (i32 only — an i64 value is not a valid if condition).
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const bodyStart = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
     const results = fn.reduce((k, c) => Array.isArray(c) && c[0] === 'result' ? k + c.length - 1 : k, 0)
@@ -1150,7 +1150,7 @@ const branch = (ast) => {
     }
     fn.splice(fn.length - 2, 2, ['if', ['result', t], ifCond, thenArm, elseArm])
   })
-  return walkPost(ast, (node) => {
+  return walkPostN(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
 
@@ -1182,7 +1182,7 @@ const branch = (ast) => {
         if (!isPure(cond)) {
           const aw = scanVal(a), bw = scanVal(b)
           let clash = false
-          walk(cond, (n, p2, i2) => {
+          walkN(cond, (n, p2, i2) => {
             if (!Array.isArray(n)) { if (i2 !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) clash = true; return }
             const o = n[0]
             if (typeof o !== 'string') return
@@ -1256,7 +1256,7 @@ const branch = (ast) => {
  * predictability trade that belongs to the speed profile (mirrors jz's
  * boolConvertToSelect tiering); it is also a small size win (~2 B/site).
  */
-const ifset = (ast) => walkPost(ast, (node) => {
+const ifset = (ast) => walkPostN(ast, (node) => {
   if (!Array.isArray(node) || node[0] !== 'if') return
   const { cond, thenBranch, elseBranch } = parseIf(node)
   if (!Array.isArray(cond) || elseBranch || thenBranch?.length !== 2) return
@@ -1270,7 +1270,7 @@ const ifset = (ast) => walkPost(ast, (node) => {
   if (!isPure(cond)) {
     const vw = scanVal(v)
     let clash = false
-    walk(cond, (n, p2, i2) => {
+    walkN(cond, (n, p2, i2) => {
       if (!Array.isArray(n)) { if (i2 !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) clash = true; return }
       const o = n[0]
       if (typeof o !== 'string') return
@@ -1298,7 +1298,7 @@ const ifset = (ast) => walkPost(ast, (node) => {
  * zero is already the wasm default (~4 B/site).
  */
 const zeroinit = (ast) => {
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const params = new Set()
     for (const c of fn) if (Array.isArray(c) && c[0] === 'param' && typeof c[1] === 'string') params.add(c[1])
@@ -1352,7 +1352,7 @@ const zeroinit = (ast) => {
  *  the canonical shape). Signed only; functions with numeric (index-form) local
  *  refs are skipped — narrowing renumbers nothing but tracks by name. */
 const narrowLocals = (ast) => {
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const decls = new Map()
     for (const c of fn)
@@ -1421,7 +1421,7 @@ const narrowLocals = (ast) => {
  *  other reader: a per-function counted rewrite. (The tee-less leaf variant of the
  *  same idiom collapses via the plain trunc∘convert / ne-vs-impossible identities.) */
 const intguard = (ast) => {
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     let counts = null   // lazy — most functions contain no matching select
     const rec = (n) => {
@@ -1473,7 +1473,7 @@ const intguard = (ast) => {
 const SELTREE_OK = /^(i32|i64|f64|f32)\.(const|add|sub|mul|min|max|abs|neg|sqrt|ceil|floor|nearest|copysign|and|or|xor|shl|shr_[su]|rotl|rotr|eqz|eq|ne|[lg][te](_[su])?|clz|ctz|popcnt|extend(8|16|32)_s|extend_i32_[su]|wrap_i64|convert_i32_[su]|convert_i64_[su]|trunc_sat_f(32|64)_[su]|reinterpret_(i32|i64|f32|f64)|promote_f32|demote_f64)$/
 const seltree = (ast) => {
   let uid = 0
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     let fnCounts = null
     const speculable = (n, teed) => {
@@ -1832,7 +1832,7 @@ const TERMINATORS = new Set(['unreachable', 'return', 'br', 'br_table'])
  */
 const deadcode = (ast) => {
   // Process each function body
-  walk(ast, (node) => {
+  walkN(ast, (node) => {
     if (!Array.isArray(node)) return
     const kind = node[0]
 
@@ -1894,7 +1894,7 @@ const eliminateDeadInBlock = (block) => {
  * @returns {Array}
  */
 const localReuse = (ast) => {
-  walk(ast, (node) => {
+  walkN(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'func') return
 
     // Collect local declarations and their types
@@ -1925,7 +1925,7 @@ const localReuse = (ast) => {
 
     // Find which locals are actually used
     let numericRef = false
-    walk(node, (n) => {
+    walkN(node, (n) => {
       if (!Array.isArray(n)) return
       const op = n[0]
       if (op === 'local.get' || op === 'local.set' || op === 'local.tee') {
@@ -2047,7 +2047,7 @@ const computeCallEffects = (ast) => {
                o === 'memory.init' || o === 'memory.grow' || o.includes('table.') || o.includes('.atomic')) e.wMem = e.rMem = true
       else if (o.includes('.load') || o === 'memory.size') e.rMem = true
     }
-    walk(n, (c, parent, idx) => {
+    walkN(n, (c, parent, idx) => {
       if (!Array.isArray(c)) {
         // bare flat tokens carry the same effects as their folded forms
         if (idx === 0 || typeof c !== 'string' || OPCODE[c] === undefined) return
@@ -2226,7 +2226,7 @@ const purgeGlobalRefs = (known, name) => {
 const scanVal = (val) => {
   const refs = new Set(), grefs = new Set()
   let mem = false, ext = false
-  walk(val, n => {
+  walkN(val, n => {
     if (!Array.isArray(n)) return
     const o = n[0]
     if (o === 'local.get' || o === 'local.tee') { if (typeof n[1] === 'string') refs.add(n[1]) }
@@ -2545,10 +2545,10 @@ const forwardPropagate = (funcNode, params, useCounts) => {
  */
 const deadThroughLoop = (funcNode, name, loop) => {
   let total = 0, inside = 0
-  walk(funcNode, n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) total++ })
-  walk(loop, n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) inside++ })
+  walkN(funcNode, n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) total++ })
+  walkN(loop, n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) inside++ })
   if (total !== inside) return false // (b) — read outside the loop may observe it
-  const readsAny = (n) => { let r = false; walk(n, c => { if (Array.isArray(c) && c[0] === 'local.get' && c[1] === name) r = true }); return r }
+  const readsAny = (n) => { let r = false; walkN(n, c => { if (Array.isArray(c) && c[0] === 'local.get' && c[1] === name) r = true }); return r }
   const hasBr = (n) => { let r = false; walk(n, c => { const o = Array.isArray(c) ? c[0] : c; if (o === 'br' || o === 'br_if' || o === 'br_table') r = true }); return r }
   const scanList = (list, from, def) => {
     for (let i = from; i < list.length; i++) {
@@ -2627,7 +2627,7 @@ const deadThroughLoop = (funcNode, name, loop) => {
  *  — a `local.tee` found inside one does not dominate its following siblings. */
 const hasConditional = (n) => {
   let found = false
-  walk(n, x => { if (Array.isArray(x) && (x[0] === 'if' || x[0] === 'loop' || x[0] === 'block' ||
+  walkN(n, x => { if (Array.isArray(x) && (x[0] === 'if' || x[0] === 'loop' || x[0] === 'block' ||
     x[0] === 'then' || x[0] === 'else' || x[0] === 'try_table')) found = true })
   return found
 }
@@ -2655,13 +2655,13 @@ const sinkIntoBranch = (scope, params, counts) => {
     const { cond, thenBranch, elseBranch } = parseIf(nxt)
     if (!Array.isArray(cond) || !isPure(cond)) continue
     let condTouches = false
-    walk(cond, n => { if (Array.isArray(n) && typeof n[1] === 'string' && n[1] === name &&
+    walkN(cond, n => { if (Array.isArray(n) && typeof n[1] === 'string' && n[1] === name &&
       (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')) condTouches = true })
     if (condTouches) continue
     const touchCount = (branch) => {
       if (!branch) return 0
       let c = 0
-      walk(branch, n => { if (Array.isArray(n) && typeof n[1] === 'string' && n[1] === name &&
+      walkN(branch, n => { if (Array.isArray(n) && typeof n[1] === 'string' && n[1] === name &&
         (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')) c++ })
       return c
     }
@@ -2707,7 +2707,7 @@ const mergeCopyThroughTee = (scope, params, counts) => {
       const prev = scope[j]
       if (!Array.isArray(prev) || hasConditional(prev)) break
       let touchesA = false, tee = null
-      walk(prev, n => {
+      walkN(prev, n => {
         if (!Array.isArray(n)) return
         if (n[0] === 'local.tee' && n.length === 3 && n[1] === B) tee = n
         else if (typeof n[1] === 'string' && n[1] === A &&
@@ -2741,8 +2741,8 @@ const commuteForSink = (scope) => {
     if (!Array.isArray(a) || a[0] !== 'local.set' || a.length !== 3 || typeof a[1] !== 'string') continue
     if (!Array.isArray(b) || b[0] !== 'local.set' || b.length !== 3 || typeof b[1] !== 'string' || a[1] === b[1]) continue
     if (!Array.isArray(stmt)) continue
-    const gets = (sub, name) => { let k = 0; walk(sub, c => { if (Array.isArray(c) && c[0] === 'local.get' && c[1] === name) k++ }); return k }
-    walk(stmt, n => {
+    const gets = (sub, name) => { let k = 0; walkN(sub, c => { if (Array.isArray(c) && c[0] === 'local.get' && c[1] === name) k++ }); return k }
+    walkN(stmt, n => {
       if (!Array.isArray(n) || !COMMUTATIVE.has(n[0]) || n.length !== 3) return
       const l = n[1], r = n[2]
       if (!Array.isArray(l) || !Array.isArray(r)) return
@@ -2768,7 +2768,7 @@ const sinkSets = (funcNode, params, useCounts) => {
     if (S) return S
     S = { flat: false, touch: new Set(), wL: new Set(), gS: new Set(), gSAny: false, gG: new Set(),
           calls: false, branchy: false, wMem: false, loadish: false, storeish: false }
-    walk(stmt, (n, p2, i2) => {
+    walkN(stmt, (n, p2, i2) => {
       if (!Array.isArray(n)) { if (i2 !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) S.flat = true; return }
       const o = n[0]
       if (typeof o !== 'string') return
@@ -2805,7 +2805,7 @@ const sinkSets = (funcNode, params, useCounts) => {
     // nothing). Crossed statements must not write the value's inputs, and when the
     // value reads memory they must not write memory or call out.
     const vLocals = new Set(), vGlobals = new Set()
-    walk(val, n => {
+    walkN(val, n => {
       if (!Array.isArray(n)) return
       if ((n[0] === 'local.get' || n[0] === 'local.tee') && typeof n[1] === 'string') vLocals.add(n[1])
       else if (n[0] === 'global.get' && typeof n[1] === 'string') vGlobals.add(n[1])
@@ -2819,7 +2819,7 @@ const sinkSets = (funcNode, params, useCounts) => {
     if (!vPure) {
       const u = { wMem: false, rMem: false, wGlob: new Set(), rGlob: new Set() }
       let opaque = false
-      walk(val, (n, parent, idx) => {
+      walkN(val, (n, parent, idx) => {
         if (!Array.isArray(n)) { if (idx !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) opaque = true; return }
         const o = n[0]
         if (typeof o !== 'string') { opaque = true; return }
@@ -2870,7 +2870,7 @@ const sinkSets = (funcNode, params, useCounts) => {
     // the sunk value now evaluates AFTER the skipped leaves — it must not write them
     if (skipped.size) {
       let writes = false
-      walk(setNode[2], n => { if (Array.isArray(n) && (n[0] === 'local.set' || n[0] === 'local.tee') && skipped.has(n[1])) writes = true })
+      walkN(setNode[2], n => { if (Array.isArray(n) && (n[0] === 'local.set' || n[0] === 'local.tee') && skipped.has(n[1])) writes = true })
       if (writes) continue
     }
     const uses = useCounts.get(name) || { gets: 0, sets: 0, tees: 0 }
@@ -2883,7 +2883,7 @@ const sinkSets = (funcNode, params, useCounts) => {
     // refresh produces) — a substitute would orphan it, a tee stays correct
     if (single) {
       let extra = 0
-      walk(funcNode[hitJ], n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) extra++ })
+      walkN(funcNode[hitJ], n => { if (Array.isArray(n) && n[0] === 'local.get' && n[1] === name) extra++ })
       if (extra > 1) single = false
     }
     cntSub(hit[0][hit[1]])
@@ -2931,10 +2931,10 @@ const firstEvalGet = (stmt, name, skipped, state) => {
       }
       if (isPure(c) && !hasTrap(c)) {
         let containsTarget = false
-        walk(c, x => { if (Array.isArray(x) && x[0] === 'local.get' && x[1] === name) containsTarget = true })
+        walkN(c, x => { if (Array.isArray(x) && x[0] === 'local.get' && x[1] === name) containsTarget = true })
         if (containsTarget) return scan(c) // the target lives here — descend, same rules
         // crossable — collect what it observes
-        walk(c, x => {
+        walkN(c, x => {
           if (!Array.isArray(x)) return
           if (x[0] === 'local.get' && typeof x[1] === 'string') skipped?.add(x[1])
           else if (x[0] === 'global.get' || (typeof x[0] === 'string' && x[0].includes('.load'))) state && (state.reads = true)
@@ -3020,7 +3020,7 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
 
   // Dead tee (statement-level or nested): written but never read back — the value on
   // the stack is all that matters, so unwrap it (the decl dies via the unused sweep).
-  walkPost(funcNode, n => {
+  walkPostN(funcNode, n => {
     if (Array.isArray(n) && n[0] === 'local.tee' && n.length === 3 &&
         typeof n[1] === 'string' && getPostUseCount(n[1]).gets === 0) {
       changed = true
@@ -3179,7 +3179,7 @@ const eliminateAdjacentDeadStores = (funcNode, params) => {
     if (params.has(a[1]) || !isPure(a[2])) continue
     // Dead only if b's value doesn't read $x before overwriting it.
     let reads = false
-    walk(b[2], n => { if (Array.isArray(n) && (n[0] === 'local.get' || n[0] === 'local.tee') && n[1] === a[1]) reads = true })
+    walkN(b[2], n => { if (Array.isArray(n) && (n[0] === 'local.get' || n[0] === 'local.tee') && n[1] === a[1]) reads = true })
     if (reads) continue
     cntSub(a)
     funcNode.splice(i, 1); changed = true; i--
@@ -3289,7 +3289,7 @@ const cse = (ast) => {
     const results = f.filter(c => Array.isArray(c) && c[0] === 'result')
     sigT.set(f[1], results.length === 1 && results[0].length === 2 && typeof results[0][1] === 'string' ? results[0][1] : null)
   }
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const all = []
     // node → {pure, est, key} memo for this function's collection phase — valid
@@ -3334,7 +3334,7 @@ const cse = (ast) => {
         // matching writesMemory's array-form predicate)
         const wLocals = new Set(), wGlobals = new Set()
         let wMem = false, call = false
-        walk(stmt, n => {
+        walkN(stmt, n => {
           if (!Array.isArray(n)) return
           const o = n[0]
           if ((o === 'local.set' || o === 'local.tee') && typeof n[1] === 'string') wLocals.add(n[1])
@@ -3380,7 +3380,7 @@ const cse = (ast) => {
               if (g && stampOf(g) !== g.stamp) g = null
               if (!g) {
                 g = { expr: n, sites: [], est: facts.est, type: candType, reads: new Set(), mem: readsMemory(n), glob: false }
-                walk(n, c => {
+                walkN(n, c => {
                   if (!Array.isArray(c)) return
                   if (c[0] === 'local.get' && typeof c[1] === 'string') g.reads.add(c[1])
                   else if (c[0] === 'global.get') g.glob = true
@@ -3422,7 +3422,7 @@ const cse = (ast) => {
         if (h === 'if') {
           const { cond, thenBranch, elseBranch } = parseIf(stmt)
           const cw = new Set(); let cGlob = false, cMemCall = false
-          walk(cond, n => {
+          walkN(cond, n => {
             if (!Array.isArray(n)) return
             const o = n[0]
             if ((o === 'local.set' || o === 'local.tee') && typeof n[1] === 'string') cw.add(n[1])
@@ -3508,7 +3508,7 @@ const inlineMacro = (ast, { pin = EMPTY_SET } = {}) => {
   // that turns out not to pay, so over-expanding here is recoverable.
   const CAP = 3
   const callCount = new Map()
-  walk(ast, n => { if (Array.isArray(n) && n[0] === 'call' && typeof n[1] === 'string') callCount.set(n[1], (callCount.get(n[1]) || 0) + 1) })
+  walkN(ast, n => { if (Array.isArray(n) && n[0] === 'call' && typeof n[1] === 'string') callCount.set(n[1], (callCount.get(n[1]) || 0) + 1) })
   const macros = new Map()
   for (const n of ast.slice(1)) {
     if (!Array.isArray(n) || n[0] !== 'func' || typeof n[1] !== 'string' || n[1][0] !== '$') continue
@@ -3546,14 +3546,14 @@ const inlineMacro = (ast, { pin = EMPTY_SET } = {}) => {
     macros.set(n[1], { params, expr })
   }
   if (!macros.size) return ast
-  walkPost(ast, n => {
+  walkPostN(ast, n => {
     if (!Array.isArray(n) || n[0] !== 'call' || !macros.has(n[1])) return
     const m = macros.get(n[1])
     if (n.length - 2 !== m.params.length) return
     inflations++
     const idx = new Map(m.params.map((p, i) => [p, i]))
     const out = clone(m.expr)
-    const expanded = walkPost(out, c => {
+    const expanded = walkPostN(out, c => {
       if (Array.isArray(c) && c[0] === 'local.get' && idx.has(c[1])) return n[2 + idx.get(c[1])]
     })
     return expanded
@@ -3616,7 +3616,7 @@ const specializeParams = (ast) => {
       // position the read occupied is equivalent (invariance guaranteed by
       // writes === 0, including across loop back-edges).
       let reads = 0, writes = 0, readSite = null
-      walk(fn, n => {
+      walkN(fn, n => {
         if (!Array.isArray(n) || n[1] !== pd[1]) return
         if (n[0] === 'local.get') { reads++; readSite = n }
         else if (n[0] === 'local.set' || n[0] === 'local.tee') writes++
@@ -3853,7 +3853,7 @@ const outline = (ast) => {
       const ltype = new Map()
       for (const c of fn) if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'local') &&
         typeof c[1] === 'string' && typeof c[2] === 'string') ltype.set(c[1], c[2])
-      walkPost(fn, (n, parent, idx) => {
+      walkPostN(fn, (n, parent, idx) => {
         if (!Array.isArray(n) || typeof n[0] !== 'string') return
         const op = n[0]
         let pure = !IMPURE_OPS.has(op) && !IMPURE_SUBSTRINGS.some(sub => op.includes(sub)) &&
@@ -3886,7 +3886,7 @@ const outline = (ast) => {
       for (const cand of cands) {
         const params = []
         let ok = true
-        walk(cand.node, (c) => {
+        walkN(cand.node, (c) => {
           if (!ok || !Array.isArray(c)) return
           if (c[0] === 'local.get') {
             if (typeof c[1] !== 'string') { ok = false; return }
@@ -3926,7 +3926,7 @@ const outline = (ast) => {
       if (live.length < 2 || net < 4) continue
       // canonicalize the FIRST live site once: positional params, shared body
       const params = []
-      const canon = walkPost(clone(live[0].node), (c) => {
+      const canon = walkPostN(clone(live[0].node), (c) => {
         if (!Array.isArray(c)) return
         if (c[0] === 'local.get') {
           let i = params.indexOf(c[1])
@@ -3962,7 +3962,7 @@ const hash32 = (s) => {
 
 let tmUid = 0
 const tailmerge = (ast) => {
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const isTerm = (n) => n === 'unreachable' || n === 'return' ||
       (Array.isArray(n) && (n[0] === 'return' || n[0] === 'unreachable' || n[0] === 'br'))
@@ -3982,7 +3982,7 @@ const tailmerge = (ast) => {
     const groups = new Map()
     // sites may sit at any depth: `return` exits the function from anywhere, and the
     // replacement br_if targets the wrapper block by NAME
-    walk(fn, (st, parent, idx) => {
+    walkN(fn, (st, parent, idx) => {
       if (!Array.isArray(st) || st[0] !== 'if' || st.length !== 3 || !parent) return
       const { cond, thenBranch, elseBranch } = parseIf(st)
       if (!Array.isArray(cond) || !thenBranch || elseBranch) return
@@ -4056,7 +4056,7 @@ const deadset = (ast) => {
   const DONE = { done: true }
   const SETK = { set: true }
   const isConstNode = (c) => Array.isArray(c) && typeof c[0] === 'string' && c[0].endsWith('.const')
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     let steps = 0
     const combine = (a, b) => (a === 'get' || b === 'get') ? 'get' : 'set'
@@ -4250,13 +4250,13 @@ const deadset = (ast) => {
 }
 
 const mergeLocals = (ast) => {
-  walk(ast, (fn) => {
+  walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     const params = new Set()
     for (const c of fn) if (Array.isArray(c) && c[0] === 'param' && typeof c[1] === 'string') params.add(c[1])
     const counts = countLocalUses(fn)
     const renames = new Map()
-    walkPost(fn, (n) => {
+    walkPostN(fn, (n) => {
       if (!Array.isArray(n) || n[0] !== 'local.set' || n.length !== 3 ||
           !Array.isArray(n[2]) || n[2][0] !== 'local.tee' || n[2].length !== 3) return
       const A = n[1], B = n[2][1]
@@ -4267,7 +4267,7 @@ const mergeLocals = (ast) => {
       renames.set(A, B)
       return ['local.set', B, n[2][2]]
     })
-    if (renames.size) walkPost(fn, (n) => {
+    if (renames.size) walkPostN(fn, (n) => {
       if (Array.isArray(n) && n[0] === 'local.get' && renames.has(n[1])) return ['local.get', renames.get(n[1])]
     })
   })
@@ -4287,7 +4287,7 @@ const isScopeNode = (n) => Array.isArray(n) &&
 const isBranchScope = (op) => op === 'block' || op === 'loop' || op === 'if'
 
 const propagate = (ast) => {
-  walk(ast, (funcNode) => {
+  walkN(ast, (funcNode) => {
     if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
 
     const params = new Set()
@@ -4319,7 +4319,7 @@ const propagate = (ast) => {
       // (wasted work always; corrupted counts once they were maintained) and
       // never saw scopes newly created by substitution clones.
       const scopes = []
-      walkPost(funcNode, n => { if (isScopeNode(n)) scopes.push(n) })
+      walkPostN(funcNode, n => { if (isScopeNode(n)) scopes.push(n) })
       const useCounts = CNT
       let progressed = false
       for (const scope of scopes) if (forwardPropagate(scope, params, useCounts)) progressed = true
@@ -4342,7 +4342,7 @@ const propagate = (ast) => {
             if (!(Array.isArray(nx) && nx[0] === 'local.set' && nx.length === 3 && nx[1] !== st[1] &&
                   Array.isArray(nx[2]) && isPure(nx[2]))) { blocked = true; break }
             let touches = false
-            walk(nx[2], c => { if (Array.isArray(c) && (c[0] === 'local.get' || c[0] === 'local.tee') && c[1] === st[1]) touches = true })
+            walkN(nx[2], c => { if (Array.isArray(c) && (c[0] === 'local.get' || c[0] === 'local.tee') && c[1] === st[1]) touches = true })
             if (touches) { blocked = true; break }
             j++
           }
@@ -4675,7 +4675,7 @@ const inline = (ast, { simdOnly = false, pin = EMPTY_SET } = {}) => {
       if (fn === callee) continue
       const addDecls = []
       for (let i = inlBodyStart(fn); i < fn.length; i++) {
-        fn[i] = walkPost(fn[i], (n) => {
+        fn[i] = walkPostN(fn[i], (n) => {
           if (!Array.isArray(n) || n[0] !== 'call' || n[1] !== calleeName) return
           const args = n.slice(2)
           if (args.length !== params.length) return  // arity mismatch — leave the call
@@ -4807,7 +4807,7 @@ const devirt = (ast) => {
   // named funcs. Bail on dynamic elem offsets or table mutation anywhere.
   const slots = new Map(), typeDefs = new Map(), funcsByName = new Map(), allFuncs = []
   let tableMutated = false
-  walk(ast, n => {
+  walkN(ast, n => {
     if (Array.isArray(n) && typeof n[0] === 'string' &&
         (n[0] === 'table.set' || n[0] === 'table.grow' || n[0] === 'table.init' ||
          n[0] === 'table.copy' || n[0] === 'table.fill')) tableMutated = true
@@ -4864,7 +4864,7 @@ const devirt = (ast) => {
   // `__is_nullish`-style guard CONDITIONS are skipped — only VALUE positions
   // contribute. A write that contains anything else poisons the global.
   const globalWrites = new Map()
-  walk(ast, n => {
+  walkN(ast, n => {
     if (!Array.isArray(n) || n[0] !== 'global.set' || typeof n[1] !== 'string') return
     if (!globalWrites.has(n[1])) globalWrites.set(n[1], [])
     globalWrites.get(n[1]).push(n[2])
@@ -4972,13 +4972,13 @@ const devirt = (ast) => {
     // Single-assignment only; the call-site rewrite guards on the INDEX value
     // itself, so soundness never depends on the source local staying stable.
     const setsCount = new Map(), hoistSrc = new Map()
-    walk(fn, n => {
+    walkN(fn, n => {
       if (!Array.isArray(n) || (n[0] !== 'local.set' && n[0] !== 'local.tee') || typeof n[1] !== 'string') return
       setsCount.set(n[1], (setsCount.get(n[1]) || 0) + 1)
       const src = matchSlotOfLocal(n[2])
       if (src) hoistSrc.set(n[1], src)
     })
-    walk(fn, n => {
+    walkN(fn, n => {
       if (!Array.isArray(n) || (n[0] !== 'local.set' && n[0] !== 'local.tee') || typeof n[1] !== 'string') return
       if (cands.get(n[1]) === null) return
       const out = []
@@ -4996,7 +4996,7 @@ const devirt = (ast) => {
       } else cands.set(n[1], null)
     })
 
-    walkPost(fn, (n, parent) => {
+    walkPostN(fn, (n, parent) => {
       if (!Array.isArray(n) || n[0] !== 'call_indirect') return
       // A call_indirect sitting directly under an `else` is (or looks exactly
       // like) the fallback arm of an existing guard — never re-wrap it, so the
@@ -5211,7 +5211,7 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
       if (fn === callee || done) continue
       const start = bodyStart(fn)
       for (let i = start; i < fn.length; i++) {
-        const replaced = walkPost(fn[i], (n) => {
+        const replaced = walkPostN(fn[i], (n) => {
           if (done || !Array.isArray(n) || n[0] !== 'call' || n[1] !== calleeName) return
           const args = n.slice(2)
           if (args.length !== params.length) return  // arity mismatch — leave it
@@ -5317,7 +5317,7 @@ const targetsLabel = (body, label) => {
  * @returns {Array}
  */
 const mergeBlocks = (ast) => {
-  walkPost(ast, (node) => {
+  walkPostN(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'block') return
     let bi = 1, label = null
     if (typeof node[1] === 'string' && node[1][0] === '$') { label = node[1]; bi = 2 }
@@ -5337,7 +5337,7 @@ const mergeBlocks = (ast) => {
     for (const tok of only) node.push(tok)
   })
 
-  walk(ast, (node) => {
+  walkN(ast, (node) => {
     if (!isScopeNode(node)) return
     let i = 1
     while (i < node.length) {
@@ -5419,7 +5419,7 @@ const mergeBlocks = (ast) => {
  * @returns {Array}
  */
 const coalesceLocals = (ast) => {
-  walk(ast, (funcNode) => {
+  walkN(ast, (funcNode) => {
     if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
 
     const decls = new Map(), params = new Map()
@@ -5567,7 +5567,7 @@ const coalesceLocals = (ast) => {
     }
     if (rename.size === 0) return
 
-    walk(funcNode, (n) => {
+    walkN(funcNode, (n) => {
       if (Array.isArray(n) &&
           (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee') &&
           rename.has(n[1])) {
@@ -5587,7 +5587,7 @@ const coalesceLocals = (ast) => {
  * @returns {Array}
  */
 const vacuum = (ast) => {
-  return walkPost(ast, (node) => {
+  return walkPostN(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
 
@@ -5848,7 +5848,7 @@ const globals = (ast) => {
   // Drop any global that is ever written (defensive — an immutable global can't
   // be, but a malformed module might) and tally read counts.
   const reads = new Map()
-  walk(ast, (n) => {
+  walkN(ast, (n) => {
     if (!Array.isArray(n)) return
     const ref = n[1]
     if (typeof ref !== 'string' || ref[0] !== '$') return
@@ -5912,7 +5912,7 @@ const globals = (ast) => {
       before = declSize; after = exported.has(name) ? declSize : 0
       for (const site of sites) {
         before += estSize(site)
-        const spliced = walkPost(clone(site), (n) => {
+        const spliced = walkPostN(clone(site), (n) => {
           if (Array.isArray(n) && n[0] === 'global.get' && n[1] === name) return clone(init)
         })
         after += estSize(fold(spliced))
@@ -5925,7 +5925,7 @@ const globals = (ast) => {
   }
   if (propagate.size === 0) return ast
 
-  walkPost(ast, (node) => {
+  walkPostN(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'global.get' || node.length !== 2) return
     if (propagate.has(node[1])) return clone(constGlobals.get(node[1]))
   })
@@ -5941,7 +5941,7 @@ const globals = (ast) => {
 
 /** Match (type.load/store (i32.add ptr (type.const N))) and fold offset */
 const offset = (ast) => {
-  return walkPost(ast, (node) => {
+  return walkPostN(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
     if (typeof op !== 'string' || (!op.endsWith('load') && !op.endsWith('store'))) return
@@ -6048,7 +6048,7 @@ const unbranch = (ast) => {
     if (op === 'call') return voidFuncs.has(n[1])
     return false
   }
-  walk(ast, (node) => {
+  walkN(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
     // Loops: `br $loop_label` jumps BACK to loop top (continue), not out.
@@ -6117,7 +6117,7 @@ const unbranch = (ast) => {
  * @returns {Array}
  */
 const loopify = (ast) => {
-  walk(ast, (node) => {
+  walkN(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'block') return
     let bi = 1, label = null
     if (typeof node[1] === 'string' && node[1][0] === '$') { label = node[1]; bi = 2 }
@@ -6179,11 +6179,11 @@ const stripmut = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
   const written = new Set()
-  walk(ast, (n) => {
+  walkN(ast, (n) => {
     if (Array.isArray(n) && n[0] === 'global.set' && typeof n[1] === 'string') written.add(n[1])
   })
 
-  return walkPost(ast, (node) => {
+  return walkPostN(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'global') return
     const name = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
     if (!name || written.has(name)) return
@@ -6280,7 +6280,7 @@ const brif = (ast) => {
  * @returns {Array}
  */
 const foldarms = (ast) => {
-  return walkPost(ast, (node) => {
+  return walkPostN(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'if') return
     const { thenBranch, elseBranch } = parseIf(node)
     if (!thenBranch || !elseBranch) return
@@ -6408,7 +6408,7 @@ const dedupe = (ast, { pin = EMPTY_SET } = {}) => {
       }
       else body.push(c)
     }
-    walk(node, (n) => {
+    walkN(node, (n) => {
       if (Array.isArray(n) && isBranchScope(n[0]) && typeof n[1] === 'string' && n[1][0] === '$' && !canon.has(n[1])) canon.set(n[1], 'B' + bi++)
     })
     const hash = types.join(' ') + '#' + hashFunc(body, canon)
@@ -6468,7 +6468,7 @@ const dedupe = (ast, { pin = EMPTY_SET } = {}) => {
   }
 
   // Rewrite all references: calls, ref.func, elem segments, call_indirect type
-  walkPost(ast, (node) => {
+  walkPostN(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
     if ((op === 'call' || op === 'return_call') && redirects.has(node[1])) {
@@ -6535,7 +6535,7 @@ const dedupTypes = (ast) => {
     }
   }
 
-  walkPost(ast, (node) => {
+  walkPostN(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
 
@@ -6933,7 +6933,7 @@ const minifyImports = (ast) => {
 /** True iff every defined func has a $name and every func reference is by $name */
 const reorderSafe = (ast) => {
   let safe = true
-  walk(ast, (n) => {
+  walkN(ast, (n) => {
     if (!safe || !Array.isArray(n)) return
     const op = n[0]
     if (op === 'func' && (typeof n[1] !== 'string' || n[1][0] !== '$')) safe = false
@@ -6959,7 +6959,7 @@ const reorder = (ast) => {
   if (!reorderSafe(ast)) return ast
 
   const callCounts = new Map()
-  walk(ast, (n) => {
+  walkN(ast, (n) => {
     if (!Array.isArray(n)) return
     if (n[0] === 'call' || n[0] === 'return_call') {
       callCounts.set(n[1], (callCounts.get(n[1]) || 0) + 1)
@@ -7068,7 +7068,7 @@ const licm = (ast) => {
       // Loop effect summary: the write-set of locals, and whether globals stay stable.
       const writes = new Set()
       let hasCall = false, hasGlobalSet = false
-      walk(loop, (n) => {
+      walkN(loop, (n) => {
         if (!Array.isArray(n)) return
         const op = n[0]
         if ((op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string') writes.add(n[1])
@@ -7417,7 +7417,7 @@ export default function optimize(ast, opts = true) {
   // Strip comment trivia inside the module: parse keeps `;;`/`(;` as string children,
   // which blocks every adjacency-windowed pass (set→get fusion, dead-store pairs).
   // Top-level banner comments survive in the wrapper above.
-  walkPost(ast, n => {
+  walkPostN(ast, n => {
     if (!Array.isArray(n)) return
     for (let i = n.length - 1; i >= 0; i--) {
       const c = n[i]
