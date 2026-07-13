@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.4.0
+
+- `walkN` / `walkPostN` public walkers — arrays-only traversal (leaves skipped), for callbacks that never act on string/number leaves
+- `optimize`: `seltree` — dense `br_table` of speculable arms compiles to a branchless select tree (speed profile)
+- `optimize`: `ifset` — one-armed conditional update lowers to a branchless `select` (speed profile)
+- `optimize`: `deadset` — const `local.set` overwritten on every path before any read is dropped
+- `optimize`: `zeroinit` — `local.set` of the spec-default zero is dropped
+- `optimize`: `narrowLocals` + `intguard` — ToInt32 machinery retires over provably-int locals, gated on net convert profit
+- `optimize`: `inlineWrappers` — adapter frames dissolve into their target at the wrapper site
+- `optimize`: `identity` folds exact `trunc∘convert` f64 round-trips and impossible `convert_i32` vs const compares
+- fix: `br_if` pair merge no longer speculates a load past its guard (the first `br_if` of a scan is the second's bounds check)
+- fix: `guardRefine` else-arm facts no longer leak past the join
+- self-host compile ~12% faster overall (hot-walk specialization + arrays-only walkers, byte-identical output)
+
+[Compare](https://github.com/dy/watr/compare/v5.3.0...v5.4.0)
+
 ## v4.7.0
 
 ### Fixed
