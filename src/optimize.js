@@ -1834,6 +1834,72 @@ const intguard = (ast, opts) => {
   return ast
 }
 
+/** Select-clamped checked read → predicted-branch if-form. The branch-free
+ *  form a NaN-box producer emits so SIMD lifts can consume loop bodies:
+ *    (select
+ *      (T.load (i32.add BASE (i32.shl (select (get $bi) (i32.const 0) (get $bn)) S)))
+ *      UNDEF
+ *      (local.get $bn))
+ *  — the address CLAMPS to 0 out of range and the outer select discards the
+ *  loaded junk. Where a vector lift consumed the loop this shape is gone by
+ *  now; every SURVIVING cluster is an un-vectorized site paying ~6 extra ops
+ *  ON THE ADDRESS DEPENDENCY CHAIN per access (split-radix FFT inner loops:
+ *  40+ sites). The if-form
+ *    (if (result T) (local.get $bn) (then (T.load (i32.add BASE (shl (get $bi) S)))) (else UNDEF))
+ *  costs one predicted branch (in-bounds always taken in real loops) and
+ *  shortens the address chain — the exact trade select-clamp made for the
+ *  lift, unwound where no lift happened. Exact: in-branch $bi < len so the
+ *  clamp is the identity; the OOB path skips a discarded in-memory load
+ *  (base+0 — valid, effect-free) and yields UNDEF either way.
+ *  Opt-in (speed profile): on hot predicted loops branchy beats branch-free,
+ *  but that is a THROUGHPUT judgement the size tiers never asked for. */
+const unclamp = (ast) => {
+  walkN(ast, (fn) => {
+    if (!Array.isArray(fn) || fn[0] !== 'func') return
+    const rec = (n) => {
+      if (!Array.isArray(n)) return
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i]
+        if (!Array.isArray(c)) continue
+        rec(c)
+        if (c[0] !== 'select' || c.length !== 4) continue
+        const [, loadN, undefN, cond] = c
+        if (!Array.isArray(cond) || cond[0] !== 'local.get') continue
+        const bn = cond[1]
+        if (!Array.isArray(loadN) || !/\.load/.test(loadN[0])) continue
+        // else-arm must be effect-free (const or global read)
+        if (!(Array.isArray(undefN) && (undefN[0].endsWith('.const') || undefN[0] === 'global.get'))) continue
+        // address: BASE + (clampSel << S) | BASE + clampSel, either operand order,
+        // optional offset= memarg on the load
+        const ai = typeof loadN[1] === 'string' && loadN[1].startsWith('offset=') ? 2 : 1
+        if (loadN.length !== ai + 1) continue
+        const addr = loadN[ai]
+        if (!Array.isArray(addr) || addr[0] !== 'i32.add' || addr.length !== 3) continue
+        const isClamp = (s) => Array.isArray(s) && s[0] === 'select' && s.length === 4 &&
+          Array.isArray(s[1]) && s[1][0] === 'local.get' &&
+          getConst(s[2])?.value === 0 &&
+          Array.isArray(s[3]) && s[3][0] === 'local.get' && s[3][1] === bn
+        const unwrap = (x) => {
+          if (isClamp(x)) return ['local.get', x[1][1]]
+          if (Array.isArray(x) && x[0] === 'i32.shl' && x.length === 3 && isClamp(x[1])) return ['i32.shl', ['local.get', x[1][1][1]], x[2]]
+          return null
+        }
+        for (const k of [1, 2]) {
+          const u = unwrap(addr[k])
+          if (!u) continue
+          const ty = loadN[0].slice(0, 3)
+          const newAddr = ['i32.add', k === 1 ? u : addr[1], k === 1 ? addr[2] : u]
+          const newLoad = ai === 2 ? [loadN[0], loadN[1], newAddr] : [loadN[0], newAddr]
+          n[i] = ['if', ['result', ty === 'v12' ? 'v128' : ty], cond, ['then', newLoad], ['else', undefN]]
+          break
+        }
+      }
+    }
+    rec(fn)
+  })
+  return ast
+}
+
 /** Branchless dispatch: a small DENSE br_table whose arms are cheap speculable
  *  values br'ing one shared exit lowers to a select TREE — every arm computes,
  *  bit-tests on the index pick one. An unpredictable index costs a mispredict
@@ -7555,6 +7621,7 @@ const PASSES = [
   ['narrow',        narrowLocals,   true,  'retype f64 locals written only by exact i32 converts — reads re-box, ToInt32 chains then fold'],
   ['guardRefine',   guardRefine,    false, 'fold NaN-box tag reads under dominating tag guards (jz NaN-box-specific; opt-in)'],
   ['intguard',      intguard,       true,  'ToInt32 guard select over an exact i32 convert → the raw value'],
+  ['unclamp',       unclamp,        false, 'select-clamped checked reads → predicted-branch if-form (surviving = unvectorized; speed profile)'],
   ['branch',        branch,         true,  'simplify constant branches'],
   ['zeroinit',      zeroinit,       true,  'drop local.set of zero when the local provably still holds its spec zero'],
   ['ifset',         ifset,          false, 'one-armed conditional update \u2192 branchless select \u2014 unconditional-update trade (speed profile)'],
@@ -7623,7 +7690,7 @@ const OPTS = Object.fromEntries(PASSES.map(p => [p[0], p[2]]))
  * about every workload — a profile the caller opts into, not a default.
  */
 const PROFILES = {
-  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true, seltree: true }),
+  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true, seltree: true, unclamp: true }),
 }
 
 /**

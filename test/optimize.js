@@ -3845,3 +3845,28 @@ test('fold: hex-float constants parse exactly (0x1p-1022 · 0x1p53 ≠ NaN)', ()
   const run2 = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src32), 'fold')))).exports
   assert.equal(run2.g(), 2 ** -32, 'f32 hex-float product folds')
 })
+
+test('unclamp: select-clamped checked read → if-form (speed profile; default off)', () => {
+  const src = `(module
+    (memory 1)
+    (func $f (export "f") (param $i i32) (param $len i32) (param $base i32) (result f64)
+      (local $bi i32) (local $bn i32)
+      (local.set $bn (i32.lt_u (local.tee $bi (local.get $i)) (local.get $len)))
+      (select
+        (f64.load (i32.add (local.get $base)
+          (i32.shl (select (local.get $bi) (i32.const 0) (local.get $bn)) (i32.const 3))))
+        (f64.const nan)
+        (local.get $bn))))`
+  const on = print(optimize(parse(src), { profile: 'speed' }))
+  assert(!on.includes('select'), 'speed profile unclamps')
+  assert(on.includes('(if'), 'if-form emitted')
+  const off = print(optimize(parse(src)))
+  assert(off.includes('select'), 'default keeps the branch-free form')
+  // behavioral: in-bounds reads the element, OOB yields the else arm
+  const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), { profile: 'speed' }))), {}).exports
+  const r = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(src))), {}).exports
+  for (const [i, len] of [[0, 4], [9, 4]]) {
+    const a = m.f(i, len, 0), b = r.f(i, len, 0)
+    assert((Number.isNaN(a) && Number.isNaN(b)) || a === b, `f(${i},${len})`)
+  }
+})
