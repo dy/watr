@@ -342,6 +342,29 @@ test('intguard: ToInt32 guard over an exact-int {+,−} ring tree → i32 ops', 
     assert.equal(m.f(a, b), r.f(a, b), `wrap ${a}+${b}`)
 })
 
+test('intguard: multi-use ToInt32 pair collapses whole-temp to raw i32', () => {
+  // a body using the coerced value TWICE: one defining guard (tee) + one
+  // secondary guard (get) + a bare trunc — per-site counts refuse (rule 1),
+  // the atomic whole-temp rewrite retires all three: fresh i32 tee + gets,
+  // no guard, no trunc, no convert
+  const src = `(module (func $f (export "f") (param $e i32) (result i32)
+    (local $t f64)
+    (i32.add
+      (i32.xor
+        (select (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t (f64.convert_i32_s (local.get $e))))) (i32.const 0) (f64.ne (local.get $t) (f64.const inf)))
+        (select (i32.wrap_i64 (i64.trunc_sat_f64_s (local.get $t))) (i32.const 0) (f64.ne (local.get $t) (f64.const inf))))
+      (i32.trunc_sat_f64_s (local.get $t)))))`
+  const out = print(optimize(parse(src), 'intguard'))
+  assert(!out.includes('select') && !out.includes('trunc') && !out.includes('convert'), 'all three sites raw')
+  assert(out.includes('(local $__ig0 i32)'), 'fresh i32 temp declared')
+  const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'intguard'))), {}).exports
+  assert.equal(m.f(21), (21 ^ 21) + 21, 'x^x + x through the collapsed temp')
+  // a stray NON-guard f64 read of t keeps everything (tally mismatch)
+  const stray = src.replace('(i32.trunc_sat_f64_s (local.get $t))',
+    '(i32.trunc_sat_f64_s (f64.add (local.get $t) (f64.const 1)))')
+  assert(print(optimize(parse(stray), 'intguard')).includes('select'), 'unclassified reader keeps the guards')
+})
+
 test('intguard: ToNumber fast path t==t over a never-NaN convert → the value, dead else dropped', () => {
   // tee form: the write is preserved by returning the tee itself
   const teeForm = `(module (func $f (export "f") (param $e i32) (result f64)
@@ -373,6 +396,21 @@ test('intguard: ToNumber fast path t==t over a never-NaN convert → the value, 
       (then (local.get $v))
       (else (f64.const 0)))))`
   assert(print(optimize(parse(unknown), 'intguard')).includes('(if'), 'unproven value keeps the NaN test')
+  // a PARAM's one write is NOT a single-def fact: reads before `p = convert(…)`
+  // see the CALLER's value (fuzz seed 794 — fractional f64 through `p = ~p`)
+  const paramWrite = `(module (func $f (export "f") (param $p f64) (result i32)
+    (i32.add
+      (i32.trunc_sat_f64_s (local.get $p))
+      (block (result i32)
+        (local.set $p (f64.convert_i32_s (i32.const 7)))
+        (if (result i32)
+          (f64.eq (local.get $p) (local.get $p))
+          (then (i32.trunc_sat_f64_s (local.get $p)))
+          (else (i32.const -1))))))`
+  const pw = print(optimize(parse(paramWrite), 'intguard'))
+  assert(pw.includes('(if'), 'param single-write does not fold the NaN test')
+  const mf = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(paramWrite), 'intguard'))), {}).exports
+  assert.equal(mf.f(3.75), 3 + 7, 'pre-write param read keeps the caller value')
 })
 
 // ==================== STRENGTH REDUCTION ====================

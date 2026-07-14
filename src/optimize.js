@@ -1447,11 +1447,26 @@ const narrowLocals = (ast) => {
  *     the else arm is unreachable, the if IS the value (writes preserved).
  *     Dead-else deletion is what unblocks seltree on +/− dispatch arms. */
 const intguard = (ast) => {
+  let uid = 0
   walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     let counts = null   // lazy — most functions contain no matching shape
     let defs = null     // lazy: name → its ONE (set|tee) RHS, or null when multi-written
+    let params = null   // lazy: param names — their INITIAL value is the caller's
+    const paramSet = () => {
+      if (!params) {
+        params = new Set()
+        for (const d of fn) if (Array.isArray(d) && d[0] === 'param')
+          for (const k of d) if (typeof k === 'string' && k[0] === '$') params.add(k)
+      }
+      return params
+    }
+    // A PARAM never qualifies: "one write" does not mean "always holds that
+    // write" — the pre-write reads see the caller's value (a fractional f64
+    // argument through `p = ~p` broke the convert fact; fuzz seed 794). True
+    // locals default to 0.0 pre-def, which every rule here treats soundly.
     const singleDef = (t) => {
+      if (paramSet().has(t)) return null
       if (!defs) {
         defs = new Map()
         const walk = (d) => {
@@ -1553,6 +1568,94 @@ const intguard = (ast) => {
       }
     }
     rec(fn)
+    // 4. Whole-temp collapse — the multi-use ToInt32 pair. A body using the
+    //    same coerced value TWICE tees `cv(x)` once and re-reads it through a
+    //    SECOND guarded select; rule 1's per-site count rightly refuses, and a
+    //    round later `merge`/`coalesce` share the temp across arms, poisoning
+    //    every later gate (the round-2-shapes trap). When EVERY use of t is
+    //      A. the defining guard  select(wrap(trunc64(tee t CV)), 0, ne(t, C))
+    //      B. a secondary guard   select(wrap(trunc64(get t)),   0, ne(t, C))
+    //      C. a bare i32.trunc_sat_f64_*(get t) matching CV's signedness
+    //    with impossible C consts, ALL sites rewrite atomically: A → tee t′ X,
+    //    B/C → get t′ over a fresh i32 t′ (X = CV's operand) — the RAW form:
+    //    no guard, no trunc, no convert. (NOT the guard→trunc swap that
+    //    measured +9% — see rule 1's note.) Pre-def reads are sound: t read
+    //    before its tee gave 0.0 → guard picks wrap(trunc(0)) = 0; t′ gives
+    //    its i32 default 0 — identical. Runs the round the shape is born,
+    //    before merge ever sees the temps.
+    const sites = new Map()   // t → { def, uses: [{n,i,C|trunc}], gets, bad }
+    const entry = (t) => { let e = sites.get(t); if (!e) sites.set(t, e = { def: null, uses: [], gets: 0, bad: false }); return e }
+    const guardShape = (c) => {
+      if (c[0] !== 'select' || c.length !== 4) return null
+      const [, arm, zero, cond] = c
+      if (!Array.isArray(arm) || arm[0] !== 'i32.wrap_i64' ||
+          !Array.isArray(arm[1]) || arm[1][0] !== 'i64.trunc_sat_f64_s' || !Array.isArray(arm[1][1])) return null
+      const z = getConst(zero)
+      if (!z || z.value !== 0) return null
+      if (!Array.isArray(cond) || cond[0] !== 'f64.ne' ||
+          !Array.isArray(cond[1]) || cond[1][0] !== 'local.get' ||
+          !Array.isArray(cond[2]) || cond[2][0] !== 'f64.const') return null
+      return { inner: arm[1][1], t: cond[1][1], C: cond[2][1] }
+    }
+    const sweep = (n) => {
+      if (!Array.isArray(n)) return
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i]
+        if (!Array.isArray(c)) continue
+        const g = guardShape(c)
+        if (g) {
+          const inner = g.inner
+          if (inner[0] === 'local.tee' && inner[1] === g.t && isCv(inner[2]) &&
+              impossibleConvertCompare(inner[2][0], g.C)) {
+            const e = entry(g.t)
+            if (e.def) e.bad = true
+            else { e.def = { n, i, cv: inner[2] }; e.gets += 1 }
+            sweep(inner[2])   // candidates nested in X still record
+            continue
+          }
+          if (inner[0] === 'local.get' && inner[1] === g.t) {
+            const e = entry(g.t)
+            e.uses.push({ n, i, C: g.C })
+            e.gets += 2
+            continue
+          }
+        }
+        if ((c[0] === 'i32.trunc_sat_f64_s' || c[0] === 'i32.trunc_sat_f64_u') && c.length === 2 &&
+            Array.isArray(c[1]) && c[1][0] === 'local.get' && typeof c[1][1] === 'string') {
+          const e = entry(c[1][1])
+          e.uses.push({ n, i, trunc: c[0] })
+          e.gets += 1
+          continue
+        }
+        sweep(c)
+      }
+    }
+    sweep(fn)
+    const newLocals = []
+    for (const [t, e] of sites) {
+      if (e.bad || !e.def || !e.uses.length || paramSet().has(t)) continue
+      counts ??= tallyLocals(fn, new Map(), 1)
+      const u = counts.get(t)
+      if (!u || (u.sets || 0) !== 0 || u.tees !== 1 || u.gets !== e.gets) continue
+      const cvOp = e.def.cv[0]
+      const truncOk = cvOp === 'f64.convert_i32_u' ? 'i32.trunc_sat_f64_u' : 'i32.trunc_sat_f64_s'
+      if (e.uses.some(x => (x.trunc && x.trunc !== truncOk) ||
+          (x.C !== undefined && !impossibleConvertCompare(cvOp, x.C)))) continue
+      const tI = `$__ig${uid++}`
+      newLocals.push(['local', tI, 'i32'])
+      e.def.n[e.def.i] = ['local.tee', tI, e.def.cv[1]]
+      for (const x of e.uses) x.n[x.i] = ['local.get', tI]
+    }
+    if (newLocals.length) {
+      // splice AFTER the rewrites — recorded sites may index into fn itself
+      let at = 1
+      for (let i = 1; i < fn.length; i++) {
+        const d = fn[i]
+        if (!Array.isArray(d)) { if (typeof d === 'string' && d[0] === '$') at = i + 1; continue }
+        if (d[0] === 'param' || d[0] === 'local' || d[0] === 'result' || d[0] === 'export' || d[0] === 'type') at = i + 1
+      }
+      fn.splice(at, 0, ...newLocals)
+    }
   })
   return ast
 }
