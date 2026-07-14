@@ -20,7 +20,7 @@ import { compile as tcompile, watr as twatr } from '../src/template.js'
 import optimize from '../src/optimize.js'
 import polyfill from '../src/polyfill.js'
 
-const isWasm = !!(
+export const isWasm = !!(
   typeof process !== 'undefined' && process.env?.WATR_WASM ||
   (typeof globalThis !== 'undefined' && globalThis.WATR_WASM)
 )
