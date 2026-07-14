@@ -406,11 +406,123 @@ test('intguard: ToNumber fast path t==t over a never-NaN convert → the value, 
         (if (result i32)
           (f64.eq (local.get $p) (local.get $p))
           (then (i32.trunc_sat_f64_s (local.get $p)))
-          (else (i32.const -1))))))`
+          (else (i32.const -1)))))))`
   const pw = print(optimize(parse(paramWrite), 'intguard'))
   assert(pw.includes('(if'), 'param single-write does not fold the NaN test')
   const mf = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(paramWrite), 'intguard'))), {}).exports
   assert.equal(mf.f(3.75), 3 + 7, 'pre-write param read keeps the caller value')
+})
+
+test('intguard: checked-read collapse — guard/undef consts resolve through the global pool', () => {
+  // The -Os shape: bounds-guarded element read (undefined NaN box when OOB)
+  // under the ToInt32 guard, both consts pooled into immutable f64 globals.
+  const mod = `(module
+    (memory 1)
+    (global $undef f64 (f64.const nan:0x8000200000000))
+    (global $unused f64 (f64.const nan))
+    (global $inf f64 (f64.const inf))
+    (func $f (export "f") (param $i i32) (param $len i32) (result i32)
+      (local $t f64)
+      (select
+        (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t
+          (if (result f64) (i32.lt_u (local.get $i) (local.get $len))
+            (then (f64.convert_i32_u (i32.load8_u (local.get $i))))
+            (else (global.get $undef))))))
+        (i32.const 0)
+        (f64.ne (local.get $t) (global.get $inf)))))`
+  const out = print(optimize(parse(mod), 'intguard'))
+  assert(!out.includes('select') && !out.includes('convert'), 'cluster collapses')
+  assert(out.includes('(if') && out.includes('i32.load8_u'), 'i32 if-form with the raw load')
+  const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(mod), 'intguard'))), {}).exports
+  const r = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(mod))), {}).exports
+  for (const [i, len] of [[0, 4], [5, 4], [3, 4]]) assert.equal(m.f(i, len), r.f(i, len), `read ${i}<${len}`)
+})
+
+test('intguard: shared scratch temp — every cluster self-contained collapses per-site', () => {
+  // murmur-gather shape: one f64 temp tee'd by FOUR independent guard clusters
+  // (plus a guarded const init). Rule 4's one-def model refuses; the per-cluster
+  // sweep collapses each (its ne reads its own tee).
+  const read = (k) => `(select
+      (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t
+        (if (result f64) (i32.lt_u (local.tee $bi (i32.add (local.get $i) (i32.const ${k}))) (local.get $len))
+          (then (f64.convert_i32_u (i32.load8_u (local.get $bi))))
+          (else (f64.const nan))))))
+      (i32.const 0)
+      (f64.ne (local.get $t) (f64.const inf)))`
+  const mod = `(module
+    (memory 1)
+    (func $f (export "f") (param $i i32) (param $len i32) (result i32)
+      (local $t f64) (local $bi i32)
+      (i32.or (i32.or ${read(0)} (i32.shl ${read(1)} (i32.const 8)))
+              (i32.shl ${read(2)} (i32.const 16)))))`
+  const out = print(optimize(parse(mod), 'intguard'))
+  assert(!out.includes('select') && !out.includes('convert'), 'all clusters collapse')
+  const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(mod), 'intguard'))), {}).exports
+  const r = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(mod))), {}).exports
+  for (const [i, len] of [[0, 8], [6, 8], [7, 8], [9, 2]]) assert.equal(m.f(i, len), r.f(i, len), `gather @${i} len ${len}`)
+})
+
+test('intguard: single-read ring — OOB NaN propagates, bounds condition hoists', () => {
+  // buf[j] + 1 under ToInt32: leaf-narrowing would give 1 on the OOB path
+  // (0+1) where ToInt32(NaN+1) is 0 — the ring keeps the raw X and hoists C.
+  const mod = (c = '1') => `(module
+    (memory 1)
+    (func $f (export "f") (param $j i32) (param $len i32) (result i32)
+      (local $t f64)
+      (select
+        (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t
+          (f64.add
+            (if (result f64) (i32.lt_u (local.get $j) (local.get $len))
+              (then (f64.convert_i32_u (i32.load8_u (local.get $j))))
+              (else (f64.const nan)))
+            (f64.const ${c})))))
+        (i32.const 0)
+        (f64.ne (local.get $t) (f64.const inf)))))`
+  const out = print(optimize(parse(mod()), 'intguard'))
+  assert(!out.includes('select') && !out.includes('f64.add'), 'ring collapses')
+  assert(out.includes('i32.add'), 'i32 ring emitted')
+  const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(mod()), 'intguard'))), {}).exports
+  const r = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(mod()))), {}).exports
+  for (const [j, len] of [[0, 4], [9, 4]]) assert.equal(m.f(j, len), r.f(j, len), `ring @${j} len ${len} (OOB → 0, not 1)`)
+  // fractional const leaf → sum not int-exact, guard stays
+  assert(print(optimize(parse(mod('0.5')), 'intguard')).includes('select'), 'fractional leaf keeps the guard')
+})
+
+test('intguard: guarded const init folds; bare trunc over checked read collapses', () => {
+  const constInit = `(module (func $f (export "f") (result i32)
+    (local $t f64)
+    (select
+      (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t (f64.const 2538058380))))
+      (i32.const 0)
+      (f64.ne (local.get $t) (f64.const inf)))))`
+  const out = print(optimize(parse(constInit), 'intguard'))
+  assert(!out.includes('select'), 'const init folds')
+  const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(constInit), 'intguard'))), {}).exports
+  assert.equal(m.f(), 2538058380 | 0, 'ToInt32 of the const')
+  // index context: trunc_sat_f64_s directly over a checked u8 read (no guard select)
+  const idx = `(module
+    (memory 1)
+    (func $f (export "f") (param $i i32) (param $len i32) (result i32)
+      (i32.trunc_sat_f64_s
+        (if (result f64) (i32.lt_u (local.get $i) (local.get $len))
+          (then (f64.convert_i32_u (i32.load8_u (local.get $i))))
+          (else (f64.const nan))))))`
+  const io = print(optimize(parse(idx), 'intguard'))
+  assert(!io.includes('trunc') && !io.includes('convert'), 'trunc∘checked-read collapses (u8 fits s-domain)')
+  const mi = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(idx), 'intguard'))), {}).exports
+  const ri = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(idx))), {}).exports
+  for (const [i, len] of [[0, 4], [7, 4]]) assert.equal(mi.f(i, len), ri.f(i, len), `idx ${i} len ${len}`)
+})
+
+test('identity: and-mask dead before a narrowing store', () => {
+  const mod = (mask) => `(module
+    (memory 1)
+    (func $f (export "f") (param $v i32)
+      (i32.store8 (i32.const 0) (i32.and (local.get $v) (i32.const ${mask})))))`
+  const out = print(optimize(parse(mod('255')), 'identity'))
+  assert(!out.includes('i32.and'), '& 0xff before store8 stripped')
+  // mask narrower than the store keeps bits out — must survive
+  assert(print(optimize(parse(mod('127')), 'identity')).includes('i32.and'), '& 0x7f is load-bearing')
 })
 
 // ==================== STRENGTH REDUCTION ====================

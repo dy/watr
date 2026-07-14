@@ -960,6 +960,22 @@ const identityNode = (node) => {
     // (i32.eqz (REL a b)) → (INVREL a b) — one byte, same operands, same order
     if (node[0] === 'i32.eqz' && node.length === 2 && Array.isArray(node[1]) && INVERT[node[1][0]] && node[1].length === 3)
       return [INVERT[node[1][0]], node[1][1], node[1][2]]
+    // Narrowing store ignores the value's high bits — an and-mask that keeps
+    // every stored bit is dead: (iNN.storeW addr (and X M)) → (iNN.storeW addr X)
+    // when (M & widthMask) == widthMask. Byte codecs mask before every store.
+    {
+      const w = STORE_KEEP[node[0]]
+      if (w !== undefined) {
+        const v = node[node.length - 1]   // value is last (offset/align attrs precede addr)
+        if (Array.isArray(v) && (v[0] === 'i32.and' || v[0] === 'i64.and') && v.length === 3) {
+          for (const k of [1, 2]) {
+            const m = getConst(v[k])
+            const mv = m && (typeof m.value === 'bigint' ? m.value : typeof m.value === 'number' ? BigInt(m.value) : null)
+            if (mv !== null && mv !== undefined && (mv & w) === w) { node[node.length - 1] = v[k === 1 ? 2 : 1]; return node }
+          }
+        }
+      }
+    }
     // Hoist a trailing convert out of a LABEL-LESS block:
     //   (block (result f64) … (f64.convert_i32_s X)) → (f64.convert_i32_s (block (result i32) … X))
     // No label ⇒ no br can produce the block's result, so the tail IS its only value;
@@ -1001,6 +1017,11 @@ const identityNode = (node) => {
     return result
 }
 /** Identity elimination as a standalone pass. */
+// Bits a narrowing store keeps — an and-mask preserving all of them is dead.
+const STORE_KEEP = {
+  'i32.store8': 0xffn, 'i32.store16': 0xffffn,
+  'i64.store8': 0xffn, 'i64.store16': 0xffffn, 'i64.store32': 0xffffffffn,
+}
 const identity = (ast) => walkPostN(ast, identityNode)
 
 // ==================== STRENGTH REDUCTION ====================
@@ -1445,9 +1466,102 @@ const narrowLocals = (ast) => {
  *  3. ToNumber fast path `t==t ? t : __slow(t)` — an if whose condition self-
  *     compares a never-NaN value (a convert: direct tee, or a single-def local):
  *     the else arm is unreachable, the if IS the value (writes preserved).
- *     Dead-else deletion is what unblocks seltree on +/− dispatch arms. */
-const intguard = (ast) => {
+ *     Dead-else deletion is what unblocks seltree on +/− dispatch arms.
+ *
+ *  5. Checked-read collapse (see rule 4 inline for the whole-temp sweep both
+ *     share): V = (if (result f64) C (then cv(X)) (else NaN)) — a bounds-guarded
+ *     element read yielding an undefined NaN box when out of range. Under the
+ *     ToInt32 guard the round-trip is exact on BOTH paths (cv exact, guard
+ *     unsatisfiable; ToInt32(NaN) = 0), so the select IS
+ *     (if (result i32) C X (i32.const 0)) — convert, trunc, tee and guard all
+ *     retired. Each cluster is self-contained (its ne reads its own tee before
+ *     any other write — select evaluates arm→zero→cond), so N clusters sharing
+ *     one scratch temp all collapse independently once EVERY touch of the temp
+ *     is accounted to a cluster. A guarded `tee t (f64.const c)` folds the same
+ *     way to i32.const ToInt32(c).
+ *
+ *  Guard/else consts resolve through immutable f64 const globals: size-tier
+ *  producers pool `inf` / the undef NaN into globals, and the literal-only
+ *  match left every one of these shapes untouched. */
+// Immutable f64 const globals of a module (name → raw const token). Sound for
+// the whole pipeline when taken up front: no pass makes a global mutable.
+const constF64Globals = (ast) => {
+  const g64 = new Map()
+  const mod = !Array.isArray(ast) ? null
+    : ast[0] === 'module' ? ast
+    // wrapped ([comment…, (module …)]) or a bare field list (module-less roots
+    // some producers feed optimize() directly)
+    : ast.find(n => Array.isArray(n) && n[0] === 'module') ?? ast
+  if (mod) for (const n of mod) {
+    if (!Array.isArray(n) || n[0] !== 'global' || typeof n[1] !== 'string') continue
+    const j = Array.isArray(n[2]) && n[2][0] === 'export' ? 3 : 2   // inline export before the type
+    if (n[j] === 'f64' && Array.isArray(n[j + 1]) && n[j + 1][0] === 'f64.const') g64.set(n[1], n[j + 1][1])
+  }
+  return g64
+}
+const intguard = (ast, opts) => {
   let uid = 0
+  // Immutable f64 const globals (name → raw const token) — the -Os const pool.
+  // The pipeline runs this pass per-function, so the module scan happens once
+  // in optimize() (constF64Globals) and arrives via opts; a direct module-
+  // rooted call scans here.
+  const g64 = opts?.constF64 ?? constF64Globals(ast)
+  const isCv = (v) => Array.isArray(v) && (v[0] === 'f64.convert_i32_s' || v[0] === 'f64.convert_i32_u')
+  const constOf = (n) => !Array.isArray(n) ? undefined
+    : n[0] === 'f64.const' ? n[1]
+    : n[0] === 'global.get' ? g64.get(n[1])
+    : undefined
+  const isNanRaw = (raw) => typeof raw === 'string' ? (raw.startsWith('nan') || raw.startsWith('-nan')) : Number.isNaN(raw)
+  // (if (result f64) C (then cv(X)) (else NaN-const/global)) — the checked read
+  const checkedRead = (V) => {
+    if (!Array.isArray(V) || V[0] !== 'if' || V.length !== 5 ||
+        !Array.isArray(V[1]) || V[1][0] !== 'result' || V[1][1] !== 'f64' ||
+        !Array.isArray(V[3]) || V[3][0] !== 'then' || V[3].length !== 2 ||
+        !Array.isArray(V[3][1]) || (V[3][1][0] !== 'f64.convert_i32_s' && V[3][1][0] !== 'f64.convert_i32_u') ||
+        !Array.isArray(V[4]) || V[4][0] !== 'else' || V[4].length !== 2) return null
+    const u = constOf(V[4][1])
+    if (u === undefined || !isNanRaw(u)) return null
+    return { cvOp: V[3][1][0], X: V[3][1][1], C: V[2] }
+  }
+  const asI32If = (r) => ['if', ['result', 'i32'], r.C, ['then', r.X], ['else', ['i32.const', 0]]]
+  // Pure i32 expression — safe to move under a condition (no loads/calls/traps).
+  const isPureI32 = (E) => !Array.isArray(E)
+    ? false
+    : E[0] === 'local.get' || E[0] === 'i32.const' ? true
+    : /^i32\.(add|sub|mul|and|or|xor|shl|shr_[su]|rotl|rotr|eqz|eq|ne|[lg][te]_[su]|clz|ctz|popcnt|extend(8|16)_s)$/.test(E[0]) &&
+      E.slice(1).every(x => typeof x === 'string' || isPureI32(x))
+  // Single-read ring: an f64 {+,−,neg} tree over ONE checked read plus pure
+  // int leaves. An OOB read's NaN propagates to the tree top, so ToInt32 of
+  // the WHOLE tree is 0 exactly when the read's bounds fail — the bounds
+  // condition hoists: (if C i32-tree 0). Leaves stay ≤16 (sums < 2^37 ≪ 2^53,
+  // every f64 add/sub exact); non-read leaves must be pure — they move under
+  // the hoisted condition and may no longer evaluate on the OOB path.
+  const ring1 = (V, st) => {
+    if (!Array.isArray(V) || ++st.n > 16) return null
+    const cr = st.read ? null : checkedRead(V)
+    if (cr) { st.read = cr; return cr.X }
+    if (isCv(V)) return isPureI32(V[1]) ? V[1] : null
+    const raw = constOf(V)   // literal or pooled global
+    if (raw !== undefined) {
+      const v = f64ConstValue(raw)
+      return typeof v === 'number' && Number.isInteger(v) && Math.abs(v) <= 0x7fffffff ? ['i32.const', v | 0] : null
+    }
+    if ((V[0] === 'f64.add' || V[0] === 'f64.sub') && V.length === 3) {
+      const a = ring1(V[1], st); if (!a) return null
+      const b = ring1(V[2], st); if (!b) return null
+      return [V[0] === 'f64.add' ? 'i32.add' : 'i32.sub', a, b]
+    }
+    if (V[0] === 'f64.neg' && V.length === 2) { const a = ring1(V[1], st); return a && ['i32.sub', ['i32.const', 0], a] }
+    return null
+  }
+  // ToInt32 of an f64 const — trunc_sat to i64, wrap (the guarded-select semantics)
+  const constToI32 = (v) => {
+    if (Number.isNaN(v)) return 0
+    const t = Math.trunc(v)
+    const cl = t >= 9223372036854775807 ? 9223372036854775807n
+      : t <= -9223372036854775808 ? -9223372036854775808n : BigInt(t)
+    return Number(BigInt.asIntN(32, cl)) | 0
+  }
   walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
     let counts = null   // lazy — most functions contain no matching shape
@@ -1479,15 +1593,32 @@ const intguard = (ast) => {
       }
       return defs.get(t) || null
     }
-    const isCv = (v) => Array.isArray(v) && (v[0] === 'f64.convert_i32_s' || v[0] === 'f64.convert_i32_u')
     // a local that provably holds a convert: its ONE def is one
     const cvLocal = (t) => { const d = singleDef(t); return d && isCv(d) ? d : null }
+    // convert result fits the trunc's domain: same signedness is the plain
+    // round-trip; s∘u additionally holds when the converted value provably
+    // sits in [0, 2^31) — narrow loads and const-masked/shifted values.
+    const smallU32 = (X) => Array.isArray(X) && (
+      X[0] === 'i32.load8_u' || X[0] === 'i32.load16_u' ||
+      (X[0] === 'i32.and' && [X[1], X[2]].some(a => { const k = getConst(a); return k && k.value >= 0 && k.value <= 0x7fffffff })) ||
+      (X[0] === 'i32.shr_u' && (() => { const k = getConst(X[2]); return k && (k.value & 31) >= 1 })()) ||
+      (X[0] === 'i32.const' && (() => { const k = getConst(X); return k && k.value >= 0 })()))
+    const truncFitsCv = (truncOp, cvOp, X) =>
+      truncOp === (cvOp === 'f64.convert_i32_u' ? 'i32.trunc_sat_f64_u' : 'i32.trunc_sat_f64_s') ||
+      (truncOp === 'i32.trunc_sat_f64_s' && cvOp === 'f64.convert_i32_u' && smallU32(X))
     const rec = (n) => {
       if (!Array.isArray(n)) return
       for (let i = 1; i < n.length; i++) {
         const c = n[i]
         if (!Array.isArray(c)) continue
         rec(c)
+        // 5b. bare trunc over a checked read (index contexts skip the ToInt32
+        //     guard): trunc_sat(if C cv(X) NaN) — trunc∘cv is the identity,
+        //     trunc_sat(NaN) = 0 — IS (if (result i32) C X 0).
+        if ((c[0] === 'i32.trunc_sat_f64_s' || c[0] === 'i32.trunc_sat_f64_u') && c.length === 2) {
+          const cr = checkedRead(c[1])
+          if (cr && truncFitsCv(c[0], cr.cvOp, cr.X)) { n[i] = asI32If(cr); continue }
+        }
         // 3. ToNumber fast path: if (t==t) t else … over a never-NaN t.
         //    Sound for ANY else content — it never executes (a pre-def read sees
         //    the local's 0.0 default: not NaN either, same then-arm). The tee
@@ -1516,15 +1647,16 @@ const intguard = (ast) => {
         const z = getConst(zero)
         if (!z || z.value !== 0) continue
         if (!Array.isArray(cond) || cond[0] !== 'f64.ne' ||
-            !Array.isArray(cond[1]) || cond[1][0] !== 'local.get' || cond[1][1] !== t ||
-            !Array.isArray(cond[2]) || cond[2][0] !== 'f64.const') continue
+            !Array.isArray(cond[1]) || cond[1][0] !== 'local.get' || cond[1][1] !== t) continue
+        const gRaw = constOf(cond[2])
+        if (gRaw === undefined) continue
         // 1. direct convert — the round-trip identity
         // (A guard-only collapse for shared temps — `trunc_sat(tee t CV)`, no
         //  count gate — was tried and REVERTED: −350 B but a reproducible +9%
         //  on the dispatch tree. The kept select is one predicted cmov; the
         //  trunc form serializes through the f64 register. Leaner ≠ faster.)
         if (isCv(V)) {
-          if (!impossibleConvertCompare(V[0], cond[2][1])) continue
+          if (!impossibleConvertCompare(V[0], gRaw)) continue
           counts ??= tallyLocals(fn, new Map(), 1)
           const u = counts.get(t)
           if (!u || u.gets !== 1 || u.tees !== 1 || (u.sets || 0) !== 0) continue
@@ -1533,7 +1665,7 @@ const intguard = (ast) => {
         }
         // 2. exact-int ring tree. Guard const must be impossible for ANY int
         //    value (not just an i32 convert) — the sum range is wider than i32.
-        const gc = f64ConstValue(cond[2][1])
+        const gc = f64ConstValue(gRaw)
         if (gc === undefined || (Number.isFinite(gc) && Number.isInteger(gc))) continue
         const ring = (E, st) => {
           if (!Array.isArray(E) || ++st.n > 16) return null
@@ -1583,8 +1715,17 @@ const intguard = (ast) => {
     //    before its tee gave 0.0 → guard picks wrap(trunc(0)) = 0; t′ gives
     //    its i32 default 0 — identical. Runs the round the shape is born,
     //    before merge ever sees the temps.
-    const sites = new Map()   // t → { def, uses: [{n,i,C|trunc}], gets, bad }
-    const entry = (t) => { let e = sites.get(t); if (!e) sites.set(t, e = { def: null, uses: [], gets: 0, bad: false }); return e }
+    // Rule 5 rides the same sweep: def kinds widen to the checked read (`tee t
+    // (if C cv(X) NaN)`) and the guarded const (`tee t (f64.const c)`), and a
+    // temp whose EVERY touch is a def-cluster (no B/C uses) collapses each
+    // cluster in place with no temp at all — each cluster's ne reads its own
+    // tee (select evaluates arm→zero→cond; nested clusters complete inside the
+    // outer arm before the outer tee lands), so pairing survives any nesting
+    // and any number of defs. B/C uses still require exactly ONE def — with
+    // several, which value flows to a use is a dataflow question this
+    // syntactic pass doesn't answer.
+    const sites = new Map()   // t → { defs: [{n,i,kind,…}], uses: [{n,i,C|trunc}], gets, tees }
+    const entry = (t) => { let e = sites.get(t); if (!e) sites.set(t, e = { defs: [], uses: [], gets: 0, tees: 0 }); return e }
     const guardShape = (c) => {
       if (c[0] !== 'select' || c.length !== 4) return null
       const [, arm, zero, cond] = c
@@ -1593,9 +1734,10 @@ const intguard = (ast) => {
       const z = getConst(zero)
       if (!z || z.value !== 0) return null
       if (!Array.isArray(cond) || cond[0] !== 'f64.ne' ||
-          !Array.isArray(cond[1]) || cond[1][0] !== 'local.get' ||
-          !Array.isArray(cond[2]) || cond[2][0] !== 'f64.const') return null
-      return { inner: arm[1][1], t: cond[1][1], C: cond[2][1] }
+          !Array.isArray(cond[1]) || cond[1][0] !== 'local.get') return null
+      const C = constOf(cond[2])
+      if (C === undefined) return null
+      return { inner: arm[1][1], t: cond[1][1], C }
     }
     const sweep = (n) => {
       if (!Array.isArray(n)) return
@@ -1605,12 +1747,27 @@ const intguard = (ast) => {
         const g = guardShape(c)
         if (g) {
           const inner = g.inner
-          if (inner[0] === 'local.tee' && inner[1] === g.t && isCv(inner[2]) &&
-              impossibleConvertCompare(inner[2][0], g.C)) {
-            const e = entry(g.t)
-            if (e.def) e.bad = true
-            else { e.def = { n, i, cv: inner[2] }; e.gets += 1 }
-            sweep(inner[2])   // candidates nested in X still record
+          if (inner[0] === 'local.tee' && inner[1] === g.t) {
+            const V = inner[2], e = entry(g.t)
+            const gc = f64ConstValue(g.C)
+            const nonInt = gc !== undefined && !(Number.isFinite(gc) && Number.isInteger(gc))
+            const rec2 = (d) => { e.defs.push(d); e.gets += 1; e.tees += 1; sweep(V) }
+            if (Array.isArray(V) && isCv(V) && impossibleConvertCompare(V[0], g.C)) { rec2({ n, i, kind: 'cv', cv: V }); continue }
+            const cr = checkedRead(V)
+            if (cr && impossibleConvertCompare(cr.cvOp, g.C)) { rec2({ n, i, kind: 'read', cr }); continue }
+            if (Array.isArray(V) && V[0] === 'f64.const' && gc !== undefined) {
+              const v = f64ConstValue(V[1])
+              if (v !== undefined) { e.defs.push({ n, i, kind: 'const', v, gc }); e.gets += 1; e.tees += 1; continue }
+            }
+            if (nonInt) {
+              const st = { n: 0 }, tree = ring1(V, st)
+              if (tree && st.read) { rec2({ n, i, kind: 'ring', C: st.read.C, tree }); continue }
+            }
+            // unmatched guarded tee: keep the cluster, but ACCOUNT for it — its
+            // ne reads its own tee, so sibling clusters stay independently
+            // collapsible (per-cluster pairing survives; only stray reads of t
+            // outside any cluster block the temp).
+            rec2({ n, i, kind: null })
             continue
           }
           if (inner[0] === 'local.get' && inner[1] === g.t) {
@@ -1633,17 +1790,34 @@ const intguard = (ast) => {
     sweep(fn)
     const newLocals = []
     for (const [t, e] of sites) {
-      if (e.bad || !e.def || !e.uses.length || paramSet().has(t)) continue
+      if (!e.defs.length || paramSet().has(t)) continue
       counts ??= tallyLocals(fn, new Map(), 1)
       const u = counts.get(t)
-      if (!u || (u.sets || 0) !== 0 || u.tees !== 1 || u.gets !== e.gets) continue
-      const cvOp = e.def.cv[0]
+      if (!u || (u.sets || 0) !== 0 || u.gets !== e.gets) continue
+      if (!e.uses.length) {
+        // self-contained: every GET of t is a cluster ne, each reading its own
+        // tee (select evaluates arm→zero→cond) — collapse the recognized
+        // clusters, keep the rest. Stray TEES elsewhere are harmless: a tee is
+        // a write consumed in place; only an unaccounted get could observe a
+        // cluster's value, and the gets gate excludes that.
+        for (const d of e.defs)
+          if (d.kind) d.n[d.i] = d.kind === 'cv' ? d.cv[1]
+            : d.kind === 'read' ? asI32If(d.cr)
+            : d.kind === 'ring' ? asI32If({ C: d.C, X: d.tree })
+            : ['i32.const', d.v !== d.gc ? constToI32(d.v) : 0]
+        continue
+      }
+      // B/C uses read the def's VALUE across sites — the strict whole-temp
+      // discipline stands: one recognized def, every tee accounted.
+      if (u.tees !== e.tees || e.defs.length !== 1 || (e.defs[0].kind !== 'cv' && e.defs[0].kind !== 'read')) continue
+      const d = e.defs[0]
+      const cvOp = d.kind === 'cv' ? d.cv[0] : d.cr.cvOp
       const truncOk = cvOp === 'f64.convert_i32_u' ? 'i32.trunc_sat_f64_u' : 'i32.trunc_sat_f64_s'
       if (e.uses.some(x => (x.trunc && x.trunc !== truncOk) ||
           (x.C !== undefined && !impossibleConvertCompare(cvOp, x.C)))) continue
       const tI = `$__ig${uid++}`
       newLocals.push(['local', tI, 'i32'])
-      e.def.n[e.def.i] = ['local.tee', tI, e.def.cv[1]]
+      d.n[d.i] = ['local.tee', tI, d.kind === 'cv' ? d.cv[1] : asI32If(d.cr)]
       for (const x of e.uses) x.n[x.i] = ['local.get', tI]
     }
     if (newLocals.length) {
@@ -7636,6 +7810,11 @@ export default function optimize(ast, opts = true) {
   // the guard below can compare entry vs exit without penalizing required folds.
   if (opts.fold) walkPost(ast, nanFoldNode)
 
+  // Immutable f64 const globals for per-function passes (intguard resolves
+  // guard/else consts through the -Os const pool). Refreshed at each round
+  // start — stripmut widens the pool; nothing ever makes a global mutable.
+  opts.constF64 = constF64Globals(ast)
+
   // deadset runs ONCE before the rounds: its per-NAME liveness is sound only
   // while locals are un-coalesced — after a round's coalesce shares slots, a
   // "dead" const store to one name could clobber the slot's OTHER user (a
@@ -7685,6 +7864,13 @@ export default function optimize(ast, opts = true) {
     let prevLen = -1
     for (let round = 0; round < 6; round++) {
       onRoundStart?.()
+      // refresh per round: round 1's stripmut turns never-written (mut f64)
+      // const globals immutable, and intguard resolves guards through them.
+      // A grown pool unlocks guard collapses in functions no pass dirtied —
+      // drop the dirty filter for this round so they are revisited.
+      const poolBefore = opts.constF64?.size ?? 0
+      opts.constF64 = constF64Globals(ast)
+      if (opts.constF64.size > poolBefore) dirty = null
       const funcsNow = collectFuncs()
       const work = dirty ? funcsNow.filter(f => dirty.has(f)) : funcsNow
       // a walkPost-shaped pass may rebuild the func ROOT (e.g. vacuum cleaning the
@@ -7714,7 +7900,15 @@ export default function optimize(ast, opts = true) {
           }
           continue
         }
-        if (MODULE_SCOPE.has(key)) { ast = fn(ast, opts); continue }
+        if (MODULE_SCOPE.has(key)) {
+          ast = fn(ast, opts)
+          // stripmut just widened the immutable pool — refresh NOW so this
+          // round's intguard (later in pass order) resolves through it. Waiting
+          // for the next round loses the shapes: merge/coalesce share the guard
+          // temps at round end and the counted gates never pass again.
+          if (key === 'stripmut') opts.constF64 = constF64Globals(ast)
+          continue
+        }
         per(fn)
       }
       const next = new Set()
