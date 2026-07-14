@@ -61,7 +61,12 @@ export default function print(tree, options = {}) {
     let curIndent = indent.repeat(level + 1)
 
     for (let i = 1; i < node.length; i++) {
-      const sub = node[i]?.valueOf?.() ?? node[i] // "\00abc\ff" strings are stored as arrays but have ._ with original value
+      let sub = node[i]?.valueOf?.() ?? node[i] // "\00abc\ff" strings are stored as arrays but have ._ with original value
+      // JS-number leaves that don't stringify to WAT tokens: ±Infinity/NaN
+      // (String() gives 'Infinity'/'NaN' — unparseable) and -0 (String() drops
+      // the sign, a real f64.const value change).
+      if (typeof sub === 'number' && (!Number.isFinite(sub) || Object.is(sub, -0)))
+        sub = sub !== sub ? 'nan' : sub === Infinity ? 'inf' : sub === -Infinity ? '-inf' : '-0'
 
       // comments - skip if not enabled. sub[1]===';' alone would also match a plain
       // string starting with ';' (n[0] is always '"' for a real string; block comments

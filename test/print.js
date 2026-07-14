@@ -121,3 +121,18 @@ t('print: comments - roundtrip with comments', () => {
   // Should be stable
   is(output, output2)
 })
+
+t('print: non-finite and -0 JS-number leaves emit WAT tokens', () => {
+  // an AST built programmatically (a producer's IR) may carry raw JS numbers;
+  // String(Infinity) = 'Infinity' is not a WAT token and -0 loses its sign
+  const tree = ['module', ['func', ['result', 'f64'],
+    ['f64.add',
+      ['f64.add', ['f64.const', Infinity], ['f64.const', -Infinity]],
+      ['f64.add', ['f64.const', NaN], ['f64.const', -0]]]]]
+  const out = print(tree)
+  ok(out.includes('(f64.const inf)'), 'Infinity → inf')
+  ok(out.includes('(f64.const -inf)'), '-Infinity → -inf')
+  ok(out.includes('(f64.const nan)'), 'NaN → nan')
+  ok(out.includes('(f64.const -0)'), '-0 keeps its sign')
+  compile(parse(out))   // round-trips through the parser and validates
+})
