@@ -61,12 +61,16 @@ export default function print(tree, options = {}) {
     let curIndent = indent.repeat(level + 1)
 
     for (let i = 1; i < node.length; i++) {
-      let sub = node[i]?.valueOf?.() ?? node[i] // "\00abc\ff" strings are stored as arrays but have ._ with original value
+      const raw = node[i]?.valueOf?.() ?? node[i] // "\00abc\ff" strings are stored as arrays but have ._ with original value
       // JS-number leaves that don't stringify to WAT tokens: ±Infinity/NaN
       // (String() gives 'Infinity'/'NaN' — unparseable) and -0 (String() drops
-      // the sign, a real f64.const value change).
-      if (typeof sub === 'number' && (!Number.isFinite(sub) || Object.is(sub, -0)))
-        sub = sub !== sub ? 'nan' : sub === Infinity ? 'inf' : sub === -Infinity ? '-inf' : '-0'
+      // the sign, a real f64.const value change). Single-def ternary with
+      // arithmetic-only tests — this file self-hosts through jz, whose kernel
+      // leg miscarried both the Number.isFinite/Object.is forms and a
+      // `let`+conditional-reassign union local (finite numbers printed empty).
+      const sub = typeof raw === 'number' && (raw - raw !== 0 || (raw === 0 && 1 / raw < 0))
+        ? (raw > 0 ? 'inf' : raw < 0 ? '-inf' : raw === 0 ? '-0' : 'nan')
+        : raw
 
       // comments - skip if not enabled. sub[1]===';' alone would also match a plain
       // string starting with ';' (n[0] is always '"' for a real string; block comments
