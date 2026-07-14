@@ -3628,3 +3628,17 @@ test('deadset: store read through a br_if exit path stays', () => {
   assert.equal(run.k(0), 7)
   assert.equal(run.k(2), 1)
 })
+
+test('fold: hex-float constants parse exactly (0x1p-1022 · 0x1p53 ≠ NaN)', () => {
+  // Number('0x1p-1022') is NaN in JS — getConst must read WAT hex-float text
+  // through f64.parse or the fold poisons the product (broke $math.pow's
+  // subnormal scaling in jz-compiled modules).
+  const src = `(module (func (export "f") (result f64)
+    (f64.mul (f64.const 0x1p-1022) (f64.const 0x1p53))))`
+  const run = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'fold')))).exports
+  assert.equal(run.f(), 2 ** -969, 'hex-float product folds bit-exactly')
+  const src32 = `(module (func (export "g") (result f32)
+    (f32.mul (f32.const 0x1p-64) (f32.const 0x1p32))))`
+  const run2 = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src32), 'fold')))).exports
+  assert.equal(run2.g(), 2 ** -32, 'f32 hex-float product folds')
+})

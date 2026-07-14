@@ -8,6 +8,7 @@
  */
 
 import { numdata, size } from './compile.js'
+import { f32 as _f32enc, f64 as _f64enc } from './encode.js'
 import { IMM, OPCODE, resultType } from './const.js'
 import parse from './parse.js'
 import { clone, walk, walkN, walkPost, walkPostN } from './util.js'
@@ -675,11 +676,17 @@ const getConst = (node) => {
   if (op === 'i64.const') return { type: 'i64', value: _i64Canon(val) }
   if (op === 'f32.const') {
     const n = _parseNanF32(val)
-    return { type: 'f32', value: n !== null ? n : Math.fround(Number(val)) }
+    // f32.parse, not Number(): WAT hex-float text ('0x1p-120') is not JS
+    // number syntax — Number() yields NaN and the fold poisons the constant.
+    return { type: 'f32', value: n !== null ? n : Math.fround(typeof val === 'string' ? _f32enc.parse(val) : Number(val)) }
   }
   if (op === 'f64.const') {
     const n = _parseNanF64(val)
-    const v = n !== null ? n : Number(val)
+    // f64.parse, not Number(): Number('0x1p-1022') is NaN — folding
+    // (f64.mul (f64.const 0x1p-1022) (f64.const 0x1p53)) then produced NaN
+    // instead of 0x1p-969, breaking $math.pow's subnormal scaling (and any
+    // hex-float constant arithmetic) under `fold`.
+    const v = n !== null ? n : (typeof val === 'string' ? _f64enc.parse(val) : Number(val))
     // Normalize ANY NaN to the literal NaN — Number.isNaN, NOT `v !== v`:
     // in-kernel `!==` routes through __eq's bit-equality, where a sign-set
     // qNaN (what x64 wasm arithmetic produces) compares EQUAL to itself (the

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.4.1
+
+- fix: `fold` reads hex-float constants (`0x1p-1022`) through `f64.parse` — `Number()` yielded NaN, poisoning constant products (broke subnormal `Math.pow` scaling in jz-compiled modules)
+
+[Compare](https://github.com/dy/watr/compare/v5.4.0...v5.4.1)
+
 ## v5.4.0
 
 - `walkN` / `walkPostN` public walkers — arrays-only traversal (leaves skipped), for callbacks that never act on string/number leaves
