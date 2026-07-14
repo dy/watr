@@ -322,6 +322,59 @@ test('intguard: ToInt32 guard select over exact i32 convert → raw value', () =
   assert(print(optimize(parse(raw), 'intguard')).includes('select'), 'non-convert value keeps the guard')
 })
 
+test('intguard: ToInt32 guard over an exact-int {+,−} ring tree → i32 ops', () => {
+  const sum = (guard = 'inf') => `(module (func $f (export "f") (param $a i32) (param $b i32) (result i32)
+    (local $t f64)
+    (select
+      (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t
+        (f64.add (f64.convert_i32_s (local.get $a)) (f64.convert_i32_s (local.get $b))))))
+      (i32.const 0)
+      (f64.ne (local.get $t) (f64.const ${guard})))))`
+  const out = print(optimize(parse(sum()), 'intguard'))
+  assert(!out.includes('select') && !out.includes('f64.add'), 'ring folds to i32.add')
+  assert(out.includes('i32.add'), 'i32 op emitted')
+  // guard const an in-range INT: a sum can equal it — impossible-for-one-convert is not enough
+  assert(print(optimize(parse(sum('3000000000')), 'intguard')).includes('select'), 'int-valued guard const keeps the guard')
+  // behavioral: ToInt32 wrap semantics preserved at the i32 boundary
+  const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(sum()), 'intguard'))), {}).exports
+  const r = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(sum()))), {}).exports
+  for (const [a, b] of [[1, 2], [2147483647, 1], [-2147483648, -1], [2147483647, 2147483647]])
+    assert.equal(m.f(a, b), r.f(a, b), `wrap ${a}+${b}`)
+})
+
+test('intguard: ToNumber fast path t==t over a never-NaN convert → the value, dead else dropped', () => {
+  // tee form: the write is preserved by returning the tee itself
+  const teeForm = `(module (func $f (export "f") (param $e i32) (result f64)
+    (local $t f64)
+    (f64.add
+      (if (result f64)
+        (f64.eq (local.tee $t (f64.convert_i32_s (local.get $e))) (local.get $t))
+        (then (local.get $t))
+        (else (f64.const nan)))
+      (local.get $t))))`
+  const out = print(optimize(parse(teeForm), 'intguard'))
+  assert(!out.includes('(if'), 'if collapsed')
+  assert(out.includes('local.tee'), 'tee write preserved for the later reader')
+  const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(teeForm), 'intguard'))), {}).exports
+  assert.equal(m.f(21), 42, 'value flows through both reads')
+  // single-def set form
+  const setForm = `(module (func (param $e i32) (result f64)
+    (local $t f64)
+    (local.set $t (f64.convert_i32_s (local.get $e)))
+    (if (result f64)
+      (f64.eq (local.get $t) (local.get $t))
+      (then (local.get $t))
+      (else (f64.const nan)))))`
+  assert(!print(optimize(parse(setForm), 'intguard')).includes('(if'), 'single-def convert local collapses')
+  // NOT provably non-NaN (param) → stays
+  const unknown = `(module (func (param $v f64) (result f64)
+    (if (result f64)
+      (f64.eq (local.get $v) (local.get $v))
+      (then (local.get $v))
+      (else (f64.const 0)))))`
+  assert(print(optimize(parse(unknown), 'intguard')).includes('(if'), 'unproven value keeps the NaN test')
+})
+
 // ==================== STRENGTH REDUCTION ====================
 
 test('strength: x * 2 → x << 1', () => {

@@ -1416,44 +1416,140 @@ const narrowLocals = (ast) => {
   return ast
 }
 
-/** ToInt32-guard collapse over a provably-i32 value. The canonical `|0` lowering
- *  wraps a non-leaf value V as
- *    (select (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t V)))
- *            (i32.const 0)
- *            (f64.ne (local.get $t) (f64.const inf)))
- *  — exact ToInt32 with a +inf guard, V evaluated once via the tee. When V is
- *  `f64.convert_i32_*(E)` the round-trip is exact and the guard unsatisfiable, so
- *  the whole select IS E — but node-local identities can't fire through the tee
- *  (the guard reads $t back), and dropping the tee is only sound when $t has no
- *  other reader: a per-function counted rewrite. (The tee-less leaf variant of the
- *  same idiom collapses via the plain trunc∘convert / ne-vs-impossible identities.) */
+/** ToInt32/ToNumber machinery collapse over provably-i32 values — the untyped-ABI
+ *  ceremonies a NaN-box producer emits around params it could not type, retired
+ *  once inlining/narrowing surfaces the i32 evidence. Three shapes:
+ *
+ *  1. ToInt32 guard. The canonical `|0` lowering wraps a non-leaf value V as
+ *       (select (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t V)))
+ *               (i32.const 0)
+ *               (f64.ne (local.get $t) (f64.const inf)))
+ *     — exact ToInt32 with a +inf guard, V evaluated once via the tee. When V is
+ *     `f64.convert_i32_*(E)` the round-trip is exact and the guard unsatisfiable,
+ *     so the whole select IS E — but node-local identities can't fire through the
+ *     tee (the guard reads $t back), and dropping the tee is only sound when $t
+ *     has no other reader: a per-function counted rewrite. (The tee-less leaf
+ *     variant collapses via the plain trunc∘convert / ne-vs-impossible identities.)
+ *
+ *  2. ToInt32 guard over an exact-int RING tree: V = an f64 {+,−,neg} tree whose
+ *     leaves are converts (direct, tee-wrapped, or single-def locals) or small int
+ *     consts. ToInt32 is reduction mod 2^32 — a ring hom — and ≤16 int32 leaves
+ *     keep every partial f64 sum below 2^37 ≪ 2^53 (each add/sub exact), so the
+ *     select IS the same tree in i32 ops. Local-backed leaves keep their reads and
+ *     lower via i32.trunc_sat (exact on convert-valued f64s, signedness follows
+ *     the def); the narrow/identity rounds then strip those too. f64.mul stays
+ *     out: a product of two int32s can round, so wrap(product) ≠ i32.mul. Guard
+ *     const must be non-int-valued (inf/nan/fraction) — an int SUM can equal an
+ *     in-i32-range const the per-convert impossibility test would admit.
+ *
+ *  3. ToNumber fast path `t==t ? t : __slow(t)` — an if whose condition self-
+ *     compares a never-NaN value (a convert: direct tee, or a single-def local):
+ *     the else arm is unreachable, the if IS the value (writes preserved).
+ *     Dead-else deletion is what unblocks seltree on +/− dispatch arms. */
 const intguard = (ast) => {
   walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
-    let counts = null   // lazy — most functions contain no matching select
+    let counts = null   // lazy — most functions contain no matching shape
+    let defs = null     // lazy: name → its ONE (set|tee) RHS, or null when multi-written
+    const singleDef = (t) => {
+      if (!defs) {
+        defs = new Map()
+        const walk = (d) => {
+          if (!Array.isArray(d)) return
+          if ((d[0] === 'local.set' || d[0] === 'local.tee') && typeof d[1] === 'string')
+            defs.set(d[1], defs.has(d[1]) ? null : d[2])
+          for (let i = 1; i < d.length; i++) walk(d[i])
+        }
+        walk(fn)
+      }
+      return defs.get(t) || null
+    }
+    const isCv = (v) => Array.isArray(v) && (v[0] === 'f64.convert_i32_s' || v[0] === 'f64.convert_i32_u')
+    // a local that provably holds a convert: its ONE def is one
+    const cvLocal = (t) => { const d = singleDef(t); return d && isCv(d) ? d : null }
     const rec = (n) => {
       if (!Array.isArray(n)) return
       for (let i = 1; i < n.length; i++) {
         const c = n[i]
         if (!Array.isArray(c)) continue
         rec(c)
+        // 3. ToNumber fast path: if (t==t) t else … over a never-NaN t.
+        //    Sound for ANY else content — it never executes (a pre-def read sees
+        //    the local's 0.0 default: not NaN either, same then-arm). The tee
+        //    form keeps its write by becoming the replacement value.
+        if (c[0] === 'if' && c.length === 5 &&
+            Array.isArray(c[1]) && c[1][0] === 'result' && c[1][1] === 'f64' &&
+            Array.isArray(c[2]) && c[2][0] === 'f64.eq' &&
+            Array.isArray(c[3]) && c[3][0] === 'then' && c[3].length === 2 &&
+            Array.isArray(c[3][1]) && c[3][1][0] === 'local.get' &&
+            Array.isArray(c[4]) && c[4][0] === 'else') {
+          const t = c[3][1][1], l = c[2][1], r = c[2][2]
+          if (Array.isArray(r) && r[0] === 'local.get' && r[1] === t &&
+              Array.isArray(l) && (
+                (l[0] === 'local.tee' && l[1] === t && isCv(l[2])) ||
+                (l[0] === 'local.get' && l[1] === t && cvLocal(t)))) {
+            n[i] = l
+            continue
+          }
+        }
         if (c[0] !== 'select' || c.length !== 4) continue
         const [, arm, zero, cond] = c
         if (!Array.isArray(arm) || arm[0] !== 'i32.wrap_i64' ||
             !Array.isArray(arm[1]) || arm[1][0] !== 'i64.trunc_sat_f64_s' ||
             !Array.isArray(arm[1][1]) || arm[1][1][0] !== 'local.tee') continue
         const tee = arm[1][1], t = tee[1], V = tee[2]
-        if (!Array.isArray(V) || (V[0] !== 'f64.convert_i32_s' && V[0] !== 'f64.convert_i32_u')) continue
         const z = getConst(zero)
         if (!z || z.value !== 0) continue
         if (!Array.isArray(cond) || cond[0] !== 'f64.ne' ||
             !Array.isArray(cond[1]) || cond[1][0] !== 'local.get' || cond[1][1] !== t ||
-            !Array.isArray(cond[2]) || cond[2][0] !== 'f64.const' ||
-            !impossibleConvertCompare(V[0], cond[2][1])) continue
+            !Array.isArray(cond[2]) || cond[2][0] !== 'f64.const') continue
+        // 1. direct convert — the round-trip identity
+        // (A guard-only collapse for shared temps — `trunc_sat(tee t CV)`, no
+        //  count gate — was tried and REVERTED: −350 B but a reproducible +9%
+        //  on the dispatch tree. The kept select is one predicted cmov; the
+        //  trunc form serializes through the f64 register. Leaner ≠ faster.)
+        if (isCv(V)) {
+          if (!impossibleConvertCompare(V[0], cond[2][1])) continue
+          counts ??= tallyLocals(fn, new Map(), 1)
+          const u = counts.get(t)
+          if (!u || u.gets !== 1 || u.tees !== 1 || (u.sets || 0) !== 0) continue
+          n[i] = V[1]
+          continue
+        }
+        // 2. exact-int ring tree. Guard const must be impossible for ANY int
+        //    value (not just an i32 convert) — the sum range is wider than i32.
+        const gc = f64ConstValue(cond[2][1])
+        if (gc === undefined || (Number.isFinite(gc) && Number.isInteger(gc))) continue
+        const ring = (E, st) => {
+          if (!Array.isArray(E) || ++st.n > 16) return null
+          if (isCv(E)) return E[1]
+          if (E[0] === 'local.tee' && typeof E[1] === 'string' && isCv(E[2]))
+            return [E[2][0] === 'f64.convert_i32_u' ? 'i32.trunc_sat_f64_u' : 'i32.trunc_sat_f64_s', E]
+          if (E[0] === 'local.get' && typeof E[1] === 'string') {
+            const d = singleDef(E[1])
+            return d && isCv(d) ? [d[0] === 'f64.convert_i32_u' ? 'i32.trunc_sat_f64_u' : 'i32.trunc_sat_f64_s', E] : null
+          }
+          if (E[0] === 'f64.const') {
+            const v = f64ConstValue(E[1])
+            return typeof v === 'number' && Number.isInteger(v) && Math.abs(v) <= 0x7fffffff ? ['i32.const', v | 0] : null
+          }
+          if ((E[0] === 'f64.add' || E[0] === 'f64.sub') && E.length === 3) {
+            const a = ring(E[1], st); if (!a) return null
+            const b = ring(E[2], st); if (!b) return null
+            return [E[0] === 'f64.add' ? 'i32.add' : 'i32.sub', a, b]
+          }
+          if (E[0] === 'f64.neg' && E.length === 2) {
+            const a = ring(E[1], st)
+            return a && ['i32.sub', ['i32.const', 0], a]
+          }
+          return null
+        }
+        const r = ring(V, { n: 0 })
+        if (!r) continue
         counts ??= tallyLocals(fn, new Map(), 1)
         const u = counts.get(t)
         if (!u || u.gets !== 1 || u.tees !== 1 || (u.sets || 0) !== 0) continue
-        n[i] = V[1]
+        n[i] = r
       }
     }
     rec(fn)
