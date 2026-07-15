@@ -3914,6 +3914,51 @@ test('deadset: exception edge to a reading catch keeps the store', () => {
   assert(!out2.includes('1000000'), 'no read anywhere — the store still drops')
 })
 
+test('unclamp+intguard: convert-wrapped select-read with a DEFINING tee guard collapses fully', () => {
+  // The interpreter register-file shape: ToInt32(checked reg[a]) where the
+  // select-form read wraps its load in f64.convert (int elements) and the
+  // clamp's guard slot is the defining `local.tee $tbn (i32.lt_u a (tee $o
+  // len))` — with $o REUSED by the arm's store guard. unclamp moves the tee
+  // into the if condition (5.7.1); intguard rule 5 then retires the whole
+  // f64 detour. End state is C's: one bounds branch + a raw i32 load.
+  const src = `(module
+    (memory (export "memory") 1)
+    (func (export "f") (param $reg i32) (param $a i32) (param $b i32) (result i32)
+      (local $tbn i32) (local $o i32) (local $inf f64) (local $tw i32) (local $tbi i32)
+      (local.set $tw
+        (i32.mul
+          (select
+            (i32.wrap_i64 (i64.trunc_sat_f64_s
+              (local.tee $inf
+                (select
+                  (f64.convert_i32_s (i32.load (i32.add (local.get $reg)
+                    (i32.shl (select (local.get $a) (i32.const 0)
+                      (local.tee $tbn (i32.lt_u (local.get $a)
+                        (local.tee $o (i32.shr_u (i32.load (i32.sub (local.get $reg) (i32.const 8))) (i32.const 2))))))
+                      (i32.const 2)))))
+                  (f64.const nan:0x7FF8000200000000)
+                  (local.get $tbn)))))
+            (i32.const 0)
+            (f64.ne (local.get $inf) (f64.const inf)))
+          (local.get $b)))
+      (if (i32.lt_u (local.tee $tbi (local.get $a)) (local.get $o))
+        (then (i32.store (i32.add (local.get $reg) (i32.shl (local.get $tbi) (i32.const 2))) (local.get $tw))))
+      (local.get $tw)))`
+  const out = print(optimize(parse(src), { profile: 'speed' }))
+  assert(!out.includes('select'), 'no select survives')
+  assert(!out.includes('trunc_sat'), 'no ToInt32 machinery survives')
+  assert(!out.includes('convert'), 'no f64 detour survives')
+  assert(out.includes('i32.lt_u'), 'the bounds branch remains')
+  // behavioral: in-bounds read×mul + guarded store; OOB → 0 (ToInt32(undefined))
+  const mk = (m) => new WebAssembly.Instance(new WebAssembly.Module(compile(m)), {}).exports
+  const init = (e) => { const mem = new Int32Array(e.memory.buffer); mem[0] = 4 << 2; mem[2] = 7; mem[3] = 9 } // len header at reg−8 (reg=8): 4 elems
+  for (const [a, b] of [[0, 3], [1, 5], [9, 5]]) {
+    const A = mk(optimize(parse(src), { profile: 'speed' })), B = mk(parse(src))
+    init(A); init(B)
+    assert.equal(A.f(8, a, b), B.f(8, a, b), `f(8,${a},${b})`)
+  }
+})
+
 test('fold: hex-float constants parse exactly (0x1p-1022 · 0x1p53 ≠ NaN)', () => {
   // Number('0x1p-1022') is NaN in JS — getConst must read WAT hex-float text
   // through f64.parse or the fold poisons the product (broke $math.pow's

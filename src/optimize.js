@@ -1866,31 +1866,52 @@ const unclamp = (ast) => {
         const [, loadN, undefN, cond] = c
         if (!Array.isArray(cond) || cond[0] !== 'local.get') continue
         const bn = cond[1]
-        if (!Array.isArray(loadN) || !/\.load/.test(loadN[0])) continue
+        // the value arm is the load itself, or an int-element read materialized
+        // as f64 — `f64.convert_i32_*(load)` (the interpreter/register-file
+        // shape); the convert rides into the then-arm, which leaves EXACTLY the
+        // if-form checked read intguard rule 5 collapses under a ToInt32 guard
+        let cvW = null, ld = loadN
+        if (Array.isArray(loadN) && (loadN[0] === 'f64.convert_i32_s' || loadN[0] === 'f64.convert_i32_u') && loadN.length === 2) {
+          cvW = loadN[0]; ld = loadN[1]
+        }
+        if (!Array.isArray(ld) || !/\.load/.test(ld[0])) continue
         // else-arm must be effect-free (const or global read)
         if (!(Array.isArray(undefN) && (undefN[0].endsWith('.const') || undefN[0] === 'global.get'))) continue
         // address: BASE + (clampSel << S) | BASE + clampSel, either operand order,
         // optional offset= memarg on the load
-        const ai = typeof loadN[1] === 'string' && loadN[1].startsWith('offset=') ? 2 : 1
-        if (loadN.length !== ai + 1) continue
-        const addr = loadN[ai]
+        const ai = typeof ld[1] === 'string' && ld[1].startsWith('offset=') ? 2 : 1
+        if (ld.length !== ai + 1) continue
+        const addr = ld[ai]
         if (!Array.isArray(addr) || addr[0] !== 'i32.add' || addr.length !== 3) continue
+        // the clamp's guard slot: the bound read back (`local.get $bn`), or the
+        // DEFINING tee itself (`local.tee $bn (i32.lt_u …)` — first evaluation
+        // of the bound, len tee and all). A tee moves into the if condition:
+        // evaluation order is preserved (the address evaluated first in the
+        // select form; the condition evaluates first in the if form — the tee
+        // IS that first evaluation either way), and any shared inner tees
+        // (`$o` = the element count reused by the arm's store guard) keep
+        // defining for their later readers.
+        let teeCond = null
         const isClamp = (s) => Array.isArray(s) && s[0] === 'select' && s.length === 4 &&
           Array.isArray(s[1]) && s[1][0] === 'local.get' &&
           getConst(s[2])?.value === 0 &&
-          Array.isArray(s[3]) && s[3][0] === 'local.get' && s[3][1] === bn
+          Array.isArray(s[3]) && (
+            (s[3][0] === 'local.get' && s[3][1] === bn) ||
+            (s[3][0] === 'local.tee' && s[3][1] === bn && (teeCond = s[3], true)))
         const unwrap = (x) => {
           if (isClamp(x)) return ['local.get', x[1][1]]
           if (Array.isArray(x) && x[0] === 'i32.shl' && x.length === 3 && isClamp(x[1])) return ['i32.shl', ['local.get', x[1][1][1]], x[2]]
           return null
         }
         for (const k of [1, 2]) {
+          teeCond = null
           const u = unwrap(addr[k])
           if (!u) continue
-          const ty = loadN[0].slice(0, 3)
           const newAddr = ['i32.add', k === 1 ? u : addr[1], k === 1 ? addr[2] : u]
-          const newLoad = ai === 2 ? [loadN[0], loadN[1], newAddr] : [loadN[0], newAddr]
-          n[i] = ['if', ['result', ty === 'v12' ? 'v128' : ty], cond, ['then', newLoad], ['else', undefN]]
+          const newLoad = ai === 2 ? [ld[0], ld[1], newAddr] : [ld[0], newAddr]
+          const ty = cvW ? 'f64' : ld[0].slice(0, 3) === 'v12' ? 'v128' : ld[0].slice(0, 3)
+          n[i] = ['if', ['result', ty], teeCond ?? cond,
+            ['then', cvW ? [cvW, newLoad] : newLoad], ['else', undefN]]
           break
         }
       }
