@@ -1512,18 +1512,71 @@ const intguard = (ast, opts) => {
     : n[0] === 'global.get' ? g64.get(n[1])
     : undefined
   const isNanRaw = (raw) => typeof raw === 'string' ? (raw.startsWith('nan') || raw.startsWith('-nan')) : Number.isNaN(raw)
-  // (if (result f64) C (then cv(X)) (else NaN-const/global)) — the checked read
-  const checkedRead = (V) => {
-    if (!Array.isArray(V) || V[0] !== 'if' || V.length !== 5 ||
-        !Array.isArray(V[1]) || V[1][0] !== 'result' || V[1][1] !== 'f64' ||
-        !Array.isArray(V[3]) || V[3][0] !== 'then' || V[3].length !== 2 ||
-        !Array.isArray(V[3][1]) || (V[3][1][0] !== 'f64.convert_i32_s' && V[3][1][0] !== 'f64.convert_i32_u') ||
-        !Array.isArray(V[4]) || V[4][0] !== 'else' || V[4].length !== 2) return null
-    const u = constOf(V[4][1])
+  // (if (result f64) C (then cv(X)) (else NaN-const/global)) — the checked read.
+  // `blockForm` additionally admits the producer's BRANCHLESS emission
+  //   (block (result f64) (local.set $bi IDX) (local.set $bn (i32.lt_u …))
+  //     (select (cv (load …(select (get $bi) 0 (get $bn))…)) UNDEF (get $bn)))
+  // — the address clamp is the identity under the hoisted condition, so the
+  // whole block IS `sets…; if $bn then load(unclamped) else NaN` (the OOB path
+  // skips a discarded load of a mapped address). Returned as {…, pre} — the
+  // set prefix the rewrite must keep ahead of the collapsed if.
+  const checkedRead = (V, blockForm = false) => {
+    if (!Array.isArray(V)) return null
+    if (V[0] === 'if') {
+      if (V.length !== 5 ||
+          !Array.isArray(V[1]) || V[1][0] !== 'result' || V[1][1] !== 'f64' ||
+          !Array.isArray(V[3]) || V[3][0] !== 'then' || V[3].length !== 2 ||
+          !Array.isArray(V[3][1]) || (V[3][1][0] !== 'f64.convert_i32_s' && V[3][1][0] !== 'f64.convert_i32_u') ||
+          !Array.isArray(V[4]) || V[4][0] !== 'else' || V[4].length !== 2) return null
+      const u = constOf(V[4][1])
+      if (u === undefined || !isNanRaw(u)) return null
+      return { cvOp: V[3][1][0], X: V[3][1][1], C: V[2] }
+    }
+    if (!blockForm || V[0] !== 'block' || !Array.isArray(V[1]) || V[1][0] !== 'result' || V[1][1] !== 'f64') return null
+    const pre = V.slice(2, -1)
+    if (!pre.every(s => Array.isArray(s) && s[0] === 'local.set')) return null
+    const sel = V[V.length - 1]
+    // an earlier unclamp may already have turned the tail select into the
+    // if-form — same block, same prefix, recurse on the tail
+    if (Array.isArray(sel) && sel[0] === 'if') {
+      const inner = checkedRead(sel, false)
+      return inner ? { ...inner, pre } : null
+    }
+    if (!Array.isArray(sel) || sel[0] !== 'select' || sel.length !== 4 ||
+        !Array.isArray(sel[3]) || sel[3][0] !== 'local.get') return null
+    const bn = sel[3][1]
+    const u = constOf(sel[2])
     if (u === undefined || !isNanRaw(u)) return null
-    return { cvOp: V[3][1][0], X: V[3][1][1], C: V[2] }
+    let cvN = sel[1]
+    if (!Array.isArray(cvN) || (cvN[0] !== 'f64.convert_i32_s' && cvN[0] !== 'f64.convert_i32_u') || cvN.length !== 2) return null
+    const ld = cvN[1]
+    if (!Array.isArray(ld) || !/\.load/.test(ld[0])) return null
+    const ai = typeof ld[1] === 'string' && ld[1].startsWith('offset=') ? 2 : 1
+    if (ld.length !== ai + 1) return null
+    const addr = ld[ai]
+    if (!Array.isArray(addr) || addr[0] !== 'i32.add' || addr.length !== 3) return null
+    const isClamp = (s) => Array.isArray(s) && s[0] === 'select' && s.length === 4 &&
+      Array.isArray(s[1]) && s[1][0] === 'local.get' &&
+      Array.isArray(s[2]) && s[2][0] === 'i32.const' && +s[2][1] === 0 &&
+      Array.isArray(s[3]) && s[3][0] === 'local.get' && s[3][1] === bn
+    const unwrap = (x) => {
+      if (isClamp(x)) return ['local.get', x[1][1]]
+      if (Array.isArray(x) && x[0] === 'i32.shl' && x.length === 3 && isClamp(x[1])) return ['i32.shl', ['local.get', x[1][1][1]], x[2]]
+      return null
+    }
+    for (const k of [1, 2]) {
+      const uw = unwrap(addr[k])
+      if (!uw) continue
+      const newAddr = ['i32.add', k === 1 ? uw : addr[1], k === 1 ? addr[2] : uw]
+      const newLoad = ai === 2 ? [ld[0], ld[1], newAddr] : [ld[0], newAddr]
+      return { cvOp: cvN[0], X: newLoad, C: ['local.get', bn], pre }
+    }
+    return null
   }
-  const asI32If = (r) => ['if', ['result', 'i32'], r.C, ['then', r.X], ['else', ['i32.const', 0]]]
+  const asI32If = (r) => {
+    const iff = ['if', ['result', 'i32'], r.C, ['then', r.X], ['else', ['i32.const', 0]]]
+    return r.pre?.length ? ['block', ['result', 'i32'], ...r.pre, iff] : iff
+  }
   // Pure i32 expression — safe to move under a condition (no loads/calls/traps).
   const isPureI32 = (E) => !Array.isArray(E)
     ? false
@@ -1538,7 +1591,10 @@ const intguard = (ast, opts) => {
   // the hoisted condition and may no longer evaluate on the OOB path.
   const ring1 = (V, st) => {
     if (!Array.isArray(V) || ++st.n > 16) return null
-    const cr = st.read ? null : checkedRead(V)
+    // block-form read leaf: its set-prefix rides st.read.pre — the rewrite
+    // keeps it ahead of the hoisted condition; every other leaf is pure, so
+    // evaluating it after the sets matches the original order
+    const cr = st.read ? null : checkedRead(V, true)
     if (cr) { st.read = cr; return cr.X }
     if (isCv(V)) return isPureI32(V[1]) ? V[1] : null
     const raw = constOf(V)   // literal or pooled global
@@ -1616,7 +1672,7 @@ const intguard = (ast, opts) => {
         //     guard): trunc_sat(if C cv(X) NaN) — trunc∘cv is the identity,
         //     trunc_sat(NaN) = 0 — IS (if (result i32) C X 0).
         if ((c[0] === 'i32.trunc_sat_f64_s' || c[0] === 'i32.trunc_sat_f64_u') && c.length === 2) {
-          const cr = checkedRead(c[1])
+          const cr = checkedRead(c[1], true)
           if (cr && truncFitsCv(c[0], cr.cvOp, cr.X)) { n[i] = asI32If(cr); continue }
         }
         // 3. ToNumber fast path: if (t==t) t else … over a never-NaN t.
@@ -1753,7 +1809,7 @@ const intguard = (ast, opts) => {
             const nonInt = gc !== undefined && !(Number.isFinite(gc) && Number.isInteger(gc))
             const rec2 = (d) => { e.defs.push(d); e.gets += 1; e.tees += 1; sweep(V) }
             if (Array.isArray(V) && isCv(V) && impossibleConvertCompare(V[0], g.C)) { rec2({ n, i, kind: 'cv', cv: V }); continue }
-            const cr = checkedRead(V)
+            const cr = checkedRead(V, true)
             if (cr && impossibleConvertCompare(cr.cvOp, g.C)) { rec2({ n, i, kind: 'read', cr }); continue }
             if (Array.isArray(V) && V[0] === 'f64.const' && gc !== undefined) {
               const v = f64ConstValue(V[1])
@@ -1761,7 +1817,7 @@ const intguard = (ast, opts) => {
             }
             if (nonInt) {
               const st = { n: 0 }, tree = ring1(V, st)
-              if (tree && st.read) { rec2({ n, i, kind: 'ring', C: st.read.C, tree }); continue }
+              if (tree && st.read) { rec2({ n, i, kind: 'ring', C: st.read.C, pre: st.read.pre, tree }); continue }
             }
             // unmatched guarded tee: keep the cluster, but ACCOUNT for it — its
             // ne reads its own tee, so sibling clusters stay independently
@@ -1803,7 +1859,7 @@ const intguard = (ast, opts) => {
         for (const d of e.defs)
           if (d.kind) d.n[d.i] = d.kind === 'cv' ? d.cv[1]
             : d.kind === 'read' ? asI32If(d.cr)
-            : d.kind === 'ring' ? asI32If({ C: d.C, X: d.tree })
+            : d.kind === 'ring' ? asI32If({ C: d.C, X: d.tree, pre: d.pre })
             : ['i32.const', d.v !== d.gc ? constToI32(d.v) : 0]
         continue
       }
@@ -7770,8 +7826,12 @@ const PASSES = [
   //   … → seltree (needs collapsed arms, pre-coalesce temps).
   ['narrow',        narrowLocals,   true,  'retype f64 locals written only by exact i32 converts — reads re-box, ToInt32 chains then fold'],
   ['guardRefine',   guardRefine,    false, 'fold NaN-box tag reads under dominating tag guards (jz NaN-box-specific; opt-in)'],
-  ['intguard',      intguard,       true,  'ToInt32 guard select over an exact i32 convert → the raw value'],
+  // unclamp BEFORE intguard: it rewrites select-form checked reads into the
+  // if-form rule 5 collapses, and the collapse must land in the SAME round —
+  // by round 2, coalesce has shared the guard temps' slots and the counted
+  // gates rightly refuse (the round-2-shapes trap).
   ['unclamp',       unclamp,        false, 'select-clamped checked reads → predicted-branch if-form (surviving = unvectorized; speed profile)'],
+  ['intguard',      intguard,       true,  'ToInt32 guard select over an exact i32 convert → the raw value'],
   ['branch',        branch,         true,  'simplify constant branches'],
   ['zeroinit',      zeroinit,       true,  'drop local.set of zero when the local provably still holds its spec zero'],
   ['ifset',         ifset,          false, 'one-armed conditional update \u2192 branchless select \u2014 unconditional-update trade (speed profile)'],
@@ -7782,11 +7842,13 @@ const PASSES = [
   // the tree still pays every arm — a regression; on unpredictable streams the
   // tree wins the mispredict back. A static compiler can't know the stream —
   // profiles opt in where dispatch-heavy code is the target.
-  // default OFF like seltree, its dual — and NOT in the speed profile either:
-  // measured on the vm interpreter bench (M4, patterned op stream) the table
-  // ran 2.3% SLOWER than the chain — a predictable stream predicts the chain
-  // nearly free while the indirect jump pays its own prediction; opt in only
-  // for genuinely unpredictable dispatch.
+  // default OFF like seltree, its dual; ON in the speed profile. Measured on
+  // the vm interpreter bench (M4, patterned op stream): with FAT arms (each
+  // paying the f64 checked-read detour) the chain predicted nearly free and
+  // the table ran 2.3% slower — but once the block-form cluster collapse
+  // leaned the arms to raw i32 (5.7.2), the chain's compare ladder became the
+  // cost and the table won it back +6.3%. Arm weight decides; the speed
+  // profile assumes collapsed arms.
   ['chainTable',    chainTable,     false, 'dense same-scrutinee if/else-if chain → br_table (the C switch lowering)'],
   ['seltree',       seltree,        false, 'small dense br_table of cheap pure arms → branchless select tree'],
   ['macro',         inlineMacro,    true,  'expand single-expression functions at call sites (positional, zero wrapper)'],
@@ -7846,7 +7908,7 @@ const OPTS = Object.fromEntries(PASSES.map(p => [p[0], p[2]]))
  * about every workload — a profile the caller opts into, not a default.
  */
 const PROFILES = {
-  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true, seltree: true, unclamp: true }),
+  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true, seltree: true, unclamp: true, chainTable: true }),
 }
 
 /**
