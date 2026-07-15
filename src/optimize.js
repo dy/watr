@@ -5128,34 +5128,63 @@ const inlZeroFor = (t) => {
   if (t === 'v128') return ['v128.const', 'i64x2', '0', '0']  // STRING lanes — watr's v128 encoder calls .replaceAll
   return null
 }
-// A callee local needs a per-entry reset only if some path reads it before any
-// unconditional write (so it relied on the callee's fresh zero-init). Mirrors
-// coalesceLocals' readsZero heuristic; unconditionally-written scratch needs none.
+// A callee local needs a per-entry reset only if some executable path reads it
+// before a write on that SAME path. The old "first set nested in an if" test was
+// over-conservative: `(then (local.set $t …) (local.get $t))` is self-contained,
+// yet every inlined call paid a reset for $t. Track definite assignment through
+// structured control instead. Joins intersect branch facts; loops/branching
+// blocks retain only their incoming fact (zero trips / early branch may bypass a
+// set). Reads inside an arm still see writes earlier in that arm.
 const inlNeedsReset = (body, name) => {
-  let seen = false, conditional = false, depth = 0
-  const visit = (n) => {
-    if (seen || !Array.isArray(n)) return
-    const op = n[0]
-    const isSet = op === 'local.set' || op === 'local.tee'
-    if ((isSet || op === 'local.get') && n[1] === name) {
-      if (isSet) for (let i = 2; i < n.length && !seen; i++) visit(n[i])
-      if (seen) return
-      seen = true
-      if (op === 'local.get' || depth > 0) conditional = true
-      return
-    }
-    const isIf = op === 'if'
-    for (let i = 1; i < n.length && !seen; i++) {
-      const c = n[i]
-      const cond = isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')
-      if (cond) depth++
-      visit(c)
-      if (cond) depth--
-    }
+  let needs = false
+  const hasBranch = (n) => {
+    if (!Array.isArray(n)) return false
+    if (n[0] === 'br' || n[0] === 'br_if' || n[0] === 'br_table') return true
+    for (let i = 1; i < n.length; i++) if (hasBranch(n[i])) return true
+    return false
   }
-  for (const n of body) { if (seen) break; visit(n) }
-  if (!seen) return false
-  return conditional
+  const seq = (xs, assigned) => {
+    for (const x of xs) assigned = visit(x, assigned)
+    return assigned
+  }
+  const visit = (n, assigned) => {
+    if (needs || !Array.isArray(n)) return assigned
+    const op = n[0]
+    if (op === 'local.get' && n[1] === name) {
+      if (!assigned) needs = true
+      return assigned
+    }
+    if ((op === 'local.set' || op === 'local.tee') && n[1] === name) {
+      assigned = seq(n.slice(2), assigned) // RHS runs before the write
+      return true
+    }
+    if (op === 'if') {
+      let thenNode = null, elseNode = null
+      const plain = []
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i]
+        if (Array.isArray(c) && c[0] === 'then') thenNode = c
+        else if (Array.isArray(c) && c[0] === 'else') elseNode = c
+        else plain.push(c)
+      }
+      const atArm = seq(plain, assigned)
+      const a = thenNode ? seq(thenNode.slice(1), atArm) : atArm
+      const b = elseNode ? seq(elseNode.slice(1), atArm) : atArm
+      return a && b
+    }
+    if (op === 'loop') {
+      seq(n.slice(typeof n[1] === 'string' ? 2 : 1), assigned)
+      return assigned // zero trips from the continuation's perspective
+    }
+    if (op === 'block') {
+      const start = typeof n[1] === 'string' ? 2 : 1
+      const out = seq(n.slice(start), assigned)
+      return hasBranch(n) ? assigned : out
+    }
+    return seq(n.slice(1), assigned)
+  }
+  seq(body, false)
+  return needs
 }
 // Module-level references that pin a function (can't be inlined-away/removed).
 const inlCollectPinned = (n, pinned) => {

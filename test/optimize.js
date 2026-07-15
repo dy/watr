@@ -2200,6 +2200,45 @@ test('coalesce: read-in-set-rhs is recognized as read-first', () => {
   assert.equal(exports.f(), 1, 'read-first local must not inherit prior slot residue')
 })
 
+test('inlineOnce: branch-local set-before-read scratch needs no per-call reset', () => {
+  const src = `(module
+    (func $helper (param $p i32) (result i32) (local $t i32)
+      (if (result i32) (local.get $p)
+        (then (local.set $t (i32.const 7)) (local.get $t))
+        (else (i32.const 3))))
+    (func (export "f") (result i32) (local $i i32) (local $sum i32)
+      (loop $L
+        (local.set $sum (i32.add (local.get $sum) (call $helper (i32.and (local.get $i) (i32.const 1)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $L (i32.lt_u (local.get $i) (i32.const 4))))
+      (local.get $sum)))`
+  const opt = optimize(parse(src), { inlineOnce: true, treeshake: true })
+  const out = print(opt)
+  assert(!/local\.set \$__inl\d+_t\s+\(i32\.const 0\)/.test(out), 'arm-local set dominates its read — no reset')
+  const f = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
+  assert.equal(f(), 20)
+})
+
+test('inlineOnce: a join read and branch-bypassed set still require reset', () => {
+  const src = `(module
+    (func $join (param $p i32) (result i32) (local $t i32)
+      (if (local.get $p) (then (local.set $t (i32.const 9))))
+      (local.get $t))
+    (func $bypass (param $p i32) (result i32) (local $u i32)
+      (block $B (br_if $B (local.get $p)) (local.set $u (i32.const 5)))
+      (local.get $u))
+    (func (export "f") (result i32)
+      (i32.add
+        (i32.add (call $join (i32.const 1)) (call $join (i32.const 0)))
+        (i32.add (call $bypass (i32.const 0)) (call $bypass (i32.const 1))))))`
+  const opt = optimize(parse(src), { inline: true, treeshake: true })
+  const out = print(opt)
+  assert(/local\.set \$__inl\d+_t\s+\(i32\.const 0\)/.test(out), 'one-arm assignment does not dominate join read')
+  assert(/local\.set \$__inl\d+_u\s+\(i32\.const 0\)/.test(out), 'br_if may bypass assignment')
+  const f = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
+  assert.equal(f(), 14)
+})
+
 test('inlineOnce+coalesce: zero-dependent callee local not merged into residue slot', () => {
   // inlineOnce hoists the callee's `$accum` into the caller's frame. Because
   // the body opens with a read of `$accum`, it depends on the per-call implicit

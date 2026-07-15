@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.7.5
+
+- fix: inlining no longer resets a scratch local whose write dominates its reads within the same conditional arm
+- preserve per-call zero initialization across joins, zero-trip loops, and branch-bypassed assignments
+
+[Compare](https://github.com/dy/watr/compare/v5.7.4...v5.7.5)
+
 ## v5.4.1
 
 - fix: `fold` reads hex-float constants (`0x1p-1022`) through `f64.parse` — `Number()` yielded NaN, poisoning constant products (broke subnormal `Math.pow` scaling in jz-compiled modules)
