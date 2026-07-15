@@ -571,6 +571,43 @@ test('identity: and-mask dead before a narrowing store', () => {
   assert(print(optimize(parse(mod('127')), 'identity')).includes('i32.and'), '& 0x7f is load-bearing')
 })
 
+test('identity: f64 compare distributes into a checked-read if-form', () => {
+  // the interpreter JNZ shape: `reg[a] !== 0` over an if-form checked read —
+  // hit arm convert_i32(load) → raw i32.ne, UNDEF-NaN miss arm → const 1;
+  // the outer f64.ne, the convert and the NaN materialization all die.
+  const mod = `(module
+    (memory 1)
+    (func $f (export "f") (param $a i32) (param $n i32) (result i32)
+      (f64.ne
+        (if (result f64) (i32.lt_u (local.get $a) (local.get $n))
+          (then (f64.convert_i32_s (i32.load (i32.shl (local.get $a) (i32.const 2)))))
+          (else (f64.const nan:0x7FF8000200000000)))
+        (f64.const 0))))`
+  const out = print(optimize(parse(mod), 'identity'))
+  assert(!out.includes('f64.ne'), 'outer f64 compare gone')
+  assert(!out.includes('f64.convert_i32_s'), 'convert gone')
+  assert(!out.includes('nan:'), 'NaN materialization gone')
+  assert(out.includes('i32.ne'), 'raw i32 compare in the hit arm')
+  assert(/\(if\s+\(result i32\)/.test(out), 'if retyped i32')
+  // eq twin: NaN arm folds to 0
+  const eq = print(optimize(parse(mod.replace('f64.ne', 'f64.eq')), 'identity'))
+  assert(eq.includes('i32.eq'), 'eq twin: raw i32 compare')
+  assert(!eq.includes('f64.eq'), 'eq twin: outer compare gone')
+  // fail-closed: a fractional const cannot map to i32 in the hit arm — the
+  // convert-arm is statically unequal, the const arm still folds
+  const frac = print(optimize(parse(mod.replace('(f64.const 0)', '(f64.const 0.5)')), 'identity'))
+  assert(!frac.includes('f64.ne'), 'fractional const: both arms fold static')
+  // fail-closed: an opaque f64 arm (no convert, not a const) keeps the original
+  const opaque = `(module
+    (func $g (export "g") (param $c i32) (param $x f64) (result i32)
+      (f64.ne
+        (if (result f64) (local.get $c)
+          (then (local.get $x))
+          (else (f64.const nan:0x7FF8000200000000)))
+        (f64.const 0))))`
+  assert(print(optimize(parse(opaque), 'identity')).includes('f64.ne'), 'opaque arm: untouched')
+})
+
 // ==================== STRENGTH REDUCTION ====================
 
 test('strength: x * 2 → x << 1', () => {

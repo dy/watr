@@ -1009,6 +1009,43 @@ const identityNode = (node) => {
             impossibleConvertCompare(conv[0], cst[1]))
           return ['i32.const', node[0] === 'f64.ne' ? 1 : 0]
       }
+      // f64 eq/ne of an IF-form (result f64) against a const distributes into
+      // the arms when BOTH simplify — the checked-read consumer shape
+      // (`reg[a] !== 0`, hash-sentinel compares): the hit arm
+      // `f64.convert_i32_*(X)` becomes a raw i32 compare (the convert is
+      // injective; a const outside its range is statically unequal) and the
+      // UNDEF/NaN miss arm folds to a constant — the outer f64 compare, the
+      // convert and the NaN materialization all die. Each arm's expression
+      // stays on its own path (no duplication, no reorder; the const is pure),
+      // so purity of the arms is irrelevant.
+      const ne = node[0] === 'f64.ne'
+      for (const [iff, cst] of [[node[1], node[2]], [node[2], node[1]]]) {
+        if (!Array.isArray(iff) || iff[0] !== 'if' || iff.length !== 5) continue
+        if (!Array.isArray(cst) || cst[0] !== 'f64.const') continue
+        const [, res, cond, thenA, elseA] = iff
+        if (!Array.isArray(res) || res[0] !== 'result' || res[1] !== 'f64') continue
+        if (!Array.isArray(thenA) || thenA[0] !== 'then' || thenA.length !== 2) continue
+        if (!Array.isArray(elseA) || elseA[0] !== 'else' || elseA.length !== 2) continue
+        const K = f64ConstValue(cst[1])
+        const arm = (A) => {
+          if (!Array.isArray(A)) return null
+          if (A[0] === 'f64.const' && A.length === 2) {
+            const v = f64ConstValue(A[1])
+            if (v !== v) return ['i32.const', ne ? 1 : 0]   // any NaN payload: unequal
+            if (v === undefined || K === undefined) return null
+            return ['i32.const', (ne ? v !== K : v === K) ? 1 : 0]
+          }
+          if ((A[0] === 'f64.convert_i32_s' || A[0] === 'f64.convert_i32_u') && A.length === 2) {
+            if (impossibleConvertCompare(A[0], cst[1])) return ['i32.const', ne ? 1 : 0]
+            if (K === undefined || !Number.isInteger(K)) return null
+            if (A[0] === 'f64.convert_i32_u' ? (K < 0 || K > 4294967295) : (K < I32S_MIN || K > I32S_MAX)) return null
+            return [ne ? 'i32.ne' : 'i32.eq', A[1], ['i32.const', K | 0]]
+          }
+          return null
+        }
+        const tA = arm(thenA[1]), tB = arm(elseA[1])
+        if (tA && tB) return ['if', ['result', 'i32'], cond, ['then', tA], ['else', tB]]
+      }
     }
     const fn = IDENTITIES[node[0]]
     if (!fn) return
