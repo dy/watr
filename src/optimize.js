@@ -1250,6 +1250,20 @@ const branch = (ast) => {
       return ['br', node[1]]
     }
 
+    // (br_table $l0 … $lN-1 $dflt (i32.const K)) → br to the selected label —
+    // K indexes UNSIGNED (negative/huge → default), matching the runtime
+    // semantics. A chainTable'd dispatch whose scrutinee folds post-inline
+    // must keep folding like the if-chain it replaced, or its dead arms
+    // freeze (a dead guard arm's import resurrects into the live set).
+    if (op === 'br_table' && node.length >= 3) {
+      const c = getConst(node[node.length - 1])
+      if (!c) return
+      const labels = node.slice(1, -1).filter(x => typeof x === 'string' && x[0] === '$')
+      if (!labels.length) return
+      const k = Number(c.value) >>> 0
+      return ['br', labels[k < labels.length - 1 ? k : labels.length - 1]]
+    }
+
     // (select a b (i32.const 0)) → b
     // (select a b (i32.const N)) → a (N != 0)
     // `select` evaluates BOTH arms before choosing, so a side effect in the DISCARDED

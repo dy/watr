@@ -3914,6 +3914,28 @@ test('deadset: exception edge to a reading catch keeps the store', () => {
   assert(!out2.includes('1000000'), 'no read anywhere — the store still drops')
 })
 
+test('branch: constant-index br_table folds to the selected br (unsigned, OOR → default)', () => {
+  // a chainTable'd dispatch whose scrutinee folds post-inline must keep
+  // folding like the if-chain it replaced — dead arms must not freeze
+  const mk = (k) => `(module (func (export "f") (result i32)
+    (block $out (result i32)
+      (block $d
+        (block $l2
+          (block $l1
+            (block $l0
+              (br_table $l0 $l1 $l2 $d (i32.const ${k})))
+            (br $out (i32.const 10)))
+          (br $out (i32.const 11)))
+        (br $out (i32.const 12)))
+      (i32.const 99))))`
+  for (const [k, want] of [[0, 10], [1, 11], [2, 12], [3, 99], [7, 99], [-1, 99]]) {
+    const out = print(optimize(parse(mk(k)), 'branch'))
+    assert(!out.includes('br_table'), `k=${k}: table folded`)
+    const run = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(mk(k)))))).exports
+    assert.equal(run.f(), want, `k=${k}`)
+  }
+})
+
 test('unclamp+intguard: convert-wrapped select-read with a DEFINING tee guard collapses fully', () => {
   // The interpreter register-file shape: ToInt32(checked reg[a]) where the
   // select-form read wraps its load in f64.convert (int elements) and the
