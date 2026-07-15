@@ -299,6 +299,52 @@ test('seltree: dense br_table of cheap pure arms → branchless select tree', ()
   for (let i = 0; i < 6; i++) assert.equal(mod.d(i, 29, 13), ref.d(i, 29, 13), `idx ${i}`)
 })
 
+test('chainTable: dense same-scrutinee if/else-if chain → br_table', () => {
+  // the interpreter-dispatch shape: a result-typed chain (each arm yields the
+  // next pc) inside a tee — C lowers exactly this to a jump table
+  const chain = `(module (memory 1) (func (export "f") (param $op i32) (param $pc i32) (result i32)
+    (local.tee $pc
+      (if (result i32) (i32.eq (local.get $op) (i32.const 0))
+        (then (i32.add (local.get $pc) (i32.const 1)))
+        (else (if (result i32) (i32.eq (local.get $op) (i32.const 1))
+          (then (i32.store (i32.const 0) (i32.const 11)) (i32.add (local.get $pc) (i32.const 1)))
+          (else (if (result i32) (i32.eq (local.get $op) (i32.const 2))
+            (then (i32.add (local.get $pc) (i32.const 2)))
+            (else (if (result i32) (i32.eq (local.get $op) (i32.const 3))
+              (then (i32.add (local.get $pc) (i32.const 3)))
+              (else (if (result i32) (i32.eq (local.get $op) (i32.const 4))
+                (then (i32.add (local.get $pc) (i32.const 4)))
+                (else (i32.const 99))))))))))))))`
+  const out = print(optimize(parse(chain), 'chainTable'))
+  assert(out.includes('br_table'), 'chain became a table')
+  assert(!/i32\.eq/.test(out), 'no comparison ladder remains')
+  const mod = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(chain), 'chainTable'))), {}).exports
+  const ref = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(chain))), {}).exports
+  for (let op = -1; op <= 6; op++) for (const pc of [0, 5])
+    assert.equal(mod.f(op, pc), ref.f(op, pc), `op ${op} pc ${pc}`)
+  // short chain (< 5 arms) keeps the branchy form
+  const short = `(module (func (export "g") (param $op i32) (result i32)
+    (if (result i32) (i32.eq (local.get $op) (i32.const 0)) (then (i32.const 1))
+      (else (if (result i32) (i32.eq (local.get $op) (i32.const 1)) (then (i32.const 2))
+        (else (i32.const 3)))))))`
+  assert(!print(optimize(parse(short), 'chainTable')).includes('br_table'), 'short chain untouched')
+  // mixed scrutinee breaks the chain at the mismatch — the inner run still converts
+  const mixed = `(module (func (export "h") (param $x i32) (param $op i32) (result i32)
+    (if (result i32) (i32.eq (local.get $x) (i32.const 0)) (then (i32.const 100))
+      (else (if (result i32) (i32.eq (local.get $op) (i32.const 0)) (then (i32.const 0))
+        (else (if (result i32) (i32.eq (local.get $op) (i32.const 1)) (then (i32.const 1))
+          (else (if (result i32) (i32.eq (local.get $op) (i32.const 2)) (then (i32.const 2))
+            (else (if (result i32) (i32.eq (local.get $op) (i32.const 3)) (then (i32.const 3))
+              (else (if (result i32) (i32.eq (local.get $op) (i32.const 4)) (then (i32.const 4))
+                (else (i32.const 99)))))))))))))))`
+  const outM = print(optimize(parse(mixed), 'chainTable'))
+  assert(outM.includes('br_table'), 'inner run converts')
+  const modM = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(mixed), 'chainTable'))), {}).exports
+  const refM = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(mixed))), {}).exports
+  for (let x = 0; x <= 1; x++) for (let op = -1; op <= 5; op++)
+    assert.equal(modM.h(x, op), refM.h(x, op), `x ${x} op ${op}`)
+})
+
 test('intguard: ToInt32 guard select over exact i32 convert → raw value', () => {
   const guarded = (tail = '') => `(module (func (param $e i32) (result ${tail ? 'f64' : 'i32'})
     (local $t f64)

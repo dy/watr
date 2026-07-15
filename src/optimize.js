@@ -1917,6 +1917,92 @@ const unclamp = (ast) => {
  *  behind the one in-range branch — always taken for real streams, so predicted.
  *  Holes, impure arms, or oversized arms keep the br_table. */
 const SELTREE_OK = /^(i32|i64|f64|f32)\.(const|add|sub|mul|min|max|abs|neg|sqrt|ceil|floor|nearest|copysign|and|or|xor|shl|shr_[su]|rotl|rotr|eqz|eq|ne|[lg][te](_[su])?|clz|ctz|popcnt|extend(8|16|32)_s|extend_i32_[su]|wrap_i64|convert_i32_[su]|convert_i64_[su]|trunc_sat_f(32|64)_[su]|reinterpret_(i32|i64|f32|f64)|promote_f32|demote_f64)$/
+/**
+ * Dense if/else-if chain over ONE i32 scrutinee → br_table — the C-compiler
+ * switch lowering. An interpreter's dispatch (`if (op==0) … else if (op==1) …`)
+ * pays a chained mispredict per step where a jump table pays one indirect
+ * branch; native compilers make exactly this transform for a handful of dense
+ * arms, and it is where C's bytecode-VM advantage lives. Matches
+ *   (if [(result T)] (i32.eq S (i32.const K)) (then …) (else (if … (else D))))
+ * where S is the SAME `local.get` at every level (re-evaluated once by the
+ * table — pure), the Ks are distinct and dense (span ≤ 2× count, holes route
+ * to default), the chain is ≥ CHAIN_MIN arms, and every level agrees on the
+ * result shape (all void, or all one (result T) with a default arm). Rewrites
+ * to nested blocks + one br_table; a result chain brs each arm's value out.
+ * Arms keep their bodies verbatim, so brs/returns inside them stay valid
+ * (labels are only ADDED around, never renamed).
+ */
+let ctUid = 0
+const CHAIN_MIN = 5
+const chainTable = (ast) => {
+  const scrutOf = (c) => {
+    if (!Array.isArray(c) || c[0] !== 'i32.eq' || c.length !== 3) return null
+    const [, a, b] = c
+    const name = (x) => Array.isArray(x) && x[0] === 'local.get' && typeof x[1] === 'string' ? x[1] : null
+    const k = (x) => Array.isArray(x) && x[0] === 'i32.const' && Number.isInteger(+x[1]) ? +x[1] : null
+    const na = name(a), kb = k(b)
+    if (na != null && kb != null) return { s: na, k: kb }
+    const nb = name(b), ka = k(a)
+    if (nb != null && ka != null) return { s: nb, k: ka }
+    return null
+  }
+  walkN(ast, (n, parent, idx) => {
+    if (!parent || !Array.isArray(n) || n[0] !== 'if') return
+    const arms = []
+    let scrut = null, resT = void 0, node = n, dflt = null
+    while (true) {
+      let j = 1, rT = null
+      if (Array.isArray(node[j]) && node[j][0] === 'result') {
+        if (node[j].length !== 2) return            // multivalue — out of scope
+        rT = node[j][1]; j++
+      }
+      const cond = node[j]
+      const thn = node.find(c => Array.isArray(c) && c[0] === 'then')
+      const els = node.find(c => Array.isArray(c) && c[0] === 'else')
+      const m = scrutOf(cond)
+      if (!m || !thn) break
+      if (scrut == null) scrut = m.s
+      else if (scrut !== m.s) break
+      if (resT === void 0) resT = rT
+      else if (resT !== rT) break
+      arms.push({ k: m.k, body: thn.slice(1) })
+      if (els && els.length === 2 && Array.isArray(els[1]) && els[1][0] === 'if') { node = els[1]; continue }
+      dflt = els ? els.slice(1) : null
+      break
+    }
+    if (arms.length < CHAIN_MIN) return
+    if (resT != null && !dflt) return               // a value chain needs a default value
+    const ks = arms.map(a => a.k)
+    if (new Set(ks).size !== ks.length) return
+    const L = Math.min(...ks), H = Math.max(...ks)
+    if (H - L + 1 > arms.length * 2) return         // too sparse — the table pays holes
+    const end = `$__ct${ctUid}e`, dLab = `$__ct${ctUid}d`
+    const armLab = arms.map((_, i) => `$__ct${ctUid}_${i}`)
+    ctUid++
+    const byK = new Map(arms.map((a, i) => [a.k, i]))
+    const vec = []
+    for (let v = L; v <= H; v++) vec.push(byK.has(v) ? armLab[byK.get(v)] : (dflt ? dLab : end))
+    const idxE = L === 0 ? ['local.get', scrut] : ['i32.sub', ['local.get', scrut], ['i32.const', L]]
+    // guard below-range: br_table clamps ONLY the high side (u≥len → default);
+    // L>0 makes negatives huge-unsigned → default too, so the sub is safe
+    let core = ['block', armLab[0], ['br_table', ...vec, dflt ? dLab : end, idxE]]
+    const armOut = (body) => resT != null
+      ? [...body.slice(0, -1), ['br', end, body[body.length - 1]]]
+      : [...body, ['br', end]]
+    for (let i = 0; i < arms.length; i++) {
+      const wrap = i + 1 < arms.length ? ['block', armLab[i + 1]] : (dflt ? ['block', dLab] : null)
+      if (wrap) { wrap.push(core, ...armOut(arms[i].body)); core = wrap }
+      else core = ['block', end, core, ...armOut(arms[i].body)]   // void, no default: last arm falls out
+    }
+    parent[idx] = dflt
+      ? (resT != null
+        ? ['block', end, ['result', resT], core, ...dflt]
+        : ['block', end, core, ...dflt])
+      : core
+  })
+  return ast
+}
+
 const seltree = (ast) => {
   let uid = 0
   walkN(ast, (fn) => {
@@ -7675,6 +7761,12 @@ const PASSES = [
   // the tree still pays every arm — a regression; on unpredictable streams the
   // tree wins the mispredict back. A static compiler can't know the stream —
   // profiles opt in where dispatch-heavy code is the target.
+  // default OFF like seltree, its dual — and NOT in the speed profile either:
+  // measured on the vm interpreter bench (M4, patterned op stream) the table
+  // ran 2.3% SLOWER than the chain — a predictable stream predicts the chain
+  // nearly free while the indirect jump pays its own prediction; opt in only
+  // for genuinely unpredictable dispatch.
+  ['chainTable',    chainTable,     false, 'dense same-scrutinee if/else-if chain → br_table (the C switch lowering)'],
   ['seltree',       seltree,        false, 'small dense br_table of cheap pure arms → branchless select tree'],
   ['macro',         inlineMacro,    true,  'expand single-expression functions at call sites (positional, zero wrapper)'],
   ['spec',          specializeParams, true, 'drop parameters every call site passes the same constant'],
