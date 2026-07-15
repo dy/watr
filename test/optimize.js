@@ -3832,6 +3832,42 @@ test('deadset: store read through a br_if exit path stays', () => {
   assert.equal(run.k(2), 1)
 })
 
+test('deadset: exception edge to a reading catch keeps the store', () => {
+  // `set x 1e6 → try { call (throws) → set x 0 } catch → get x`: the linear
+  // scan reaches the killer store, but the call's exception edge lands at the
+  // catch label with 1e6 LIVE. Both the scan-through case (candidate before
+  // the try) and the inside-candidate case (candidate within the body) keep.
+  const src = `(module
+    (tag $e)
+    (func $boom (throw $e))
+    (func (export "f") (result i32)
+      (local $x i32)
+      (local.set $x (i32.const 1000000))
+      (block $catch
+        (try_table (catch_all $catch)
+          (call $boom)
+          (local.set $x (i32.const 0))))
+      (local.get $x)))`
+  const out = print(optimize(parse(src), 'deadset')).replace(/\s+/g, ' ')
+  assert(out.includes('(local.set $x (i32.const 1000000))'), 'catch path reads the pre-try value')
+  const run = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src))))).exports
+  assert.equal(run.f(), 1000000, 'exception path observes the first store')
+  // control: with no read after the catch join, both stores are dead → drop
+  const dead = `(module
+    (tag $e)
+    (func $boom (throw $e))
+    (func (export "g") (result i32)
+      (local $x i32)
+      (local.set $x (i32.const 1000000))
+      (block $catch
+        (try_table (catch_all $catch)
+          (call $boom)
+          (local.set $x (i32.const 0))))
+      (i32.const 3)))`
+  const out2 = print(optimize(parse(dead), 'deadset')).replace(/\s+/g, ' ')
+  assert(!out2.includes('1000000'), 'no read anywhere — the store still drops')
+})
+
 test('fold: hex-float constants parse exactly (0x1p-1022 · 0x1p53 ≠ NaN)', () => {
   // Number('0x1p-1022') is NaN in JS — getConst must read WAT hex-float text
   // through f64.parse or the fold poisons the product (broke $math.pow's

@@ -4573,9 +4573,29 @@ const deadset = (ast) => {
           if (n[1] === x) return 'set'
           i++; continue
         }
-        if (op === 'return' || op === 'unreachable') {
+        if (op === 'return' || op === 'unreachable' || op === 'throw' || op === 'throw_ref' || op === 'rethrow') {
+          // throw is terminal here: every ENCLOSING in-function catch edge was
+          // verified 'set' when the scan entered its try_table (below), and an
+          // uncaught throw unwinds out of the function, where locals die
           if (n.length > 1 && Array.isArray(n[1])) { list = n; i = 1; k = SETK; continue }
           return 'set'
+        }
+        if (op === 'try_table') {
+          // EXCEPTION EDGES: any instruction inside the body can transfer to a
+          // catch label with the candidate's value LIVE. Verify every catch
+          // continuation is 'set' at entry; only then is the body scannable as
+          // straight-line (a mid-body throw lands somewhere the value is dead).
+          let j = 1, label = null
+          if (typeof n[1] === 'string' && n[1][0] === '$') { label = n[1]; j = 2 }
+          let env2 = env
+          if (label) { env2 = { ...env }; env2[label] = { exit: true, k: restK() } }
+          while (j < n.length && Array.isArray(n[j]) && (n[j][0] === 'result' || n[j][0] === 'type')) j++
+          for (; j < n.length && Array.isArray(n[j]) && (n[j][0] === 'catch' || n[j][0] === 'catch_ref'
+              || n[j][0] === 'catch_all' || n[j][0] === 'catch_all_ref'); j++) {
+            const t = env2[n[j][n[j].length - 1]]
+            if (!t || followLabel(x, t, spin, depth + 1) === 'get') return 'get'
+          }
+          k = restK(); list = n; i = j; env = env2; continue
         }
         if (op === 'br') {
           const t = env[n[1]]
@@ -4641,17 +4661,25 @@ const deadset = (ast) => {
 
     // Driver: mirror S's environment construction structurally; at each
     // const-store candidate evaluate its continuation. Collect first, drop
-    // after (queries must all see the original tree).
+    // after (queries must all see the original tree). `catches` carries the
+    // continuations of every ENCLOSING try_table's catch labels — an exception
+    // between the candidate and its killer write lands there with the value
+    // live, so each must also prove 'set'.
     const drops = []
-    const driveList = (list, i, k, env) => {
-      for (; i < list.length; i++) driveNode(list[i], { list, i: i + 1, k, env }, env)
+    const driveList = (list, i, k, env, catches) => {
+      for (; i < list.length; i++) driveNode(list[i], { list, i: i + 1, k, env }, env, catches)
     }
-    const driveNode = (n, k, env) => {
+    const driveNode = (n, k, env, catches) => {
       if (!Array.isArray(n)) return
       const op = n[0]
       if (op === 'local.set' && n.length === 3 && isConstNode(n[2])) {
         steps = 0
-        if (evalK(n[1], k, new Set(), 0) === 'set') drops.push(n)
+        let st = evalK(n[1], k, new Set(), 0)
+        for (const t of catches) {
+          if (st === 'get') break
+          st = t == null ? 'get' : combine(st, followLabel(n[1], t, new Set(), 0))
+        }
+        if (st === 'set') drops.push(n)
         return
       }
       if (op === 'if') {
@@ -4667,8 +4695,8 @@ const deadset = (ast) => {
         for (; i < n.length; i++) {
           const c = n[i]
           if (!Array.isArray(c)) continue
-          if (c[0] === 'then' || c[0] === 'else') driveList(c, 1, k, env2)
-          else if (c[0] !== 'result') driveNode(c, { arms: true, thn, els, k, env: env2 }, env2)
+          if (c[0] === 'then' || c[0] === 'else') driveList(c, 1, k, env2, catches)
+          else if (c[0] !== 'result') driveNode(c, { arms: true, thn, els, k, env: env2 }, env2, catches)
         }
         return
       }
@@ -4681,15 +4709,30 @@ const deadset = (ast) => {
           env2 = { ...env }
           env2[label] = op === 'block' ? { exit: true, k } : { loop: n, i, k, env: env2 }
         }
-        driveList(n, i, k, env2)
+        driveList(n, i, k, env2, catches)
         return
       }
-      driveList(n, 1, k, env)
+      if (op === 'try_table') {
+        let i = 1, label = null
+        if (typeof n[1] === 'string' && n[1][0] === '$') { label = n[1]; i = 2 }
+        let env2 = env
+        if (label) { env2 = { ...env }; env2[label] = { exit: true, k } }
+        while (i < n.length && Array.isArray(n[i]) && (n[i][0] === 'result' || n[i][0] === 'type')) i++
+        const inner = [...catches]
+        for (; i < n.length && Array.isArray(n[i]) && (n[i][0] === 'catch' || n[i][0] === 'catch_ref'
+            || n[i][0] === 'catch_all' || n[i][0] === 'catch_all_ref'); i++) {
+          // null marks an unresolvable catch label — candidates under it always keep
+          inner.push(env2[n[i][n[i].length - 1]] ?? null)
+        }
+        driveList(n, i, k, env2, inner)
+        return
+      }
+      driveList(n, 1, k, env, catches)
     }
     let bodyStart = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
     while (bodyStart < fn.length && Array.isArray(fn[bodyStart]) &&
       (fn[bodyStart][0] === 'param' || fn[bodyStart][0] === 'result' || fn[bodyStart][0] === 'local' || fn[bodyStart][0] === 'export' || fn[bodyStart][0] === 'type')) bodyStart++
-    driveList(fn, bodyStart, DONE, {})
+    driveList(fn, bodyStart, DONE, {}, [])
     for (const n of drops) { n.length = 1; n[0] = 'nop' }
   })
   return ast
