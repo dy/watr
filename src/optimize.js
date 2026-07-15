@@ -2821,7 +2821,7 @@ let CNT = null, CNT_FN = null
 const cntSub = (node) => { if (CNT) tallyLocals(node, CNT, -1) }
 const cntAdd = (node) => { if (CNT) tallyLocals(node, CNT, 1) }
 const cntOracle = (funcNode, site) => {
-  if (!CNT || typeof process === 'undefined' || !process.env.WATR_CNT_ORACLE) return
+  if (!CNT || typeof process === 'undefined' || !process.env?.WATR_CNT_ORACLE) return
   const fresh = countLocalUses(funcNode)
   const names = new Set([...fresh.keys(), ...CNT.keys()])
   for (const k of names) {
