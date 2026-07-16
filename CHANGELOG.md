@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.7.8
+
+- optimize: speed profile partially unrolls large branch-heavy scalar loops ×2
+  with an exact odd-trip guard; nested labels and control transfers fail closed
+- test: keep inline-reset regressions observable when later propagation could
+  safely replace the guarded local with a select
+
+[Compare](https://github.com/dy/watr/compare/v5.7.7...v5.7.8)
+
 ## v5.7.7
 
 - fix: tolerate process shims without an `env` object in the count-oracle gate

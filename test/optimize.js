@@ -299,6 +299,32 @@ test('seltree: dense br_table of cheap pure arms → branchless select tree', ()
   for (let i = 0; i < 6; i++) assert.equal(mod.d(i, 29, 13), ref.d(i, 29, 13), `idx ${i}`)
 })
 
+test('unroll2: large branch-heavy bottom-tested loop partially unrolls exactly', () => {
+  const src = `(module (func (export "f") (result i32)
+    (local $i i32) (local $s i32)
+    (block $break
+      (loop $again
+        (if (i32.eqz (i32.and (local.get $i) (i32.const 1))) (then (local.set $s (i32.add (local.get $s) (i32.const 1)))))
+        (if (i32.eqz (i32.and (local.get $i) (i32.const 2))) (then (local.set $s (i32.add (local.get $s) (i32.const 2)))))
+        (if (i32.eqz (i32.and (local.get $i) (i32.const 4))) (then (local.set $s (i32.add (local.get $s) (i32.const 4)))))
+        (if (i32.eqz (i32.and (local.get $i) (i32.const 8))) (then (local.set $s (i32.add (local.get $s) (i32.const 8)))))
+        (br_if $again (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (i32.const 129)))))
+    (local.get $s)))`
+  const once = optimize(parse(src), 'unroll2')
+  const out = print(once)
+  assert(/br_if \$break[\s\S]{0,80}i32\.eqz/.test(out), 'first-copy tail exits through the enclosing break block')
+  assert((out.match(/i32\.and/g) || []).length === 8, 'branch-heavy body duplicated exactly twice')
+  const mod = new WebAssembly.Instance(new WebAssembly.Module(compile(once)), {}).exports
+  const ref = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(src))), {}).exports
+  assert.equal(mod.f(), ref.f(), 'odd trip count preserves the scalar result')
+  const twice = print(optimize(once, 'unroll2'))
+  assert.equal((twice.match(/i32\.and/g) || []).length, 8, 'pass is idempotent across optimizer calls')
+
+  const withContinue = src.replace('(br_if $again (i32.lt_u', '(br_if $again (i32.eqz (local.get $i))) (br_if $again (i32.lt_u')
+  assert.equal((print(optimize(parse(withContinue), 'unroll2')).match(/i32\.and/g) || []).length, 4,
+    'internal control transfer rejects duplication')
+})
+
 test('chainTable: dense same-scrutinee if/else-if chain → br_table', () => {
   // the interpreter-dispatch shape: a result-typed chain (each arm yields the
   // next pc) inside a tee — C lowers exactly this to a jump table
@@ -2227,16 +2253,16 @@ test('inlineOnce: a join read and branch-bypassed set still require reset', () =
     (func $bypass (param $p i32) (result i32) (local $u i32)
       (block $B (br_if $B (local.get $p)) (local.set $u (i32.const 5)))
       (local.get $u))
-    (func (export "f") (result i32)
+    (func (export "f") (param $p i32) (param $q i32) (result i32)
       (i32.add
-        (i32.add (call $join (i32.const 1)) (call $join (i32.const 0)))
-        (i32.add (call $bypass (i32.const 0)) (call $bypass (i32.const 1))))))`
-  const opt = optimize(parse(src), { inline: true, treeshake: true })
+        (i32.add (call $join (local.get $p)) (call $join (local.get $q)))
+        (i32.add (call $bypass (local.get $q)) (call $bypass (local.get $p))))))`
+  const opt = optimize(parse(src), { inline: true, treeshake: true, propagate: false, merge: false, coalesce: false })
   const out = print(opt)
   assert(/local\.set \$__inl\d+_t\s+\(i32\.const 0\)/.test(out), 'one-arm assignment does not dominate join read')
   assert(/local\.set \$__inl\d+_u\s+\(i32\.const 0\)/.test(out), 'br_if may bypass assignment')
   const f = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
-  assert.equal(f(), 14)
+  assert.equal(f(1, 0), 14)
 })
 
 test('inlineOnce+coalesce: zero-dependent callee local not merged into residue slot', () => {

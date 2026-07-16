@@ -2131,6 +2131,64 @@ const chainTable = (ast) => {
   return ast
 }
 
+/** Partially unroll ×2 a large, branch-heavy canonical bottom-tested loop.
+ *
+ * Input shape (the normal structured lowering of a for/while loop):
+ *   (block $break (loop $again BODY (br_if $again COND)))
+ * becomes:
+ *   (block $break (loop $again BODY (br_if $break (i32.eqz COND))
+ *                              BODY (br_if $again COND)))
+ * The first guard is the original iteration test negated, so odd trip counts,
+ * condition side effects and traps preserve order exactly. Restrict to a loop
+ * that is last in its break block and whose body has no nested labels/control
+ * transfers; duplicating named label scopes or continue/break targets would
+ * require alpha-renaming. The ≥4-if / large-bound gates target scalar codecs
+ * and state machines where two independent iterations overlap branch latency,
+ * while leaving compact/predictable loops alone. Runs once after inlining. */
+const unroll2 = (ast) => {
+  const nodeCount = n => !Array.isArray(n) ? 1 : 1 + n.slice(1).reduce((s, x) => s + nodeCount(x), 0)
+  const hasUnsafeControl = n => {
+    if (!Array.isArray(n)) return false
+    const op = n[0]
+    if (op === 'block' || op === 'loop' || op === 'br' || op === 'br_if' ||
+        op === 'return' || op === 'return_call' || op === 'return_call_indirect' ||
+        op === 'unreachable' || op === 'throw' || op === 'try' || op === 'try_table') return true
+    for (let i = 1; i < n.length; i++) if (hasUnsafeControl(n[i])) return true
+    return false
+  }
+  const ifCount = n => {
+    if (!Array.isArray(n)) return 0
+    let c = n[0] === 'if' ? 1 : 0
+    for (let i = 1; i < n.length; i++) c += ifCount(n[i])
+    return c
+  }
+  const largeBound = n => {
+    if (!Array.isArray(n)) return false
+    if (n[0] === 'i32.const' && Number.isInteger(+n[1]) && Math.abs(+n[1]) >= 128) return true
+    for (let i = 1; i < n.length; i++) if (largeBound(n[i])) return true
+    return false
+  }
+  const rec = n => {
+    if (!Array.isArray(n)) return
+    for (let i = 1; i < n.length; i++) rec(n[i])
+    if (n[0] !== 'block' || typeof n[1] !== 'string') return
+    const lp = n[n.length - 1]
+    if (!Array.isArray(lp) || lp[0] !== 'loop' || typeof lp[1] !== 'string' || lp.length < 4) return
+    const tail = lp[lp.length - 1]
+    if (!Array.isArray(tail) || tail[0] !== 'br_if' || tail[1] !== lp[1] || !largeBound(tail[2])) return
+    const body = lp.slice(2, -1)
+    if (body.some(hasUnsafeControl) || body.reduce((s, x) => s + ifCount(x), 0) < 4 ||
+        body.reduce((s, x) => s + nodeCount(x), 0) > 1200) return
+    lp.splice(2, lp.length - 2,
+      ...body,
+      ['br_if', n[1], ['i32.eqz', clone(tail[2])]],
+      ...body.map(clone),
+      tail)
+  }
+  rec(ast)
+  return ast
+}
+
 const seltree = (ast) => {
   let uid = 0
   walkN(ast, (fn) => {
@@ -7931,6 +7989,7 @@ const PASSES = [
   // profile assumes collapsed arms.
   ['chainTable',    chainTable,     false, 'dense same-scrutinee if/else-if chain → br_table (the C switch lowering)'],
   ['seltree',       seltree,        false, 'small dense br_table of cheap pure arms → branchless select tree'],
+  ['unroll2',       unroll2,        false, 'large branch-heavy scalar loop → exact ×2 partial unroll (speed profile)'],
   ['macro',         inlineMacro,    true,  'expand single-expression functions at call sites (positional, zero wrapper)'],
   ['spec',          specializeParams, true, 'drop parameters every call site passes the same constant'],
   ['devirt',        devirt,         false, 'call_indirect with a constant or known closure-const index → direct/guarded calls — grows bytes for speed'],
@@ -7988,7 +8047,7 @@ const OPTS = Object.fromEntries(PASSES.map(p => [p[0], p[2]]))
  * about every workload — a profile the caller opts into, not a default.
  */
 const PROFILES = {
-  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true, seltree: true, unclamp: true, chainTable: true }),
+  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true, seltree: true, unclamp: true, chainTable: true, unroll2: true }),
 }
 
 /**
@@ -8194,6 +8253,7 @@ export default function optimize(ast, opts = true) {
   // hoist first and no call site ever devirtualizes (jz speed tier, closures devirt tests).
   const finish = (a) => {
     a = runInline(a)
+    if (opts.unroll2) a = unroll2(a)
     if (opts.devirt) a = devirt(a)
     if (opts.licm) a = licm(a)
     // cse runs ONCE at fixpoint: inside the rounds its tee'd locals block the very
@@ -8255,7 +8315,7 @@ export default function optimize(ast, opts = true) {
       }
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' ||
+        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'unroll2' ||
             (skipInline && key === 'inlineOnce')) continue
         if (SIMPLIFY_KEYS.has(key)) {
           if (!fused) {
@@ -8368,4 +8428,4 @@ export default function optimize(ast, opts = true) {
 
 /** Count AST nodes (fast size heuristic). */
 export { count as size, count, binarySize }
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
