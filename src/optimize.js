@@ -999,6 +999,21 @@ const identityNode = (node) => {
       }
       return
     }
+    // wrap of a 64-bit OR with a HIGH-ONLY constant: wrap keeps the low 32 bits,
+    // which the constant doesn't touch — (i32.wrap_i64 (i64.or C_hi X)) →
+    // (i32.wrap_i64 X) when (C & 0xFFFFFFFF) == 0. The NaN-box pointer BOX is
+    // exactly or(tagHi, extend_i32_u ptr); with ROUNDTRIP's wrap∘extend (the
+    // family re-runs on a hit) the whole box unwinds to the raw pointer.
+    if (node[0] === 'i32.wrap_i64' && node.length === 2 &&
+        Array.isArray(node[1]) && node[1][0] === 'i64.or' && node[1].length === 3) {
+      for (const k of [1, 2]) {
+        // getConst i64 values are canonical '0x'+16-hex STRINGS (self-host
+        // contract — no BigInt): low 32 bits zero ⟺ trailing 8 hex zeros.
+        const c = getConst(node[1][k])
+        if (c && typeof c.value === 'string' && c.value.length === 18 && c.value.endsWith('00000000'))
+          return ['i32.wrap_i64', node[1][k === 1 ? 2 : 1]]
+      }
+    }
     if (node.length !== 3) return
     // f64 eq/ne of a convert_i32 result against an impossible constant — statically
     // unequal. The convert operand is dropped, so it must be pure.
@@ -2059,9 +2074,36 @@ const SELTREE_OK = /^(i32|i64|f64|f32)\.(const|add|sub|mul|min|max|abs|neg|sqrt|
  * to nested blocks + one br_table; a result chain brs each arm's value out.
  * Arms keep their bodies verbatim, so brs/returns inside them stay valid
  * (labels are only ADDED around, never renamed).
+ *
+ * COST GATE — light arms keep the chain. The table's one indirect branch
+ * mispredicts (~15-20 cy) on every unpredictable hit, where the compare chain
+ * pays only ~min(p,1-p) per level visited — each level of an N-way chain is a
+ * (N-1)/N-biased, individually predictable branch. When every arm is a TINY
+ * value-yield (loads/ALU only — the tagged-union record-dispatch shape), the
+ * branch IS the whole cost and the chain wins on shuffled streams (measured
+ * 3.6× on an 8-way shape-polymorphic reader). Arms that do real work — stores,
+ * calls, nested control — amortize the indirect branch, and their streams
+ * (interpreter loops) correlate enough for the BTB, so the table keeps its
+ * bytecode-VM win.
  */
 let ctUid = 0
 const CHAIN_MIN = 5
+const LIGHT_ARM_CAP = 48
+const hasLoadNode = (x) => Array.isArray(x) &&
+  ((typeof x[0] === 'string' && x[0].includes('.load')) || x.slice(1).some(hasLoadNode))
+const armLight = (body) => {
+  let n = 0
+  const walk = (x) => {
+    if (!Array.isArray(x)) return true
+    const o = x[0]
+    if (typeof o === 'string' && (o === 'call' || o === 'call_indirect' || o === 'loop' || o === 'if' ||
+      o === 'br_table' || o.includes('.store') || o.startsWith('memory.'))) return false
+    if (++n > LIGHT_ARM_CAP) return false
+    for (let i = 1; i < x.length; i++) if (!walk(x[i])) return false
+    return true
+  }
+  return body.every(walk)
+}
 const chainTable = (ast) => {
   const scrutOf = (c) => {
     if (!Array.isArray(c) || c[0] !== 'i32.eq' || c.length !== 3) return null
@@ -2099,6 +2141,14 @@ const chainTable = (ast) => {
       break
     }
     if (arms.length < CHAIN_MIN) return
+    // Cost gate (doc above): all arms light AND some arm loads memory ⇒ keep
+    // the chain. A loading arm is unspeculable, so seltree could never lower
+    // the table branch-free — it would stay an indirect branch eating a
+    // mispredict per unpredictable hit, where the biased chain wins. All-pure
+    // light arms fall THROUGH to the table: seltree (its dual, same profile)
+    // then lowers it to the branchless select tree — the best form.
+    if (arms.every(a => armLight(a.body)) && (!dflt || armLight(dflt)) &&
+        (arms.some(a => a.body.some(hasLoadNode)) || (dflt && dflt.some(hasLoadNode)))) return
     if (resT != null && !dflt) return               // a value chain needs a default value
     const ks = arms.map(a => a.k)
     if (new Set(ks).size !== ks.length) return

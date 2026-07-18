@@ -369,6 +369,42 @@ test('chainTable: dense same-scrutinee if/else-if chain → br_table', () => {
   const refM = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(mixed))), {}).exports
   for (let x = 0; x <= 1; x++) for (let op = -1; op <= 5; op++)
     assert.equal(modM.h(x, op), refM.h(x, op), `x ${x} op ${op}`)
+  // COST GATE: light LOADING arms keep the chain — a table here could never go
+  // branch-free (loads are unspeculable for seltree), and on a shuffled stream
+  // its indirect branch mispredicts per hit where the biased chain predicts
+  // (the tagged-union record-dispatch shape, measured 3.6×). Stores/calls
+  // (the interpreter shape above) still take the table.
+  const loading = `(module (memory 1) (func (export "m") (param $k i32) (param $p i32) (result i32)
+    (if (result i32) (i32.eq (local.get $k) (i32.const 0))
+      (then (i32.load (local.get $p)))
+      (else (if (result i32) (i32.eq (local.get $k) (i32.const 1))
+        (then (i32.load offset=4 (local.get $p)))
+        (else (if (result i32) (i32.eq (local.get $k) (i32.const 2))
+          (then (i32.add (i32.load (local.get $p)) (i32.load offset=8 (local.get $p))))
+          (else (if (result i32) (i32.eq (local.get $k) (i32.const 3))
+            (then (i32.mul (i32.load offset=4 (local.get $p)) (i32.const 3)))
+            (else (if (result i32) (i32.eq (local.get $k) (i32.const 4))
+              (then (i32.load offset=12 (local.get $p)))
+              (else (i32.const 99)))))))))))))`
+  assert(!print(optimize(parse(loading), 'chainTable')).includes('br_table'),
+    'light loading arms keep the chain')
+})
+
+test('identity: i32.wrap of i64.or with a high-only constant strips the or (NaN-box unwind)', () => {
+  // The pointer BOX is or(tagHi, extend_i32_u ptr) — wrap keeps only the low
+  // 32 bits the constant never touches, so the whole box unwinds to the raw
+  // pointer (with ROUNDTRIP's wrap∘extend in the same family pass).
+  const boxed = `(module (func (export "f") (param $p i32) (result i32)
+    (i32.wrap_i64 (i64.or (i64.const 0x7FFB000000000000) (i64.extend_i32_u (local.get $p))))))`
+  const out = print(optimize(parse(boxed), 'identity'))
+  assert(!out.includes('i64.or'), 'or with high-only constant stripped')
+  assert(!out.includes('i64.extend'), 'wrap∘extend round-trip collapsed')
+  const mod = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(boxed), 'identity'))), {}).exports
+  for (const p of [0, 1, 0x7fffffff, -1 >>> 0]) assert.equal(mod.f(p), p | 0, `p ${p}`)
+  // a constant with ANY low bit set must NOT fold
+  const low = `(module (func (export "g") (param $p i32) (result i32)
+    (i32.wrap_i64 (i64.or (i64.const 0x7FFB000000000001) (i64.extend_i32_u (local.get $p))))))`
+  assert(print(optimize(parse(low), 'identity')).includes('i64.or'), 'low-bit constant keeps the or')
 })
 
 test('intguard: ToInt32 guard select over exact i32 convert → raw value', () => {
