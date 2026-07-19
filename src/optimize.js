@@ -1111,6 +1111,17 @@ const strengthNode = (node) => {
         return ['i64.shl', b, ['i64.const', va.toString(2).length - 1]]
     }
 
+    // (x << K) >> K, K ∈ {24, 16} → i32.extend{8,16}_s — the byte/short
+    // sign-extension idiom (byte codecs mask-and-extend per sample); one op,
+    // engines lower it to a single sxtb/sxth.
+    if (op === 'i32.shr_s' && Array.isArray(a) && a[0] === 'i32.shl' && a.length === 3) {
+      const kOut = getConst(b), kIn = getConst(a[2])
+      if (kOut && kIn && kOut.value === kIn.value) {
+        if (kOut.value === 24) return ['i32.extend8_s', a[1]]
+        if (kOut.value === 16) return ['i32.extend16_s', a[1]]
+      }
+    }
+
     // x / 2^n → x >> n (unsigned only, signed division is more complex)
     if (op === 'i32.div_u') {
       const cb = getConst(b)

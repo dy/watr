@@ -4157,3 +4157,19 @@ test('unclamp: select-clamped checked read → if-form (speed profile; default o
     assert((Number.isNaN(a) && Number.isNaN(b)) || a === b, `f(${i},${len})`)
   }
 })
+
+test('strength: (x<<K)>>K folds to sign-extension ops (byte-codec idiom)', () => {
+  const src = `(module (func (export "b") (param $x i32) (result i32)
+    (i32.shr_s (i32.shl (local.get $x) (i32.const 24)) (i32.const 24)))
+  (func (export "h") (param $x i32) (result i32)
+    (i32.shr_s (i32.shl (local.get $x) (i32.const 16)) (i32.const 16)))
+  (func (export "keep") (param $x i32) (result i32)
+    (i32.shr_s (i32.shl (local.get $x) (i32.const 24)) (i32.const 16))))`
+  const out = print(optimize(parse(src), 'strength'))
+  assert(out.includes('i32.extend8_s'), 'byte extend folds')
+  assert(out.includes('i32.extend16_s'), 'short extend folds')
+  assert(out.includes('i32.shl'), 'mismatched shift counts keep the pair')
+  const mod = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'strength'))), {}).exports
+  for (const x of [0, 1, 127, 128, 255, 256, 0x7fff, 0x8000, -1, 0x12345678])
+    assert.equal(mod.b(x), (x << 24) >> 24, `b(${x})`), assert.equal(mod.h(x), (x << 16) >> 16, `h(${x})`)
+})
