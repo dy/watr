@@ -8229,6 +8229,11 @@ const hashNode = (node) => {
 
 export default function optimize(ast, opts = true) {
   CALLFX = null
+  // Per-run name counters: module-level survivors made a warm process emit
+  // history-dependent names ($__inl4 then $__inl14 for the same input) — the
+  // TEXT output must be a pure function of (ast, opts). Within one run the
+  // monotone bump still guarantees no collision.
+  ctUid = outUid = tmUid = inlineUid = 0
   if (typeof ast === 'string') ast = parse(ast)   // accept WAT source directly
   const strictGuard = opts === true  // default: zero tolerance for bloat
   opts = normalize(opts)
