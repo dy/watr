@@ -8497,4 +8497,8 @@ export { count as size, count, binarySize }
 // already-embedded $__inlN locals. Text determinism is the caller's per-compile
 // contract; monotone growth within one pipeline guarantees no collisions.
 export const resetNameUids = () => { ctUid = outUid = tmUid = inlineUid = 0 }
+// Also reachable as a property of the default export: callers on a published
+// watr without this feature can probe `optimize.resetNameUids?.()` instead of
+// a named import (which would hard-fail module resolution).
+optimize.resetNameUids = resetNameUids
 export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
