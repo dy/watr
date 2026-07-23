@@ -8229,11 +8229,6 @@ const hashNode = (node) => {
 
 export default function optimize(ast, opts = true) {
   CALLFX = null
-  // Per-run name counters: module-level survivors made a warm process emit
-  // history-dependent names ($__inl4 then $__inl14 for the same input) — the
-  // TEXT output must be a pure function of (ast, opts). Within one run the
-  // monotone bump still guarantees no collision.
-  ctUid = outUid = tmUid = inlineUid = 0
   if (typeof ast === 'string') ast = parse(ast)   // accept WAT source directly
   const strictGuard = opts === true  // default: zero tolerance for bloat
   opts = normalize(opts)
@@ -8494,4 +8489,12 @@ export default function optimize(ast, opts = true) {
 
 /** Count AST nodes (fast size heuristic). */
 export { count as size, count, binarySize }
+// Reset the per-compile name-uid counters (inline/outline/tailmerge/chainTable
+// generated locals). Callers that drive a full COMPILE PIPELINE (e.g. jz: its
+// pre-watr phase calls inline/inlineOnce directly, then optimize() runs later)
+// call this ONCE at pipeline start — resetting inside optimize() itself both
+// missed the direct entries and risked intra-pipeline name collisions with
+// already-embedded $__inlN locals. Text determinism is the caller's per-compile
+// contract; monotone growth within one pipeline guarantees no collisions.
+export const resetNameUids = () => { ctUid = outUid = tmUid = inlineUid = 0 }
 export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
