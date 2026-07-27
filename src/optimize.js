@@ -7657,7 +7657,11 @@ const packData = (ast) => {
 
   dataNodes.sort((a, b) => {
     const ma = String(a.memidx), mb = String(b.memidx)
-    if (ma !== mb) return ma.localeCompare(mb)
+    // Codepoint order, NOT localeCompare: locale collation varies by host
+    // locale/ICU build, so a locale-sensitive sort here makes the emitted
+    // module (data ordering → offsets → downstream size/inline decisions)
+    // differ across machines — nondeterministic output for identical input.
+    if (ma !== mb) return ma < mb ? -1 : 1
     return a.offset - b.offset
   })
 
