@@ -5901,6 +5901,30 @@ const devirt = (ast) => {
         arms.push([cNode, name, slot])
       }
       const readBack = f.local != null ? ['local.get', f.local] : ['global.get', f.global]
+      // idxLocal==null means the guard reads f.local BACK via a bare local.get — sound
+      // only if f.local already holds its final value at guard time. The common producer
+      // shape (jz's closure select) writes it via a `local.tee` living INSIDE this very
+      // call_indirect's own arg list — perfectly ordered before rewriting (WASM evaluates
+      // args, then idx, left-to-right within one instruction), but the guard ladder hoists
+      // the read OUT in front of whichever arm still carries that tee, so it fires before
+      // the tee refreshes the local: a call site whose target is invariant reads the same
+      // stale value every time (harmless), but one that varies per call (e.g. alternating
+      // across loop iterations) reads the PREVIOUS call's value — wrong every other hit.
+      // Find that embedded tee (idxLocal's own single-assignment invariant makes its path
+      // immune already) and re-run its producer once, right before the guard, so the read
+      // is always fresh; the arms' own untouched copies of the tee then just re-confirm
+      // the same value (cands is non-poisoned here, so every write devirt has seen for
+      // this local is a pure const/select tree — safe to evaluate twice).
+      let primer = null
+      if (idxLocal == null && f.local != null) {
+        const findTeeProducer = (node) => {
+          if (!Array.isArray(node)) return null
+          if (node[0] === 'local.tee' && node[1] === f.local) return node[2]
+          for (const c of node) { const p = findTeeProducer(c); if (p) return p }
+          return null
+        }
+        for (const a of args) { primer = findTeeProducer(a); if (primer) break }
+      }
       let out = n
       for (let i = arms.length - 1; i >= 0; i--) {
         const [cNode, name, slot] = arms[i]
@@ -5910,6 +5934,11 @@ const devirt = (ast) => {
             : ['i64.eq', ['i64.reinterpret_f64', clone(readBack)], clone(cNode)],
           ['then', ['call', name, ...args.map(clone)]],
           ['else', out]]
+      }
+      if (primer) {
+        out = ['block', ...(results.length ? [['result', ...results]] : []),
+          ['local.set', f.local, clone(primer)],
+          out]
       }
       return out
     })

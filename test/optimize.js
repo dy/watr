@@ -3918,6 +3918,55 @@ test('devirt: hoisted slot extraction (producer LICM) + param-coalesced closure 
   assert.equal(main(0, 1), 0)
 })
 
+test('devirt: guard reads the closure local FRESH, not stale-before-its-own-tee (jz hunt, 2026-08)', () => {
+  // jz's own hunt (todo.md 148cadf7) found this live in dist/jz.wasm at optimize
+  // 'speed'/level 3: the call site's closure select is `local.tee $clos (select
+  // A B cond)`, embedded directly in the call_indirect's OWN arg list — the
+  // slot-extraction index reads `local.get $clos` right next to it (unhoisted,
+  // unlike the LICM'd-index shape pinned above). Within the untouched
+  // call_indirect this is sound (WASM evaluates args, including the tee,
+  // before idx). The guard-ladder rewrite hoists the index READ into an `if`
+  // condition sitting IN FRONT of every arm, including the one still carrying
+  // the tee — so the guard fires before that call's own tee ever refreshes
+  // $clos, reading whatever the PREVIOUS call at this site left behind. An
+  // invariant dispatch target never notices (same value either way); a target
+  // that ALTERNATES per call — `(i%2===0?A:B)(...)` in a loop — reads the
+  // wrong arm every other iteration. Minimal repro: two candidates picked by
+  // loop parity, summed; devirt must select A on even i, B on odd i, every i.
+  const src = `(module
+    (type $sig (func (param f64 i32) (result i32)))
+    (func $A (param $clos f64) (param $x i32) (result i32) (i32.add (local.get $x) (i32.const 100)))
+    (func $B (param $clos f64) (param $x i32) (result i32) (i32.add (local.get $x) (i32.const 200)))
+    (table 2 funcref)
+    (elem (i32.const 0) func $A $B)
+    (func (export "main") (param $n i32) (result i32)
+      (local $i i32) (local $s i32) (local $clos f64)
+      (block $brk (loop $l
+        (br_if $brk (i32.ge_s (local.get $i) (local.get $n)))
+        (local.set $s (i32.add (local.get $s)
+          (call_indirect (type $sig)
+            (local.tee $clos (f64.reinterpret_i64 (select
+              (i64.const 0x7ffd000000000000) (i64.const 0x7ffd000100000000)
+              (i32.eqz (i32.rem_s (local.get $i) (i32.const 2))))))
+            (local.get $i)
+            (i32.wrap_i64 (i64.and (i64.shr_u (i64.reinterpret_f64 (local.get $clos)) (i64.const 32)) (i64.const 32767))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $l)))
+      (local.get $s)))`
+  const opt = devirt(parse(src))
+  const txt = print(opt)
+  assert.ok(/\(call \$A/.test(txt) && /\(call \$B/.test(txt), 'both candidates direct-called under index guards')
+  assert.ok(/call_indirect/.test(txt), 'original call_indirect kept as the fallback arm')
+  const ref = (n) => { let s = 0; for (let i = 0; i < n; i++) s += (i % 2 === 0 ? 100 : 200) + i; return s }
+  const { main } = run(print(opt))
+  for (const n of [0, 1, 2, 3, 4, 5, 10]) assert.equal(main(n), ref(n), `n=${n}: A/B chosen fresh every call`)
+  // pin at every optimize level the jz hunt actually flagged (devirt is level-3-only)
+  for (const level of [0, 1, 2, 3]) {
+    const { main } = run(src, { level })
+    for (const n of [0, 2, 4, 10]) assert.equal(main(n), ref(n), `level ${level}, n=${n}`)
+  }
+})
+
 test('cse: a re-tee between two sites of one statement kills the group (intra-statement write order)', () => {
   // jz's Math.round(x) + Math.round(-x) shape after local coalescing: ONE statement
   // holds two textually-identical `(f64.eq (get $n) (f64.sub (get $t) 0.5))` subtrees,
