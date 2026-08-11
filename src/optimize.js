@@ -8376,13 +8376,23 @@ export default function optimize(ast, opts = true) {
   const MODULE_SCOPE = new Set(['stripmut', 'globals', 'guardRefine', 'macro', 'spec', 'inlineOnce',
     'dedupe', 'dedupTypes', 'packData', 'treeshake', 'minifyImports', 'reorder', 'unbranch', 'rettail'])
   const collectFuncs = () => { const out = []; for (const n of ast) if (Array.isArray(n) && n[0] === 'func') out.push(n); return out }
-  const snapshots = new Map()
+  let snapshots = new Map()  // let: region-arena Slice 1's regionExit hook rebinds this on relocation (see runRounds)
   let dirty = null // null = everything
   const runRounds = (skipInline, onRoundStart) => {
     // dirty sets make extra rounds nearly free — the cap is a safety net, not a cost
     let prevLen = -1
     for (let round = 0; round < 6; round++) {
       onRoundStart?.()
+      // Region-arena Slice 1 (opt-in, additive — jz's region-arena design,
+      // .work/region-arena-design.md in the jz repo): a caller MAY supply
+      // regionMark()/regionExit(mark, root) hooks to reclaim each round's
+      // transient allocation at round end, keeping only what's still reachable
+      // from `ast` (plus this loop's own dirty/snapshots bookkeeping, bundled
+      // alongside it since both are keyed on func-node identity and must
+      // relocate in lockstep with the tree — see regionExit's own contract).
+      // Every existing caller leaves opts.regionMark/regionExit undefined, so
+      // `?.()` never fires and this is a complete no-op for them.
+      const __regionMark = opts.regionMark?.()
       // refresh per round: round 1's stripmut turns never-written (mut f64)
       // const globals immutable, and intguard resolves guards through them.
       // A grown pool unlocks guard collapses in functions no pass dirtied —
@@ -8447,6 +8457,10 @@ export default function optimize(ast, opts = true) {
       prevLen = ast.length
       for (const [f, h] of nextHash) snapshots.set(f, h)
       dirty = next
+      if (opts.regionExit) {
+        const __regionOut = opts.regionExit(__regionMark, [ast, dirty, snapshots])
+        ast = __regionOut[0]; dirty = __regionOut[1]; snapshots = __regionOut[2]
+      }
       if (verbose) log(`  round ${round + 1}: ${next.size} dirty funcs`)
       if (!next.size && topStable) break
     }
