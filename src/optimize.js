@@ -8458,25 +8458,21 @@ export default function optimize(ast, opts = true) {
       for (const [f, h] of nextHash) snapshots.set(f, h)
       dirty = next
       if (opts.regionExit) {
-        // Module-scope scratch state is NOT part of the [ast, dirty, snapshots]
-        // root bundle regionExit relocates, so anything here that still points at
-        // a tree/string allocated above this round's mark would dangle once
-        // regionExit reclaims it. CNT/CNT_FN (propagate()'s per-function use-count
-        // cache) are already nulled by propagate() itself before any pass loop
-        // returns, so this is normally a no-op — cleared anyway so a future
-        // early-return/exception path can't leave one set across the boundary.
-        // SW/SW_MEM (substGets' per-statement write-log) are the real leak:
-        // every reset happens right BEFORE the next substGets call, so the very
-        // last call of the round leaves its log unread and undrained here —
-        // confirmed live via direct instrumentation (SW.length===1 mid-round on
-        // a real compile). Drain unconditionally; both are pure scratch, rebuilt
-        // from scratch on next use regardless of what's in them now.
+        // A region exit is a moving-GC safepoint: every heap value live after it
+        // must be in this root bundle and every live local/field must be rebound
+        // from the returned bundle. Module-scope scratch is dead here, so drain it
+        // instead. CNT/CNT_FN (propagate's use counts) are normally already null;
+        // SW/SW_MEM (substGets' write log) retain the last statement of the round.
         CNT = null; CNT_FN = null; SW.length = 0; SW_MEM = false
-        const __regionOut = opts.regionExit(__regionMark, [ast, dirty, snapshots])
-        ast = __regionOut[0]; dirty = __regionOut[1]; snapshots = __regionOut[2]
+        // constF64 survives into the next round through opts and is rebuilt only
+        // AFTER its old .size is read, so it is a real root alongside the tree and
+        // convergence maps. `next` is merely dirty's pre-safepoint alias: never
+        // read it again after this call; use the rebound dirty below.
+        const __regionOut = opts.regionExit(__regionMark, [ast, dirty, snapshots, opts.constF64])
+        ast = __regionOut[0]; dirty = __regionOut[1]; snapshots = __regionOut[2]; opts.constF64 = __regionOut[3]
       }
-      if (verbose) log(`  round ${round + 1}: ${next.size} dirty funcs`)
-      if (!next.size && topStable) break
+      if (verbose) log(`  round ${round + 1}: ${dirty.size} dirty funcs`)
+      if (!dirty.size && topStable) break
     }
   }
 

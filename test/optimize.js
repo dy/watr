@@ -4229,7 +4229,7 @@ test('region-arena: regionExit boundary drains CNT/CNT_FN/SW/SW_MEM scratch cach
   // jz's region-arena design (opt-in opts.regionMark()/opts.regionExit(mark, root)
   // hooks, wired in runRounds — see the comment above the opts.regionExit call site):
   // a live implementation reclaims everything NOT reachable from the root bundle
-  // [ast, dirty, snapshots] a caller passes to regionExit. Module-scope scratch
+  // [ast, dirty, snapshots, constF64] a caller passes to regionExit. Module-scope scratch
   // state used by propagate()/forwardPropagate()/substGets() (CNT/CNT_FN, SW/SW_MEM)
   // is NOT part of that root — a residual reference left in one of them across the
   // boundary would dangle once a real regionExit reclaims it.
@@ -4271,4 +4271,31 @@ test('region-arena: regionExit boundary drains CNT/CNT_FN/SW/SW_MEM scratch cach
   // behaviorally invisible to callers who never wire regionMark/regionExit.
   const outNoHooks = print(optimize(parse(src)))
   assert.equal(out, outNoHooks, 'regionHooks wiring does not change optimize() output')
+})
+
+test('region-arena: every value live past regionExit is rooted and rebound', () => {
+  // Model a moving collector by returning NEW dirty/constF64 objects and mutating
+  // the function name after this round's snapshot was taken. Round 2 therefore
+  // computes a non-empty pre-safepoint `next`, while regionExit returns an empty
+  // relocated `dirty`. The loop must read the rebound dirty (and stop at round 2),
+  // never the stale `next` alias. constF64 is likewise live through opts: the next
+  // round reads its old .size before rebuilding it, so it must occupy root slot 3
+  // and be rebound too.
+  const src = `(module (func $f (export "f") (result i32) (i32.const 1)))`
+  let markCalls = 0, exitCalls = 0
+  optimize(parse(src), {
+    regionMark: () => ++markCalls,
+    regionExit: (mark, root) => {
+      exitCalls++
+      assert.equal(root.length, 4, 'complete region root bundle')
+      assert(root[1] instanceof Set, 'dirty root')
+      assert(root[2] instanceof Map, 'snapshot root')
+      assert(root[3] instanceof Map, 'constF64 root')
+      const fn = root[0].find(n => Array.isArray(n) && n[0] === 'func')
+      fn[1] = `$moved${exitCalls}` // change the next round's content hash after snapshot
+      return [root[0], new Set(), root[2], { size: 1000 }]
+    }
+  })
+  assert.equal(exitCalls, 2, 'rebound empty dirty terminates at the first top-stable round')
+  assert.equal(markCalls, exitCalls, 'mark/exit paired 1:1')
 })
