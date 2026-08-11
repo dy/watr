@@ -8458,6 +8458,20 @@ export default function optimize(ast, opts = true) {
       for (const [f, h] of nextHash) snapshots.set(f, h)
       dirty = next
       if (opts.regionExit) {
+        // Module-scope scratch state is NOT part of the [ast, dirty, snapshots]
+        // root bundle regionExit relocates, so anything here that still points at
+        // a tree/string allocated above this round's mark would dangle once
+        // regionExit reclaims it. CNT/CNT_FN (propagate()'s per-function use-count
+        // cache) are already nulled by propagate() itself before any pass loop
+        // returns, so this is normally a no-op — cleared anyway so a future
+        // early-return/exception path can't leave one set across the boundary.
+        // SW/SW_MEM (substGets' per-statement write-log) are the real leak:
+        // every reset happens right BEFORE the next substGets call, so the very
+        // last call of the round leaves its log unread and undrained here —
+        // confirmed live via direct instrumentation (SW.length===1 mid-round on
+        // a real compile). Drain unconditionally; both are pure scratch, rebuilt
+        // from scratch on next use regardless of what's in them now.
+        CNT = null; CNT_FN = null; SW.length = 0; SW_MEM = false
         const __regionOut = opts.regionExit(__regionMark, [ast, dirty, snapshots])
         ast = __regionOut[0]; dirty = __regionOut[1]; snapshots = __regionOut[2]
       }
@@ -8548,4 +8562,9 @@ export const resetNameUids = () => { ctUid = outUid = tmUid = inlineUid = 0 }
 // watr without this feature can probe `optimize.resetNameUids?.()` instead of
 // a named import (which would hard-fail module resolution).
 optimize.resetNameUids = resetNameUids
+// Testing hook: true iff the region-boundary scratch caches (CNT/CNT_FN/SW/
+// SW_MEM — runRounds' regionExit clear, see above) are drained right now. Not
+// part of the optimize() pipeline; used by test/optimize.js's regionHooks test
+// to verify the clear actually holds at the boundary, not just "no throw".
+export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === false
 export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }

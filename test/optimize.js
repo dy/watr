@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import { readdirSync, readFileSync } from 'node:fs'
 import { clone } from '../src/util.js'
-import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize, normalize, devirt } from '../src/optimize.js'
+import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize, normalize, devirt, __regionScratchDrained } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 import srcCompile, { size } from '../src/compile.js'
 
@@ -4221,4 +4221,54 @@ test('strength: (x<<K)>>K folds to sign-extension ops (byte-codec idiom)', () =>
   const mod = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'strength'))), {}).exports
   for (const x of [0, 1, 127, 128, 255, 256, 0x7fff, 0x8000, -1, 0x12345678])
     assert.equal(mod.b(x), (x << 24) >> 24, `b(${x})`), assert.equal(mod.h(x), (x << 16) >> 16, `h(${x})`)
+})
+
+// ==================== REGION ARENA ====================
+
+test('region-arena: regionExit boundary drains CNT/CNT_FN/SW/SW_MEM scratch caches', () => {
+  // jz's region-arena design (opt-in opts.regionMark()/opts.regionExit(mark, root)
+  // hooks, wired in runRounds — see the comment above the opts.regionExit call site):
+  // a live implementation reclaims everything NOT reachable from the root bundle
+  // [ast, dirty, snapshots] a caller passes to regionExit. Module-scope scratch
+  // state used by propagate()/forwardPropagate()/substGets() (CNT/CNT_FN, SW/SW_MEM)
+  // is NOT part of that root — a residual reference left in one of them across the
+  // boundary would dangle once a real regionExit reclaims it.
+  //
+  // Found live via direct instrumentation compiling watr.js through jz at -O3: SW
+  // (substGets' per-statement write-log) is reset right BEFORE each substGets call,
+  // never AFTER the last one of a round — so a function whose final top-level
+  // statement reaches substGets (any global.set/local.set/local.tee statement, or a
+  // nested one) leaves SW non-empty exactly at the regionExit checkpoint. CNT/CNT_FN
+  // are already nulled by propagate() before it returns, so they're normally already
+  // clear here — asserted anyway so a future control-flow change can't silently
+  // reintroduce the same leak under a different name.
+  //
+  // delete-churn ($dead, eliminated by eliminateDeadStores) + a chained substitution
+  // ($a single-use into the final global.set) exercise real forwardPropagate/
+  // substGets work each round, ending on a global.set statement (the confirmed leak
+  // shape) so the boundary is hit with genuinely dirty scratch state if undrained.
+  const src = `(module (global $g (export "g") (mut i32) (i32.const 0))
+    (func $f (export "f") (param $x i32)
+      (local $a i32) (local $dead i32)
+      (local.set $dead (i32.const 999))
+      (local.set $a (i32.add (local.get $x) (i32.const 1)))
+      (global.set $g (local.get $a))))`
+  let markCalls = 0, exitCalls = 0
+  const opt = optimize(parse(src), {
+    regionMark: () => { markCalls++; return markCalls },
+    regionExit: (mark, root) => {
+      exitCalls++
+      assert(__regionScratchDrained(), `scratch caches must be drained at regionExit boundary (call ${exitCalls})`)
+      return root
+    }
+  })
+  assert(exitCalls >= 1, 'regionExit hook fired at least once')
+  assert.equal(exitCalls, markCalls, 'mark/exit paired 1:1')
+  const out = print(opt)
+  assert(!out.includes('$dead'), 'dead store still eliminated with hooks wired')
+  assert(out.includes('global.set'), 'global write survives')
+  // Same source, no hooks: identical optimized output — the boundary clear must be
+  // behaviorally invisible to callers who never wire regionMark/regionExit.
+  const outNoHooks = print(optimize(parse(src)))
+  assert.equal(out, outNoHooks, 'regionHooks wiring does not change optimize() output')
 })
