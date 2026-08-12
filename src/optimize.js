@@ -3083,7 +3083,23 @@ let substHits = 0
 // makes every write op impure), so logging the pre-substitution traversal is
 // exact. Flat (bare-token) writes are NOT logged — matching the array-only
 // walks this replaces; forwardPropagate's flat-token barrier handles those.
-const SW = []
+// `let`, not `const`: region-arena's regionExit rebinds this on relocation
+// (see runRounds) — SW is a real jz-heap ARRAY once this file is itself
+// compiled by jz's self-host kernel, and fa3fe0e's `SW.length = 0` drain
+// only cleared its LOGICAL content, never its own backing pointer. A region
+// exit is a moving-GC safepoint: SW's pointer is a module-scope global
+// outside [ast, dirty, snapshots, opts.constF64], so a mid-round growth
+// (arrGrow relocating SW to a fresh, round-local address) left that address
+// unrooted — reclaimed at the SAME exit that drained SW's length, while the
+// global pointer kept referencing it. The NEXT round's substGets push then
+// read/wrote through the stale pointer into whatever the reclaim now put
+// there (kernel-scale finding, self-hosted jz: .work/research.md §Region
+// arena, "TEMPORAL BISECTION" + this follow-up — the corrupting write was
+// $__arr_push1 called from substGets, every single occurrence, one call
+// site, landing on a freshly-allocated Map's header). Fixed the same way
+// dirty/snapshots/constF64 already are: SW rides the root bundle below and
+// gets rebound to its relocated (or unchanged, if durable) pointer.
+let SW = []
 let SW_MEM = false
 const substGets = (node, known) => {
   if (!Array.isArray(node)) return node
@@ -8468,8 +8484,13 @@ export default function optimize(ast, opts = true) {
         // AFTER its old .size is read, so it is a real root alongside the tree and
         // convergence maps. `next` is merely dirty's pre-safepoint alias: never
         // read it again after this call; use the rebound dirty below.
-        const __regionOut = opts.regionExit(__regionMark, [ast, dirty, snapshots, opts.constF64])
-        ast = __regionOut[0]; dirty = __regionOut[1]; snapshots = __regionOut[2]; opts.constF64 = __regionOut[3]
+        // SW rides along too (see its own declaration comment): truncating its
+        // LENGTH above doesn't touch its own backing pointer, which is just as
+        // liable to be a round-local, unrooted allocation as `ast`'s own nodes —
+        // it needs the identical relocate-and-rebind treatment, not a length reset
+        // alone.
+        const __regionOut = opts.regionExit(__regionMark, [ast, dirty, snapshots, opts.constF64, SW])
+        ast = __regionOut[0]; dirty = __regionOut[1]; snapshots = __regionOut[2]; opts.constF64 = __regionOut[3]; SW = __regionOut[4]
       }
       if (verbose) log(`  round ${round + 1}: ${dirty.size} dirty funcs`)
       if (!dirty.size && topStable) break
