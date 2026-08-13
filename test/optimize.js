@@ -1551,6 +1551,41 @@ test('propagate: tiny-const not leaked across sibling local.tee', () => {
   assert.strictEqual(inst.exports.f(), 640)
 })
 
+test('propagate: tiny const tee in if condition reaches both arms', () => {
+  const src = `(module (func (export "f") (param $limit i32) (result i32)
+    (local $idx i32)
+    (if (result i32)
+      (i32.lt_u (local.tee $idx (i32.const 7)) (local.get $limit))
+      (then (i32.add (local.get $idx) (i32.const 1)))
+      (else (i32.sub (local.get $idx) (i32.const 1))))))`
+  const opt = optimize(parse(src), 'propagate fold locals')
+  const out = print(opt)
+  assert(!out.includes('$idx'), 'dominated tee/get scratch is eliminated')
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports
+  assert.equal(f(8), 8)
+  assert.equal(f(7), 6)
+})
+
+test('propagate: condition tee fact stops at arm writes and nested control', () => {
+  const src = `(module
+    (func (export "write") (param $c i32) (result i32) (local $x i32)
+      (if (result i32) (local.tee $x (i32.const 7))
+        (then (local.set $x (local.get $c)) (local.get $x))
+        (else (local.get $x))))
+    (func (export "nested") (param $c i32) (result i32) (local $x i32)
+      (if (result i32)
+        (if (result i32) (local.get $c)
+          (then (local.tee $x (i32.const 7)))
+          (else (i32.const 1)))
+        (then (local.get $x))
+        (else (i32.const -1)))))`
+  const opt = optimize(parse(src), 'propagate')
+  const { write, nested } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports
+  assert.equal(write(9), 9, 'arm write invalidates the condition fact')
+  assert.equal(nested(1), 7)
+  assert.equal(nested(0), 0, 'nested-arm tee does not dominate the outer arm')
+})
+
 test('propagate: tracked value invalidated by nested local.tee in next statement RHS', () => {
   // Forward propagation tracks `$ptr`'s value `(i64.reinterpret_f64 (local.get $ai0))`.
   // The next statement's RHS contains a nested `(local.tee $ai0 …)` that overwrites
@@ -4280,20 +4315,21 @@ test('region-arena: every value live past regionExit is rooted and rebound', () 
   // relocated `dirty`. The loop must read the rebound dirty (and stop at round 2),
   // never the stale `next` alias. constF64 is likewise live through opts: the next
   // round reads its old .size before rebuilding it, so it must occupy root slot 3
-  // and be rebound too.
+  // and be rebound too. SW's backing array is live across rounds in slot 4.
   const src = `(module (func $f (export "f") (result i32) (i32.const 1)))`
   let markCalls = 0, exitCalls = 0
   optimize(parse(src), {
     regionMark: () => ++markCalls,
     regionExit: (mark, root) => {
       exitCalls++
-      assert.equal(root.length, 4, 'complete region root bundle')
+      assert.equal(root.length, 5, 'complete region root bundle')
       assert(root[1] instanceof Set, 'dirty root')
       assert(root[2] instanceof Map, 'snapshot root')
       assert(root[3] instanceof Map, 'constF64 root')
+      assert(Array.isArray(root[4]), 'SW root')
       const fn = root[0].find(n => Array.isArray(n) && n[0] === 'func')
       fn[1] = `$moved${exitCalls}` // change the next round's content hash after snapshot
-      return [root[0], new Set(), root[2], { size: 1000 }]
+      return [root[0], new Set(), root[2], { size: 1000 }, root[4]]
     }
   })
   assert.equal(exitCalls, 2, 'rebound empty dirty terminates at the first top-stable round')

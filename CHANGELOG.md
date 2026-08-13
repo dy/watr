@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.7.16
+
+- optimize: propagate tiny constants assigned while evaluating an `if`
+  condition into both dominated arms, including expression-position `if`s
+
+[Compare](https://github.com/dy/watr/compare/v5.7.15...v5.7.16)
+
 ## v5.7.8
 
 - optimize: speed profile partially unrolls large branch-heavy scalar loops ×2

@@ -3158,6 +3158,52 @@ const substGets = (node, known) => {
   return node
 }
 
+/** Collect tiny constants written unconditionally while an `if` condition is
+ * evaluated. Every arm starts after the condition, so those values dominate
+ * arm reads. Stop at nested structured control: a tee in one of its paths need
+ * not execute. Later writes in the eager expression replace earlier facts in
+ * WebAssembly's left-to-right evaluation order. */
+const conditionConsts = (node) => {
+  let known = null
+  const rec = (n) => {
+    if (!Array.isArray(n)) return
+    const op = n[0]
+    if (isBranchScope(op) || op === 'try' || op === 'try_table') return
+    if ((op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string') {
+      if (n.length === 3) rec(n[2]) // the value evaluates before the write
+      if (n.length === 3 && isTinyConst(n[2])) (known ||= new Map()).set(n[1], {
+        val: n[2], pure: true, refs: new Set(), grefs: new Set(),
+        readsMem: false, ext: false, singleUse: false, copy: false, depth: 0
+      })
+      else known?.delete(n[1])
+      return
+    }
+    for (let i = 1; i < n.length; i++) rec(n[i])
+  }
+  rec(node)
+  return known
+}
+
+/** Propagate condition-written tiny constants into arms at any expression
+ * depth. An `if` commonly appears as a local.set value, so the straight-line
+ * scope driver cannot limit this to statement-root ifs. */
+const propagateConditionConsts = (ifs) => {
+  let changed = false
+  for (const n of ifs) {
+    const { cond, thenBranch, elseBranch } = parseIf(n)
+    const known = conditionConsts(cond)
+    if (!known?.size) continue
+    for (const arm of [thenBranch, elseBranch]) {
+      if (!arm) continue
+      const h0 = substHits
+      SW.length = 0; SW_MEM = false
+      substGets(arm, new Map(known))
+      if (substHits !== h0) changed = true
+    }
+  }
+  return changed
+}
+
 /**
  * Forward propagation pass: track local.set values and substitute local.gets.
  * Returns true if any substitution was made.
@@ -5156,10 +5202,13 @@ const propagate = (ast) => {
       // nested in its value — the once-collected list kept mutating dead trees
       // (wasted work always; corrupted counts once they were maintained) and
       // never saw scopes newly created by substitution clones.
-      const scopes = []
-      walkPostN(funcNode, n => { if (isScopeNode(n)) scopes.push(n) })
+      const scopes = [], ifs = []
+      walkPostN(funcNode, n => {
+        if (isScopeNode(n)) scopes.push(n)
+        if (n[0] === 'if') ifs.push(n)
+      })
       const useCounts = CNT
-      let progressed = false
+      let progressed = propagateConditionConsts(ifs)
       for (const scope of scopes) if (forwardPropagate(scope, params, useCounts)) progressed = true
       cntOracle(funcNode, 'forwardPropagate')
       const counts = CNT
