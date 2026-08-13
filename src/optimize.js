@@ -5527,7 +5527,7 @@ const buildInline = (params, locals, inlResult, cBody, args) => {
 const INLINE_MAX_NODES = 90
 const isV128SimdHelper = (params, inlResult) =>
   inlResult === 'v128' && params.length > 0 && params.every(p => p.type === 'v128')
-const inline = (ast, { simdOnly = false, pin = EMPTY_SET } = {}) => {
+const inline = (ast, { simdOnly = false, pin = EMPTY_SET, touched = null } = {}) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
   // simdOnly prefilter: a candidate must have an all-v128 signature, a pure
@@ -5590,6 +5590,7 @@ const inline = (ast, { simdOnly = false, pin = EMPTY_SET } = {}) => {
     for (const fn of funcs) {
       if (fn === callee) continue
       const addDecls = []
+      const before = replaced
       for (let i = inlBodyStart(fn); i < fn.length; i++) {
         fn[i] = walkPostN(fn[i], (n) => {
           if (!Array.isArray(n) || n[0] !== 'call' || n[1] !== calleeName) return
@@ -5602,6 +5603,14 @@ const inline = (ast, { simdOnly = false, pin = EMPTY_SET } = {}) => {
         })
       }
       if (addDecls.length) fn.splice(inlBodyStart(fn), 0, ...addDecls)
+      // Record every caller this round actually rewrote — lets the driver (runInline)
+      // re-propagate ONLY the functions inline touched instead of a whole-module sweep.
+      // propagate() is per-function-local (no cross-function state), so a function inline
+      // never spliced into is byte-identical to its post-round-loop fixpoint state — a
+      // module-wide re-scan of it is pure repeated work on a module this large (measured:
+      // ~6400 funcs, propagate's own per-func cost dwarfs every sibling pass — see
+      // watopt-mem session profiling). touched accumulates across MAX_INLINE_ROUNDS rounds.
+      if (touched && replaced > before) touched.add(fn)
     }
 
     // Drop the callee only if every site inlined; else keep it and stop re-picking it.
@@ -5638,7 +5647,7 @@ const inline = (ast, { simdOnly = false, pin = EMPTY_SET } = {}) => {
  * still measure the growth.
  */
 const WRAPPER_INLINE_MAX = 360
-const inlineWrappers = (ast, { pin = EMPTY_SET } = {}) => {
+const inlineWrappers = (ast, { pin = EMPTY_SET, touched = null } = {}) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
   const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
   const byName = new Map()
@@ -5686,6 +5695,10 @@ const inlineWrappers = (ast, { pin = EMPTY_SET } = {}) => {
     if (stmt === call) w[start] = block
     else if (!graft(stmt)) continue
     if (decls.length) w.splice(inlBodyStart(w), 0, ...decls)
+    // Only `w` (the wrapper) changed content — the callee is copied FROM, never mutated.
+    // See `inline`'s matching comment: lets runInline re-propagate just the rewritten
+    // wrapper instead of a whole-module sweep.
+    if (touched) touched.add(w)
   }
   return ast
 }
@@ -8354,15 +8367,29 @@ export default function optimize(ast, opts = true) {
   // a normal round would. opt-in (speed level); a no-op when no small callee qualifies.
   const runInline = (a) => {
     if (opts.inlineWrappers) {
-      a = inlineWrappers(a, { pin: opts.pin })
-      if (opts.propagate) a = propagate(a)
+      // propagate is per-function-local (its whole working set — CNT, known, scopes —
+      // is scoped to one funcNode; see propagate's own declaration), so re-running it
+      // on a function inlineWrappers didn't touch reproduces exactly nothing: every
+      // function reachable here already sat at a propagate fixpoint (the round loop's
+      // own post-round `for (const f of dirty) propagate(f)` sweep guarantees that
+      // before finish() is ever called). A whole-module propagate(a) is therefore a
+      // same-output, pure-cost re-scan of every untouched function — on a module this
+      // large (jz×jz: ~6400 funcs) that dwarfs every sibling pass (watopt-mem session
+      // profiling: propagate ≈20-40× its neighbours per func, and the scan forces a
+      // major GC each time). touched, populated by inlineWrappers itself, is exactly
+      // the set whose content actually changed.
+      const touched = opts.propagate ? new Set() : null
+      a = inlineWrappers(a, { pin: opts.pin, touched })
+      if (touched) for (const f of touched) propagate(f)
       if (opts.coalesceLocals) a = coalesceLocals(a)
     }
     if (!opts.inline) return a
     // `inline: 'simd'` → SIMD-helper-only (jz's speed tier, avoids general bloat);
-    // `inline: true` / `'all'` → general inlining of tiny functions.
-    a = inline(a, { simdOnly: opts.inline === 'simd', pin: opts.pin })
-    if (opts.propagate) a = propagate(a)
+    // `inline: true` / `'all'` → general inlining of tiny functions. Same touched-set
+    // narrowing as inlineWrappers above, same soundness argument.
+    const touched2 = opts.propagate ? new Set() : null
+    a = inline(a, { simdOnly: opts.inline === 'simd', pin: opts.pin, touched: touched2 })
+    if (touched2) for (const f of touched2) propagate(f)
     if (opts.mergeBlocks) a = mergeBlocks(a)
     if (opts.vacuum) a = vacuum(a)
     if (opts.coalesceLocals) a = coalesceLocals(a)

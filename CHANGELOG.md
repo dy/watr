@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- optimize: `inline`/`inlineWrappers` now report which functions they actually
+  rewrote; the driver's post-inline `propagate` sweep runs on just those
+  instead of re-scanning the whole module. `propagate` is per-function-local,
+  so a function neither pass touched was already at its fixpoint (the round
+  loop's own post-round sweep guarantees that) — same output, far less
+  redundant work on large modules (~6400-func self-hosted-compiler-scale
+  module: two whole-module rescans down to a few hundred actually-touched
+  functions)
+
 ## v5.7.16
 
 - optimize: propagate tiny constants assigned while evaluating an `if`
