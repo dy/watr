@@ -1,0 +1,148 @@
+/* watr: landing page and documentation components (needs theme.css) */
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;overflow-x:clip}
+body{margin:0;background:var(--paper);color:var(--body);font-family:var(--mono);
+  font-size:14px;line-height:1.7;-webkit-font-smoothing:antialiased;overflow-x:clip}
+::selection{background:var(--wasm-soft);color:var(--ink)}
+.col{max-width:var(--col);margin:0 auto;padding:0 var(--s5)}
+a{color:inherit;text-decoration:underline;text-decoration-color:var(--hair-2);
+  text-underline-offset:3px;text-decoration-thickness:1px}
+a:hover,a:focus-visible{color:var(--wasm);text-decoration-color:var(--wasm);outline:none}
+h1,h2,h3,h4{color:var(--ink);text-wrap:balance;font-weight:600}
+h1{font-family:var(--wide);font-size:clamp(24px,3.6vw,36px);letter-spacing:-.04em;
+  line-height:1.16;margin:0 0 var(--s4);font-weight:700}
+h2{font-family:var(--wide);font-size:15.5px;letter-spacing:-.02em;line-height:1.4;margin:0 0 var(--s2)}
+h3{font-size:14px;margin:var(--s5) 0 var(--s2)}
+p{margin:0 0 var(--s3);max-width:66ch}
+code{font-family:var(--mono)}
+:not(pre)>code{background:var(--panel);padding:.1em .35em;font-size:.93em}
+
+/* masthead + footer: hairline frame around the page */
+header{border-bottom:1px solid var(--hair)}
+footer{border-top:1px solid var(--hair);margin-top:var(--s8);color:var(--dim);font-size:13px}
+.bar{padding-top:var(--s4);padding-bottom:var(--s4);display:flex;justify-content:space-between;
+  align-items:center;gap:var(--s4);flex-wrap:wrap}
+footer .bar{padding-top:var(--s5);padding-bottom:var(--s7)}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--wide);font-weight:700;
+  font-size:15px;letter-spacing:-.02em;color:var(--ink);text-decoration:none}
+.brand svg{display:block;flex:none}
+nav{display:flex;gap:var(--s5);font-size:13px;flex-wrap:wrap}
+nav a{color:var(--dim);text-decoration:none}
+nav a:hover,nav a:focus-visible{color:var(--ink)}
+nav a[aria-current]{color:var(--ink)}
+.ver{color:var(--dim);font-size:11.5px;letter-spacing:.04em;margin-right:auto}
+.lic{display:flex;align-items:center;gap:var(--s4)}
+.lic a{color:var(--dim);text-decoration:none}
+.lic a:hover,.lic a:focus-visible{color:var(--ink)}
+.om{font-size:19px;line-height:1;color:var(--dim);text-decoration:none}
+.om:hover,.om:focus-visible{color:var(--wasm)}
+
+/* hero */
+main .col,main.col{padding-top:var(--s7)}
+.deck{font-size:15px;line-height:1.65;color:var(--body);margin:0 0 var(--s5);max-width:58ch}
+.deck b{color:var(--ink);font-weight:600}
+.get{display:flex;gap:var(--s3);flex-wrap:wrap;margin-bottom:var(--s7)}
+.cmd{display:flex;align-items:center;gap:10px;border:1px solid var(--ink);background:var(--ink);
+  padding:9px var(--s4);font-size:13px;color:var(--on-ink);text-decoration:none}
+.cmd span{color:var(--on-ink-dim);user-select:none}
+.cmd b{font-weight:500}
+.cmd:hover,.cmd:focus-visible{background:var(--wasm);border-color:var(--wasm);color:#fff}
+.cmd:hover span,.cmd:focus-visible span{color:#cfc9f8}
+.lnk{display:inline-flex;align-items:center;border:1px solid var(--hair-2);background:var(--raise);
+  color:var(--ink);padding:9px var(--s4);font-size:13px;font-weight:500;text-decoration:none}
+.lnk:hover,.lnk:focus-visible{background:var(--panel);border-color:var(--ink);color:var(--ink)}
+
+/* feature row: the three claims, under the repl */
+.feats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s5) var(--s6);
+  margin:0 0 var(--s7)}
+.feats>div{min-width:0}
+.feats h3{margin:0 0 var(--s1);font-size:13.5px}
+.feats p{margin:0;font-size:12.5px;color:var(--dim)}
+
+/* sections: single sequence; the number hangs left of the column and links to the section */
+.tile{position:relative;min-width:0;margin:0 0 var(--s7);scroll-margin-top:var(--s4)}
+.tile>.no{position:absolute;left:calc(-1 * var(--hang));top:3px;width:calc(var(--hang) - var(--s4));
+  text-align:right;font-family:var(--wide);font-weight:600;font-size:10.5px;letter-spacing:.08em;
+  color:var(--wasm);text-decoration:none}
+.tile>.no:hover,.tile>.no:focus-visible{color:var(--ink)}
+.tile h2{margin:0 0 var(--s2)}
+.tile p{margin:0;font-size:13px}
+.fine{margin:var(--s3) 0 0;font-size:11.5px;color:var(--dim)}
+
+/* bento grid: 2-up API entries inside a section */
+.bento{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s5) var(--s6);
+  margin-top:var(--s4)}
+.bento>div{min-width:0}
+.bento h3{margin:0 0 var(--s1);font-size:13.5px}
+.bento h3 code{color:var(--wasm);background:none;padding:0}
+.bento p{font-size:12.5px;color:var(--dim)}
+.bento pre{font-size:12px;padding:var(--s3)}
+
+/* code */
+pre{margin:var(--s4) 0 0;background:var(--panel);border:1px solid var(--hair);
+  padding:var(--s3) var(--s4);font-size:13px;line-height:1.75;overflow-x:auto;color:var(--ink)}
+pre i{color:var(--dim);font-style:normal}
+pre b{color:var(--wasm);font-weight:500}
+pre code{background:none;padding:0}
+
+/* data */
+table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;
+  margin:var(--s4) 0 0}
+th,td{text-align:right;padding:var(--s2) 0 var(--s2) var(--s4);border-bottom:1px solid var(--hair)}
+th:first-child,td:first-child{text-align:left;padding-left:0}
+th{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:500}
+tbody tr:last-child td{border-bottom:0}
+tr.me td{color:var(--ink);font-weight:600}
+tr.me td:first-child{color:var(--wasm)}
+.scroll{overflow-x:auto}
+dl{margin:var(--s4) 0 0;display:grid;grid-template-columns:120px minmax(0,1fr);gap:0 18px}
+dt,dd{min-width:0}
+dt{color:var(--wasm);padding:6px 0;border-top:1px solid var(--hair);font-weight:500}
+dd{margin:0;padding:6px 0;border-top:1px solid var(--hair)}
+
+/* live compile panel */
+.demo{border:1px solid var(--hair);background:var(--raise);margin:0 0 var(--s8);
+  box-shadow:0 1px 2px rgb(22 21 26 / .03),0 12px 32px -16px rgb(22 21 26 / .08)}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.pane{min-width:0;border-left:1px solid var(--hair)}
+.pane:first-child{border-left:0}
+.ph{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:var(--s2) var(--s3);
+  border-bottom:1px solid var(--hair);font-size:10.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--dim)}
+.ph .bad{color:var(--red)}
+textarea{width:100%;border:0;background:transparent;color:var(--ink);resize:vertical;display:block;
+  font-family:var(--mono);font-size:12.5px;line-height:1.8;padding:var(--s3);min-height:160px;tab-size:2}
+textarea:focus{outline:2px solid var(--wasm);outline-offset:-2px}
+.dump{padding:var(--s3);font-size:12.5px;line-height:1.8;min-height:160px;white-space:pre;
+  overflow-x:auto;font-variant-numeric:tabular-nums;color:var(--ink)}
+.dump .off{color:var(--dim)}
+.dump .magic{background:var(--wasm);color:#fff}
+.dump .err{color:var(--red);white-space:pre-wrap}
+
+/* prose (docs.md rendered by Jekyll) */
+.prose h1{margin-bottom:var(--s5)}
+.prose h2{font-size:17px;margin:var(--s7) 0 var(--s3);padding-top:var(--s4);border-top:1px solid var(--hair)}
+.prose ul,.prose ol{margin:0 0 var(--s3);padding-left:20px;max-width:66ch}
+.prose li{margin:3px 0}
+.prose blockquote{margin:var(--s4) 0;padding-left:var(--s4);border-left:2px solid var(--hair-2);color:var(--dim)}
+.prose img{max-width:100%;height:auto}
+.prose table{width:100%}
+.prose td,.prose th{vertical-align:top}
+
+@media(max-width:840px){
+  /* no room for the gutter: number sits above the heading */
+  .tile>.no{position:static;display:inline-block;width:auto;text-align:left;margin-bottom:var(--s1)}
+}
+@media(max-width:640px){
+  /* table becomes its own scroll container; full width above this breakpoint */
+  .prose table{display:block;overflow-x:auto}
+  .bento{grid-template-columns:minmax(0,1fr)}
+  .feats{grid-template-columns:minmax(0,1fr)}
+  .split{grid-template-columns:minmax(0,1fr)}
+  .pane{border-left:0;border-top:1px solid var(--hair)}
+  .pane:first-child{border-top:0}
+  dl{grid-template-columns:minmax(0,1fr);gap:0}
+  dt{border-top:1px solid var(--hair);padding-bottom:0}
+  dd{border-top:0;padding-top:2px}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}

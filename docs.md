@@ -1,3 +1,9 @@
+---
+layout: doc
+title: "watr documentation: compile, parse, print and optimize WAT"
+description: "API reference for watr: compile WebAssembly text to binary, parse to a tree, pretty-print, minify, polyfill post-MVP features and optimize wasm output."
+---
+
 # watr
 
 Fast WebAssembly Text Format (WAT) compiler for JavaScript/Node.js.

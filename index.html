@@ -1,0 +1,217 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wat2wasm in JavaScript: compile WAT to wasm binary | watr</title>
+<meta name="description" content="watr compiles WebAssembly text (WAT) to wasm binary in pure JavaScript. A spec-complete wat2wasm implementation in 44 KB with no dependencies and no Emscripten: it imports like any other ES module in browsers, Node and workers.">
+<link rel="icon" href="./watr.svg" type="image/svg+xml">
+<link rel="canonical" href="https://dy.github.io/watr/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Martian+Mono:wght@600;700&display=swap">
+<link rel="stylesheet" href="./theme.css">
+<link rel="stylesheet" href="./site.css">
+
+<header><div class="col bar">
+  <a class="brand" href="./"><svg width="27" height="17" viewBox="0 0 32 20" aria-hidden="true"><path d="M30.2 7.1c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.16.37.58.54.95.38l7.33-3.1L30.2 7.1Z" fill="#654ff0"/><path d="M20.8 7.16c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.67Z" fill="#654ff0"/><path d="M11.39 7.22c-.16-.37-.58-.55-.95-.39l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.66Z" fill="#654ff0"/><path d="M27.38.44c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1L27.38.44Z" fill="#654ff0"/><path d="M8.56.55c-.15-.37-.58-.54-.95-.38L.28 3.27l1.13 2.67c.16.37.58.54.95.38l7.33-3.1L8.56.55Z" fill="#654ff0"/><path d="M17.97.5c-.15-.37-.58-.55-.95-.39L9.7 3.22l1.13 2.66c.15.37.58.54.95.39l7.33-3.11L17.97.5Z" fill="#654ff0"/><path d="M23.48 13.49c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.67Z" fill="#654ff0"/><path d="M14.07 13.55c-.16-.37-.58-.54-.95-.39l-7.34 3.11 1.13 2.67c.16.37.58.54.95.38l7.33-3.1-1.12-2.67Z" fill="#654ff0"/></svg> watr</a>
+  <span class="ver">v5.7.16</span>
+  <nav>
+    <a href="./docs">docs</a>
+    <a href="./play/">play</a>
+    <a href="https://github.com/dy/watr">github</a>
+    <a href="https://npmjs.org/watr">npm</a>
+  </nav>
+</div></header>
+
+<main class="col">
+  <h1>Compile WebAssembly text to binary in JavaScript</h1>
+  <p class="deck">A <b>wat2wasm</b> implementation in plain JavaScript. Built for compilers,
+     build tools, test suites and playgrounds.</p>
+  <div class="get">
+    <a class="cmd" href="https://npmjs.org/watr"><span>$</span><b>npm i watr</b></a>
+    <a class="lnk" href="./play/">playground</a>
+  </div>
+
+  <div class="demo"><div class="split">
+    <div class="pane">
+      <div class="ph"><span>input.wat</span></div>
+      <textarea id="in" spellcheck="false" aria-label="WebAssembly text input">(func (export "add") (param i32 i32) (result i32)
+  (i32.add (local.get 0) (local.get 1)))</textarea>
+    </div>
+    <div class="pane">
+      <div class="ph"><span>output.wasm</span><span id="st">41 bytes</span></div>
+      <div class="dump" id="out" role="status" aria-live="polite"></div>
+    </div>
+  </div></div>
+
+  <div class="feats">
+    <div>
+      <h3>Portable</h3>
+      <p>A regular ES module: no <code>.wasm</code> file, no Emscripten. Bundlers, workers and
+         blob URLs load it like any other import.</p>
+    </div>
+    <div>
+      <h3>Spec-complete</h3>
+      <p>Full <a href="https://webassembly.github.io/spec/core/text/index.html">spec syntax</a>
+         and phase 5, 4 and 3 <a href="https://github.com/WebAssembly/proposals">proposals</a>,
+         validated by the <a href="https://github.com/WebAssembly/spec/tree/main/test">official
+         testsuite</a> on every commit.</p>
+    </div>
+    <div>
+      <h3>Lightweight</h3>
+      <p>44 KB minified, zero dependencies, 3.6&times; the throughput of
+         <a href="https://github.com/WebAssembly/wabt">wabt</a>.</p>
+    </div>
+  </div>
+
+  <section class="tile" id="performance">
+    <a class="no" href="#performance">01</a>
+    <h2>Performance</h2>
+    <p>Compiles in-process: test suites, hot reload and codegen never wait on a subprocess.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Compiler</th><th>Size</th><th>Throughput</th></tr></thead>
+      <tbody>
+        <tr class="me"><td>watr</td><td>44 KB</td><td>3,123 op/s</td></tr>
+        <tr><td>spec/wast.js</td><td>216 KB</td><td>1,509 op/s</td></tr>
+        <tr><td>wabt</td><td>282 KB</td><td>859 op/s</td></tr>
+        <tr><td>binaryen</td><td>1,100 KB</td><td>473 op/s</td></tr>
+        <tr><td>wat-compiler</td><td>152 KB + wabt</td><td>355 op/s</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="tile" id="api">
+    <a class="no" href="#api">02</a>
+    <h2>API</h2>
+    <p>The tagged template compiles, instantiates and imports interpolated values in one step.
+       TypeScript types included.</p>
+<pre><b>import</b> watr <b>from</b> 'watr'
+
+<b>const</b> { test } = watr`(func (export "test") (call ${console.log} (i32.const 42)))`
+test()  <i>// 42</i></pre>
+    <div class="bento">
+      <div>
+        <h3><code>parse</code></h3>
+        <p>Text to an S-expression tree.</p>
+<pre>parse('(i32.const 42)')
+<i>// ['i32.const', '42']</i></pre>
+      </div>
+      <div>
+        <h3><code>print</code></h3>
+        <p>Tree or text, pretty-printed.</p>
+<pre>print(src)
+<i>// indented, one op per line</i></pre>
+      </div>
+      <div>
+        <h3><code>minify</code></h3>
+        <p>Same, with whitespace dropped.</p>
+<pre>print(src, { indent: <b>false</b>, newline: <b>false</b> })
+<i>// (module(func(result i32)(i32.const 42)))</i></pre>
+      </div>
+      <div>
+        <h3><code>polyfill</code></h3>
+        <p>Newer features lowered to MVP.</p>
+<pre><b>import</b> polyfill <b>from</b> 'watr/polyfill'
+compile(polyfill(src))</pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="tile" id="optimizer">
+    <a class="no" href="#optimizer">03</a>
+    <h2>Optimizer</h2>
+    <p>Folds constants, treeshakes, inlines, coalesces and outlines. A function call instead of
+       a 1.1 MB binary spawned per file.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Optimizer</th><th>Total size</th><th>Batch</th><th>Footprint</th></tr></thead>
+      <tbody>
+        <tr class="me"><td>watr/optimize</td><td>19,734 B</td><td>110 ms in-process</td><td>149 KB</td></tr>
+        <tr><td>wasm-opt -Oz</td><td>19,852 B</td><td>990 ms via CLI</td><td>1,100 KB</td></tr>
+        <tr><td>wasm-opt -O3</td><td>22,302 B</td><td>not measured</td><td>1,100 KB</td></tr>
+      </tbody>
+    </table></div>
+    <p class="fine">21-module corpus: smaller than -O3 on every module, ties or beats -Oz on 18 of 20 files.</p>
+  </section>
+
+  <section class="tile" id="conformance">
+    <a class="no" href="#conformance">04</a>
+    <h2>Conformance</h2>
+    <p>CI runs the <a href="https://github.com/WebAssembly/spec/tree/main/test">WebAssembly spec
+       testsuite</a>; coverage is tracked on
+       <a href="https://webassembly.org/features/?categories=tools">webassembly.org</a>, including
+       <a href="https://github.com/WebAssembly/stringref">stringref</a>,
+       <a href="https://github.com/WebAssembly/rounding-mode-control">rounding mode control</a> and
+       <a href="https://github.com/WebAssembly/wide-arithmetic">wide arithmetic</a>.
+       Errors report line and column.</p>
+<pre>&gt; compile('(func (export "x"')
+<i>Error: Unclosed parenthesis at 1:18</i></pre>
+    <p>watr compiles <a href="https://github.com/dy/jz">jz</a>, a minimal static JS subset.</p>
+  </section>
+
+  <section class="tile" id="cli">
+    <a class="no" href="#cli">05</a>
+    <h2>CLI</h2>
+<pre>npx watr input.wat              <i># input.wasm</i>
+npx watr input.wat -o out.wasm  <i># custom output</i>
+npx watr input.wat --print      <i># pretty-print</i>
+npx watr input.wat --minify     <i># minify</i>
+npx watr input.wat --optimize   <i># fold, treeshake, inline, coalesce</i>
+npx watr input.wat --polyfill   <i># newer features to MVP</i></pre>
+  </section>
+</main>
+
+<footer><div class="col bar">
+  <div class="lic">
+    <a href="https://github.com/dy/watr/blob/main/LICENSE">MIT</a>
+    <a class="om" href="https://krishnized.github.io/license" aria-label="krishnized license">&#2384;</a>
+  </div>
+  <nav>
+    <a href="./docs">docs</a>
+    <a href="./play/">play</a>
+    <a href="https://github.com/dy/watr">github</a>
+    <a href="https://npmjs.org/watr">npm</a>
+  </nav>
+</div></footer>
+
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"watr",
+"description":"Spec-complete wat2wasm implementation in JavaScript. Compiles WebAssembly text (WAT) to wasm binary with no dependencies and no Emscripten.",
+"url":"https://dy.github.io/watr/","codeRepository":"https://github.com/dy/watr",
+"programmingLanguage":"JavaScript","license":"https://opensource.org/licenses/MIT",
+"keywords":"wat2wasm, WebAssembly, WAT, wasm, compiler"}
+</script>
+
+<script type="module">
+import { compile } from './watr.js';
+const inp = document.getElementById('in');
+const out = document.getElementById('out');
+const st  = document.getElementById('st');
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+function render(){
+  let bytes;
+  try { bytes = compile(inp.value); }
+  catch (e) {
+    out.innerHTML = '<span class="err">' + esc(String(e && e.message || e)) + '</span>';
+    st.textContent = 'error';
+    st.className = 'bad';
+    return;
+  }
+  const b = [...bytes];
+  st.textContent = b.length + ' bytes';
+  st.className = '';
+  let html = '';
+  for (let i = 0; i < b.length; i += 8) {
+    const row = b.slice(i, i + 8);
+    const hex = row.map((v, j) => {
+      const h = v.toString(16).padStart(2, '0');
+      return (i + j) < 4 ? '<span class="magic">' + h + '</span>' : h;
+    }).join(' ');
+    const asc = row.map(v => (v > 31 && v < 127) ? String.fromCharCode(v) : '.').join('');
+    html += '<span class="off">' + i.toString(16).padStart(4, '0') + '</span>  '
+          + hex + '   '.repeat(8 - row.length)
+          + '  <span class="off">' + esc(asc) + '</span>\n';
+  }
+  out.innerHTML = html;
+}
+inp.addEventListener('input', render);
+render();
+</script>

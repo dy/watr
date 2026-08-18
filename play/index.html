@@ -5,18 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <title>WAT REPL - Run or compile WebAssembly text code online</title>
-  <meta name="description" content="Online WebAssembly REPL for compiling and formatting WebAssembly text WAT code into binary directly in your browser. Fast, simple, and efficient. Multiple compiler choices.">
+  <meta name="description" content="Online WebAssembly REPL for compiling and formatting WebAssembly text (WAT) code into binary in your browser. Compare five compilers.">
   <meta name="keywords" content="WebAssembly, WAT, WAST, WASM, online REPL, WebAssembly editor, WASM REPL, wabt, wat2wasm, wat compiler">
 
   <meta property="og:title" content="WebAssembly Text REPL">
   <meta property="og:description" content="Run and test WebAssembly WAT code online.">
-  <meta property="og:url" content="https://dy.github.io/watr/docs/repl">
+  <meta property="og:url" content="https://dy.github.io/watr/play/">
   <meta property="og:type" content="website">
   <!-- <meta property="og:image" content="https://dy.github.io/watr/docs/og-image.png"> -->
 
   <!-- <meta name="twitter:card" content="summary_large_image"> -->
   <meta name="twitter:title" content="WebAssembly Text REPL">
-  <meta name="twitter:description" content="Fast, simple WebAssembly REPL for WAT code.">
+  <meta name="twitter:description" content="Run and test WebAssembly WAT code online.">
   <!-- <meta name="twitter:image" content="https://dy.github.io/watr/docs/twitter-image.png"> -->
 
   <meta name="google" content="notranslate">
@@ -28,7 +28,7 @@
       "name": "WebAssembly Text REPL",
       "applicationCategory": "Developer Tool",
       "operatingSystem": "All",
-      "url": "https://dy.github.io/watr/docs/repl",
+      "url": "https://dy.github.io/watr/play/",
       "description": "An online WebAssembly REPL for running and testing WAT code.",
       "offers": {
         "@type": "Offer",
@@ -38,9 +38,16 @@
     }
   </script>
 
-  <link rel="canonical" href="https://dy.github.io/watr/docs/repl">
+  <link rel="icon" href="../watr.svg" type="image/svg+xml">
+<link rel="canonical" href="https://dy.github.io/watr/play/">
 
   <link rel="stylesheet" href="./lib/reset.css" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Martian+Mono:wght@600;700&display=swap">
+  <link rel="stylesheet" href="../theme.css">
+  <link rel="stylesheet" href="../site.css">
 
   <!-- Prevent FOUC for sprae directives -->
   <style>
@@ -54,14 +61,15 @@
   <style>
     html,
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+      font-family: var(--mono);
     }
 
     body {
-      font-family: sans-serif;
-      font-optical-sizing: auto;
-      font-weight: 400;
-      font-style: normal;
+      background: var(--paper);
+      color: var(--body);
+      font-size: 14px;
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
       padding-bottom: 3rem;
       display: flex;
       flex-direction: column;
@@ -69,37 +77,86 @@
       position: relative;
     }
 
-    a {
-      color: silver;
+    /* site chrome: full-bleed bar matching the landing page */
+    .playbar {
+      padding-left: 1rem;
+      padding-right: 1rem;
+    }
+
+    .ident {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+
+      h1 {
+        font-size: 13px;
+        font-weight: 500;
+        letter-spacing: 0;
+        color: var(--dim);
+        margin: 0;
+      }
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      margin: 1rem 1rem 0;
+      gap: .75rem;
+      flex-wrap: wrap;
+    }
+
+    footer a {
+      color: var(--dim);
+      text-decoration: none;
 
       &:hover {
-        color: black;
+        color: var(--wasm);
       }
     }
 
     button,
     select {
       height: 2rem;
-      border: none;
-      box-shadow: 0 1px 1px 1px gainsboro;
-      border-radius: 3px;
+      border: 1px solid var(--hair-2);
+      border-radius: 0;
+      background: var(--raise);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12.5px;
       cursor: pointer;
     }
 
     button {
       white-space: nowrap;
-      background: whitesmoke;
       min-width: 2rem;
       padding: 0 .5rem;
 
       &:hover {
-        background: white;
+        background: var(--panel);
+        border-color: var(--ink);
       }
 
       &::before {
         content: attr(icon);
         font-size: 1rem;
       }
+    }
+
+    button.primary {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: var(--paper);
+
+      &:hover {
+        background: var(--wasm);
+        border-color: var(--wasm);
+      }
+    }
+
+    button:focus-visible,
+    select:focus-visible {
+      outline: 2px solid var(--wasm);
+      outline-offset: -2px;
     }
 
     @media (max-width: 600px) {
@@ -111,31 +168,31 @@
     pre,
     code,
     output {
-      font-family: monospace;
+      font-family: var(--mono);
       font-weight: 400;
       font-style: normal;
     }
 
-    /* theme */
+    /* syntax theme */
     :root {
       --success: inherit;
-      --error: #dc3545;
+      --error: var(--red);
 
-      --data: #d6336c;
-      --keyword: #2b69cc;
-      --number: #37a2a5;
-      --comment: #848d95;
-      --annot: #6f42c1;
-      --id: #953800;
+      --data: #b02a5b;
+      --keyword: var(--wasm);
+      --number: #197278;
+      --comment: var(--dim);
+      --annot: #7a3fb8;
+      --id: #8a4a12;
     }
 
     /* Drag-drop overlay */
     body.dragover::after {
-      content: '📂 Drop .wat or .wasm file';
+      content: '\1F4C2 Drop .wat or .wasm file';
       position: fixed;
       inset: 0;
-      background: rgba(43, 105, 204, 0.9);
-      color: white;
+      background: color-mix(in srgb, var(--wasm) 90%, transparent);
+      color: #fff;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -147,14 +204,20 @@
 </head>
 
 <body id="app" :ondrop="handleDrop" :ondragover="handleDragOver" :ondragleave="handleDragLeave">
-  <header style="padding: 1rem 1rem 0.5rem; display: flex; gap: 1rem;">
-    <h1 title="WebAssembly text REPL">WAT REPL</h1>
-    <nav style="margin-left: auto; gap: 1rem; display: flex;">
-      <a href="https://github.com/dy/watr" title="Source (github)">⎇</a>
+  <header><div class="bar playbar">
+    <div class="ident">
+      <a class="brand" href="../"><svg width="27" height="17" viewBox="0 0 32 20" aria-hidden="true"><path d="M30.2 7.1c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.16.37.58.54.95.38l7.33-3.1L30.2 7.1Z" fill="#654ff0"/><path d="M20.8 7.16c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.67Z" fill="#654ff0"/><path d="M11.39 7.22c-.16-.37-.58-.55-.95-.39l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.66Z" fill="#654ff0"/><path d="M27.38.44c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1L27.38.44Z" fill="#654ff0"/><path d="M8.56.55c-.15-.37-.58-.54-.95-.38L.28 3.27l1.13 2.67c.16.37.58.54.95.38l7.33-3.1L8.56.55Z" fill="#654ff0"/><path d="M17.97.5c-.15-.37-.58-.55-.95-.39L9.7 3.22l1.13 2.66c.15.37.58.54.95.39l7.33-3.11L17.97.5Z" fill="#654ff0"/><path d="M23.48 13.49c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.67Z" fill="#654ff0"/><path d="M14.07 13.55c-.16-.37-.58-.54-.95-.39l-7.34 3.11 1.13 2.67c.16.37.58.54.95.38l7.33-3.1-1.12-2.67Z" fill="#654ff0"/></svg> watr</a>
+      <h1 title="WebAssembly text REPL">WAT REPL</h1>
+    </div>
+    <nav>
+      <a href="../docs">docs</a>
+      <a href="./" aria-current="page">play</a>
+      <a href="https://github.com/dy/watr">github</a>
+      <a href="https://npmjs.org/watr">npm</a>
     </nav>
-  </header>
+  </div></header>
 
-  <nav style="display: flex; align-items: center; margin: 0 1rem; gap: 1rem; flex-wrap: wrap;">
+  <div class="toolbar">
     <label for="example" title="Example">
       <select name="example" :value="example" :onchange="e => e.target.value === '_load' ? loadBinaryInput.click() : loadExample(e.target.value)">
         <option value="">Custom</option>
@@ -188,9 +251,9 @@
 
     <button :hidden="compiler !== 'watr'" :onclick="applyOptimize()" title="Optimize: fold, treeshake, deadcode, locals, identity, strength, branch, propagate, inline" icon="⚡"> optimize</button>
 
-    <button style="margin-left: auto" :onclick="download()" title="Download WASM binary" aria-label="Download WASM binary" icon="📥"> .wasm</button>
+    <button class="primary" style="margin-left: auto" :onclick="download()" title="Download WASM binary" aria-label="Download WASM binary" icon="📥"> .wasm</button>
     <button :onclick="copyBase64()" title="Copy binary as base64 string" aria-label="Copy binary as base64 string" icon="📑"> base64</button>
-  </nav>
+  </div>
 
   <div id="container">
     <style>
@@ -231,7 +294,9 @@
         user-select: none;
         font-family: monospace;
         line-height: inherit;
-        border-right: 1px solid gainsboro;
+        background: none;
+        border: 0;
+        border-right: 1px solid var(--hair);
         margin-right: 0.5rem;
         min-width: 2ch;
       }
@@ -242,6 +307,9 @@
         position: relative;
         flex: 1;
         min-width: 0;
+        background: none;
+        padding: 0;
+        font-size: inherit;
 
         &:empty::before {
           content: "Type your code here...";
@@ -275,7 +343,7 @@
         }
 
         .error-line {
-          background: rgba(220, 53, 69, 0.15);
+          background: color-mix(in srgb, var(--red) 10%, transparent);
           display: inline-block;
           width: 100%;
           margin: 0 -0.25rem;
@@ -295,6 +363,7 @@
         overflow: auto;
         display: flex;
         justify-content: center;
+        border-left: 1px solid var(--hair);
       }
 
       #binary {
@@ -313,10 +382,10 @@
         position: absolute;
         top: 0;
         right: 0;
-        background: gainsboro;
-        color: gray;
+        background: var(--panel);
+        color: var(--dim);
+        border: 1px solid var(--hair-2);
         padding: 0.25rem 0.5rem;
-        border-radius: 3px;
         font-size: 0.75rem;
         animation: fadeout 1s ease-out forwards;
       }
@@ -332,6 +401,14 @@
       }
 
       .preamble {
+        color: var(--comment);
+      }
+
+      .section {
+        white-space: pre;
+      }
+
+      .ascii {
         color: var(--comment);
       }
 
@@ -393,7 +470,7 @@
       right: 0;
       left: 0;
       text-align: left;
-      background: linear-gradient(to top, white 50%, rgba(255, 255, 255, 0) 100%);
+      background: linear-gradient(to top, var(--paper) 55%, transparent);
     }
     .err-loc, .log-info {
       cursor: pointer;
@@ -556,6 +633,21 @@
       return Array.from(arr).map(c => c.toString(16).padStart(2, 0)).join(' ')
     }
 
+    function ascii(arr) {
+      return Array.from(arr).map(c => c > 31 && c < 127 ? String.fromCharCode(c) : '.').join('')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    }
+
+    // hex rows with aligned ascii gutter
+    function dump(arr, w = 16) {
+      const rows = []
+      for (let i = 0; i < arr.length; i += w) {
+        const row = Array.from(arr.slice(i, i + w))
+        rows.push(hex(row).padEnd(w * 3 - 1) + '  <span class="ascii">' + ascii(row) + '</span>')
+      }
+      return rows.join('\n')
+    }
+
     // gzip compress and return size
     async function gzipSize(buf) {
       const stream = new Blob([buf]).stream().pipeThrough(new CompressionStream('gzip'))
@@ -574,18 +666,17 @@
       let result = ''
       let offset = 8
 
-      result += `<p class="section preamble" title="preamble">${hex(bytes.slice(0, 8))}</p>`
+      result += `<p class="section preamble" title="preamble">${dump(bytes.slice(0, 8))}</p>`
 
       while (offset < bytes.length) {
         const id = bytes[offset++]
         if (!SECTION[id]) throw new Error(`Bad section ${id}`)
 
         result += `<p title="${SECTION[id]}" class="section ${SECTION[id]}">`
-        result += ` <b title="${SECTION[id]} id: ${id}">${hex([id])}</b>`
+        result += `<b title="${SECTION[id]} id: ${id}">${hex([id])}</b>`
         const [size, newOffset] = uleb(bytes, offset)
-        result += ` <i title="${SECTION[id]} size: ${size}">${hex(bytes.slice(offset, newOffset))}</i> `
-        result += `<br/>`
-        result += hex(bytes.slice(newOffset, offset = newOffset + size))
+        result += ` <i title="${SECTION[id]} size: ${size}">${hex(bytes.slice(offset, newOffset))}</i>\n`
+        result += dump(bytes.slice(newOffset, offset = newOffset + size))
         result += `</p>`
       }
       return result

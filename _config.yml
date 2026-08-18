@@ -1,0 +1,14 @@
+title: watr
+description: Spec-complete wat2wasm implementation in JavaScript. Compiles WebAssembly text (WAT) to wasm binary with no dependencies and no Emscripten.
+url: https://dy.github.io
+baseurl: /watr
+
+exclude:
+  - node_modules
+  - test
+  - types
+  - bin
+  - play/test-results
+  - playwright.config.js
+  - package-lock.json
+  - tea.yaml
