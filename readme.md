@@ -4,7 +4,7 @@
 _Light & fast WAT compiler_
 
 * [feature](https://webassembly.org/features/?categories=browsers%2Cstandalones%2Ctools) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
-* [compile](./docs.md#compilesource) · [polyfill](./docs.md#polyfillast-options) · [optimize](./docs.md#optimizeast-options) · [parse](./docs.md#parsesource-options) · [prettify](./docs.md#printtree-options) · [minify](./docs.md#printtree-options)
+* [compile](./docs.md#compilesource), [polyfill](./docs.md#polyfillast-options), [optimize](./docs.md#optimizeast-options), [parse](./docs.md#parsesource-options), [prettify](./docs.md#printtree-options), [minify](./docs.md#printtree-options)
 * instant wasm, JS interop, CLI, clear errors
 
 **[site](https://dy.github.io/watr)** / **[docs](./docs.md)** /  **[playground](https://dy.github.io/watr/play/)**
