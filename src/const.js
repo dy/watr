@@ -76,6 +76,8 @@ const TABLE = [
   'memory.init dataidx_memoryidx', 'data.drop dataidx', 'memory.copy memoryidx_memoryidx', 'memory.fill memoryidx?',
   'table.init reversed', 'elem.drop elemidx', 'table.copy tableidx_tableidx', 'table.grow tableidx', 'table.size tableidx', 'table.fill tableidx',
   0xfc0013, 'i64.add128', 'i64.sub128', 'i64.mul_wide_s', 'i64.mul_wide_u',
+  // 0x30: half precision memory ops
+  0xfc0030, 'f32.load_f16 memarg', 'f32.store_f16 memarg',
   // 0x80-0xBB: rounding mode control
   0xfc0080, 'f32.sqrt_ceil', 'f32.add_ceil', 'f32.sub_ceil', 'f32.mul_ceil', 'f32.div_ceil',
   'f64.sqrt_ceil', 'f64.add_ceil', 'f64.sub_ceil', 'f64.mul_ceil', 'f64.div_ceil',
@@ -133,6 +135,14 @@ const TABLE = [
   'i8x16.relaxed_laneselect', 'i16x8.relaxed_laneselect', 'i32x4.relaxed_laneselect', 'i64x2.relaxed_laneselect',
   'f32x4.relaxed_min', 'f32x4.relaxed_max', 'f64x2.relaxed_min', 'f64x2.relaxed_max',
   'i16x8.relaxed_q15mulr_s', 'i16x8.relaxed_dot_i8x16_i7x16_s', 'i32x4.relaxed_dot_i8x16_i7x16_add_s',
+  // 0x120: half precision (f16x8)
+  0xfd0120, 'f16x8.splat', 'f16x8.extract_lane laneidx', 'f16x8.replace_lane laneidx',
+  0xfd0130, 'f16x8.abs', 'f16x8.neg', 'f16x8.sqrt', 'f16x8.ceil', 'f16x8.floor', 'f16x8.trunc', 'f16x8.nearest',
+  'f16x8.eq', 'f16x8.ne', 'f16x8.lt', 'f16x8.gt', 'f16x8.le', 'f16x8.ge',
+  'f16x8.add', 'f16x8.sub', 'f16x8.mul', 'f16x8.div', 'f16x8.min', 'f16x8.max', 'f16x8.pmin', 'f16x8.pmax',
+  'i16x8.trunc_sat_f16x8_s', 'i16x8.trunc_sat_f16x8_u', 'f16x8.convert_i16x8_s', 'f16x8.convert_i16x8_u',
+  'f16x8.demote_f32x4_zero', 'f16x8.demote_f64x2_zero', 'f32x4.promote_low_f16x8',
+  0xfd014e, 'f16x8.madd', 'f16x8.nmadd',
   // 0xfe: atomic/thread instructions
   0xfe0000, 'memory.atomic.notify memarg', 'memory.atomic.wait32 memarg', 'memory.atomic.wait64 memarg', 'atomic.fence opt_memory',
   0xfe0010, 'i32.atomic.load memarg', 'i64.atomic.load memarg', 'i32.atomic.load8_u memarg', 'i32.atomic.load16_u memarg',

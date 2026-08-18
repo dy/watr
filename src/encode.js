@@ -135,7 +135,7 @@ export function i64(n, buffer = []) {
   return buffer
 }
 const _buf = new ArrayBuffer(8)
-const _u8 = new Uint8Array(_buf), _i32 = new Int32Array(_buf), _f32 = new Float32Array(_buf), _f64 = new Float64Array(_buf), _i64 = new BigInt64Array(_buf)
+const _u8 = new Uint8Array(_buf), _i32 = new Int32Array(_buf), _f32 = new Float32Array(_buf), _f64 = new Float64Array(_buf), _i64 = new BigInt64Array(_buf), _u64 = new BigUint64Array(_buf)
 
 i64.parse = n => {
   n = cleanInt(n)
@@ -177,6 +177,54 @@ export function f32(input, out, value, idx) {
 
   if (out) { out.push(_u8[0], _u8[1], _u8[2], _u8[3]); return }
   return [_u8[0], _u8[1], _u8[2], _u8[3]]
+}
+
+// f16: IEEE 754 binary16 (half-precision proposal). 2 bytes LE.
+const F16_SIGN = 0x8000, F16_NAN = 0x7c00, F16_QUIET = 0x200
+export function f16(input, out, value, idx) {
+  let bits
+  if (typeof input === 'string' && (idx = input.indexOf('nan')) >= 0) {
+    if (input[idx + 3] === ':') {
+      const tail = input.slice(idx + 4)
+      bits = (tail === 'canonical' || tail === 'arithmetic') ? F16_QUIET : (i32.parse(tail) & 0x3ff)
+    } else bits = F16_QUIET
+    bits |= F16_NAN
+    if (input[0] === '-') bits |= F16_SIGN
+  }
+  else {
+    value = typeof input === 'string' ? f64.parse(input) : input
+    bits = f16.bits(value)
+    // finite literal that rounds to infinity is out of f16 range (mirrors f32/f64 literal checks)
+    if ((bits & 0x7fff) === F16_NAN && isFinite(value)) err(`f16 constant out of range`)
+  }
+  if (out) { out.push(bits & 0xff, bits >>> 8); return }
+  return [bits & 0xff, bits >>> 8]
+}
+
+// exact f64 -> binary16: round to nearest, ties to even (differentially tested vs DataView.setFloat16)
+f16.bits = (v) => {
+  _f64[0] = v
+  const b = _u64[0]
+  const sign = Number(b >> 48n) & F16_SIGN
+  const e = Number((b >> 52n) & 0x7ffn), m = b & 0xfffffffffffffn
+  if (e === 0x7ff) return sign | F16_NAN | (m ? F16_QUIET : 0)
+  if (e === 0) return sign // f64 subnormal, far below f16 range
+  const E = e - 1023
+  if (E > 15) return sign | F16_NAN // >= 2^16: infinity
+  const full = (1n << 52n) | m // 53-bit significand, value = full * 2^(E-52)
+  const shift = 42 + (E < -14 ? -14 - E : 0) // keep 11 bits for normals, fewer for subnormals
+  if (shift > 53) return sign // below half of the smallest subnormal
+  let half = Number(full >> BigInt(shift))
+  if ((full >> BigInt(shift - 1)) & 1n)
+    if ((full & ((1n << BigInt(shift - 1)) - 1n)) !== 0n || (half & 1)) half++
+  if (E >= -14) {
+    let exp = E + 15
+    if (half >= 0x800) half >>= 1, exp++ // rounding carried past the implicit bit
+    if (exp >= 0x1f) return sign | F16_NAN
+    return sign | (exp << 10) | (half & 0x3ff)
+  }
+  if (half >= 0x400) return sign | 0x400 // subnormal rounded up into the smallest normal
+  return sign | half
 }
 
 const F64_SIGN = 0x8000000000000000n, F64_NAN = 0x7ff0000000000000n, F64_QUIET = 0x8000000000000n
