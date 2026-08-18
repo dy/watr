@@ -5,7 +5,9 @@ baseurl: /watr
 
 exclude:
   - node_modules
-  - test
+  - test/official
+  - test/lib
+  - test/repl
   - types
   - bin
   - play/test-results

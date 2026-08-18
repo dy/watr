@@ -44,16 +44,16 @@
 
   <div class="feats">
     <div>
-      <h3>Portable</h3>
-      <p>A regular ES module: no <code>.wasm</code> file, no Emscripten. Bundlers, workers and
-         blob URLs load it like any other import.</p>
-    </div>
-    <div>
       <h3>Spec-complete</h3>
       <p>Full <a href="https://webassembly.github.io/spec/core/text/index.html">spec syntax</a>
          and phase 5, 4 and 3 <a href="https://github.com/WebAssembly/proposals">proposals</a>,
          validated by the <a href="https://github.com/WebAssembly/spec/tree/main/test">official
          testsuite</a> on every commit.</p>
+    </div>
+    <div>
+      <h3>Portable</h3>
+      <p>A regular ES module: no <code>.wasm</code> file, no Emscripten. Bundlers, workers and
+         blob URLs load it like any other import.</p>
     </div>
     <div>
       <h3>Lightweight</h3>
@@ -65,7 +65,7 @@
   <section class="tile" id="performance">
     <a class="no" href="#performance">01</a>
     <h2>Performance</h2>
-    <p>Compiles in-process: test suites, hot reload and codegen never wait on a subprocess.</p>
+    <p>The fastest of the JavaScript WAT compilers, and the smallest.</p>
     <div class="scroll"><table>
       <thead><tr><th>Compiler</th><th>Size</th><th>Throughput</th></tr></thead>
       <tbody>
@@ -89,30 +89,31 @@
 test()  <i>// 42</i></pre>
     <div class="bento">
       <div>
-        <h3><code>parse</code></h3>
+        <h3><a href="./docs#parsesource-options"><code>parse</code></a></h3>
         <p>Text to an S-expression tree.</p>
 <pre>parse('(i32.const 42)')
 <i>// ['i32.const', '42']</i></pre>
       </div>
       <div>
-        <h3><code>print</code></h3>
+        <h3><a href="./docs#printtree-options"><code>print</code></a></h3>
         <p>Tree or text, pretty-printed.</p>
 <pre>print(src)
 <i>// indented, one op per line</i></pre>
       </div>
       <div>
-        <h3><code>minify</code></h3>
+        <h3><a href="./docs#printtree-options"><code>minify</code></a></h3>
         <p>Same, with whitespace dropped.</p>
 <pre>print(src, { indent: <b>false</b>, newline: <b>false</b> })
 <i>// (module(func(result i32)(i32.const 42)))</i></pre>
       </div>
       <div>
-        <h3><code>polyfill</code></h3>
+        <h3><a href="./docs#polyfillast-options"><code>polyfill</code></a></h3>
         <p>Newer features lowered to MVP.</p>
 <pre><b>import</b> polyfill <b>from</b> 'watr/polyfill'
 compile(polyfill(src))</pre>
       </div>
     </div>
+    <p class="fine">Options, AST format and the rest of the surface: <a href="./docs">API reference</a>.</p>
   </section>
 
   <section class="tile" id="optimizer">
@@ -129,21 +130,21 @@ compile(polyfill(src))</pre>
       </tbody>
     </table></div>
     <p class="fine">21-module corpus: smaller than -O3 on every module, ties or beats -Oz on 18 of 20 files.</p>
+    <p class="fine">Passes and options: <a href="./docs#optimizeast-options">optimize docs</a>.</p>
   </section>
 
   <section class="tile" id="conformance">
     <a class="no" href="#conformance">04</a>
     <h2>Conformance</h2>
     <p>CI runs the <a href="https://github.com/WebAssembly/spec/tree/main/test">WebAssembly spec
-       testsuite</a>; coverage is tracked on
-       <a href="https://webassembly.org/features/?categories=tools">webassembly.org</a>, including
+       testsuite</a>. Feature coverage, including
        <a href="https://github.com/WebAssembly/stringref">stringref</a>,
        <a href="https://github.com/WebAssembly/rounding-mode-control">rounding mode control</a> and
-       <a href="https://github.com/WebAssembly/wide-arithmetic">wide arithmetic</a>.
+       <a href="https://github.com/WebAssembly/wide-arithmetic">wide arithmetic</a>, is tracked on
+       <a href="https://webassembly.org/features/?categories=tools">webassembly.org</a>.
        Errors report line and column.</p>
 <pre>&gt; compile('(func (export "x"')
 <i>Error: Unclosed parenthesis at 1:18</i></pre>
-    <p>watr compiles <a href="https://github.com/dy/jz">jz</a>, a minimal static JS subset.</p>
   </section>
 
   <section class="tile" id="cli">
@@ -155,6 +156,15 @@ npx watr input.wat --print      <i># pretty-print</i>
 npx watr input.wat --minify     <i># minify</i>
 npx watr input.wat --optimize   <i># fold, treeshake, inline, coalesce</i>
 npx watr input.wat --polyfill   <i># newer features to MVP</i></pre>
+  </section>
+
+  <section class="tile" id="used-by">
+    <a class="no" href="#used-by">06</a>
+    <h2>Used by</h2>
+    <ul class="users">
+      <li><a href="https://jz.js.org" aria-label="jz"><svg width="22" height="22" viewBox="0 0 630 630" aria-hidden="true"><path d="M630 0H0V630H630V0Z" fill="#16151a"/><path d="M165.65 526.474L213.863 497.296C223.164 513.788 231.625 527.74 251.92 527.74C271.374 527.74 283.639 520.13 283.639 490.53V289.23H342.843V491.367C342.843 552.688 306.899 580.599 254.458 580.599C207.096 580.599 179.605 556.07 165.65 526.469" fill="#fcfcfd"/><path d="M412.075 316.04H534.138L409.808 550.902H546.138" stroke="#fcfcfd" stroke-width="54" stroke-linecap="square"/></svg></a>
+        a JS to WASM compiler.</li>
+    </ul>
   </section>
 </main>
 

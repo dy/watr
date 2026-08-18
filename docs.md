@@ -528,6 +528,6 @@ watr`(func (export "g") (param i64) (result i64) (i64.mul (local.get 0) (i64.con
 
 ## See Also
 
-* [Examples](./test/example/)
+* [Examples](https://github.com/dy/watr/tree/main/test/example)
 * [Playground](https://dy.github.io/watr/play/)
 * [WebAssembly Spec](https://webassembly.github.io/spec/)

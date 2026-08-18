@@ -26,9 +26,30 @@
   </nav>
 </div></header>
 
+<nav class="toc" aria-label="Contents"></nav>
+
 <main class="col prose">
 {{ content }}
 </main>
+
+<script>
+// sticky side navigation: h2 sections, h3 API entries
+const toc = document.querySelector('.toc')
+const heads = [...document.querySelectorAll('main h2[id], main h3[id]')]
+toc.innerHTML = heads.map(h =>
+  `<a href="#${h.id}" class="${h.tagName === 'H3' ? 'sub' : ''}">${h.textContent.replace(/\(.*$/, '')}</a>`
+).join('')
+const links = new Map(heads.map((h, i) => [h, toc.children[i]]))
+let current = null
+const spy = new IntersectionObserver(es => {
+  for (const e of es) if (e.isIntersecting) {
+    current?.removeAttribute('aria-current')
+    current = links.get(e.target)
+    current.setAttribute('aria-current', 'true')
+  }
+}, { rootMargin: '0px 0px -80% 0px' })
+heads.forEach(h => spy.observe(h))
+</script>
 
 <footer><div class="col bar">
   <div class="lic">
