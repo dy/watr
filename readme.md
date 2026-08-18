@@ -7,7 +7,7 @@ _Light & fast WAT compiler_
 * [compile](./docs.md#compilesource), [polyfill](./docs.md#polyfillast-options), [optimize](./docs.md#optimizeast-options), [parse](./docs.md#parsesource-options), [prettify](./docs.md#printtree-options), [minify](./docs.md#printtree-options)
 * instant wasm, JS interop, CLI, clear errors
 
-**[site](https://dy.github.io/watr)** / **[docs](./docs.md)** /  **[playground](https://dy.github.io/watr/play/)**
+**[site](https://dy.github.io/watr)**  /  **[docs](./docs.md)**  /  **[playground](https://dy.github.io/watr/play/)**
 
 
 <!-- _Use for_: backends, compilers, DSLs, codegen, dev tools -->
