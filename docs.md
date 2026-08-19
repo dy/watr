@@ -1,5 +1,6 @@
 ---
 layout: doc
+permalink: /docs
 title: "watr documentation: compile, parse, print and optimize WAT"
 description: "API reference for watr: compile WebAssembly text to binary, parse to a tree, pretty-print, minify, polyfill post-MVP features and optimize wasm output."
 ---

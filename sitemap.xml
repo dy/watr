@@ -1,18 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://dy.github.io/watr/</loc>
-    <changefreq>weekly</changefreq>
-    <priority>1.0</priority>
+    <loc>https://watr.js.org/</loc>
   </url>
   <url>
-    <loc>https://dy.github.io/watr/play/</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.9</priority>
+    <loc>https://watr.js.org/play/</loc>
   </url>
   <url>
-    <loc>https://dy.github.io/watr/docs</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
+    <loc>https://watr.js.org/docs</loc>
   </url>
 </urlset>
