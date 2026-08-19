@@ -64,8 +64,7 @@
   <section class="tile" id="performance">
     <a class="no" href="#performance">01</a>
     <h2>Performance</h2>
-    <p>The fastest of the JavaScript WAT compilers, and the smallest. A single walk over the
-       parsed tree emits the bytes: no IR, no runtime, nothing to instantiate.</p>
+    <p>A single walk over the parsed tree emits the bytes: no IR, no runtime, nothing to instantiate.</p>
     <div class="scroll"><table>
       <thead><tr><th>Compiler</th><th>Size</th><th>Throughput</th></tr></thead>
       <tbody>
@@ -119,8 +118,7 @@ compile(polyfill(src))</pre>
   <section class="tile" id="optimizer">
     <a class="no" href="#optimizer">03</a>
     <h2>Optimizer</h2>
-    <p>Folds constants, treeshakes, inlines, coalesces and outlines. A function call instead of
-       a 1.1 MB binary spawned per file.</p>
+    <p>Folds constants, treeshakes, inlines, coalesces and outlines.</p>
     <div class="scroll"><table>
       <thead><tr><th>Optimizer</th><th>Total size</th><th>Batch</th><th>Footprint</th></tr></thead>
       <tbody>
@@ -168,11 +166,6 @@ npx watr input.wat --polyfill   <i># newer features to MVP</i></pre>
         a JS to WASM compiler.</li>
     </ul>
   </section>
-
-  <div class="get">
-    <a class="cmd" href="https://npmjs.org/watr"><span>$</span><b>npm i watr</b></a>
-    <a class="lnk" href="./play/">playground</a>
-  </div>
 </main>
 
 <footer><div class="col bar">
