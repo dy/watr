@@ -39,6 +39,7 @@ Enables [polyfills](#available-polyfills) and [optimizations](#available-optimiz
 | [Stringref](https://github.com/WebAssembly/stringref) | yes | no |
 | [Rounding mode control](https://github.com/WebAssembly/rounding-mode-control) | yes | n/a |
 | [Half precision](https://github.com/WebAssembly/half-precision) | yes | no |
+| [Acquire-release atomics](https://github.com/WebAssembly/acquire-release-atomics) | atomic loads | no |
 
 
 ## Install

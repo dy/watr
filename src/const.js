@@ -145,8 +145,9 @@ const TABLE = [
   0xfd014e, 'f16x8.madd', 'f16x8.nmadd',
   // 0xfe: atomic/thread instructions
   0xfe0000, 'memory.atomic.notify memarg', 'memory.atomic.wait32 memarg', 'memory.atomic.wait64 memarg', 'atomic.fence opt_memory',
-  0xfe0010, 'i32.atomic.load memarg', 'i64.atomic.load memarg', 'i32.atomic.load8_u memarg', 'i32.atomic.load16_u memarg',
-  'i64.atomic.load8_u memarg', 'i64.atomic.load16_u memarg', 'i64.atomic.load32_u memarg', 'i32.atomic.store memarg',
+  // atomic loads take a trailing ordering keyword (acquire-release atomics proposal)
+  0xfe0010, 'i32.atomic.load memarg_order', 'i64.atomic.load memarg_order', 'i32.atomic.load8_u memarg_order', 'i32.atomic.load16_u memarg_order',
+  'i64.atomic.load8_u memarg_order', 'i64.atomic.load16_u memarg_order', 'i64.atomic.load32_u memarg_order', 'i32.atomic.store memarg',
   'i64.atomic.store memarg', 'i32.atomic.store8 memarg', 'i32.atomic.store16 memarg', 'i64.atomic.store8 memarg',
   'i64.atomic.store16 memarg', 'i64.atomic.store32 memarg', 'i32.atomic.rmw.add memarg', 'i64.atomic.rmw.add memarg',
   'i32.atomic.rmw8.add_u memarg', 'i32.atomic.rmw16.add_u memarg', 'i64.atomic.rmw8.add_u memarg', 'i64.atomic.rmw16.add_u memarg',
