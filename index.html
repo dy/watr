@@ -46,9 +46,9 @@
     <div>
       <h3>Spec-complete</h3>
       <p>Full <a href="https://webassembly.github.io/spec/core/text/index.html">spec syntax</a> and
-         <a href="https://webassembly.org/features/?categories=tools">features</a>: phase 5, 4 and 3 <a href="https://github.com/WebAssembly/proposals">proposals</a>,
-         validated by the <a href="https://github.com/WebAssembly/spec/tree/main/test">official
-         testsuite</a> on every commit.</p>
+         <a href="https://webassembly.org/features/?categories=tools">features</a>: phase 5, 4 and 3 <a href="https://github.com/WebAssembly/proposals">proposals</a>.
+         60,380 <a href="https://github.com/WebAssembly/spec/tree/main/test">official
+         testsuite</a> assertions run on every commit.</p>
     </div>
     <div>
       <h3>Portable</h3>
@@ -57,15 +57,15 @@
     </div>
     <div>
       <h3>Lightweight</h3>
-      <p>44 KB minified, zero dependencies, 3.6&times; the throughput of
-         <a href="https://github.com/WebAssembly/wabt">wabt</a>.</p>
+      <p>44 KB minified, 14 KB gzipped, zero dependencies.</p>
     </div>
   </div>
 
   <section class="tile" id="performance">
     <a class="no" href="#performance">01</a>
     <h2>Performance</h2>
-    <p>The fastest of the JavaScript WAT compilers, and the smallest.</p>
+    <p>The fastest of the JavaScript WAT compilers, and the smallest. A single walk over the
+       parsed tree emits the bytes: no IR, no runtime, nothing to instantiate.</p>
     <div class="scroll"><table>
       <thead><tr><th>Compiler</th><th>Size</th><th>Throughput</th></tr></thead>
       <tbody>
@@ -137,7 +137,7 @@ compile(polyfill(src))</pre>
     <a class="no" href="#conformance">04</a>
     <h2>Conformance</h2>
     <p>CI runs the <a href="https://github.com/WebAssembly/spec/tree/main/test">WebAssembly spec
-       testsuite</a>. Feature coverage, including
+       testsuite</a>, pinned at 2026-08-12. Feature coverage, including
        <a href="https://github.com/WebAssembly/stringref">stringref</a>,
        <a href="https://github.com/WebAssembly/rounding-mode-control">rounding mode control</a> and
        <a href="https://github.com/WebAssembly/wide-arithmetic">wide arithmetic</a>, is tracked on
@@ -145,6 +145,8 @@ compile(polyfill(src))</pre>
        Errors report line and column.</p>
 <pre>&gt; compile('(func (export "x"')
 <i>Error: Unclosed parenthesis at 1:18</i></pre>
+    <p class="fine">watr compiles WebAssembly text only: C and Rust need LLVM or Emscripten,
+       and decoding .wasm back to text is wabt's wasm2wat.</p>
   </section>
 
   <section class="tile" id="cli">
@@ -166,6 +168,11 @@ npx watr input.wat --polyfill   <i># newer features to MVP</i></pre>
         a JS to WASM compiler.</li>
     </ul>
   </section>
+
+  <div class="get">
+    <a class="cmd" href="https://npmjs.org/watr"><span>$</span><b>npm i watr</b></a>
+    <a class="lnk" href="./play/">playground</a>
+  </div>
 </main>
 
 <footer><div class="col bar">
