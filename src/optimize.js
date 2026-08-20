@@ -970,8 +970,10 @@ const identityNode = (node) => {
         if (Array.isArray(v) && (v[0] === 'i32.and' || v[0] === 'i64.and') && v.length === 3) {
           for (const k of [1, 2]) {
             const m = getConst(v[k])
-            const mv = m && (typeof m.value === 'bigint' ? m.value : typeof m.value === 'number' ? BigInt(m.value) : null)
-            if (mv !== null && mv !== undefined && (mv & w) === w) { node[node.length - 1] = v[k === 1 ? 2 : 1]; return node }
+            if (m && (typeof m.value === 'bigint' || typeof m.value === 'number')) {
+              const mv = typeof m.value === 'bigint' ? m.value : BigInt(m.value)
+              if ((mv & w) === w) { node[node.length - 1] = v[k === 1 ? 2 : 1]; return node }
+            }
           }
         }
       }
@@ -1103,12 +1105,18 @@ const strengthNode = (node) => {
     if (op === 'i64.mul') {
       // hex value → LOCAL BigInt (in-expression construction is kernel-safe);
       // shift counts emit as plain numbers.
-      const cb = getConst(b), vb = cb ? BigInt(cb.value) : null
-      if (vb != null && vb > 0n && (vb & (vb - 1n)) === 0n)
-        return ['i64.shl', a, ['i64.const', vb.toString(2).length - 1]]
-      const ca = getConst(a), va = ca ? BigInt(ca.value) : null
-      if (va != null && va > 0n && (va & (va - 1n)) === 0n)
-        return ['i64.shl', b, ['i64.const', va.toString(2).length - 1]]
+      const cb = getConst(b)
+      if (cb) {
+        const vb = BigInt(cb.value)
+        if (vb > 0n && (vb & (vb - 1n)) === 0n)
+          return ['i64.shl', a, ['i64.const', vb.toString(2).length - 1]]
+      }
+      const ca = getConst(a)
+      if (ca) {
+        const va = BigInt(ca.value)
+        if (va > 0n && (va & (va - 1n)) === 0n)
+          return ['i64.shl', b, ['i64.const', va.toString(2).length - 1]]
+      }
     }
 
     // (x << K) >> K, K ∈ {24, 16} → i32.extend{8,16}_s — the byte/short
@@ -1131,9 +1139,12 @@ const strengthNode = (node) => {
       }
     }
     if (op === 'i64.div_u') {
-      const cb = getConst(b), vb = cb ? BigInt(cb.value) : null
-      if (vb != null && vb > 0n && (vb & (vb - 1n)) === 0n)
-        return ['i64.shr_u', a, ['i64.const', vb.toString(2).length - 1]]
+      const cb = getConst(b)
+      if (cb) {
+        const vb = BigInt(cb.value)
+        if (vb > 0n && (vb & (vb - 1n)) === 0n)
+          return ['i64.shr_u', a, ['i64.const', vb.toString(2).length - 1]]
+      }
     }
 
     // x % 2^n → x & (2^n - 1) (unsigned only)
@@ -1144,9 +1155,12 @@ const strengthNode = (node) => {
       }
     }
     if (op === 'i64.rem_u') {
-      const cb = getConst(b), vb = cb ? BigInt(cb.value) : null
-      if (vb != null && vb > 0n && (vb & (vb - 1n)) === 0n)
-        return ['i64.and', a, ['i64.const', '0x' + _i64Hex16(vb - 1n)]]
+      const cb = getConst(b)
+      if (cb) {
+        const vb = BigInt(cb.value)
+        if (vb > 0n && (vb & (vb - 1n)) === 0n)
+          return ['i64.and', a, ['i64.const', '0x' + _i64Hex16(vb - 1n)]]
+      }
     }
 }
 /** Strength reduction as a standalone pass. */
