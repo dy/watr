@@ -33,12 +33,19 @@ if (isWasm) {
   const wasmBytes = readFileSync(new URL('../dist/watr.wasm', import.meta.url))
   const { exports } = instantiate(wasmBytes, { memory: 4096 })
 
+  // polyfill emits raw BigInt leaves (i64 sign_ext shifts, trunc_sat clamp
+  // bounds, extended_const folds) — a plain BigInt can't cross the wasm
+  // boundary as a value (jz's marshaler rejects it with no host-BigInt
+  // evidence at that slot), so stringify same as template.js's PUA values:
+  // a decimal string parses back to the same i64 on the other side.
+  const unbig = node => Array.isArray(node) ? node.map(unbig) : typeof node === 'bigint' ? node.toString() : node
+
   parse = exports.parse
-  print = exports.print
+  print = (ast, ...rest) => exports.print(unbig(ast), ...rest)
 
   const backend = {
     parse,
-    compile: ast => new Uint8Array(exports.compile(ast)),
+    compile: ast => new Uint8Array(exports.compile(unbig(ast))),
     optimize,
     polyfill,
   }
