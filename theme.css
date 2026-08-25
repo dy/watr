@@ -1,0 +1,34 @@
+/* watr: shared design tokens */
+:root{
+  /* surfaces */
+  --paper:#fcfcfd;      /* page, near-white with a cool tint */
+  --panel:#f4f4f7;      /* recessed: code blocks, chips */
+  --raise:#ffffff;      /* lifted: demo panes, controls */
+
+  /* text */
+  --ink:#16151a;        /* headings, strong */
+  --body:#3e3c46;       /* body copy, 9.5:1 on paper */
+  --dim:#6b6875;        /* meta, labels, 4.9:1 on paper */
+
+  /* lines */
+  --hair:#e5e5ea;       /* hairlines */
+  --hair-2:#d4d4dc;     /* control borders */
+
+  /* accent: the WebAssembly purple, used sparingly */
+  --wasm:#654ff0;       /* 4.8:1 on paper */
+  --wasm-soft:#efedfd;  /* tint for selection / highlights */
+  --red:#c62828;
+  --on-ink:#e9e8ef;     /* text on dark (terminal chip) */
+  --on-ink-dim:#8f8c9c; /* prompt on dark */
+
+  /* type */
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --wide:"Martian Mono","IBM Plex Mono",ui-monospace,Menlo,monospace;
+
+  /* layout */
+  --col:720px;
+  --hang:56px;      /* section-number gutter */
+
+  /* spacing: 8pt scale */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px;
+}

@@ -1,7 +1,7 @@
 {
   "name": "watr",
-  "version": "5.7.16",
-  "description": "Light & fast WAT compiler – WebAssembly Text to binary, parse, print, transform",
+  "version": "5.9.1",
+  "description": "wat2wasm in JS: compile WebAssembly text (WAT) to wasm binary. Parse, print, minify, optimize. Zero deps.",
   "main": "watr.js",
   "bin": {
     "watr": "./bin/watr.js"
@@ -103,7 +103,7 @@
   "bugs": {
     "url": "https://github.com/dy/watr/issues"
   },
-  "homepage": "https://github.com/dy/watr#readme",
+  "homepage": "https://dy.github.io/watr/",
   "devDependencies": {
     "@playwright/test": "^1.57.0",
     "esbuild": "^0.24.2",

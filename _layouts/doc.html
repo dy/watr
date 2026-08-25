@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.title %}{{ page.title }}{% else %}{{ site.title }}{% endif %}</title>
+<meta name="description" content="{% if page.description %}{{ page.description }}{% else %}{{ site.description }}{% endif %}">
+<link rel="icon" href="{{ site.baseurl }}/watr.svg" type="image/svg+xml">
+<meta name="theme-color" content="#fcfcfd">
+<link rel="canonical" href="{{ site.url }}{{ site.baseurl }}{{ page.url }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Martian+Mono:wght@600;700&display=swap">
+<link rel="stylesheet" href="{{ site.baseurl }}/theme.css">
+<link rel="stylesheet" href="{{ site.baseurl }}/site.css">
+</head>
+<body>
+<header><div class="col bar">
+  <a class="brand" href="{{ site.baseurl }}/"><svg width="27" height="17" viewBox="0 0 32 20" aria-hidden="true"><path d="M30.2 7.1c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.16.37.58.54.95.38l7.33-3.1L30.2 7.1Z" fill="#654ff0"/><path d="M20.8 7.16c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.67Z" fill="#654ff0"/><path d="M11.39 7.22c-.16-.37-.58-.55-.95-.39l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.66Z" fill="#654ff0"/><path d="M27.38.44c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1L27.38.44Z" fill="#654ff0"/><path d="M8.56.55c-.15-.37-.58-.54-.95-.38L.28 3.27l1.13 2.67c.16.37.58.54.95.38l7.33-3.1L8.56.55Z" fill="#654ff0"/><path d="M17.97.5c-.15-.37-.58-.55-.95-.39L9.7 3.22l1.13 2.66c.15.37.58.54.95.39l7.33-3.11L17.97.5Z" fill="#654ff0"/><path d="M23.48 13.49c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.67Z" fill="#654ff0"/><path d="M14.07 13.55c-.16-.37-.58-.54-.95-.39l-7.34 3.11 1.13 2.67c.16.37.58.54.95.38l7.33-3.1-1.12-2.67Z" fill="#654ff0"/></svg> watr</a>
+  <span class="ver">v5.9.0</span>
+  <nav>
+    <a href="{{ site.baseurl }}/docs" aria-current="page">docs</a>
+    <a href="{{ site.baseurl }}/play/">play</a>
+    <a href="https://github.com/dy/watr">github</a>
+    <a href="https://npmjs.org/watr">npm</a>
+  </nav>
+</div></header>
+
+<nav class="toc" aria-label="Contents"></nav>
+
+<main class="col prose">
+{{ content }}
+</main>
+
+<script>
+// sticky side navigation: h2 sections, h3 API entries
+const toc = document.querySelector('.toc')
+const heads = [...document.querySelectorAll('main h2[id], main h3[id]')]
+toc.innerHTML = heads.map(h =>
+  `<a href="#${h.id}" class="${h.tagName === 'H3' ? 'sub' : ''}">${h.textContent.replace(/\(.*$/, '')}</a>`
+).join('')
+const links = new Map(heads.map((h, i) => [h, toc.children[i]]))
+let current = null
+const spy = new IntersectionObserver(es => {
+  for (const e of es) if (e.isIntersecting) {
+    current?.removeAttribute('aria-current')
+    current = links.get(e.target)
+    current.setAttribute('aria-current', 'true')
+  }
+}, { rootMargin: '0px 0px -80% 0px' })
+heads.forEach(h => spy.observe(h))
+</script>
+
+<footer><div class="col bar">
+  <div class="lic">
+    <a href="https://github.com/dy/watr/blob/main/LICENSE">MIT</a>
+    <a class="om" href="https://krishnized.github.io/license" aria-label="krishnized license">&#2384;</a>
+  </div>
+  <nav>
+    <a href="{{ site.baseurl }}/">home</a>
+    <a href="{{ site.baseurl }}/play/">play</a>
+    <a href="https://github.com/dy/watr">github</a>
+  </nav>
+</div></footer>
+</body>
+</html>

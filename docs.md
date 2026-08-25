@@ -1,3 +1,10 @@
+---
+layout: doc
+permalink: /docs
+title: "watr documentation: compile, parse, print and optimize WAT"
+description: "API reference for watr: compile WebAssembly text to binary, parse to a tree, pretty-print, minify, polyfill post-MVP features and optimize wasm output."
+---
+
 # watr
 
 Fast WebAssembly Text Format (WAT) compiler for JavaScript/Node.js.
@@ -31,6 +38,8 @@ Enables [polyfills](#available-polyfills) and [optimizations](#available-optimiz
 | [JS string builtins](https://github.com/WebAssembly/js-string-builtins) | yes | n/a |
 | [Stringref](https://github.com/WebAssembly/stringref) | yes | no |
 | [Rounding mode control](https://github.com/WebAssembly/rounding-mode-control) | yes | n/a |
+| [Half precision](https://github.com/WebAssembly/half-precision) | yes | no |
+| [Acquire-release atomics](https://github.com/WebAssembly/acquire-release-atomics) | atomic loads | no |
 
 
 ## Install
@@ -522,6 +531,6 @@ watr`(func (export "g") (param i64) (result i64) (i64.mul (local.get 0) (i64.con
 
 ## See Also
 
-* [Examples](./test/example/)
+* [Examples](https://github.com/dy/watr/tree/main/test/example)
 * [Playground](https://dy.github.io/watr/play/)
 * [WebAssembly Spec](https://webassembly.github.io/spec/)

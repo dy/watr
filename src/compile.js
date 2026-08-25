@@ -367,7 +367,7 @@ const isIdx = n => n?.[0] === '$' || !isNaN(n)
 /** Check if node is an identifier (starts with $) */
 const isId = n => n?.[0] === '$'
 /** Check if node is align/offset memory parameter */
-const isMemParam = n => n?.[0] === 'a' || n?.[0] === 'o'
+const isMemParam = n => (n?.[0] === 'a' && n[1] === 'l') || (n?.[0] === 'o' && n[1] === 'f')
 
 /**
  * Normalize and flatten function body to stack form.
@@ -988,6 +988,21 @@ const HANDLER = {
   select: (n, c) => { let r = n.shift() || []; return r.length ? vec(r.map(t => reftype(t, c))) : [] },
   ref_null: (n, c) => { let t = n.shift(); return Array.isArray(t) && t[0] === 'exact' ? [0x62, ...uleb(id(t[1], c.type))] : TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)) },
   memarg: (n, c, op, out) => memargEnc(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0, out),
+  // memarg + trailing ordering keyword (acquire-release atomics): seqcst=0x00, acqrel=0x01;
+  // flags bit 4 signals the ordering byte, placed between align (+memidx) and offset
+  memarg_order: (n, c, op, out) => {
+    const memIdx = isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0
+    const [a, o] = memarg(n)
+    const ord = n[0] === 'seqcst' ? 0 : n[0] === 'acqrel' ? 1 : -1
+    if (ord >= 0) n.shift()
+    const alignVal = (a ?? align(op)) | (memIdx && 0x40) | (ord >= 0 && 0x10)
+    if (out) { uleb(alignVal, out); if (memIdx) uleb(memIdx, out); if (ord >= 0) out.push(ord); uleb(o ?? 0, out); return }
+    const r = uleb(alignVal)
+    if (memIdx) r.push(...uleb(memIdx))
+    if (ord >= 0) r.push(ord)
+    r.push(...uleb(o ?? 0))
+    return r
+  },
   opt_memory: (n, c, op, out) => wleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory), out),
   reftype: (n, c) => { let ht = reftype(n.shift(), c); return ht.length > 1 ? ht.slice(1) : ht },
   reftype2: (n, c) => { let b = blockid(n.shift(), c.block), h1 = reftype(n.shift(), c), h2 = reftype(n.shift(), c), ht = h => h.length > 1 ? h.slice(1) : h; return [((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), ...ht(h1), ...ht(h2)] },
