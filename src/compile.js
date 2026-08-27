@@ -44,6 +44,9 @@ const cleanup = (node, result) => {
   return result.length === 1 && result[0]?.[0] === 'module' ? result[0] : result
 }
 
+// string literal node: byte array from str() (carries valueOf() -> source text)
+const isStr = n => Array.isArray(n) && typeof n.valueOf() === 'string'
+
 
 // Internal: assemble the module. sizeOnly=false → wasm bytes (Uint8Array); sizeOnly=true →
 // just the byte LENGTH, skipping materialization of the multi-MB binary — that's size()'s
@@ -141,7 +144,12 @@ function assemble(nodes, sizeOnly) {
       ctx.type.push(td)
     }
     // other sections may have id
-    else if (kind === 'start' || kind === 'export') ctx[kind].push(node)
+    else if (kind === 'export') {
+      if (!isStr(node[0])) err('Missing export name')
+      if (!Array.isArray(node[1])) err('Missing export desc')
+      ctx.export.push(node)
+    }
+    else if (kind === 'start') ctx.start.push(node)
 
     else return true
   })
@@ -154,7 +162,12 @@ function assemble(nodes, sizeOnly) {
 
       // import abbr
       // (import m n (table|memory|global|func id? type)) -> (table|memory|global|func id? (import m n) type)
-      if (kind === 'import') [kind, ...node] = (imported = node).pop()
+      if (kind === 'import') {
+        imported = node
+        if (!isStr(imported[0]) || !isStr(imported[1])) err('Missing import name')
+        if (imported.length !== 3 || !Array.isArray(imported[2])) err('Bad import desc')
+        ;[kind, ...node] = imported.pop()
+      }
 
       // index, alias
       let items = ctx[kind];
@@ -163,10 +176,17 @@ function assemble(nodes, sizeOnly) {
 
       // export abbr
       // (table|memory|global|func|tag id? (export n)* ...) -> (table|memory|global|func|tag id ...) (export n (table|memory|global|func id))
-      while (node[0]?.[0] === 'export') ctx.export.push([node.shift()[1], [kind, items?.length]])
+      while (node[0]?.[0] === 'export') {
+        let ex = node.shift(), [, nm, ...rest] = ex
+        if (!isStr(nm) || rest.length) err('Bad export name', ex.loc ?? n.loc)
+        ctx.export.push([nm, [kind, items.length]])
+      }
 
       // for import nodes - redirect output to import
-      if (node[0]?.[0] === 'import') [, ...imported] = node.shift()
+      if (node[0]?.[0] === 'import') {
+        let im = node.shift(); [, ...imported] = im
+        if (imported.length !== 2 || !isStr(imported[0]) || !isStr(imported[1])) err('Missing import name', im.loc ?? n.loc)
+      }
 
       // table abbr: (table id? i64? reftype (elem ...)) -> (table id? i64? n n reftype) + (elem ...)
       if (kind === 'table') {

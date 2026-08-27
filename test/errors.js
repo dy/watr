@@ -391,3 +391,31 @@ t.demo('Complex nested error', () => {
 )`)
 
 })
+
+// Malformed export/import (https://github.com/dy/watr/issues/10)
+t('error: malformed export/import throws located Error, not TypeError', () => {
+  const cases = [
+    ['(module (func (export)))', 'Bad export name', '1:15'],
+    ['(module (func (export "a" "b")))', 'Bad export name', '1:15'],
+    ['(module (global (export) i32 (i32.const 0)))', 'Bad export name', '1:17'],
+    ['(module (memory (export) 1))', 'Bad export name', '1:17'],
+    ['(module (table (export) 1 funcref))', 'Bad export name', '1:16'],
+    ['(module (tag (export)))', 'Bad export name', '1:14'],
+    ['(module (export))', 'Missing export name', '1:9'],
+    ['(module (export "a"))', 'Missing export desc', '1:9'],
+    ['(module (func (import)))', 'Missing import name', '1:15'],
+    ['(module (func (import "a")))', 'Missing import name', '1:15'],
+    ['(module (import "a"))', 'Missing import name', '1:9'],
+    ['(module (import "a" "b"))', 'Bad import desc', '1:9'],
+    ['(module (import "a" "b" (func) x))', 'Bad import desc', '1:9'],
+    ['(module\n  (func (export "f"))\n  (func (export)))', 'Bad export name', '3:9'],
+  ]
+  for (const [src, msg, loc] of cases) {
+    try { compile(src); ok(false, `should throw: ${src}`) }
+    catch (e) {
+      ok(!(e instanceof TypeError), `${src}: ${e.constructor.name}`)
+      ok(e.message.includes(msg), `${src}: expected "${msg}", got: ${e.message}`)
+      ok(e.message.includes(`at ${loc}`), `${src}: expected "at ${loc}", got: ${e.message}`)
+    }
+  }
+})
