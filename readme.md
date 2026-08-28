@@ -5,7 +5,7 @@ _Light & fast WAT compiler_
 
 * [feature](https://webassembly.org/features/?categories=tools) & [spec](https://webassembly.github.io/spec/core/text/index.html)-complete, zero deps
 * [compile](./docs.md#compilesource), [polyfill](./docs.md#polyfillast-options), [optimize](./docs.md#optimizeast-options), [parse](./docs.md#parsesource-options), [prettify](./docs.md#printtree-options), [minify](./docs.md#printtree-options)
-* instant wasm, JS interop, CLI, clear errors
+* instant wasm, JS interop, CLI, [source maps](./docs.md#source-maps), clear errors
 
 **[site](https://dy.github.io/watr)**  /  **[docs](./docs.md)**  /  **[playground](https://dy.github.io/watr/play/)**
 
@@ -55,6 +55,7 @@ npx watr input.wat --print      # pretty-print
 npx watr input.wat --minify     # minify
 npx watr input.wat --optimize   # fold, treeshake, inline, coalesce, …
 npx watr input.wat --polyfill   # newer features → MVP
+npx watr input.wat --source-map # + input.wasm.map from ;;@ file:line:col comments
 ```
 
 ## Metrics

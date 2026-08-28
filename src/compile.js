@@ -2,7 +2,7 @@ import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
 import { SECTION, TYPE, KIND, OPCODE, IMM, DEFTYPE } from './const.js'
 import parse from './parse.js'
-import { err, unescape, str, setErrLoc, setErrSrc, getErrLoc, getErrSrc } from './util.js'
+import { err, unescape, str, utf8, LOC, setErrLoc, setErrSrc, getErrLoc, getErrSrc } from './util.js'
 
 
 /**
@@ -14,7 +14,9 @@ import { err, unescape, str, setErrLoc, setErrSrc, getErrLoc, getErrSrc } from '
  * @returns {any} Cleaned node
  */
 // Comments (;; … or (; … ;)) and non-custom (@…) annotations carry no semantic
-// load past parse — strip them. Predicate stays separate from `cleanup` so
+// load past parse — strip them. Exception: `;;@ file:line:col` source-location
+// annotations (Binaryen convention) survive as ['@loc', …] markers and feed the
+// result's .sourceMap. Predicate stays separate from `cleanup` so
 // neither has to invent a "drop me" sentinel and risk colliding with a
 // legitimate `null`/`undefined` immediate in the AST.
 // A block-comment token is `(;…` (parse.js: `buf = '(' + ';'`) — checking n[1]===';'
@@ -26,8 +28,12 @@ import { err, unescape, str, setErrLoc, setErrSrc, getErrLoc, getErrSrc } from '
 // then silently drops that segment's whole content as if it were a comment. Mirrors the
 // already-correct guard in optimize.js's own comment-strip (`c[0]==='(' && c[1]===';'`).
 const isDroppable = (n) =>
-  (typeof n === 'string' && (n[0] === ';' || (n[0] === '(' && n[1] === ';'))) ||
-  (Array.isArray(n) && n[0]?.[0] === '@' && n[0] !== '@custom' && !n[0]?.startsWith?.('@metadata.code.'))
+  (typeof n === 'string' && (n[0] === ';' ? !LOC.test(n) : n[0] === '(' && n[1] === ';')) ||
+  (Array.isArray(n) && n[0]?.[0] === '@' && n[0] !== '@custom' && n[0] !== '@loc' && !n[0]?.startsWith?.('@metadata.code.'))
+
+// ;;@ annotation comment → ['@loc', file, line, col, symbol?] marker; bare ;;@ → ['@loc'] (clear)
+const loc = (s, m = LOC.exec(s)) =>
+  m[1] == null ? ['@loc'] : m[4] == null ? ['@loc', m[1], +m[2], +m[3]] : ['@loc', m[1], +m[2], +m[3], m[4]]
 
 const cleanup = (node, result) => {
   if (typeof node === 'string') return (
@@ -35,6 +41,8 @@ const cleanup = (node, result) => {
     node[0] === '$' && node[1] === '"' ? (node.includes('\\') ? '$' + unescape(node.slice(1)) : '$' + node.slice(2, -1)) :
     // convert string literals to byte arrays with valueOf
     node[0] === '"' ? str(node) :
+    // ;;@ source-location annotation (the only comment isDroppable keeps)
+    node[0] === ';' ? loc(node) :
     node
   )
   if (!Array.isArray(node)) return node
@@ -59,7 +67,7 @@ function assemble(nodes, sizeOnly) {
 
   nodes = isDroppable(nodes) ? [] : (cleanup(nodes) ?? [])
 
-  let idx = 0
+  let idx = 0, pendingLoc // module-level ;;@ awaiting the next defined function
 
   // module abbr https://webassembly.github.io/spec/core/text/modules.html#id10
   if (nodes[0] === 'module') idx++, isId(nodes[idx]) && idx++
@@ -157,6 +165,8 @@ function assemble(nodes, sizeOnly) {
     // prepare/normalize nodes
     .forEach((n) => {
       let [kind, ...node] = n
+      // ;;@ at module level — flows into the next defined function's body (#line)
+      if (kind === '@loc') { pendingLoc = n; return }
       setErrLoc(n.loc) // track position for errors
       let imported // if node needs to be imported
 
@@ -211,11 +221,17 @@ function assemble(nodes, sizeOnly) {
 
       // dupe to code section, save implicit type
       else if (kind === 'func') {
+        // ;;@ markers between the func head and its params belong to the body
+        let locs = []
+        while (node[0]?.[0] === '@loc') locs.push(node.shift())
         let [idx, param, result] = typeuse(node, ctx);
         idx ??= regtype(param, result, ctx)
 
         // flatten + normalize function body
-        !imported && ctx.code.push([[idx, param, result], ...normalize(node, ctx)])
+        if (!imported) {
+          pendingLoc && (locs.unshift(pendingLoc), pendingLoc = null)
+          ctx.code.push([[idx, param, result], ...locs, ...normalize(node, ctx)])
+        }
         node = [['type', idx]]
       }
 
@@ -333,18 +349,15 @@ function assemble(nodes, sizeOnly) {
   // actually carried annotations — the common (annotation-free) path stays free.
   const md = metadataOffsets()
   if (md) wasm.metadata = md
+  const sm = sourceMap()
+  if (sm) wasm.sourceMap = sm
 
   return wasm
 
-  // Map each recorded code-metadata position (function-body-relative, as stored
-  // by build.code) to its absolute byte offset in the final binary.
-  // → { [type]: [[absoluteByteOffset, data], ...] } sorted by offset, or
-  //   undefined when no annotations were present.
-  function metadataOffsets() {
-    let has = false
-    for (const _ in ctx.metadata) has = true // any annotations? (no break — jz self-host lowers for-in without one)
-    if (!has) return
-    const out = {}
+  // Shared offset math for metadataOffsets()/sourceMap(): absolute byte offset of
+  // each function body (start of locals vec), imported-func count (funcIdx → code
+  // index), and the end of the code section.
+  function bodyOffsets() {
     // 8 = magic + version; sections before code give the code section's base
     const codeBase = 8 + sections.slice(0, sections.indexOf(codeSection)).reduce((n, s) => n + s.length, 0)
     // function items are the tail of the code section (after id + size + count)
@@ -355,7 +368,19 @@ function assemble(nodes, sizeOnly) {
       bodyBase[i] = off + (ctx.codeSizePrefix?.[i] ?? 0)
       off += codeItems[i].length
     }
-    const importedFuncs = ctx.import.filter(imp => imp[2][0] === 'func').length
+    return [bodyBase, ctx.import.filter(imp => imp[2][0] === 'func').length, codeBase + codeSection.length]
+  }
+
+  // Map each recorded code-metadata position (function-body-relative, as stored
+  // by build.code) to its absolute byte offset in the final binary.
+  // → { [type]: [[absoluteByteOffset, data], ...] } sorted by offset, or
+  //   undefined when no annotations were present.
+  function metadataOffsets() {
+    let has = false
+    for (const _ in ctx.metadata) has = true // any annotations? (no break — jz self-host lowers for-in without one)
+    if (!has) return
+    const [bodyBase, importedFuncs] = bodyOffsets()
+    const out = {}
     for (const type in ctx.metadata) {
       const entries = []
       for (const [funcIdx, instances] of ctx.metadata[type]) {
@@ -366,14 +391,71 @@ function assemble(nodes, sizeOnly) {
     }
     return out
   }
+
+  // Source map (v3) from ;;@ annotations, Binaryen-compatible: one generated line,
+  // generated column = absolute byte offset in the binary; ;;@ line is 1-based
+  // (stored 0-based), column stored as-is; bare ;;@ emits a 1-field segment
+  // (maps to nothing); a final clear closes the code section so trailing sections
+  // don't inherit the last location. Undefined when no ;;@ were present.
+  function sourceMap() {
+    if (!ctx.sourcemap) return
+    const [bodyBase, importedFuncs, codeEnd] = bodyOffsets()
+    const entries = []
+    for (const [funcIdx, locs] of ctx.sourcemap)
+      for (const e of locs) entries.push([bodyBase[funcIdx - importedFuncs] + e[0], ...e.slice(1)])
+    entries.push([codeEnd])
+    const sources = [], names = [], mappings = []
+    let cleared = true, p0 = 0, p1 = 0, p2 = 1, p3 = 0, p4 = 0
+    for (const [off, file, line, col, sym] of entries) {
+      if (file == null) { // clear — emit only if a location is active
+        if (!cleared) mappings.push(vlq(off - p0)), p0 = off, cleared = true
+        continue
+      }
+      let seg = vlq(off - p0); p0 = off, cleared = false
+      let s = sources.indexOf(file); s < 0 && (s = sources.push(file) - 1)
+      seg += vlq(s - p1) + vlq(line - p2) + vlq(col - p3)
+      p1 = s, p2 = line, p3 = col
+      if (sym != null) {
+        let n = names.indexOf(sym); n < 0 && (n = names.push(sym) - 1)
+        seg += vlq(n - p4), p4 = n
+      }
+      mappings.push(seg)
+    }
+    return { version: 3, sources, names, mappings: mappings.join(',') }
+  }
+}
+
+// base64 VLQ (source map v3): sign bit in LSB, 5 bits per digit, bit 6 = continuation
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+const vlq = (n) => {
+  let v = n < 0 ? (-n << 1) | 1 : n << 1, s = ''
+  do { s += B64[v > 31 ? (v & 31) | 32 : v], v >>>= 5 } while (v)
+  return s
 }
 
 /**
  * Convert a WAT tree (or source string) to a wasm binary (Uint8Array). When the WAT carries
  * `@metadata.code.<type>` annotations the result also exposes `.metadata` —
- * `{ [type]: [[absByteOffset, data], ...] }`, the hook a source-map emitter needs.
+ * `{ [type]: [[absByteOffset, data], ...] }`. When it carries `;;@ file:line:col`
+ * source-location comments (Binaryen convention) the result exposes `.sourceMap` —
+ * a standard source map v3 object `{ version, sources, names, mappings }`.
  */
 export default function compile(nodes) { return assemble(nodes) }
+
+/**
+ * Append a `sourceMappingURL` custom section to a compiled binary. Appended at the
+ * end, so existing byte offsets — and the source map built from them — stay valid.
+ *
+ * @param {Uint8Array} wasm - wasm binary
+ * @param {string} url - source map location (path or object URL)
+ * @returns {Uint8Array} new binary with the section appended
+ */
+export function sourceMapURL(wasm, url) {
+  const section = [0, ...vec([...vec(utf8('sourceMappingURL')), ...vec(utf8(url))])]
+  const out = new Uint8Array(wasm.length + section.length)
+  out.set(wasm), out.set(section, wasm.length)
+  return out
+}
 
 /**
  * Byte size of `compile(nodes)` without materializing the binary — a peer transform for
@@ -855,8 +937,10 @@ const build = [
     if (ctx._codeIdx === undefined) ctx._codeIdx = 0
     let codeIdx = ctx._codeIdx++
 
-    // collect locals
-    while (body[0]?.[0] === 'local') {
+    // collect locals (;;@ markers may precede them — hoist past, order kept)
+    let leadloc = []
+    while (body[0]?.[0] === 'local' || body[0]?.[0] === '@loc') {
+      if (body[0][0] === '@loc') { leadloc.push(body.shift()); continue }
       let [, ...types] = body.shift()
       if (isId(types[0])) {
         let nm = types.shift()
@@ -865,9 +949,11 @@ const build = [
       }
       ctx.local.push(...types)
     }
+    for (let i = leadloc.length; i--;) body.unshift(leadloc[i])
 
-    // Setup metadata tracking for this function
+    // Setup metadata / source-location tracking for this function
     ctx.meta = {}
+    ctx.loc = []
     const bytes = instr(body, ctx)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
@@ -884,9 +970,14 @@ const build = [
       for (const inst of ctx.meta[type]) inst[0] += locals.length
       ;((ctx.metadata ??= {})[type] ??= []).push([funcIdx, ctx.meta[type]])
     }
+    // lift ;;@ source-location entries the same way (function-body-relative)
+    if (ctx.loc.length) {
+      for (const e of ctx.loc) e[0] += locals.length
+      ;(ctx.sourcemap ??= []).push([funcIdx, ctx.loc])
+    }
 
     // cleanup tmp state
-    ctx.local = ctx.block = ctx.meta = null
+    ctx.local = ctx.block = ctx.meta = ctx.loc = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
     const item = uleb(locals.length + bytes.length)
@@ -1137,6 +1228,18 @@ const instr = (nodes, ctx) => {
       continue
     }
 
+    // ;;@ source-location marker — record at the next instruction's byte offset
+    // ['@loc', file, line, col, symbol?] sets, bare ['@loc'] clears (#line semantics)
+    if (op?.[0] === '@loc') {
+      const locs = ctx.loc
+      if (locs) {
+        const e = [out.length, ...op.slice(1)]
+        // same position → last annotation wins
+        locs.length && locs[locs.length - 1][0] === out.length ? locs[locs.length - 1] = e : locs.push(e)
+      }
+      continue
+    }
+
     // Array = unknown instruction passed through from normalize
     if (Array.isArray(op)) {
       op.loc != null && setErrLoc(op.loc)
@@ -1255,6 +1358,7 @@ const instrSize = (nodes, ctx) => {
   while (nodes?.length) {
     let op = nodes.shift()
     if (op?.[0] === '@metadata') { meta.push(op.slice(1)); continue }
+    if (op?.[0] === '@loc') continue // ;;@ marker — no bytes, no size effect
     if (Array.isArray(op)) { op.loc != null && setErrLoc(op.loc); err(`Unknown instruction ${op[0]}`) }
     const code = OPCODE[op]
     if (typeof code !== 'number') err(`Unknown instruction ${op}`)
@@ -1277,7 +1381,8 @@ const codeItemSize = (body, ctx) => {
   ctx.local.name = 'local'; ctx.block.name = 'block'
   if (ctx._codeIdx === undefined) ctx._codeIdx = 0
   let codeIdx = ctx._codeIdx++
-  while (body[0]?.[0] === 'local') {
+  while (body[0]?.[0] === 'local' || body[0]?.[0] === '@loc') {
+    if (body[0][0] === '@loc') { body.shift(); continue } // ;;@ marker — no bytes
     let [, ...types] = body.shift()
     if (isId(types[0])) { let nm = types.shift(); if (nm in ctx.local) err(`Duplicate local ${nm}`); else ctx.local[nm] = ctx.local.length }
     ctx.local.push(...types)

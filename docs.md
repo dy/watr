@@ -112,6 +112,27 @@ compile(optimize(src))             // optimize for size/speed
 compile(optimize(polyfill(src)))   // both
 ```
 
+#### Source maps
+
+`;;@ file:line:col` comments ([Binaryen convention](https://github.com/WebAssembly/design/discussions/1593), C's `#line` analog) mark which original source produced the following instructions: the location applies until the next `;;@`, bare `;;@` clears it, an optional 4th `:symbol` field lands in the map's `names`. When present, the compiled binary exposes `.sourceMap` — a standard [source map v3](https://tc39.es/ecma426/) object mapping binary byte offsets to original positions. Compile errors report the annotated position too, eg. ``Unknown instruction `i32.wrong` at 4:5 (src.ts:3:1)``.
+
+```js
+import { compile, sourceMapURL } from 'watr'
+
+let wasm = compile(`(func (export "f") (result i32)
+  ;;@ src.ts:3:1
+  (i32.const 42)
+)`)
+wasm.sourceMap // { version: 3, sources: ['src.ts'], names: [], mappings: '...' }
+
+// serve the map next to the binary, or point at a blob —
+// sourceMapURL appends a `sourceMappingURL` custom section (offsets stay valid)
+const url = URL.createObjectURL(new Blob([JSON.stringify(wasm.sourceMap)]))
+wasm = sourceMapURL(wasm, url)
+```
+
+CLI: `watr src.wat -o out.wasm --source-map` writes `out.wasm.map` and embeds its URL.
+
 ### `polyfill(ast, options?)`
 
 Transform AST to polyfill newer WebAssembly features for older runtimes.
@@ -526,6 +547,7 @@ watr`(func (export "g") (param i64) (result i64) (i64.mul (local.get 0) (i64.con
 (@name "my_module")
 (@metadata.code.branch_hint "\00") if ... end  ;; unlikely
 (@metadata.code.branch_hint "\01") if ... end  ;; likely
+;;@ src.ts:3:1 ;; source location → compile(src).sourceMap
 ```
 
 

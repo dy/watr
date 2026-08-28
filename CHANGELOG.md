@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   module: two whole-module rescans down to a few hundred actually-touched
   functions)
 
+## v5.10.0
+
+- compile: `;;@ file:line:col` source-location comments (Binaryen convention) →
+  `.sourceMap` (source map v3) on the compiled binary; optional `:symbol` 4th
+  field lands in `names`; bare `;;@` clears (#11)
+- compile: `sourceMapURL(wasm, url)` appends a `sourceMappingURL` custom section
+- compile: errors report the annotated original position — `at 4:5 (src.ts:3:1)`
+- cli: `--source-map [file]` writes the map + embeds its URL
+
+[Compare](https://github.com/dy/watr/compare/v5.9.3...v5.10.0)
+
 ## v5.7.16
 
 - optimize: propagate tiny constants assigned while evaluating an `if`

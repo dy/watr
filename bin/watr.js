@@ -15,7 +15,7 @@
 
 import { readFileSync, writeFileSync } from 'fs'
 import { basename } from 'path'
-import compile from '../src/compile.js'
+import compile, { sourceMapURL } from '../src/compile.js'
 import print from '../src/print.js'
 import polyfill from '../src/polyfill.js'
 import optimize from '../src/optimize.js'
@@ -56,8 +56,12 @@ if (optimizeIdx !== -1) {
 const outIdx = args.findIndex(a => a === '-o' || a === '--output')
 const outArg = outIdx !== -1 ? args[outIdx + 1] : null
 
+// Parse --source-map arg (optional value = map file path, must end with .map)
+const smIdx = args.findIndex(a => a === '--source-map')
+const smArg = smIdx !== -1 && args[smIdx + 1]?.endsWith('.map') ? args[smIdx + 1] : null
+
 const flags = new Set(args.filter(a => a.startsWith('-') && a !== '-'))
-const files = args.filter(a => (!a.startsWith('-') || a === '-') && a !== polyfillFeatureArg && a !== optimizeFeatureArg && a !== outArg)
+const files = args.filter(a => (!a.startsWith('-') || a === '-') && a !== polyfillFeatureArg && a !== optimizeFeatureArg && a !== outArg && a !== smArg)
 
 // Help
 if (flags.has('-h') || flags.has('--help') || !files.length) {
@@ -77,6 +81,8 @@ Options:
   --polyfill [features] Polyfill newer features to MVP (default: all)
                         Features: funcref sign_ext nontrapping bulk_memory
                                   return_call i31ref extended_const multi_value
+  --source-map [file]   Write source map from \`;;@ file:line:col\` comments
+                        (default: <output>.map) + embed sourceMappingURL
   -h, --help            Show this help
 
 Examples:
@@ -87,6 +93,7 @@ Examples:
   watr add.wat -O treeshake       # optimize specific
   watr add.wat --polyfill         # polyfill all features
   watr add.wat --polyfill funcref # polyfill specific features
+  watr add.wat --source-map       # → add.wasm + add.wasm.map
   cat add.wat | watr -            # stdin → stdout (binary)
 
 ॐ
@@ -118,7 +125,7 @@ if (flags.has('-m') || flags.has('--minify')) {
 }
 
 // Compile mode
-const binary = compile(ast)
+let binary = compile(ast)
 
 // Output
 const output = outIdx !== -1 && args[outIdx + 1]
@@ -126,6 +133,15 @@ const output = outIdx !== -1 && args[outIdx + 1]
   : input === '-'
     ? null
     : input.replace(/\.wat$/, '') + '.wasm'
+
+// Source map: write the map file, embed its URL as a trailing custom section
+if (smIdx !== -1) {
+  const mapFile = smArg ?? (output ?? 'out.wasm') + '.map'
+  const map = binary.sourceMap ?? { version: 3, sources: [], names: [], mappings: '' }
+  writeFileSync(mapFile, JSON.stringify(map))
+  binary = sourceMapURL(binary, basename(mapFile))
+  console.error(`✓ ${basename(mapFile)}`)
+}
 
 if (output) {
   writeFileSync(output, binary)

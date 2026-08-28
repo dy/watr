@@ -8,9 +8,17 @@
 let errLoc, errSrc
 
 /**
+ * `;;@` source-location annotation (Binaryen convention, C's #line analog):
+ * `;;@ file:line:col` or `;;@ file:line:col:symbol`; bare `;;@` clears.
+ * Groups: [, file, line, col, symbol] — all undefined for the bare form.
+ */
+export const LOC = /^;;@(?:[ \t]+(.*?):(\d+):(\d+)(?::(\S+))?)?[ \t]*\r?\n?$/
+
+/**
  * Throws an error with optional source position.
  * Uses the ambient errSrc for source and errLoc for default position.
- * If pos provided or errLoc set, appends "at line:col".
+ * If pos provided or errLoc set, appends "at line:col", plus the original
+ * source position from the nearest preceding `;;@` annotation, if any.
  *
  * @param {string} text - Error message
  * @param {number} [pos] - Byte offset in source (defaults to errLoc)
@@ -24,6 +32,14 @@ export const err = (text, pos=errLoc) => {
       else col++
     }
     text += ` at ${line}:${col}`
+    // nearest preceding ;;@ annotation → original source position (#line semantics:
+    // a bare ;;@ clears, matching LOC with no file group and suppressing the suffix)
+    const at = errSrc.lastIndexOf(';;@', pos)
+    if (at >= 0) {
+      const eol = errSrc.indexOf('\n', at)
+      const m = LOC.exec(errSrc.slice(at, eol < 0 ? errSrc.length : eol))
+      if (m?.[1] != null) text += ` (${m[1]}:${m[2]}:${m[3]})`
+    }
   }
   throw Error(text)
 }
@@ -41,6 +57,9 @@ export const intRE = /^[+-]?(?:0x[\da-f]+|\d+)$/i
 
 const tenc = new TextEncoder();
 const tdec = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+/** UTF-8 encode a JS string to a plain byte array */
+export const utf8 = s => [...tenc.encode(s)]
 const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
 
 

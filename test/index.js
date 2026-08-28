@@ -1,5 +1,6 @@
 import './parse.js'
 import './compile.js'
+import './sourcemap.js'
 import './print.js'
 import './watr.js'
 import './polyfill.js'

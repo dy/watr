@@ -4,7 +4,7 @@
  * @module watr
  */
 
-import _compile from './src/compile.js'
+import _compile, { sourceMapURL } from './src/compile.js'
 import parse from './src/parse.js'
 import print from './src/print.js'
 import { compile as _tcompile, watr as _twatr } from './src/template.js'
@@ -18,6 +18,8 @@ const backend = { parse, compile: _compile }
 
 /**
  * Compile WAT to binary. Supports both string and template literal.
+ * `;;@ file:line:col` source-location comments expose `.sourceMap` on the result —
+ * a source map v3 object; embed its URL via `sourceMapURL(wasm, url)`.
  *
  * @param {string|TemplateStringsArray} source - WAT source or template strings
  * @param {...any} values - Interpolation values (for template literal).
@@ -51,4 +53,4 @@ function watr(source, ...values) {
 }
 
 export default watr
-export { watr, compile, parse, print }
+export { watr, compile, parse, print, sourceMapURL }
