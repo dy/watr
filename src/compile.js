@@ -1060,23 +1060,23 @@ const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[
 const wleb = (v, out) => { if (out) { uleb(v, out); return } return uleb(v) }
 
 const HANDLER = {
-  reversed: (n, c) => { let t = n.shift(), e = n.shift(); return [...uleb(id(e, c.elem)), ...uleb(id(t, c.table))] },
+  reversed: (n, c) => { let t = n.pop(), e = n.pop(); return [...uleb(id(e, c.elem)), ...uleb(id(t, c.table))] },
   block: (n, c, op, out) => {
     c.block.push(1)
-    isId(n[0]) && (c.block[n.shift()] = c.block.length)
-    let t = n.shift()
+    isId(instrPeek(n)) && (c.block[n.pop()] = c.block.length)
+    let t = n.pop()
     const b = !t ? [TYPE.void] : t[0] === 'result' ? reftype(t[1], c) : uleb(id(t[1], c.type))
     if (out) { for (let i = 0; i < b.length; i++) out.push(b[i]); return }
     return b
   },
   try_table: (n, c) => {
-    isId(n[0]) && (c.block[n.shift()] = c.block.length + 1)
-    let blocktype = n.shift()
+    isId(instrPeek(n)) && (c.block[n.pop()] = c.block.length + 1)
+    let blocktype = n.pop()
     let result = !blocktype ? [TYPE.void] : blocktype[0] === 'result' ? reftype(blocktype[1], c) : uleb(id(blocktype[1], c.type))
     // Collect catch clauses BEFORE pushing try_table to block stack (catch labels are relative to outer blocks)
     let catches = [], count = 0
-    while (n[0]?.[0] === 'catch' || n[0]?.[0] === 'catch_ref' || n[0]?.[0] === 'catch_all' || n[0]?.[0] === 'catch_all_ref') {
-      let clause = n.shift()
+    while (instrPeek(n)?.[0] === 'catch' || instrPeek(n)?.[0] === 'catch_ref' || instrPeek(n)?.[0] === 'catch_all' || instrPeek(n)?.[0] === 'catch_all_ref') {
+      let clause = n.pop()
       let kind = clause[0] === 'catch' ? 0x00 : clause[0] === 'catch_ref' ? 0x01 : clause[0] === 'catch_all' ? 0x02 : 0x03
       if (kind <= 0x01) catches.push(kind, ...uleb(id(clause[1], c.tag)), ...uleb(blockid(clause[2], c.block)))
       else catches.push(kind, ...uleb(blockid(clause[1], c.block)))
@@ -1087,25 +1087,25 @@ const HANDLER = {
   },
   end: (_n, c) => (c.block.pop(), []),
   call_indirect: (n, c, op, out) => {
-    let t = n.shift(), [, idx] = n.shift()
+    let t = n.pop(), [, idx] = n.pop()
     if (out) { uleb(id(idx, c.type), out); uleb(id(t, c.table), out); return }
     return [...uleb(id(idx, c.type)), ...uleb(id(t, c.table))]
   },
   br_table: (n, c) => {
     let labels = [], count = 0
-    while (n[0] && (!isNaN(n[0]) || isId(n[0]))) (labels.push(...uleb(blockid(n.shift(), c.block))), count++)
+    while (instrPeek(n) && (!isNaN(instrPeek(n)) || isId(instrPeek(n)))) (labels.push(...uleb(blockid(n.pop(), c.block))), count++)
     return [...uleb(count - 1), ...labels]
   },
-  select: (n, c) => { let r = n.shift() || []; return r.length ? vec(r.map(t => reftype(t, c))) : [] },
-  ref_null: (n, c) => { let t = n.shift(); return Array.isArray(t) && t[0] === 'exact' ? [0x62, ...uleb(id(t[1], c.type))] : TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)) },
-  memarg: (n, c, op, out) => memargEnc(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0, out),
+  select: (n, c) => { let r = n.pop() || []; return r.length ? vec(r.map(t => reftype(t, c))) : [] },
+  ref_null: (n, c) => { let t = n.pop(); return Array.isArray(t) && t[0] === 'exact' ? [0x62, ...uleb(id(t[1], c.type))] : TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)) },
+  memarg: (n, c, op, out) => memargEnc(n, op, isIdx(instrPeek(n)) && !isMemParam(instrPeek(n)) ? id(n.pop(), c.memory) : 0, out),
   // memarg + trailing ordering keyword (acquire-release atomics): seqcst=0x00, acqrel=0x01;
   // flags bit 4 signals the ordering byte, placed between align (+memidx) and offset
   memarg_order: (n, c, op, out) => {
-    const memIdx = isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0
+    const memIdx = isIdx(instrPeek(n)) && !isMemParam(instrPeek(n)) ? id(n.pop(), c.memory) : 0
     const [a, o] = memarg(n)
-    const ord = n[0] === 'seqcst' ? 0 : n[0] === 'acqrel' ? 1 : -1
-    if (ord >= 0) n.shift()
+    const ord = instrPeek(n) === 'seqcst' ? 0 : instrPeek(n) === 'acqrel' ? 1 : -1
+    if (ord >= 0) n.pop()
     const alignVal = (a ?? align(op)) | (memIdx && 0x40) | (ord >= 0 && 0x10)
     if (out) { uleb(alignVal, out); if (memIdx) uleb(memIdx, out); if (ord >= 0) out.push(ord); uleb(o ?? 0, out); return }
     const r = uleb(alignVal)
@@ -1114,73 +1114,73 @@ const HANDLER = {
     r.push(...uleb(o ?? 0))
     return r
   },
-  opt_memory: (n, c, op, out) => wleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory), out),
-  reftype: (n, c) => { let ht = reftype(n.shift(), c); return ht.length > 1 ? ht.slice(1) : ht },
-  reftype2: (n, c) => { let b = blockid(n.shift(), c.block), h1 = reftype(n.shift(), c), h2 = reftype(n.shift(), c), ht = h => h.length > 1 ? h.slice(1) : h; return [((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), ...ht(h1), ...ht(h2)] },
+  opt_memory: (n, c, op, out) => wleb(id(isIdx(instrPeek(n)) ? n.pop() : 0, c.memory), out),
+  reftype: (n, c) => { let ht = reftype(n.pop(), c); return ht.length > 1 ? ht.slice(1) : ht },
+  reftype2: (n, c) => { let b = blockid(n.pop(), c.block), h1 = reftype(n.pop(), c), h2 = reftype(n.pop(), c), ht = h => h.length > 1 ? h.slice(1) : h; return [((h2[0] !== TYPE.ref) << 1) | (h1[0] !== TYPE.ref), ...uleb(b), ...ht(h1), ...ht(h2)] },
   v128const: (n) => {
-    let [t, num] = n.shift().split('x'), bits = +t.slice(1), stride = bits >>> 3; num = +num
+    let [t, num] = n.pop().split('x'), bits = +t.slice(1), stride = bits >>> 3; num = +num
     if (t[0] === 'i') {
       let arr = num === 16 ? new Uint8Array(16) : num === 8 ? new Uint16Array(8) : num === 4 ? new Uint32Array(4) : new BigUint64Array(2)
-      for (let j = 0; j < num; j++) arr[j] = encode[t].parse(n.shift())
+      for (let j = 0; j < num; j++) arr[j] = encode[t].parse(n.pop())
       return [...new Uint8Array(arr.buffer)]
     }
     let arr = new Uint8Array(16)
-    for (let j = 0; j < num; j++) arr.set(encode[t](n.shift()), j * stride)
+    for (let j = 0; j < num; j++) arr.set(encode[t](n.pop()), j * stride)
     return [...arr]
   },
   shuffle: (n) => {
     let result = []
-    for (let j = 0; j < 16; j++) result.push(parseUint(n.shift(), 32))
-    if (typeof n[0] === 'string' && !isNaN(n[0])) err(`invalid lane length`)
+    for (let j = 0; j < 16; j++) result.push(parseUint(n.pop(), 32))
+    if (typeof instrPeek(n) === 'string' && !isNaN(instrPeek(n))) err(`invalid lane length`)
     return result
   },
   memlane: (n, c, op) => {
     // SIMD lane: [memidx?] [offset/align]* laneidx - memidx present if isId OR (isIdx AND (next is memParam OR isIdx))
-    const memIdx = isId(n[0]) || (isIdx(n[0]) && (isMemParam(n[1]) || isIdx(n[1]))) ? id(n.shift(), c.memory) : 0
-    return [...memargEnc(n, op, memIdx), ...uleb(parseUint(n.shift()))]
+    const memIdx = isId(instrPeek(n)) || (isIdx(instrPeek(n)) && (isMemParam(instrPeek(n, 1)) || isIdx(instrPeek(n, 1)))) ? id(n.pop(), c.memory) : 0
+    return [...memargEnc(n, op, memIdx), ...uleb(parseUint(n.pop()))]
   },
   // *idx types — write-mode (out present) pushes in place and returns undefined;
   // return-mode hands back a fresh array. The sentinel is EXPLICIT: a boxed-
   // pointer identity compare (`returned !== out`) misfires under the jz kernel.
-  labelidx: (n, c, op, out) => wleb(blockid(n.shift(), c.block), out),
-  laneidx: (n, c, op, out) => { const v = parseUint(n.shift(), 0xff); if (out) { out.push(v); return } return [v] },
-  funcidx: (n, c, op, out) => wleb(id(n.shift(), c.func), out),
-  typeidx: (n, c, op, out) => wleb(id(n.shift(), c.type), out),
-  tableidx: (n, c, op, out) => wleb(id(n.shift(), c.table), out),
-  memoryidx: (n, c, op, out) => wleb(id(n.shift(), c.memory), out),
-  globalidx: (n, c, op, out) => wleb(id(n.shift(), c.global), out),
-  localidx: (n, c, op, out) => wleb(id(n.shift(), c.local), out),
-  dataidx: (n, c, op, out) => wleb(id(n.shift(), c.data), out),
-  elemidx: (n, c, op, out) => wleb(id(n.shift(), c.elem), out),
-  tagidx: (n, c, op, out) => wleb(id(n.shift(), c.tag), out),
-  'memoryidx?': (n, c, op, out) => wleb(id(isIdx(n[0]) ? n.shift() : 0, c.memory), out),
-  stringidx: (n, c, op, out) => { let s = n.shift(), key = s.valueOf(), idx = c.strings.findIndex(x => x.valueOf() === key); if (idx < 0) idx = c.strings.push(s) - 1; return wleb(idx, out) },
+  labelidx: (n, c, op, out) => wleb(blockid(n.pop(), c.block), out),
+  laneidx: (n, c, op, out) => { const v = parseUint(n.pop(), 0xff); if (out) { out.push(v); return } return [v] },
+  funcidx: (n, c, op, out) => wleb(id(n.pop(), c.func), out),
+  typeidx: (n, c, op, out) => wleb(id(n.pop(), c.type), out),
+  tableidx: (n, c, op, out) => wleb(id(n.pop(), c.table), out),
+  memoryidx: (n, c, op, out) => wleb(id(n.pop(), c.memory), out),
+  globalidx: (n, c, op, out) => wleb(id(n.pop(), c.global), out),
+  localidx: (n, c, op, out) => wleb(id(n.pop(), c.local), out),
+  dataidx: (n, c, op, out) => wleb(id(n.pop(), c.data), out),
+  elemidx: (n, c, op, out) => wleb(id(n.pop(), c.elem), out),
+  tagidx: (n, c, op, out) => wleb(id(n.pop(), c.tag), out),
+  'memoryidx?': (n, c, op, out) => wleb(id(isIdx(instrPeek(n)) ? n.pop() : 0, c.memory), out),
+  stringidx: (n, c, op, out) => { let s = n.pop(), key = s.valueOf(), idx = c.strings.findIndex(x => x.valueOf() === key); if (idx < 0) idx = c.strings.push(s) - 1; return wleb(idx, out) },
 
   // Value type
-  i32: (n, c, op, out) => { if (out) { encode.i32(n.shift(), out); return } return encode.i32(n.shift()) },
-  i64: (n, c, op, out) => { if (out) { encode.i64(n.shift(), out); return } return encode.i64(n.shift()) },
-  f32: (n, c, op, out) => encode.f32(n.shift(), out),
-  f64: (n, c, op, out) => encode.f64(n.shift(), out),
-  v128: (n) => encode.v128(n.shift()),
+  i32: (n, c, op, out) => { if (out) { encode.i32(n.pop(), out); return } return encode.i32(n.pop()) },
+  i64: (n, c, op, out) => { if (out) { encode.i64(n.pop(), out); return } return encode.i64(n.pop()) },
+  f32: (n, c, op, out) => encode.f32(n.pop(), out),
+  f64: (n, c, op, out) => encode.f64(n.pop(), out),
+  v128: (n) => encode.v128(n.pop()),
 
   // Combinations
-  typeidx_field: (n, c) => { let typeId = id(n.shift(), c.type); return [...uleb(typeId), ...uleb(id(n.shift(), c.type[typeId][1]))] },
-  typeidx_multi: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(n.shift())],
-  typeidx_dataidx: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.data))],
-  typeidx_elemidx: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.elem))],
-  typeidx_typeidx: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.type))],
-  dataidx_memoryidx: (n, c) => [...uleb(id(n.shift(), c.data)), ...uleb(id(n.shift(), c.memory))],
-  memoryidx_memoryidx: (n, c) => [...uleb(id(n.shift(), c.memory)), ...uleb(id(n.shift(), c.memory))],
-  tableidx_tableidx: (n, c) => [...uleb(id(n.shift(), c.table)), ...uleb(id(n.shift(), c.table))],
+  typeidx_field: (n, c) => { let typeId = id(n.pop(), c.type); return [...uleb(typeId), ...uleb(id(n.pop(), c.type[typeId][1]))] },
+  typeidx_multi: (n, c) => [...uleb(id(n.pop(), c.type)), ...uleb(n.pop())],
+  typeidx_dataidx: (n, c) => [...uleb(id(n.pop(), c.type)), ...uleb(id(n.pop(), c.data))],
+  typeidx_elemidx: (n, c) => [...uleb(id(n.pop(), c.type)), ...uleb(id(n.pop(), c.elem))],
+  typeidx_typeidx: (n, c) => [...uleb(id(n.pop(), c.type)), ...uleb(id(n.pop(), c.type))],
+  dataidx_memoryidx: (n, c) => [...uleb(id(n.pop(), c.data)), ...uleb(id(n.pop(), c.memory))],
+  memoryidx_memoryidx: (n, c) => [...uleb(id(n.pop(), c.memory)), ...uleb(id(n.pop(), c.memory))],
+  tableidx_tableidx: (n, c) => [...uleb(id(n.pop(), c.table)), ...uleb(id(n.pop(), c.table))],
 
   // stack switching handlers (Phase 3)
-  cont_bind: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.type))],
-  switch_cont: (n, c) => [...uleb(id(n.shift(), c.type)), ...uleb(id(n.shift(), c.tag))],
+  cont_bind: (n, c) => [...uleb(id(n.pop(), c.type)), ...uleb(id(n.pop(), c.type))],
+  switch_cont: (n, c) => [...uleb(id(n.pop(), c.type)), ...uleb(id(n.pop(), c.tag))],
   resume: (n, c) => {
-    const typeidx = uleb(id(n.shift(), c.type))
+    const typeidx = uleb(id(n.pop(), c.type))
     const handlers = []; let cnt = 0
-    while (n[0]?.[0] === 'on') {
-      const [, tag, label] = n.shift()
+    while (instrPeek(n)?.[0] === 'on') {
+      const [, tag, label] = n.pop()
       if (label === 'switch') handlers.push(0x01, ...uleb(id(tag, c.tag)))
       else handlers.push(0x00, ...uleb(id(tag, c.tag)), ...uleb(blockid(label, c.block)))
       cnt++
@@ -1188,11 +1188,11 @@ const HANDLER = {
     return [...typeidx, ...uleb(cnt), ...handlers]
   },
   resume_throw: (n, c) => {
-    const typeidx = uleb(id(n.shift(), c.type))
-    const exnidx = uleb(id(n.shift(), c.tag))
+    const typeidx = uleb(id(n.pop(), c.type))
+    const exnidx = uleb(id(n.pop(), c.tag))
     const handlers = []; let cnt = 0
-    while (n[0]?.[0] === 'on') {
-      const [, tag, label] = n.shift()
+    while (instrPeek(n)?.[0] === 'on') {
+      const [, tag, label] = n.pop()
       if (label === 'switch') handlers.push(0x01, ...uleb(id(tag, c.tag)))
       else handlers.push(0x00, ...uleb(id(tag, c.tag)), ...uleb(blockid(label, c.block)))
       cnt++
@@ -1200,10 +1200,10 @@ const HANDLER = {
     return [...typeidx, ...exnidx, ...uleb(cnt), ...handlers]
   },
   resume_throw_ref: (n, c) => {
-    const typeidx = uleb(id(n.shift(), c.type))
+    const typeidx = uleb(id(n.pop(), c.type))
     const handlers = []; let cnt = 0
-    while (n[0]?.[0] === 'on') {
-      const [, tag, label] = n.shift()
+    while (instrPeek(n)?.[0] === 'on') {
+      const [, tag, label] = n.pop()
       if (label === 'switch') handlers.push(0x01, ...uleb(id(tag, c.tag)))
       else handlers.push(0x00, ...uleb(id(tag, c.tag)), ...uleb(blockid(label, c.block)))
       cnt++
@@ -1213,42 +1213,22 @@ const HANDLER = {
 };
 
 
-// instr()/instrSize() and every HANDLER/SIZE_HANDLER entry consume their
-// `nodes` argument the same way: `.shift()` off the front, `[0]`/`[1]` to
-// peek. A function body lands here as ONE flat array (opcodes and immediates
-// interleaved as plain siblings — normalize() already unfolded any nesting),
-// so a large function pays Array.prototype.shift()'s O(remaining-length) cost
-// once per element — O(n²) total over the body. instrCursor() keeps the exact
-// same shift()/[0]/[1]/length surface (so no HANDLER/SIZE_HANDLER changes
-// needed) but backs it with a once-reversed copy popped from the end: shift()
-// becomes O(1), the reversal is a single O(n) pass. Bounded lookahead only
-// (verified: no HANDLER reads past index 1), so only indices 0/1 are tracked.
-// A plain closure + hand-kept data properties, not a class with accessors:
-// this file compiles as part of jz's self-hosted kernel too (watr is a real
-// dependency of the self-host build, not just a dev tool), and jz's
-// self-hostable JS subset rejects getters/setters ("jz objects have no
-// accessors") — confirmed by hitting that exact error with a `get length()`
-// version of this same cursor.
-const instrCursor = (arr) => {
-  const r = arr ? arr.slice().reverse() : []
-  const c = { r, length: r.length, 0: r[r.length - 1], 1: r[r.length - 2], shift: () => {
-    const v = c.r.pop()
-    c.length = c.r.length
-    c[0] = c.r[c.r.length - 1]
-    c[1] = c.r[c.r.length - 2]
-    return v
-  } }
-  return c
-}
+// Instruction bodies are already private, normalized token arrays. Reverse them
+// once in place and consume from the end: Array.pop() is O(1), unlike the old
+// front-shift whose repeated backing-store moves made a body O(n²). Every
+// immediate handler consumes through pop() and peeks through instrPeek(), so no
+// per-body wrapper, copied array, or closure is needed (important for watr's
+// no-GC self-hosted wasm build).
+const instrPeek = (nodes, ahead = 0) => nodes[nodes.length - 1 - ahead]
 
 // instruction encoder — bytes land DIRECTLY in the output stream (write-mode
 // handlers push immediates themselves; cold handlers still return small arrays)
 const instr = (nodes, ctx) => {
-  nodes = instrCursor(nodes)
+  nodes.reverse()
   let out = [], meta = []
 
-  while (nodes?.length) {
-    let op = nodes.shift()
+  while (nodes.length) {
+    let op = nodes.pop()
 
     // Handle code metadata marker - store for next instruction
     // ['@metadata', type, data]
@@ -1294,9 +1274,9 @@ const instr = (nodes, ctx) => {
     const imm = IMM[op]
     if (imm) {
       // select: becomes typed select (opcode+1) if next node is an array with result types
-      if (op === 'select' && nodes[0]?.length) out[at]++
+      if (op === 'select' && instrPeek(nodes)?.length) out[at]++
       // ref.type|cast: opcode+1 if type is nullable: (ref null $t) or (funcref, anyref, etc.)
-      else if (imm === 'reftype' && !op.endsWith('_null') && (nodes[0][1] === 'null' || nodes[0][0] !== 'ref')) {
+      else if (imm === 'reftype' && !op.endsWith('_null') && (instrPeek(nodes)[1] === 'null' || instrPeek(nodes)[0] !== 'ref')) {
         out[out.length - 1]++
       }
       const b = HANDLER[imm](nodes, ctx, op, out)
@@ -1342,33 +1322,33 @@ const memargSize = (nodes, op, memIdx = 0) => {
 const SIZE_HANDLER = {}
 for (const k in HANDLER) SIZE_HANDLER[k] = (n, c, op) => HANDLER[k](n, c, op).length
 Object.assign(SIZE_HANDLER, {
-  i32: (n) => slebSize32(n.shift()),
-  f32: (n) => (n.shift(), 4),
-  f64: (n) => (n.shift(), 8),
-  localidx: (n, c) => ulebSize(id(n.shift(), c.local)),
-  funcidx: (n, c) => ulebSize(id(n.shift(), c.func)),
-  typeidx: (n, c) => ulebSize(id(n.shift(), c.type)),
-  tableidx: (n, c) => ulebSize(id(n.shift(), c.table)),
-  memoryidx: (n, c) => ulebSize(id(n.shift(), c.memory)),
-  globalidx: (n, c) => ulebSize(id(n.shift(), c.global)),
-  dataidx: (n, c) => ulebSize(id(n.shift(), c.data)),
-  elemidx: (n, c) => ulebSize(id(n.shift(), c.elem)),
-  tagidx: (n, c) => ulebSize(id(n.shift(), c.tag)),
-  labelidx: (n, c) => ulebSize(blockid(n.shift(), c.block)),
-  laneidx: (n) => (parseUint(n.shift(), 0xff), 1),
-  memarg: (n, c, op) => memargSize(n, op, isIdx(n[0]) && !isMemParam(n[0]) ? id(n.shift(), c.memory) : 0),
-  opt_memory: (n, c) => ulebSize(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
-  'memoryidx?': (n, c) => ulebSize(id(isIdx(n[0]) ? n.shift() : 0, c.memory)),
-  call_indirect: (n, c) => { const t = n.shift(), [, ti] = n.shift(); return ulebSize(id(ti, c.type)) + ulebSize(id(t, c.table)) },
+  i32: (n) => slebSize32(n.pop()),
+  f32: (n) => (n.pop(), 4),
+  f64: (n) => (n.pop(), 8),
+  localidx: (n, c) => ulebSize(id(n.pop(), c.local)),
+  funcidx: (n, c) => ulebSize(id(n.pop(), c.func)),
+  typeidx: (n, c) => ulebSize(id(n.pop(), c.type)),
+  tableidx: (n, c) => ulebSize(id(n.pop(), c.table)),
+  memoryidx: (n, c) => ulebSize(id(n.pop(), c.memory)),
+  globalidx: (n, c) => ulebSize(id(n.pop(), c.global)),
+  dataidx: (n, c) => ulebSize(id(n.pop(), c.data)),
+  elemidx: (n, c) => ulebSize(id(n.pop(), c.elem)),
+  tagidx: (n, c) => ulebSize(id(n.pop(), c.tag)),
+  labelidx: (n, c) => ulebSize(blockid(n.pop(), c.block)),
+  laneidx: (n) => (parseUint(n.pop(), 0xff), 1),
+  memarg: (n, c, op) => memargSize(n, op, isIdx(instrPeek(n)) && !isMemParam(instrPeek(n)) ? id(n.pop(), c.memory) : 0),
+  opt_memory: (n, c) => ulebSize(id(isIdx(instrPeek(n)) ? n.pop() : 0, c.memory)),
+  'memoryidx?': (n, c) => ulebSize(id(isIdx(instrPeek(n)) ? n.pop() : 0, c.memory)),
+  call_indirect: (n, c) => { const t = n.pop(), [, ti] = n.pop(); return ulebSize(id(ti, c.type)) + ulebSize(id(t, c.table)) },
   block: (n, c) => {
     c.block.push(1)
-    isId(n[0]) && (c.block[n.shift()] = c.block.length)
-    const t = n.shift()
+    isId(instrPeek(n)) && (c.block[n.pop()] = c.block.length)
+    const t = n.pop()
     return !t ? 1 : t[0] === 'result' ? reftype(t[1], c).length : ulebSize(id(t[1], c.type))
   },
   end: (_n, c) => (c.block.pop(), 0),
   stringidx: (n, c) => {
-    const str = n.shift(), key = str.valueOf()
+    const str = n.pop(), key = str.valueOf()
     let idx = c.strings.findIndex(x => x.valueOf() === key)
     if (idx < 0) idx = c.strings.push(str) - 1
     return ulebSize(idx)
@@ -1383,10 +1363,10 @@ Object.assign(SIZE_HANDLER, {
 // VALUE, not the length, so they're irrelevant here. MUST equal instr(...).length
 // (asserted by the byteSize↔compile invariant test).
 const instrSize = (nodes, ctx) => {
-  nodes = instrCursor(nodes)
+  nodes.reverse()
   let size = 0, meta = []
-  while (nodes?.length) {
-    let op = nodes.shift()
+  while (nodes.length) {
+    let op = nodes.pop()
     if (op?.[0] === '@metadata') { meta.push(op.slice(1)); continue }
     if (op?.[0] === '@loc') continue // ;;@ marker — no bytes, no size effect
     if (Array.isArray(op)) { op.loc != null && setErrLoc(op.loc); err(`Unknown instruction ${op[0]}`) }
@@ -1447,7 +1427,7 @@ const blockid = (nm, block, i) => (
 // consume align/offset params
 const memarg = (args) => {
   let align, offset, k, v
-  while (isMemParam(args[0])) [k, v] = args.shift().split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
+  while (isMemParam(instrPeek(args))) [k, v] = args.pop().split('='), k === 'offset' ? offset = +v : k === 'align' ? align = +v : err(`Unknown param ${k}=${v}`)
 
   if (offset < 0 || offset > 0xffffffff) err(`Bad offset ${offset}`)
   if (align <= 0 || align > 0xffffffff) err(`Bad align ${align}`)
