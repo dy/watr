@@ -67,6 +67,9 @@ main .col,main.col{padding-top:var(--s7)}
 .tile>.no:hover,.tile>.no:focus-visible{color:var(--ink)}
 .tile h2{margin:0 0 var(--s2)}
 .tile p{margin:0;font-size:13px}
+.badges{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3)}
+.badges a{display:block;line-height:0}
+.badges img{display:block;height:20px}
 .fine{margin:var(--s3) 0 0;font-size:11.5px;color:var(--dim)}
 .bento + .fine{margin-top:var(--s4)}
 .fine + .fine{margin-top:var(--s4)}
@@ -88,9 +91,11 @@ main .col,main.col{padding-top:var(--s7)}
 /* code */
 pre{margin:var(--s4) 0 0;background:var(--panel);border:1px solid var(--hair);
   padding:var(--s3) var(--s4);font-size:13px;line-height:1.75;overflow-x:auto;color:var(--ink)}
-pre i{color:var(--dim);font-style:normal}
-pre b{color:var(--wasm);font-weight:500}
 pre code{background:none;padding:0}
+/* syntax: hl.js paints via CSS Custom Highlight API (same category names as microlighter themes) */
+::highlight(comment){color:var(--dim)}
+::highlight(keyword){color:var(--wasm)}
+::highlight(string),::highlight(numeric){color:var(--lit)}
 
 /* data */
 table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;

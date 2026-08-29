@@ -12,7 +12,7 @@
 
 <header><div class="col bar">
   <a class="brand" href="./"><svg width="27" height="17" viewBox="0 0 32 20" aria-hidden="true"><path d="M30.2 7.1c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.16.37.58.54.95.38l7.33-3.1L30.2 7.1Z" fill="#654ff0"/><path d="M20.8 7.16c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.67Z" fill="#654ff0"/><path d="M11.39 7.22c-.16-.37-.58-.55-.95-.39l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.66Z" fill="#654ff0"/><path d="M27.38.44c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1L27.38.44Z" fill="#654ff0"/><path d="M8.56.55c-.15-.37-.58-.54-.95-.38L.28 3.27l1.13 2.67c.16.37.58.54.95.38l7.33-3.1L8.56.55Z" fill="#654ff0"/><path d="M17.97.5c-.15-.37-.58-.55-.95-.39L9.7 3.22l1.13 2.66c.15.37.58.54.95.39l7.33-3.11L17.97.5Z" fill="#654ff0"/><path d="M23.48 13.49c-.16-.37-.58-.54-.95-.38l-7.33 3.1 1.13 2.67c.15.37.58.54.95.38l7.33-3.1-1.13-2.67Z" fill="#654ff0"/><path d="M14.07 13.55c-.16-.37-.58-.54-.95-.39l-7.34 3.11 1.13 2.67c.16.37.58.54.95.38l7.33-3.1-1.12-2.67Z" fill="#654ff0"/></svg> watr</a>
-  <span class="ver">v5.9.0</span>
+  <span class="ver">v5.10.0</span>
   <nav>
     <a href="./docs">docs</a>
     <a href="./play/">repl</a>
@@ -78,34 +78,34 @@
   <section class="tile" id="api">
     <a class="no" href="#api">02</a>
     <h2>API</h2>
-<pre><b>import</b> watr <b>from</b> 'watr'
+<pre><code class="language-js">import watr from 'watr'
 
-<b>const</b> { test } = watr`(func (export "test") (call ${console.log} (i32.const 42)))`
-test()  <i>// 42</i></pre>
+const { test } = watr`(func (export "test") (call ${console.log} (i32.const 42)))`
+test()  // 42</code></pre>
     <div class="bento">
       <div>
         <h3><a href="./docs#parsesource-options"><code>parse</code></a></h3>
         <!-- <p>Text to an S-expression tree.</p> -->
-<pre>parse('(i32.const 42)')
-<i>// ['i32.const', '42']</i></pre>
+<pre><code class="language-js">parse('(i32.const 42)')
+// ['i32.const', '42']</code></pre>
       </div>
       <div>
         <h3><a href="./docs#printtree-options"><code>print</code></a></h3>
         <!-- <p>Tree or text, pretty-printed.</p> -->
-<pre>print(src)
-<i>// indented, one op per line</i></pre>
+<pre><code class="language-js">print(src)
+// indented, one op per line</code></pre>
       </div>
       <div>
         <h3><a href="./docs#printtree-options"><code>minify</code></a></h3>
         <!-- <p>Same, with whitespace dropped.</p> -->
-<pre>print(src, { indent: <b>false</b>, newline: <b>false</b> })
-<i>// (module(func(result i32)(i32.const 42)))</i></pre>
+<pre><code class="language-js">print(src, { indent: false, newline: false })
+// (module(func(result i32)(i32.const 42)))</code></pre>
       </div>
       <div>
         <h3><a href="./docs#polyfillast-options"><code>polyfill</code></a></h3>
         <!-- <p>Newer features lowered to MVP.</p> -->
-<pre><b>import</b> polyfill <b>from</b> 'watr/polyfill'
-compile(polyfill(src))</pre>
+<pre><code class="language-js">import polyfill from 'watr/polyfill'
+compile(polyfill(src))</code></pre>
       </div>
     </div>
     <p class="fine"><a href="./docs">API reference</a>.</p>
@@ -130,21 +130,22 @@ compile(polyfill(src))</pre>
   <section class="tile" id="conformance">
     <a class="no" href="#conformance">04</a>
     <h2>Conformance</h2>
-    <p>CI runs <a href="https://github.com/WebAssembly/spec/tree/main/test">WebAssembly spec
-       testsuite</a>.<br>
-       Features tracked on
-       <a href="https://webassembly.org/features/?categories=tools">webassembly.org</a>.
+    <p class="badges">
+      <a href="https://github.com/dy/watr/actions/workflows/test.js.yml"><img src="https://github.com/dy/watr/actions/workflows/test.js.yml/badge.svg" alt="test: spec testsuite" height="20"></a>
+      <a href="https://webassembly.org/features/?categories=tools"><img src="https://img.shields.io/badge/features-phase%202%E2%80%935-white" alt="features: phase 2–5" height="20"></a>
+    </p>
   </section>
 
   <section class="tile" id="cli">
     <a class="no" href="#cli">05</a>
     <h2>CLI</h2>
-<pre>npx watr input.wat              <i># input.wasm</i>
-npx watr input.wat -o out.wasm  <i># custom output</i>
-npx watr input.wat --print      <i># pretty-print</i>
-npx watr input.wat --minify     <i># minify</i>
-npx watr input.wat --optimize   <i># fold, treeshake, inline, coalesce</i>
-npx watr input.wat --polyfill   <i># newer features to MVP</i></pre>
+<pre><code class="language-sh">npx watr input.wat               # input.wasm
+npx watr input.wat -o out.wasm   # custom output
+npx watr input.wat --print       # pretty-print
+npx watr input.wat --minify      # minify
+npx watr input.wat --optimize    # fold, treeshake, inline, coalesce
+npx watr input.wat --polyfill    # newer features to MVP
+npx watr input.wat --source-map  # + input.wasm.map from ;;@ comments</code></pre>
   </section>
 
   <section class="tile" id="used-by">
@@ -214,3 +215,4 @@ function render(){
 inp.addEventListener('input', render);
 render();
 </script>
+<script type="module" src="./hl.js"></script>

@@ -18,6 +18,7 @@
   --wasm:#654ff0;       /* 4.8:1 on paper */
   --wasm-soft:#efedfd;  /* tint for selection / highlights */
   --red:#c62828;
+  --lit:#177245;        /* code literals: strings, numbers; 5.8:1 on paper */
   --on-ink:#e9e8ef;     /* text on dark (terminal chip) */
   --on-ink-dim:#8f8c9c; /* prompt on dark */
 

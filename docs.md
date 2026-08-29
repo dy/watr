@@ -9,7 +9,7 @@ description: "API reference for watr: compile WebAssembly text to binary, parse 
 
 Fast WebAssembly Text Format (WAT) compiler for JavaScript/Node.js.
 
-Supports [phase 5](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md), [phase 4](https://github.com/WebAssembly/proposals) and phase 3 features, full [spec syntax](https://webassembly.github.io/spec/core/text/index.html) and passes the [WebAssembly test suite](https://github.com/WebAssembly/testsuite).<br>
+Supports [phase 5](https://github.com/WebAssembly/proposals/blob/main/finished-proposals.md), [phase 4](https://github.com/WebAssembly/proposals), phase 3 and phase 2 features, full [spec syntax](https://webassembly.github.io/spec/core/text/index.html) and passes the [WebAssembly test suite](https://github.com/WebAssembly/testsuite).<br>
 Includes [stringref](https://github.com/WebAssembly/stringref), [rounding mode control](https://github.com/WebAssembly/rounding-mode-control), and [wide arithmetic](https://github.com/WebAssembly/wide-arithmetic).<br>
 Enables [polyfills](#available-polyfills) and [optimizations](#available-optimizations).
 
@@ -62,25 +62,25 @@ const { add } = watr`(func (export "add") (param i32 i32) (result i32) (i32.add 
 add(2, 3) // 5
 
 // auto-import JS functions
-const { test } = watr`(func (export "test") (call \${console.log} (i32.const 42)))`
+const { test } = watr`(func (export "test") (call ${console.log} (i32.const 42)))`
 test() // 42
 
 // interpolate numbers
-watr`(global (export "pi") f64 (f64.const \${Math.PI}))`       // f64
-watr`(func (export "f") (result i64) (i64.const \${123n}))`    // i64 BigInt
+watr`(global (export "pi") f64 (f64.const ${Math.PI}))`       // f64
+watr`(func (export "f") (result i64) (i64.const ${123n}))`    // i64 BigInt
 
 // interpolate config
-watr`(memory (export "mem") \${pages})`                        // memory size
-watr`(func (export "f") (call \${0}))`                         // indices
-watr`(func \${id} ...)`                                        // identifiers
+watr`(memory (export "mem") ${pages})`                        // memory size
+watr`(func (export "f") (call ${0}))`                         // indices
+watr`(func ${id} ...)`                                        // identifiers
 
 // interpolate binary data
-watr`(memory (export "mem") (data \${new Uint8Array([1,2,3])}))`
-watr`(data (i32.const 0) \${[1, 2, 3, 4]})`
+watr`(memory (export "mem") (data ${new Uint8Array([1,2,3])}))`
+watr`(data (i32.const 0) ${[1, 2, 3, 4]})`
 
 // interpolate code strings
 const ops = '(i32.add (i32.const 1) (i32.const 2))'
-watr`(func (export "f") (result i32) \${ops})`
+watr`(func (export "f") (result i32) ${ops})`
 
 // string argument
 watr('(func (export "f") (result i32) (i32.const 42))')
@@ -95,7 +95,7 @@ import { compile } from 'watr'
 
 compile(`(func (export "f"))`)                       // string
 compile(['func', ['export', '"f"']])                 // AST
-compile`(func (export "f") (f64.const \${Math.PI}))` // template
+compile`(func (export "f") (f64.const ${Math.PI}))` // template
 // Uint8Array
 ```
 

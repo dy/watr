@@ -3,10 +3,18 @@ description: Spec-complete wat2wasm implementation in JavaScript. Compiles WebAs
 url: https://watr.js.org
 baseurl: ""
 
+# code fences render as plain <pre><code class="language-*"> — hl.js paints them
+kramdown:
+  syntax_highlighter_opts:
+    disable: true
+
+# underscore-prefixed files are skipped by default; the playground fetches this one
+include:
+  - test/lib/_wast.cjs
+
 exclude:
   - node_modules
   - test/official
-  - test/lib
   - test/repl
   - types
   - bin
