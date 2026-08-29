@@ -1213,9 +1213,38 @@ const HANDLER = {
 };
 
 
+// instr()/instrSize() and every HANDLER/SIZE_HANDLER entry consume their
+// `nodes` argument the same way: `.shift()` off the front, `[0]`/`[1]` to
+// peek. A function body lands here as ONE flat array (opcodes and immediates
+// interleaved as plain siblings — normalize() already unfolded any nesting),
+// so a large function pays Array.prototype.shift()'s O(remaining-length) cost
+// once per element — O(n²) total over the body. instrCursor() keeps the exact
+// same shift()/[0]/[1]/length surface (so no HANDLER/SIZE_HANDLER changes
+// needed) but backs it with a once-reversed copy popped from the end: shift()
+// becomes O(1), the reversal is a single O(n) pass. Bounded lookahead only
+// (verified: no HANDLER reads past index 1), so only indices 0/1 are tracked.
+// A plain closure + hand-kept data properties, not a class with accessors:
+// this file compiles as part of jz's self-hosted kernel too (watr is a real
+// dependency of the self-host build, not just a dev tool), and jz's
+// self-hostable JS subset rejects getters/setters ("jz objects have no
+// accessors") — confirmed by hitting that exact error with a `get length()`
+// version of this same cursor.
+const instrCursor = (arr) => {
+  const r = arr ? arr.slice().reverse() : []
+  const c = { r, length: r.length, 0: r[r.length - 1], 1: r[r.length - 2], shift: () => {
+    const v = c.r.pop()
+    c.length = c.r.length
+    c[0] = c.r[c.r.length - 1]
+    c[1] = c.r[c.r.length - 2]
+    return v
+  } }
+  return c
+}
+
 // instruction encoder — bytes land DIRECTLY in the output stream (write-mode
 // handlers push immediates themselves; cold handlers still return small arrays)
 const instr = (nodes, ctx) => {
+  nodes = instrCursor(nodes)
   let out = [], meta = []
 
   while (nodes?.length) {
@@ -1354,6 +1383,7 @@ Object.assign(SIZE_HANDLER, {
 // VALUE, not the length, so they're irrelevant here. MUST equal instr(...).length
 // (asserted by the byteSize↔compile invariant test).
 const instrSize = (nodes, ctx) => {
+  nodes = instrCursor(nodes)
   let size = 0, meta = []
   while (nodes?.length) {
     let op = nodes.shift()
