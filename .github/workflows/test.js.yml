@@ -20,11 +20,11 @@ jobs:
         # Node 20 lacks GC/multi-memory/etc; Node 22+ has most features
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: true
     - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
@@ -32,4 +32,4 @@ jobs:
     - run: npm run build --if-present
     - name: Test
       run: node test
-      # Tests auto-skip unsupported features via detection
+      # watr's own tests; the official spec testsuite runs in spec.yml

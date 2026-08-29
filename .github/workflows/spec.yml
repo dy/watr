@@ -1,0 +1,30 @@
+# Official WebAssembly spec testsuite (test/official submodule) — the conformance badge
+name: spec
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  spec:
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [22.x, 24.x]
+        # unsupported features auto-skip via runtime detection
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    - run: npm ci
+    - run: npm run test:spec

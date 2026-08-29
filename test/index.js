@@ -10,5 +10,5 @@ import './rounding-mode.js'
 import './half-precision.js'
 import './acquire-release.js'
 import './js-string-builtins.js'
-import './testsuite.js'
+// official spec testsuite runs separately: npm run test:spec
 // import './bench.js'
