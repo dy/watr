@@ -22,9 +22,8 @@
 </div></header>
 
 <main class="col">
-  <h1>Compile WebAssembly text to binary in JavaScript</h1>
-  <p class="deck">A <b>wat2wasm</b> implementation in plain JavaScript. Built for compilers,
-     build tools, test suites and playgrounds.</p>
+  <h1>Compile WAT to WASM</h1>
+  <p class="deck"><b>WebAssembly text</b> to <b>binary WASM</b> (wat2wasm) in plain JavaScript. For compilers, build tools, test suites and playgrounds.</p>
   <div class="get">
     <a class="cmd" href="https://npmjs.org/watr"><span>$</span><b>npm i watr</b></a>
     <a class="lnk" href="./play/">playground</a>
@@ -52,8 +51,8 @@
     </div>
     <div>
       <h3>Portable</h3>
-      <p>A regular ES module: no <code>.wasm</code> file, no Emscripten. Bundlers, workers and
-         blob URLs load it like any other import.</p>
+      <p>ESM: no <code>.wasm</code>, no Emscripten. Bundlers, workers and
+         blob URLs load as any other import.</p>
     </div>
     <div>
       <h3>Lightweight</h3>
@@ -64,7 +63,6 @@
   <section class="tile" id="performance">
     <a class="no" href="#performance">01</a>
     <h2>Performance</h2>
-    <p>A single walk over the parsed tree emits the bytes: no IR, no runtime, nothing to instantiate.</p>
     <div class="scroll"><table>
       <thead><tr><th>Compiler</th><th>Size</th><th>Throughput</th></tr></thead>
       <tbody>
@@ -80,8 +78,6 @@
   <section class="tile" id="api">
     <a class="no" href="#api">02</a>
     <h2>API</h2>
-    <p>The tagged template compiles, instantiates and imports interpolated values in one step.
-       TypeScript types included.</p>
 <pre><b>import</b> watr <b>from</b> 'watr'
 
 <b>const</b> { test } = watr`(func (export "test") (call ${console.log} (i32.const 42)))`
@@ -89,36 +85,36 @@ test()  <i>// 42</i></pre>
     <div class="bento">
       <div>
         <h3><a href="./docs#parsesource-options"><code>parse</code></a></h3>
-        <p>Text to an S-expression tree.</p>
+        <!-- <p>Text to an S-expression tree.</p> -->
 <pre>parse('(i32.const 42)')
 <i>// ['i32.const', '42']</i></pre>
       </div>
       <div>
         <h3><a href="./docs#printtree-options"><code>print</code></a></h3>
-        <p>Tree or text, pretty-printed.</p>
+        <!-- <p>Tree or text, pretty-printed.</p> -->
 <pre>print(src)
 <i>// indented, one op per line</i></pre>
       </div>
       <div>
         <h3><a href="./docs#printtree-options"><code>minify</code></a></h3>
-        <p>Same, with whitespace dropped.</p>
+        <!-- <p>Same, with whitespace dropped.</p> -->
 <pre>print(src, { indent: <b>false</b>, newline: <b>false</b> })
 <i>// (module(func(result i32)(i32.const 42)))</i></pre>
       </div>
       <div>
         <h3><a href="./docs#polyfillast-options"><code>polyfill</code></a></h3>
-        <p>Newer features lowered to MVP.</p>
+        <!-- <p>Newer features lowered to MVP.</p> -->
 <pre><b>import</b> polyfill <b>from</b> 'watr/polyfill'
 compile(polyfill(src))</pre>
       </div>
     </div>
-    <p class="fine">Options, AST format and the rest of the surface: <a href="./docs">API reference</a>.</p>
+    <p class="fine"><a href="./docs">API reference</a>.</p>
   </section>
 
   <section class="tile" id="optimizer">
     <a class="no" href="#optimizer">03</a>
     <h2>Optimizer</h2>
-    <p>Folds constants, treeshakes, inlines, coalesces and outlines.</p>
+    <!-- <p>Folds constants, treeshakes, inlines, coalesces and outlines.</p> -->
     <div class="scroll"><table>
       <thead><tr><th>Optimizer</th><th>Total size</th><th>Batch</th><th>Footprint</th></tr></thead>
       <tbody>
@@ -127,24 +123,17 @@ compile(polyfill(src))</pre>
         <tr><td>wasm-opt -O3</td><td>22,302 B</td><td>not measured</td><td>1,100 KB</td></tr>
       </tbody>
     </table></div>
-    <p class="fine">21-module corpus: smaller than -O3 on every module, ties or beats -Oz on 18 of 20 files.</p>
-    <p class="fine">Passes and options: <a href="./docs#optimizeast-options">optimize docs</a>.</p>
+    <!-- <p class="fine">21-module corpus: smaller than -O3 on every module, ties or beats -Oz on 18 of 20 files.</p> -->
+    <p class="fine"><a href="./docs#optimizeast-options">Optimize docs</a>.</p>
   </section>
 
   <section class="tile" id="conformance">
     <a class="no" href="#conformance">04</a>
     <h2>Conformance</h2>
-    <p>CI runs the <a href="https://github.com/WebAssembly/spec/tree/main/test">WebAssembly spec
-       testsuite</a>, pinned at 2026-08-12. Feature coverage, including
-       <a href="https://github.com/WebAssembly/stringref">stringref</a>,
-       <a href="https://github.com/WebAssembly/rounding-mode-control">rounding mode control</a> and
-       <a href="https://github.com/WebAssembly/wide-arithmetic">wide arithmetic</a>, is tracked on
+    <p>CI runs <a href="https://github.com/WebAssembly/spec/tree/main/test">WebAssembly spec
+       testsuite</a>.<br>
+       Features tracked on
        <a href="https://webassembly.org/features/?categories=tools">webassembly.org</a>.
-       Errors report line and column.</p>
-<pre>&gt; compile('(func (export "x"')
-<i>Error: Unclosed parenthesis at 1:18</i></pre>
-    <p class="fine">watr compiles WebAssembly text only: C and Rust need LLVM or Emscripten,
-       and decoding .wasm back to text is wabt's wasm2wat.</p>
   </section>
 
   <section class="tile" id="cli">
