@@ -1,10 +1,10 @@
 {
   "name": "watr",
-  "version": "5.10.0",
+  "version": "5.10.1",
   "description": "wat2wasm in JS: compile WebAssembly text (WAT) to wasm binary. Parse, print, minify, optimize. Zero deps.",
   "main": "watr.js",
   "bin": {
-    "watr": "./bin/watr.js"
+    "watr": "bin/watr.js"
   },
   "types": "types/watr.d.ts",
   "exports": {

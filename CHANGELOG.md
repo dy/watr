@@ -7,17 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-- optimize: `inline`/`inlineWrappers` now report which functions they actually
-  rewrote; the driver's post-inline `propagate` sweep runs on just those
-  instead of re-scanning the whole module. `propagate` is per-function-local,
-  so a function neither pass touched was already at its fixpoint (the round
-  loop's own post-round sweep guarantees that) — same output, far less
-  redundant work on large modules (~6400-func self-hosted-compiler-scale
-  module: two whole-module rescans down to a few hundred actually-touched
-  functions)
+## v5.10.1
+
+- compile: instruction encoding now reverses normalized instruction arrays and
+  consumes them with `pop()`, replacing quadratic front removal with linear
+  traversal. Native and Wasm-hosted compilers produce identical binaries.
+- test: run the official specification suite in local, CI, Wasm-hosted, and
+  prepublish test paths.
+
+[Compare](https://github.com/dy/watr/compare/v5.10.0...v5.10.1)
 
 ## v5.10.0
 
+- optimize: `inline`/`inlineWrappers` now report which functions they actually
+  rewrote; the driver's post-inline `propagate` sweep runs on just those
+  instead of re-scanning the whole module. `propagate` is per-function-local,
+  so a function neither pass touched was already at its fixpoint. The round
+  loop's own post-round sweep guarantees that untouched functions are already
+  settled.
 - compile: `;;@ file:line:col` source-location comments (Binaryen convention) →
   `.sourceMap` (source map v3) on the compiled binary; optional `:symbol` 4th
   field lands in `names`; bare `;;@` clears (#11)
