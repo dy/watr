@@ -4066,6 +4066,8 @@ const estBytes = (n) => {
 // writes nothing (reads of memory/globals are fine — the group invalidation
 // clocks below fence them like any load). Single-result only: the shared local
 // carries exactly one value.
+const cseLocalRef = (value) => typeof value === 'string' || typeof value === 'number'
+
 const cseCallOk = (n, sigT) =>
   n[0] === 'call' && typeof n[1] === 'string' && sigT.get(n[1]) != null &&
   (() => { const e = CALLFX?.get(n[1]); return !!e && !e.unknown && !e.wMem && e.wGlob.size === 0 })()
@@ -4192,7 +4194,7 @@ const cse = (ast) => {
         walkN(stmt, n => {
           if (!Array.isArray(n)) return
           const o = n[0]
-          if ((o === 'local.set' || o === 'local.tee') && typeof n[1] === 'string') wLocals.add(n[1])
+          if ((o === 'local.set' || o === 'local.tee') && cseLocalRef(n[1])) wLocals.add(n[1])
           else if (o === 'global.set' && typeof n[1] === 'string') wGlobals.add(n[1])
           else if (o === 'call' && cseCallOk(n, sigT)) { /* effect-clean: not an invalidating call */ }
           else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') call = true
@@ -4237,7 +4239,7 @@ const cse = (ast) => {
                 g = { expr: n, sites: [], est: facts.est, type: candType, reads: new Set(), mem: readsMemory(n), glob: false }
                 walkN(n, c => {
                   if (!Array.isArray(c)) return
-                  if (c[0] === 'local.get' && typeof c[1] === 'string') g.reads.add(c[1])
+                  if (c[0] === 'local.get' && cseLocalRef(c[1])) g.reads.add(c[1])
                   else if (c[0] === 'global.get') g.glob = true
                   // an admitted call's reads live in its BODY, not this subtree's
                   // text — surface them onto the group so the mem/glob clocks fence
@@ -4259,7 +4261,7 @@ const cse = (ast) => {
           // this node's OWN write effect ticks AFTER its children (operands
           // evaluate first) — pure candidates above never carry writes, so every
           // write is stamped exactly once, in evaluation order
-          if (o === 'local.set' || o === 'local.tee') { if (typeof n[1] === 'string') lastW.set(n[1], ++tick) }
+          if (o === 'local.set' || o === 'local.tee') { if (cseLocalRef(n[1])) lastW.set(n[1], ++tick) }
           else if (o === 'global.set') gTick = ++tick
           else if (o === 'call' && cseCallOk(n, sigT)) { /* effect-clean: writes nothing, no tick */ }
           else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') gTick = mTick = ++tick
@@ -4280,7 +4282,7 @@ const cse = (ast) => {
           walkN(cond, n => {
             if (!Array.isArray(n)) return
             const o = n[0]
-            if ((o === 'local.set' || o === 'local.tee') && typeof n[1] === 'string') cw.add(n[1])
+            if ((o === 'local.set' || o === 'local.tee') && cseLocalRef(n[1])) cw.add(n[1])
             else if (o === 'global.set') cGlob = true
             else if (o === 'call' && cseCallOk(n, sigT)) { /* effect-clean */ }
             else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') { cGlob = true; cMemCall = true }

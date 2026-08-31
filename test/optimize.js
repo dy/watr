@@ -4026,6 +4026,24 @@ test('cse: a re-tee between two sites of one statement kills the group (intra-st
   assert.equal(f(-3.5), 1, 'sign-flipped pair: -3 + 4')
 })
 
+test('cse: numeric local writes invalidate expressions that read the same index', () => {
+  const src = `(module
+    (func (export "f") (result f64)
+      (local f64 f64)
+      (local.set 0 (f64.const 0))
+      (drop (block (result f64)
+        (drop (block (result f64)
+          (local.set 1 (local.get 0))
+          (local.set 0 (f64.add (local.get 0) (f64.const 1)))
+          (local.get 1)))
+        (block (result f64)
+          (local.set 1 (local.get 0))
+          (local.set 0 (f64.add (local.get 0) (f64.const 1)))
+          (local.get 1))))
+      (local.get 0)))`
+  assert.equal(run(src).f(), 2, 'the second add reads the first update, never a stale CSE value')
+})
+
 test('deadset: const store overwritten in every dispatch arm before any read drops', () => {
   // the inliner zero-init shape: temps zeroed at loop-body top, every READ
   // sits inside the one arm that overwrites them first

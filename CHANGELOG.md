@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- optimize: CSE now tracks numeric local indices as well as named locals, so a write to `local 0` invalidates expressions that read `local 0`.
+
 ## v5.10.1
 
 - compile: instruction encoding now reverses normalized instruction arrays and
