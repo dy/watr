@@ -2790,6 +2790,9 @@ const IMPURE_OPS = new Set([
  * PURE here — value-pure between stores — so any site that SPECULATES evaluation (runs an expr
  * on paths that didn't run it before) must pair isPure/hasTrap with readsMemory: loads trap OOB. */
 const IMPURE_SUBSTRINGS = ['.store', 'memory.', '.atomic.']
+/** `memory.size` is a read like a load — no effect, no trap — and `readsMemory` already
+ * orders it against `memory.grow`; the `memory.` substring is for the mutators. */
+const impureOp = (op) => IMPURE_OPS.has(op) || (op !== 'memory.size' && IMPURE_SUBSTRINGS.some(s => op.includes(s)))
 
 /**
  * Pure means: no side effects, no traps we care about, no control flow.
@@ -2798,12 +2801,11 @@ const IMPURE_SUBSTRINGS = ['.store', 'memory.', '.atomic.']
 const isPure = (node) => {
   // A bare string can be a stack-style INSTRUCTION token ('return', 'drop', …), not
   // just an immediate — judge it by the same op tables as the folded form.
-  if (typeof node === 'string') return !IMPURE_OPS.has(node) && !IMPURE_SUBSTRINGS.some(s => node.includes(s))
+  if (typeof node === 'string') return !impureOp(node)
   if (!Array.isArray(node)) return true
   const op = node[0]
   if (typeof op !== 'string') return false
-  if (IMPURE_OPS.has(op)) return false
-  for (const sub of IMPURE_SUBSTRINGS) if (op.includes(sub)) return false
+  if (impureOp(op)) return false
   for (let i = 1; i < node.length; i++) if (Array.isArray(node[i]) && !isPure(node[i])) return false
   return true
 }
@@ -2887,8 +2889,7 @@ const STRUCTURED_OPS = new Set(['if', 'then', 'else', 'block', 'loop', 'try'])
 // and only computes a result (arithmetic, compare, convert, select, load) — so
 // discarding its value leaves just the operands' side effects. Excludes impure
 // ops and the structured forms above.
-const isEagerValueOp = (op) => typeof op === 'string' && !IMPURE_OPS.has(op) &&
-  !STRUCTURED_OPS.has(op) && !IMPURE_SUBSTRINGS.some(s => op.includes(s))
+const isEagerValueOp = (op) => typeof op === 'string' && !impureOp(op) && !STRUCTURED_OPS.has(op)
 
 // Statements that preserve `node`'s side effects when its VALUE is discarded.
 // A fully-pure value contributes nothing; an eager value op contributes only its
@@ -3685,7 +3686,7 @@ const sinkSets = (funcNode, params, useCounts) => {
           for (const g of e.wGlob) u.wGlob.add(g)
           for (const g of e.rGlob) u.rGlob.add(g)
         }
-        else if (IMPURE_OPS.has(o) || IMPURE_SUBSTRINGS.some(sub => o.includes(sub))) opaque = true
+        else if (impureOp(o)) opaque = true
       })
       if (!opaque) vFx = u
     }
@@ -4080,10 +4081,7 @@ const csePureNode = (n, sigT) => {
   const op = n[0]
   if (typeof op !== 'string') return false
   if (op === 'call') { if (!cseCallOk(n, sigT)) return false }
-  else {
-    if (IMPURE_OPS.has(op)) return false
-    for (const sub of IMPURE_SUBSTRINGS) if (op.includes(sub)) return false
-  }
+  else if (impureOp(op)) return false
   for (let i = 1; i < n.length; i++) if (Array.isArray(n[i]) && !csePureNode(n[i], sigT)) return false
   return true
 }
@@ -4108,8 +4106,7 @@ const cseFactsOf = (n, sigT, memo) => {
   f = { pure: true, est: OPCODE[op] > 0xffff ? 2 : 1, h1: 0x811c9dc5, h2: 0x1000193 }
   if (typeof op !== 'string') f.pure = false
   else if (op === 'call') { if (!cseCallOk(n, sigT)) f.pure = false }
-  else if (IMPURE_OPS.has(op)) f.pure = false
-  else { for (const sub of IMPURE_SUBSTRINGS) if (op.includes(sub)) { f.pure = false; break } }
+  else if (impureOp(op)) f.pure = false
   cseMix(f, cseLeafH(String(op)))
   const localOp = op === 'local.get' || op === 'local.set' || op === 'local.tee'
   for (let i = 1; i < n.length; i++) {
@@ -4713,7 +4710,7 @@ const outline = (ast) => {
       walkPostN(fn, (n, parent, idx) => {
         if (!Array.isArray(n) || typeof n[0] !== 'string') return
         const op = n[0]
-        let pure = !IMPURE_OPS.has(op) && !IMPURE_SUBSTRINGS.some(sub => op.includes(sub)) &&
+        let pure = !impureOp(op) &&
           op !== 'if' && op !== 'block' && op !== 'loop' && op !== 'then' && op !== 'else' && op !== 'try_table'
         let b = ownBytes(n)
         let h = op

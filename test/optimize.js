@@ -1869,6 +1869,32 @@ test('vacuum: if with empty branches', () => {
   assert(!src.includes('if'), 'should remove empty if')
 })
 
+test('vacuum: a drop keeps only the effects under it: a tee becomes a set, an eager op over two calls leaves the two calls', () => {
+  const src = `(module (func $g (result i32) (i32.const 1)) (func (export "f") (result i32) (local $x i32)
+    (drop (i32.sub (local.tee $x (call $g)) (i32.const 1)))
+    (drop (i32.add (call $g) (call $g)))
+    (local.get $x)))`
+  const fn = optimize(parse(src), 'vacuum').find(n => Array.isArray(n) && n[0] === 'func' && n[1] !== '$g')
+  const body = fn.slice(fn.findIndex(n => Array.isArray(n) && n[0] === 'local') + 1)
+  assert.deepEqual(body, [['local.set', '$x', ['call', '$g']], ['block', ['drop', ['call', '$g']], ['drop', ['call', '$g']]], ['local.get', '$x']])
+  assert.equal(run(src, 'vacuum').f(), 1)
+})
+
+test('vacuum: drop of memory.size (a read, not a mutator); memory.grow stays', () => {
+  const src = '(module (memory 1) (func (export "f") (drop (memory.size)) (drop (memory.grow (i32.const 1)))))'
+  const out = print(optimize(parse(src), 'vacuum'))
+  assert(!out.includes('memory.size'), 'memory.size has no effect to keep')
+  assert(out.includes('memory.grow'), 'memory.grow is the effect')
+})
+
+test('propagate: memory.size never crosses a memory.grow', () => {
+  const src = `(module (memory 1) (func (export "f") (result i32) (local $n i32)
+    (local.set $n (memory.size))
+    (drop (memory.grow (i32.const 2)))
+    (local.get $n)))`
+  assert.equal(run(src).f(), 1, 'the size read before the grow')
+})
+
 test('vacuum: removes nop', () => {
   const ast = parse('(module (func nop (i32.const 1) drop))')
   const opt = optimize(ast, 'vacuum')
