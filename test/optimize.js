@@ -2370,6 +2370,74 @@ test('coalesce: skips locals first referenced inside if/else', () => {
   assert.equal(exports.f(1), 5, 'then-path local read returns explicit value')
 })
 
+// ==================== SORT LOCALS ====================
+
+test('sortLocals: declarations group by type, stable within a type; params stay', () => {
+  const src = `(module (func (export "f") (param $p f64) (result f64)
+    (local $a i32) (local $x f64) (local $b i32) (local $y f64)
+    (local.set $a (i32.const 1)) (local.set $b (i32.const 2))
+    (local.set $x (f64.convert_i32_s (i32.add (local.get $a) (local.get $b))))
+    (local.set $y (f64.mul (local.get $x) (local.get $p)))
+    (local.get $y)))`
+  const opt = optimize(parse(src), 'sortLocals')
+  const fn = opt.find(n => Array.isArray(n) && n[0] === 'func')
+  const decls = fn.filter(n => Array.isArray(n) && n[0] === 'local').map(n => n[1] + ' ' + n[2])
+  assert.deepEqual(decls, ['$a i32', '$b i32', '$x f64', '$y f64'])
+  assert.equal(fn[2][0], 'param', 'the param keeps its slot')
+  assert(compile(opt).length < compile(parse(src)).length, 'two locals-vector entries instead of four')
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports
+  assert.equal(f(2), 6)
+})
+
+test('sortLocals: past 128 declarations the most-used locals take the one-byte indices', () => {
+  const N = 130
+  const decls = Array.from({ length: N }, (_, i) => `(local $l${i} i32)`).join(' ')
+  // $l129 sits at index 129 (two ULEB bytes) and is the only local read more than once
+  const src = `(module (func (export "f") (param $p i32) (result i32) ${decls}
+    (local.set $l0 (local.get $p))
+    (local.set $l129 (i32.add (local.get $l0) (i32.const 1)))
+    (i32.add (i32.add (local.get $l129) (local.get $l129)) (local.get $l129))))`
+  const base = parse(src), opt = optimize(parse(src), 'sortLocals')
+  const fn = opt.find(n => Array.isArray(n) && n[0] === 'func')
+  const order = fn.filter(n => Array.isArray(n) && n[0] === 'local').map(n => n[1])
+  assert.equal(order.length, N)
+  assert(order.indexOf('$l129') < 127, 'the hot local moved into the one-byte zone')
+  assert.equal(compile(base).length - compile(opt).length, 4, 'four two-byte refs became one byte each')
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports
+  assert.equal(f(3), 12)
+})
+
+test('sortLocals: a numeric local ref or an unnamed declaration pins the layout', () => {
+  const numeric = optimize(parse(`(module (func (export "f") (result i32)
+    (local $a f64) (local $b i32) (local $c f64)
+    (local.set 1 (i32.const 7)) (local.get $b)))`), 'sortLocals')
+  const fn = numeric.find(n => Array.isArray(n) && n[0] === 'func')
+  assert.deepEqual(fn.filter(n => Array.isArray(n) && n[0] === 'local').map(n => n[1]), ['$a', '$b', '$c'])
+  assert.equal(new WebAssembly.Instance(new WebAssembly.Module(compile(numeric))).exports.f(), 7)
+  const unnamed = optimize(parse(`(module (func (export "f") (result i32)
+    (local $a f64) (local i32 i32) (local $c f64)
+    (local.set 1 (i32.const 8)) (local.get 1)))`), 'sortLocals')
+  const fn2 = unnamed.find(n => Array.isArray(n) && n[0] === 'func')
+  assert.deepEqual(fn2.filter(n => Array.isArray(n) && n[0] === 'local').map(n => n.slice(1).join(' ')), ['$a f64', 'i32 i32', '$c f64'])
+  assert.equal(new WebAssembly.Instance(new WebAssembly.Module(compile(unnamed))).exports.f(), 8)
+})
+
+test('sortLocals: runs last in the default pipeline, after coalesce has renumbered', () => {
+  const src = `(module (func (export "f") (param $p i32) (result i32)
+    (local $a i32) (local $x f64) (local $b i32) (local $y f64)
+    (local.set $a (i32.add (local.get $p) (i32.const 1)))
+    (local.set $x (f64.convert_i32_s (local.get $a)))
+    (local.set $b (i32.mul (local.get $p) (i32.const 3)))
+    (local.set $y (f64.convert_i32_s (local.get $b)))
+    (i32.trunc_f64_s (f64.add (local.get $x) (local.get $y)))))`
+  const opt = optimize(parse(src))
+  const fn = opt.find(n => Array.isArray(n) && n[0] === 'func')
+  const rank = { i32: 0, i64: 1, f32: 2, f64: 3 }
+  const types = fn.filter(n => Array.isArray(n) && n[0] === 'local').map(n => n[2])
+  for (let i = 1; i < types.length; i++) assert(rank[types[i - 1]] <= rank[types[i]], 'declarations grouped by type: ' + types.join(' '))
+  assert.equal(new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f(2), 9)
+})
+
 // ==================== TYPE TREESHAKE ====================
 
 test('treeshake: removes unused types', () => {

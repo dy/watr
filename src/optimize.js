@@ -6552,6 +6552,64 @@ const coalesceLocals = (ast) => {
   return ast
 }
 
+// ==================== LOCAL ORDER ====================
+
+const TYPE_RANK = { i32: 0, i64: 1, f32: 2, f64: 3, v128: 4 }
+
+/**
+ * Order a function's local declarations for the encoding: a `local.get/set/tee`
+ * index is a ULEB128 (one byte below 128, two above) and the locals vector costs
+ * one entry per run of a type. With at most 128 declarations, params included,
+ * every index is one byte and only the vector matters, so the locals group by
+ * type (stable within a type). Above that the most-used locals take the one-byte
+ * indices, counted over the body as it stands, and each side of the boundary
+ * groups by type again, the tail opening with the head's closing type so the
+ * two runs at the boundary are one. Runs ONCE after the rounds: `coalesce`
+ * renumbers and no later pass declares a local. Params never move (their
+ * slots are the call ABI); a function with an unnamed declaration or a
+ * numeric local ref keeps its layout (an index is meaningful only in place).
+ * @param {Array} ast
+ * @returns {Array}
+ */
+const sortLocals = (ast) => {
+  const funcs = ast[0] === 'func' ? [ast] : ast.filter(n => Array.isArray(n) && n[0] === 'func')
+  for (const fn of funcs) {
+    const decls = [], at = []
+    let params = 0, fixed = false
+    for (let i = 1; i < fn.length; i++) {
+      const c = fn[i]
+      if (!Array.isArray(c)) continue
+      if (c[0] === 'param') params += typeof c[1] === 'string' && c[1][0] === '$' ? 1 : c.length - 1
+      else if (c[0] === 'local') {
+        if (c.length !== 3 || typeof c[1] !== 'string' || c[1][0] !== '$') { fixed = true; break }
+        decls.push(c); at.push(i)
+      }
+    }
+    if (fixed || decls.length < 2) continue
+    const uses = new Map()
+    walkN(fn, (n) => {
+      if (!Array.isArray(n) || (n[0] !== 'local.get' && n[0] !== 'local.set' && n[0] !== 'local.tee')) return
+      const ref = n[1]
+      if (typeof ref !== 'string' || ref[0] !== '$') fixed = true
+      else uses.set(ref, (uses.get(ref) || 0) + 1)
+    })
+    if (fixed) continue
+    const order = decls.map((d, k) => ({ d, t: TYPE_RANK[d[2]] ?? 9, k, n: uses.get(d[1]) || 0 }))
+    const byType = (a, b) => (a.t - b.t) || (a.k - b.k)
+    if (params + decls.length <= 128) order.sort(byType)
+    else {
+      order.sort((a, b) => (b.n - a.n) || byType(a, b))
+      const head = order.slice(0, Math.max(0, 128 - params)).sort(byType)
+      const last = head.length ? head[head.length - 1].t : -1   // the tail opens with the head's closing type
+      const rank = (x) => x.t === last ? -1 : x.t
+      const tail = order.slice(head.length).sort((a, b) => (rank(a) - rank(b)) || (a.k - b.k))
+      order.splice(0, order.length, ...head, ...tail)
+    }
+    at.forEach((i, k) => { fn[i] = order[k].d })
+  }
+  return ast
+}
+
 // ==================== VACUUM ====================
 
 /**
@@ -8199,6 +8257,7 @@ const PASSES = [
   ['mergeBlocks',   mergeBlocks,    true,  'unwrap `(block $L …)` whose label is never targeted'],
   ['coalesce',      coalesceLocals, true,  'share local slots between same-type non-overlapping locals'],
   ['locals',        localReuse,     true,  'remove unused locals'],
+  ['sortLocals',    sortLocals,     true,  'order local declarations for the encoding: hot indices one byte, one locals-vector entry per type — runs once after rounds'],
   ['outline',       outline,        true,  'extract repeated pure expressions into shared helper functions'],
   ['dedupTypes',    dedupTypes,     true,  'merge identical type definitions'],
   ['packData',      packData,       true,  'trim trailing zeros, merge adjacent data segments'],
@@ -8467,6 +8526,9 @@ export default function optimize(ast, opts = true) {
       if (opts.locals) a = localReuse(a)
     }
     if (opts.outline) a = outline(a)
+    // Last: every pass above may declare, drop or renumber a local; the order
+    // is read off the final body.
+    if (opts.sortLocals) a = sortLocals(a)
     return wrapper ? (wrapper[slot] = a, wrapper) : a
   }
 
@@ -8527,7 +8589,7 @@ export default function optimize(ast, opts = true) {
       }
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'unroll2' ||
+        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'unroll2' || key === 'sortLocals' ||
             (skipInline && key === 'inlineOnce')) continue
         if (SIMPLIFY_KEYS.has(key)) {
           if (!fused) {
@@ -8676,4 +8738,4 @@ optimize.resetNameUids = resetNameUids
 // part of the optimize() pipeline; used by test/optimize.js's regionHooks test
 // to verify the clear actually holds at the boundary, not just "no throw".
 export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === false
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals }
+export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }

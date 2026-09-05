@@ -217,6 +217,7 @@ sense when you control the host are **opt-in** (marked ◌); the rest are on by 
 | `vacuum` | Remove no-ops | Nops, drop-of-pure, empty branches |
 | `mergeBlocks` | Unwrap blocks whose label is never targeted | `(block $L body)` with no `br $L` inside → `body` (saves `block`/`end` framing) |
 | `coalesce` | Share local slots between non-overlapping same-type locals | Two `i32` locals with disjoint live ranges → one local |
+| `sortLocals` | Order local declarations for the encoding (once, after every other pass) | Group by type so the locals vector is one entry per type; past 128 declarations the most-used locals take the one-byte indices |
 | `peephole` | Algebraic identities | `x - x` → `0`, `x & 0` → `0` |
 | `globals` | Propagate immutable global constants | `global.get` of never-written global → its constant (size-aware) |
 | `offset` | Fold offsets into load/store | `(i32.load (i32.add ptr (i32.const 4)))` → `(i32.load offset=4 ptr)` |

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 - optimize: CSE now tracks numeric local indices as well as named locals, so a write to `local 0` invalidates expressions that read `local 0`.
+- optimize: `sortLocals` (default on) orders local declarations for the encoding once every other pass has run: grouped by type so the locals vector is one entry per type, and past 128 declarations the most-used locals take the one-byte indices. A pipeline that renumbers locals (`coalesce`) no longer leaves the layout where it fell.
 
 ## v5.10.1
 
