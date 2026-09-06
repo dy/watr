@@ -55,6 +55,30 @@ const cleanup = (node, result) => {
 // string literal node: byte array from str() (carries valueOf() -> source text)
 const isStr = n => Array.isArray(n) && typeof n.valueOf() === 'string'
 
+// A growable packed byte buffer for the code section: one byte per byte
+// (a plain array of byte values costs a word per element under a self-hosted
+// engine, and the section is copied per function, per merge and per frame).
+// `push(...bytes)` and `length` are what the instruction encoders use on an
+// array (`out.push`, `out.length`), so an encoder writes either. A plain
+// object of methods, not a class: this file is compiled by jz's own kernel.
+const makeByteBuf = (cap) => {
+  const b = { buf: new Uint8Array(cap), length: 0 }
+  b.ensure = (n) => {
+    if (b.length + n <= b.buf.length) return
+    let cap2 = b.buf.length * 2 || 1024
+    while (cap2 < b.length + n) cap2 *= 2
+    const nb = new Uint8Array(cap2)
+    nb.set(b.buf.subarray(0, b.length))
+    b.buf = nb
+  }
+  b.push = (...xs) => { b.ensure(xs.length); for (let i = 0; i < xs.length; i++) b.buf[b.length++] = xs[i]; return b.length }
+  b.append = (other) => { b.ensure(other.length); b.buf.set(other.buf.subarray(0, other.length), b.length); b.length += other.length }
+  b.bytes = () => b.buf.subarray(0, b.length)
+  return b
+}
+// `out[i]++` on either an array (an initializer expression's bytes) or a ByteBuf
+const incAt = (out, i) => { if (Array.isArray(out)) out[i]++; else out.buf[i]++ }
+
 
 // Internal: assemble the module. sizeOnly=false → wasm bytes (Uint8Array); sizeOnly=true →
 // just the byte LENGTH, skipping materialization of the multi-MB binary — that's size()'s
@@ -298,18 +322,17 @@ function assemble(nodes, sizeOnly) {
     return 8 + codeSecLen + others.reduce((s, sec) => s + sec.length, 0)   // 8 = magic + version
   }
 
-  // inline bin(code) so the per-function item bytes survive — with ctx.codeSizePrefix
-  // they let us lift code-metadata positions to absolute binary offsets below
-  const codeItems = ctx.code.filter(Boolean).map(item => build[SECTION.code](item, ctx)).filter(Boolean)
-  // fused vec(vec(items)): count + items appended once, then the section frame —
-  // the generic path copies the multi-MB stream twice more
-  let codeSection = []
-  if (codeItems.length) {
-    const inner = uleb(codeItems.length)
-    for (const it of codeItems) for (let i = 0; i < it.length; i++) inner.push(it[i])
-    codeSection = [SECTION.code, ...uleb(inner.length)]
-    for (let i = 0; i < inner.length; i++) codeSection.push(inner[i])
-  }
+  // The code section: every function's item written straight into one packed
+  // buffer (build.code takes the buffer and the per-function scratch), the
+  // section frame a small array before it. `codeItemLens` keeps each item's
+  // byte length for the metadata offsets below.
+  const codeList = ctx.code.filter(Boolean)
+  const codeBody = makeByteBuf(codeList.length ? 1 << 16 : 0), codeScratch = makeByteBuf(codeList.length ? 4096 : 0)
+  const codeItemLens = []
+  if (codeList.length) uleb(codeList.length, codeBody)
+  for (const item of codeList) codeItemLens.push(build[SECTION.code](item, ctx, codeBody, codeScratch))
+  const codeSection = codeList.length ? [SECTION.code, ...uleb(codeBody.length)] : []
+  const codeBytes = codeBody.bytes()
   const metaSection = binMeta()
   const dataSection = bin(SECTION.data)
   const stringsSection = ctx.strings.length ? [SECTION.strings, ...vec([0x00, ...vec(ctx.strings.map(s => vec(s)))])] : []
@@ -330,12 +353,14 @@ function assemble(nodes, sizeOnly) {
     elemSection,
     bin(SECTION.datacount, false),
     codeSection,
+    codeBytes,
     metaSection,
     dataSection
   ]
 
-  // build final binary — sections are flat byte arrays; copy them into place
-  // instead of flattening a multi-MB nested array through Uint8Array.from
+  // build final binary — sections are flat byte arrays (the code section's body
+  // a packed one); copy them into place instead of flattening a multi-MB nested
+  // array through Uint8Array.from
   let total = 8
   for (const sec of sections) total += sec.length
   const wasm = new Uint8Array(total)
@@ -361,14 +386,14 @@ function assemble(nodes, sizeOnly) {
     // 8 = magic + version; sections before code give the code section's base
     const codeBase = 8 + sections.slice(0, sections.indexOf(codeSection)).reduce((n, s) => n + s.length, 0)
     // function items are the tail of the code section (after id + size + count)
-    const itemsBase = codeBase + codeSection.length - codeItems.reduce((n, it) => n + it.length, 0)
+    const itemsBase = codeBase + codeSection.length + codeBytes.length - codeItemLens.reduce((n, l) => n + l, 0)
     // per code index → absolute offset of its function body (start of locals vec)
     const bodyBase = []
-    for (let i = 0, off = itemsBase; i < codeItems.length; i++) {
+    for (let i = 0, off = itemsBase; i < codeItemLens.length; i++) {
       bodyBase[i] = off + (ctx.codeSizePrefix?.[i] ?? 0)
-      off += codeItems[i].length
+      off += codeItemLens[i]
     }
-    return [bodyBase, ctx.import.filter(imp => imp[2][0] === 'func').length, codeBase + codeSection.length]
+    return [bodyBase, ctx.import.filter(imp => imp[2][0] === 'func').length, codeBase + codeSection.length + codeBytes.length]
   }
 
   // Map each recorded code-metadata position (function-body-relative, as stored
@@ -920,8 +945,8 @@ const build = [
     ])
   },
 
-  // (code)
-  (body, ctx) => {
+  // (code): the item appended to the section buffer `out` through the per-function `scratch`; returns its length
+  (body, ctx, out, scratch) => {
     let [typeidx, param] = body.shift()
     if (!param) [, [param]] = ctx.type[id(typeidx, ctx.type)]
 
@@ -954,7 +979,8 @@ const build = [
     // Setup metadata / source-location tracking for this function
     ctx.meta = {}
     ctx.loc = []
-    const bytes = instr(body, ctx)
+    scratch.length = 0
+    const bytes = instr(body, ctx, scratch)
 
     // squash locals into (n:u32 t:valtype)*, n is number and t is type
     // we skip locals provided by params
@@ -980,11 +1006,15 @@ const build = [
     ctx.local = ctx.block = ctx.meta = ctx.loc = null
 
     // https://webassembly.github.io/spec/core/binary/modules.html#code-section
-    const item = uleb(locals.length + bytes.length)
-    ;(ctx.codeSizePrefix ??= [])[codeIdx] = item.length // = vec prefix width
-    for (let i = 0; i < locals.length; i++) item.push(locals[i])
-    for (let i = 0; i < bytes.length; i++) item.push(bytes[i])
-    return item
+    // The item, appended to the section buffer: its size, the locals, the body
+    // bytes copied out of the scratch. Returns the item's byte length.
+    const size = uleb(locals.length + bytes.length)
+    ;(ctx.codeSizePrefix ??= [])[codeIdx] = size.length // = vec prefix width
+    const at = out.length
+    out.push(...size)
+    out.push(...locals)
+    out.append(bytes)
+    return out.length - at
   },
 
   // (data (i32.const 0) "\aa" "\bb"?)
@@ -1223,9 +1253,9 @@ const instrPeek = (nodes, ahead = 0) => nodes[nodes.length - 1 - ahead]
 
 // instruction encoder — bytes land DIRECTLY in the output stream (write-mode
 // handlers push immediates themselves; cold handlers still return small arrays)
-const instr = (nodes, ctx) => {
+const instr = (nodes, ctx, out = []) => {
   nodes.reverse()
-  let out = [], meta = []
+  let meta = []
 
   while (nodes.length) {
     let op = nodes.pop()
@@ -1274,10 +1304,10 @@ const instr = (nodes, ctx) => {
     const imm = IMM[op]
     if (imm) {
       // select: becomes typed select (opcode+1) if next node is an array with result types
-      if (op === 'select' && instrPeek(nodes)?.length) out[at]++
+      if (op === 'select' && instrPeek(nodes)?.length) incAt(out, at)
       // ref.type|cast: opcode+1 if type is nullable: (ref null $t) or (funcref, anyref, etc.)
       else if (imm === 'reftype' && !op.endsWith('_null') && (instrPeek(nodes)[1] === 'null' || instrPeek(nodes)[0] !== 'ref')) {
-        out[out.length - 1]++
+        incAt(out, out.length - 1)
       }
       const b = HANDLER[imm](nodes, ctx, op, out)
       if (b) for (let i = 0; i < b.length; i++) out.push(b[i])
