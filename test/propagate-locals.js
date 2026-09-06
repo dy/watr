@@ -14,33 +14,46 @@ import optimize, { binarySize } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 
 const MEM = '(memory (export "memory") 1)'
-const run = (bytes, calls, imports = {}) => {
+// A run: the calls in order, and after EVERY call the result or trap, the host log so far,
+// every exported global and the first 64 bytes of memory, so a wrong write early in the
+// sequence cannot be hidden by a later call. `init` fills memory before the first call
+// (nonzero bytes make a misplaced read or write visible where zeros would not).
+const run = (bytes, calls, imports = {}, init = null) => {
   const mod = new WebAssembly.Module(bytes)
   const log = []
   const inst = new WebAssembly.Instance(mod, { env: { log: v => { log.push(v); return v }, ...imports } })
-  const out = []
+  if (init && inst.exports.memory) new Uint8Array(inst.exports.memory.buffer).set(init)
+  const snapshot = () => ({
+    log: [...log],
+    globals: Object.fromEntries(Object.entries(inst.exports).filter(([, v]) => v instanceof WebAssembly.Global).map(([k, v]) => [k, v.value])),
+    mem: inst.exports.memory ? [...new Uint8Array(inst.exports.memory.buffer).subarray(0, 64)] : null,
+    pages: inst.exports.memory?.buffer.byteLength,
+  })
+  const steps = []
   for (const [name, ...args] of calls) {
-    try { out.push(['ok', inst.exports[name](...args)]) }
-    catch (e) { out.push(['throws', e.constructor.name, e instanceof WebAssembly.RuntimeError ? e.message : '']) }
+    let out
+    try { out = ['ok', inst.exports[name](...args)] }
+    catch (e) { out = ['throws', e.constructor.name, e instanceof WebAssembly.RuntimeError ? e.message : ''] }
+    steps.push({ call: `${name}(${args.join(', ')})`, out, ...snapshot() })
   }
-  // memory is read after the calls: a memory.grow detaches the earlier buffer
-  const mem = inst.exports.memory ? [...new Uint8Array(inst.exports.memory.buffer).subarray(0, 64)] : null
-  return { out, log, mem, pages: inst.exports.memory?.buffer.byteLength }
+  return { out: steps.map(s => s.out), steps, ...snapshot() }
 }
 // Before: the parsed module as is. After: `propagate` alone, then the default pipeline.
-const check = (src, calls, expect, imports) => {
+const check = (src, calls, expect, imports, init) => {
   const before = compile(src)
   const ast = parse(src)
   const propagated = optimize(parse(src), 'propagate')
   const after = compile(print(propagated))
   const full = compile(print(optimize(parse(src))))
-  const a = run(before, calls, imports), b = run(after, calls, imports), c = run(full, calls, imports)
-  assert.deepEqual(b, a, 'propagate alone preserves results, traps, log and memory')
-  assert.deepEqual(c, a, 'the default pipeline preserves them too')
+  const a = run(before, calls, imports, init), b = run(after, calls, imports, init), c = run(full, calls, imports, init)
+  assert.deepEqual(b.steps, a.steps, 'propagate alone preserves results, traps, log, globals and memory after every call')
+  assert.deepEqual(c.steps, a.steps, 'the default pipeline preserves them too')
   assert.ok(binarySize(propagated) <= binarySize(ast), `propagate never inflates: ${binarySize(ast)} → ${binarySize(propagated)}`)
   if (expect) expect(print(propagated), a)
   return print(propagated)
 }
+const PATTERN = Uint8Array.from({ length: 64 }, (_, i) => (i * 7 + 3) & 255)
+const P0 = PATTERN[0] | PATTERN[1] << 8 | PATTERN[2] << 16 | PATTERN[3] << 24   // the i32 at address 0 under the pattern
 
 test('propagate-locals: a pure single-use temp is forwarded, named or numeric', () => {
   const named = `(module ${MEM} (func (export "f") (param $a i32) (param $i i32) (result i32) (local $t i32)
@@ -188,4 +201,110 @@ test('propagate-locals: v128 lanes propagate like any value and the function sta
     assert.equal(inst.exports.f(0), 3 + 2.5)
     assert.deepEqual([...new Float64Array(inst.exports.memory.buffer).subarray(0, 2)], [3, 5])
   }
+})
+
+// ── evaluation order inside one statement ────────────────────────────────────
+// A tracked load, global read, call result or trapping value must not be
+// substituted after an effect that follows its definition, wherever that effect
+// sits: as the RHS of a set or tee, under a drop, a return, a store operand, and
+// whether it is the first, second or a repeated effect of its kind in the
+// statement. Where no effect intervenes, the forwarding must happen.
+const HELPERS = `(func $id (param i32) (result i32) (local.get 0))
+  (func $write (result i32) (i32.store (i32.const 0) (i32.const 7)) (i32.const 1))
+  (func $write2 (result i32) (i32.store (i32.const 0) (i32.const 9)) (i32.const 2))
+  (func $pure (result i32) (i32.const 3))`
+const ORDER = (body, extra = '') => `(module ${MEM} ${HELPERS} ${extra} (func (export "f") (result i32) (local $v i32) (local $r i32) ${body}))`
+const forwarded = (s, name) => !new RegExp(`\\(local\\.set \\$${name}`).test(s) && !new RegExp(`\\(local\\.get \\$${name}`).test(s)
+
+test('propagate-locals: a load defined before a call nested in a later set stays before it (the reviewer\'s case)', () => {
+  const src = ORDER(`(local.set $v (i32.load (i32.const 0)))
+    (local.set $r (call $id (i32.add (call $write) (local.get $v))))
+    (local.get $r)`)
+  check(src, [['f'], ['f']], (s, a) => { assert.deepEqual(a.out, [['ok', P0 + 1], ['ok', 8]], 'the first call reads the pattern before the write'); assert.ok(/local\.set \$v/.test(s), 'the load keeps its place') }, {}, PATTERN)
+})
+
+test('propagate-locals: the same load past effects under a tee, a drop, a return and a store operand', () => {
+  for (const [name, body] of [
+    ['tee', `(local.set $v (i32.load (i32.const 0))) (drop (local.tee $r (call $id (i32.add (call $write) (local.get $v))))) (local.get $r)`],
+    ['drop', `(local.set $v (i32.load (i32.const 0))) (drop (call $id (i32.add (call $write) (local.get $v)))) (local.get $v)`],
+    ['return', `(local.set $v (i32.load (i32.const 0))) (return (call $id (i32.add (call $write) (local.get $v))))`],
+    ['store operand', `(local.set $v (i32.load (i32.const 0))) (i32.store (i32.const 8) (i32.add (call $write) (local.get $v))) (i32.load (i32.const 8))`],
+    ['store address', `(local.set $v (i32.load (i32.const 0))) (i32.store (i32.add (call $write) (local.get $v)) (i32.const 5)) (i32.load (i32.const 8))`],
+  ]) check(ORDER(body), [['f'], ['f']], (s, a) => assert.ok(/local\.set \$v/.test(s), `${name}: the load keeps its place`), {}, PATTERN)
+})
+
+test('propagate-locals: first, second and repeated effects of one kind in one statement', () => {
+  const twice = ORDER(`(local.set $v (i32.load (i32.const 0)))
+    (local.set $r (call $id (i32.add (i32.add (call $write) (call $write2)) (local.get $v))))
+    (local.get $r)`)
+  check(twice, [['f']], (s, a) => { assert.deepEqual(a.out, [['ok', P0 + 3]]); assert.ok(/local\.set \$v/.test(s)) }, {}, PATTERN)
+  // the effect after an earlier one of the same kind: the first store is not the last
+  const afterFirst = ORDER(`(local.set $v (i32.load (i32.const 0)))
+    (local.set $r (i32.add (i32.add (call $pure) (block (result i32) (i32.store (i32.const 4) (i32.const 1)) (i32.const 0))) (i32.add (block (result i32) (i32.store (i32.const 0) (i32.const 7)) (i32.const 0)) (local.get $v))))
+    (local.get $r)`)
+  check(afterFirst, [['f']], (s, a) => { assert.deepEqual(a.out, [['ok', P0 + 3]]); assert.ok(/local\.set \$v/.test(s), 'the second store, not the first, precedes the use') }, {}, PATTERN)
+  // no effect before the use: forwarded, with the effect after it
+  const before = ORDER(`(local.set $v (i32.load (i32.const 0)))
+    (local.set $r (call $id (i32.add (local.get $v) (call $write))))
+    (local.get $r)`)
+  check(before, [['f'], ['f']], (s, a) => { assert.deepEqual(a.out, [['ok', P0 + 1], ['ok', 8]]); assert.ok(forwarded(s, 'v'), 'the load is forwarded into the use evaluated before the call') }, {}, PATTERN)
+})
+
+test('propagate-locals: indirect calls, memory.grow, global writes, table writes and throws are effects too', () => {
+  const indirect = `(module ${MEM} (type $t (func (result i32))) (table $tb 1 funcref) (elem (i32.const 0) $write) ${HELPERS}
+    (func (export "f") (result i32) (local $v i32) (local.set $v (i32.load (i32.const 0))) (call $id (i32.add (call_indirect (type $t) (i32.const 0)) (local.get $v)))))`
+  check(indirect, [['f']], (s, a) => { assert.deepEqual(a.out, [['ok', P0 + 1]]); assert.ok(/local\.set \$v/.test(s)) }, {}, PATTERN)
+  const grow = `(module ${MEM} ${HELPERS} (func (export "f") (result i32) (local $v i32)
+    (local.set $v (memory.size)) (call $id (i32.add (memory.grow (i32.const 1)) (local.get $v)))))`
+  check(grow, [['f'], ['f']], (s, a) => { assert.deepEqual(a.out, [['ok', 2], ['ok', 4]]); assert.ok(/local\.set \$v/.test(s)) })
+  const global = `(module ${MEM} (global $g (export "g") (mut i32) (i32.const 5)) ${HELPERS} (func (export "f") (result i32) (local $v i32)
+    (local.set $v (global.get $g)) (call $id (i32.add (block (result i32) (global.set $g (i32.const 100)) (i32.const 1)) (local.get $v)))))`
+  check(global, [['f'], ['f']], (s, a) => { assert.deepEqual(a.out, [['ok', 6], ['ok', 101]]); assert.ok(/local\.set \$v/.test(s)) })
+  const tableWrite = `(module ${MEM} (type $t (func (result i32))) (table $tb 2 funcref) (elem (i32.const 0) $pure $write) ${HELPERS}
+    (func (export "f") (result i32) (local $v i32) (local.set $v (call_indirect (type $t) (i32.const 0)))
+      (call $id (i32.add (block (result i32) (table.set $tb (i32.const 0) (ref.func $write)) (i32.const 10)) (i32.add (local.get $v) (call_indirect (type $t) (i32.const 0)))))))`
+  check(tableWrite, [['f'], ['f']], (s, a) => { assert.deepEqual(a.out, [['ok', 14], ['ok', 12]]); assert.ok(/local\.set \$v/.test(s), 'a call result stays before the table write') }, {}, PATTERN)
+  const thrown = `(module ${MEM} (tag $e (param i32)) ${HELPERS} (func (export "f") (param $c i32) (result i32) (local $v i32)
+    (local.set $v (i32.load (i32.const 0)))
+    (block $h (result i32) (try_table (result i32) (catch $e $h)
+      (call $id (i32.add (if (result i32) (local.get $c) (then (i32.store (i32.const 0) (i32.const 7)) (throw $e (i32.const 50))) (else (i32.const 1))) (local.get $v)))))))`
+  check(thrown, [['f', 0], ['f', 1], ['f', 0]], (s, a) => { assert.deepEqual(a.out, [['ok', P0 + 1], ['ok', 50], ['ok', 8]]); assert.ok(/local\.set \$v/.test(s)) }, {}, PATTERN)
+})
+
+test('propagate-locals: a trapping value keeps its place before a nested effect; numeric and aliased locals', () => {
+  const trap = `(module ${MEM} ${HELPERS} (func (export "f") (param $d i32) (result i32) (local $q i32)
+    (local.set $q (i32.div_s (i32.const 100) (local.get $d)))
+    (call $id (i32.add (call $write) (local.get $q)))))`
+  check(trap, [['f', 0]], (s, a) => { assert.equal(a.out[0][0], 'throws'); assert.equal(a.mem[0], 3, 'the trap came before the write: memory keeps its pattern'); assert.ok(/local\.set \$q/.test(s)) }, {}, PATTERN)
+  check(trap, [['f', 4]], (s, a) => assert.deepEqual(a.out, [['ok', 26]]), {}, PATTERN)
+  const numeric = `(module ${MEM} ${HELPERS} (func (export "f") (result i32) (local i32) (local i32)
+    (local.set 0 (i32.load (i32.const 0)))
+    (local.set 1 (call $id (i32.add (call $write) (local.get 0))))
+    (local.get 1)))`
+  check(numeric, [['f'], ['f']], (s, a) => assert.deepEqual(a.out, [['ok', P0 + 1], ['ok', 8]]), {}, PATTERN)
+  const aliased = `(module ${MEM} ${HELPERS} (func (export "f") (param $p i32) (result i32) (local $c i32)
+    (local.set $c (local.get $p))
+    (call $id (i32.add (local.tee $p (i32.const 100)) (local.get $c)))))`
+  check(aliased, [['f', 5]], (s, a) => assert.deepEqual(a.out, [['ok', 105]], 'the copy keeps the value from before the parameter is rewritten'))
+})
+
+test('propagate-locals: nested control, a zero-trip loop, an early exit and a handler operand around a nested effect', () => {
+  const nested = ORDER(`(local.set $v (i32.load (i32.const 0)))
+    (if (i32.const 1) (then (local.set $r (call $id (i32.add (call $write) (local.get $v))))))
+    (local.get $r)`)
+  check(nested, [['f']], (s, a) => assert.deepEqual(a.out, [['ok', P0 + 1]]), {}, PATTERN)
+  const zeroTrip = ORDER(`(local.set $v (i32.load (i32.const 0)))
+    (block $b (loop $l (br_if $b (i32.const 1)) (local.set $v (i32.const 99)) (br $l)))
+    (local.set $r (call $id (i32.add (call $write) (local.get $v))))
+    (local.get $r)`)
+  check(zeroTrip, [['f']], (s, a) => assert.deepEqual(a.out, [['ok', P0 + 1]]), {}, PATTERN)
+  const exit = ORDER(`(local.set $v (i32.load (i32.const 0)))
+    (block $out (br_if $out (i32.eqz (local.get $v))) (local.set $r (call $id (i32.add (call $write) (local.get $v)))))
+    (local.get $r)`)
+  check(exit, [['f'], ['f']], (s, a) => assert.deepEqual(a.out, [['ok', P0 + 1], ['ok', 8]]), {}, PATTERN)
+  const handler = `(module ${MEM} (tag $e (param i32)) ${HELPERS} (func (export "f") (result i32) (local $v i32) (local $r i32)
+    (local.set $v (i32.load (i32.const 0)))
+    (block $h (result i32) (try_table (result i32) (catch $e $h) (throw $e (i32.add (call $write) (local.get $v)))))
+    (local.set $r) (local.get $r)))`
+  check(handler, [['f'], ['f']], (s, a) => assert.deepEqual(a.out, [['ok', P0 + 1], ['ok', 8]], 'the handler receives the pre-write value'), {}, PATTERN)
 })

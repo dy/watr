@@ -3120,13 +3120,20 @@ let substHits = 0
 // site, landing on a freshly-allocated Map's header). Fixed the same way
 // dirty/snapshots/constF64 already are: SW rides the root bundle below and
 // gets rebound to its relocated (or unchanged, if durable) pointer.
+// The effect log of the statement substGets is walking, in evaluation order: SW the
+// locals (and \0g-prefixed globals) written, SW_MEM the count of memory writes,
+// SW_EXT the count of calls and throws. Counts, not flags: a sibling evaluated
+// after an effect must see it whether or not an earlier one already happened. An
+// instruction's own effect is logged after its operands, where wasm performs it.
 let SW = []
-let SW_MEM = false
-// A call (or a throw) inside the statement substGets walked: tracked values that
-// read state a callee can mutate are stale after it, as after a statement-level call.
-let SW_EXT = false
+let SW_MEM = 0
+let SW_EXT = 0
 const purgeMem = (m) => { for (const [key, t] of m) if (t.readsMem) m.delete(key) }
 const purgeExt = (m) => { for (const [key, t] of m) if (t.ext) m.delete(key) }
+const isMemWrite = (op) => op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow' ||
+  (op.includes('.atomic.') && !op.endsWith('.load')) || op === 'table.set' || op === 'table.grow' || op === 'table.fill' || op === 'table.copy' || op === 'table.init'
+const isExtEffect = (op) => op === 'call' || op === 'call_indirect' || op === 'call_ref' || op === 'return_call' || op === 'return_call_indirect' ||
+  op === 'return_call_ref' || op === 'throw' || op === 'throw_ref'
 const substGets = (node, known) => {
   if (!Array.isArray(node)) return node
   const op = node[0]
@@ -3134,14 +3141,6 @@ const substGets = (node, known) => {
     const k = typeof node[1] === 'string' && known.get(node[1])
     if (k && canSubst(k)) return clone(k.val)
     return node
-  }
-  if (typeof op === 'string') {
-    if ((op === 'local.set' || op === 'local.tee') && typeof node[1] === 'string') SW.push(node[1])
-    else if (op === 'global.set' && typeof node[1] === 'string') SW.push('\0g' + node[1])
-    else if (op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow' ||
-             (op.includes('.atomic.') && !op.endsWith('.load'))) SW_MEM = true
-    else if (op === 'call' || op === 'call_indirect' || op === 'call_ref' || op === 'return_call' || op === 'return_call_indirect' ||
-             op === 'return_call_ref' || op === 'throw' || op === 'throw_ref') SW_EXT = true
   }
   let inner = known
   if (isBranchScope(op)) {
@@ -3186,12 +3185,20 @@ const substGets = (node, known) => {
           else { inner.delete(w); purgeRefs(inner, w) }
         }
       }
-      if ((SW_MEM && !m0) || (SW_EXT && !e0)) {
+      if (SW_MEM > m0 || SW_EXT > e0) {
         if (inner === known) inner = new Map(known)
-        if (SW_MEM && !m0) purgeMem(inner)
-        if (SW_EXT && !e0) purgeExt(inner)
+        if (SW_MEM > m0) purgeMem(inner)
+        if (SW_EXT > e0) purgeExt(inner)
       }
     }
+  }
+  // this instruction's own effect, after its operands: a table write is external
+  // state as well (a tracked table.get or call_indirect result is stale past it)
+  if (typeof op === 'string') {
+    if ((op === 'local.set' || op === 'local.tee') && typeof node[1] === 'string') SW.push(node[1])
+    else if (op === 'global.set' && typeof node[1] === 'string') SW.push('\0g' + node[1])
+    else if (isMemWrite(op)) { SW_MEM++; if (op.startsWith('table.')) SW_EXT++ }
+    else if (isExtEffect(op)) SW_EXT++
   }
   return node
 }
@@ -3234,7 +3241,7 @@ const propagateConditionConsts = (ifs) => {
     for (const arm of [thenBranch, elseBranch]) {
       if (!arm) continue
       const h0 = substHits
-      SW.length = 0; SW_MEM = false
+      SW.length = 0; SW_MEM = 0; SW_EXT = 0
       substGets(arm, new Map(known))
       if (substHits !== h0) changed = true
     }
@@ -3313,7 +3320,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       // substGets returns its argument unchanged unless the whole subtree
       // resolves to a substitution (bare `(local.get $x)` root case) — assign
       // back so the bare-RHS pattern actually propagates.
-      SW.length = 0; SW_MEM = false; SW_EXT = false
+      SW.length = 0; SW_MEM = 0; SW_EXT = 0
       const sr = substGets(instr[2], known)
       if (sr !== instr[2]) { cntSub(instr[2]); cntAdd(sr); instr[2] = sr; changed = true }
       // Nested `local.set`/`local.tee` inside the RHS already ran when the next
@@ -3355,7 +3362,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       const { condIdx, cond } = parseIf(instr)
       if (Array.isArray(cond)) {
         const h0 = substHits
-        SW.length = 0; SW_MEM = false; SW_EXT = false   // log unused: the branch-scope clear below covers cond writes
+        SW.length = 0; SW_MEM = 0; SW_EXT = 0   // log unused: the branch-scope clear below covers cond writes
         const r = substGets(cond, known)
         if (r !== cond) { cntSub(cond); cntAdd(r); instr[condIdx] = r; changed = true }
         else if (substHits !== h0) changed = true
@@ -3384,7 +3391,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     // Substitute nested local.gets (skip control-flow nodes — locals may be reassigned inside)
     if (op !== 'block' && op !== 'loop' && op !== 'if') {
       const h0 = substHits
-      SW.length = 0; SW_MEM = false; SW_EXT = false
+      SW.length = 0; SW_MEM = 0; SW_EXT = 0
       substGets(instr, known)
       if (substHits !== h0) changed = true
       // Invalidate tracking for any names written by a nested set/tee — those
@@ -8675,7 +8682,7 @@ export default function optimize(ast, opts = true) {
         // from the returned bundle. Module-scope scratch is dead here, so drain it
         // instead. CNT/CNT_FN (propagate's use counts) are normally already null;
         // SW/SW_MEM (substGets' write log) retain the last statement of the round.
-        CNT = null; CNT_FN = null; SW.length = 0; SW_MEM = false; SW_EXT = false
+        CNT = null; CNT_FN = null; SW.length = 0; SW_MEM = 0; SW_EXT = 0
         // constF64 survives into the next round through opts and is rebuilt only
         // AFTER its old .size is read, so it is a real root alongside the tree and
         // convergence maps. `next` is merely dirty's pre-safepoint alias: never
@@ -8779,5 +8786,5 @@ optimize.resetNameUids = resetNameUids
 // SW_MEM — runRounds' regionExit clear, see above) are drained right now. Not
 // part of the optimize() pipeline; used by test/optimize.js's regionHooks test
 // to verify the clear actually holds at the boundary, not just "no throw".
-export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === false && SW_EXT === false
+export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === 0 && SW_EXT === 0
 export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }
