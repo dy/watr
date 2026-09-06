@@ -1022,7 +1022,7 @@ const identityNode = (node) => {
     if (node[0] === 'f64.eq' || node[0] === 'f64.ne') {
       for (const [conv, cst] of [[node[1], node[2]], [node[2], node[1]]]) {
         if (Array.isArray(conv) && (conv[0] === 'f64.convert_i32_s' || conv[0] === 'f64.convert_i32_u') &&
-            Array.isArray(cst) && cst[0] === 'f64.const' && isPure(conv[1]) &&
+            Array.isArray(cst) && cst[0] === 'f64.const' && isDiscardable(conv[1]) &&
             impossibleConvertCompare(conv[0], cst[1]))
           return ['i32.const', node[0] === 'f64.ne' ? 1 : 0]
       }
@@ -1353,7 +1353,7 @@ const branch = (ast) => {
       if (!c) return
       const zero = c.value === 0 || c.value === ZERO64
       const keep = zero ? node[2] : node[1], discard = zero ? node[1] : node[2]
-      if (!isPure(discard)) return
+      if (!isDiscardable(discard)) return
       return keep
     }
   })
@@ -2428,7 +2428,7 @@ const foldStrProbes = (fn) => {
         const resultDecl = c.find(x => Array.isArray(x) && x[0] === 'result')
         if (cond && thenBranch && elseBranch && resultDecl && probeOps(cond, ops)) {
           const elseVal = elseBranch.length === 2 ? elseBranch[1] : ['block', resultDecl, ...elseBranch.slice(1)]
-          const drops = ops.filter(o => !isPure(o)).map(o => ['drop', o])
+          const drops = ops.filter(o => !isDiscardable(o)).map(o => ['drop', o])
           c = n[i] = drops.length ? ['block', resultDecl, ...drops, elseVal] : elseVal
           if (!Array.isArray(c)) continue
         }
@@ -2899,7 +2899,8 @@ const isEagerValueOp = (op) => typeof op === 'string' && !impureOp(op) && !STRUC
 // — into the bare `local.set X V`, eliminating dead arithmetic the plain
 // `drop(PURE)→nop` rule can't (the tee makes the whole subtree impure).
 const dropEffects = (node) => {
-  if (!Array.isArray(node) || isPure(node)) return []
+  if (!Array.isArray(node) || isDiscardable(node)) return []
+  if (isPure(node)) return [['drop', node]]   // pure but trapping: the trap stays
   const op = node[0]
   if (op === 'local.tee' && node.length === 3) return [['local.set', node[1], node[2]]]
   if (isEagerValueOp(op)) {
@@ -3129,6 +3130,13 @@ let SW = []
 let SW_MEM = 0
 let SW_EXT = 0
 const purgeMem = (m) => { for (const [key, t] of m) if (t.readsMem) m.delete(key) }
+// A single-use trapping value is MOVED to its use: its defining set goes with it,
+// here, because a dead store of a trapping value is never discarded later (the trap
+// would run twice, or at the old place as well as the new).
+const retireMovedDef = (k) => {
+  if (!k.trap || !k.singleUse || !k.def) return
+  cntSub(k.def); k.def.length = 1; k.def[0] = 'nop'; k.def = null
+}
 const purgeExt = (m) => { for (const [key, t] of m) if (t.ext) m.delete(key) }
 const isMemWrite = (op) => op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow' ||
   (op.includes('.atomic.') && !op.endsWith('.load')) || op === 'table.set' || op === 'table.grow' || op === 'table.fill' || op === 'table.copy' || op === 'table.init'
@@ -3139,7 +3147,7 @@ const substGets = (node, known) => {
   const op = node[0]
   if (op === 'local.get' && node.length === 2) {
     const k = typeof node[1] === 'string' && known.get(node[1])
-    if (k && canSubst(k)) return clone(k.val)
+    if (k && canSubst(k)) { retireMovedDef(k); return clone(k.val) }
     return node
   }
   let inner = known
@@ -3344,6 +3352,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       known.set(instr[1], {
         val: instr[2], pure: isPure(instr[2]),
         refs: facts.refs, grefs: facts.grefs, readsMem: facts.mem, ext: facts.ext, trap: facts.trap,
+        def: op === 'local.set' ? instr : null,
         singleUse: uses.gets <= 1 && uses.sets <= 1 && uses.tees === 0,
         copy: isLocalCopy(instr[2], instr[1]),
         depth
@@ -3380,6 +3389,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     if (op === 'local.get' && instr.length === 2 && typeof instr[1] === 'string') {
       const tracked = known.get(instr[1])
       if (tracked && canSubst(tracked)) {
+        retireMovedDef(tracked)
         const replacement = clone(tracked.val)
         cntSub(instr)
         instr.length = 0; instr.push(...(Array.isArray(replacement) ? replacement : [replacement]))
@@ -3853,7 +3863,7 @@ const localWritesOnly = (n) => {
   const op = n[0]
   if (typeof op !== 'string') return false
   if (op === 'local.set' || op === 'local.tee') { if (typeof n[1] !== 'string') return false }
-  else if (impureOp(op) || /\.(div|rem)_[su]$|\.trunc_f/.test(op)) return false
+  else if (impureOp(op) || TRAP_OPS.has(op) || /\.(div|rem)_[su]$|\.trunc_f/.test(op)) return false
   for (let i = 1; i < n.length; i++) if (Array.isArray(n[i]) && !localWritesOnly(n[i])) return false
   return true
 }
@@ -4039,7 +4049,7 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
       // VALUE is pure (its side effects would otherwise still need to run);
       // an impure but trap-free VALUE reduces to its side-effect core.
       if (sub.length === 3) {
-        if (isPure(sub[2])) { cntSub(sub); funcNode.splice(i, 1); changed = true }
+        if (isDiscardable(sub[2])) { cntSub(sub); funcNode.splice(i, 1); changed = true }
         else if (!hasTrap(sub[2])) {
           cntSub(sub)
           const eff = dropEffects(sub[2])
@@ -4084,7 +4094,7 @@ const eliminateAdjacentDeadStores = (funcNode, params) => {
     // `b` may be a set OR a tee (both overwrite the local before `a`'s value is read).
     if (!Array.isArray(a) || a[0] !== 'local.set' || a.length !== 3) continue
     if (!Array.isArray(b) || (b[0] !== 'local.set' && b[0] !== 'local.tee') || b.length !== 3 || b[1] !== a[1]) continue
-    if (params.has(a[1]) || !isPure(a[2])) continue
+    if (params.has(a[1]) || !isDiscardable(a[2])) continue
     // Dead only if b's value doesn't read $x before overwriting it.
     let reads = false
     walkN(b[2], n => { if (Array.isArray(n) && (n[0] === 'local.get' || n[0] === 'local.tee') && n[1] === a[1]) reads = true })
@@ -6690,7 +6700,7 @@ const vacuum = (ast) => {
     // once, not twice); and an impure cond may set a local a later op reads (an address
     // `local.tee` the matching store reuses) — dropping it leaves that local stale. Keep
     // the select unless everything discarded is pure.
-    if (op === 'select' && node.length >= 4 && equal(node[1], node[2]) && isPure(node[1]) && isPure(node[3])) return node[1]
+    if (op === 'select' && node.length >= 4 && equal(node[1], node[2]) && isDiscardable(node[1]) && isDiscardable(node[3])) return node[1]
 
     if (op === 'if') {
       const { cond, thenBranch, elseBranch } = parseIf(node)
@@ -6698,7 +6708,7 @@ const vacuum = (ast) => {
       const elseEmpty = !elseBranch || elseBranch.length <= 1
 
       // (if cond () ()) → nop or (drop cond)
-      if (thenEmpty && elseEmpty) return isPure(cond) ? ['nop'] : ['drop', cond]
+      if (thenEmpty && elseEmpty) return isDiscardable(cond) ? ['nop'] : ['drop', cond]
 
       // (if cond (then X) (else)) → drop the empty else
       if (elseBranch && elseEmpty && !thenEmpty) {
@@ -6726,7 +6736,7 @@ const vacuum = (ast) => {
         // was the only reason it was a tee.
         const next = node[i + 1]
         const isDrop = next === 'drop' || (Array.isArray(next) && next[0] === 'drop' && next.length === 1)
-        if (Array.isArray(child) && isDrop && isPure(child)) {
+        if (Array.isArray(child) && isDrop && isDiscardable(child)) {
           i++ // skip the drop too
           continue
         }
@@ -6745,13 +6755,13 @@ const vacuum = (ast) => {
 // ==================== PEEPHOLE ====================
 
 /** Peephole optimizations: simple algebraic identities.
- *  Every rule that DROPS an operand guards on isPure: an impure operand must still
- *  be evaluated for its side effects. The load-bearing case is a typed-array element
+ *  Every rule that DROPS an operand guards on isDiscardable: an impure operand must
+ *  still be evaluated for its side effects, a trapping one for its trap. The load-bearing case is a typed-array element
  *  store, whose address is a `local.tee` inside the value expression (the element's
  *  own read); dropping that operand (e.g. `(a[i] op a[i]) & 0`) would strand the
  *  store with a stale address — a silent miscompile. When impure, keep the op (it
  *  still yields the same value AND runs the operand). */
-const selfFold = (val) => (a, b) => equal(a, b) && isPure(a) ? val : null
+const selfFold = (val) => (a, b) => equal(a, b) && isDiscardable(a) ? val : null
 const PEEPHOLE = {
   // (local.tee $x (local.get $x)) re-stores the exact value already held — for any
   // bit pattern — so it is the bare get.
@@ -6784,37 +6794,37 @@ const PEEPHOLE = {
 
   // Zero/all-bits absorption — drops the NON-const operand, so guard its purity.
   'i32.mul': (a, b) => {
-    if (getConst(b)?.value === 0 && isPure(a)) return ['i32.const', 0]
-    if (getConst(a)?.value === 0 && isPure(b)) return ['i32.const', 0]
+    if (getConst(b)?.value === 0 && isDiscardable(a)) return ['i32.const', 0]
+    if (getConst(a)?.value === 0 && isDiscardable(b)) return ['i32.const', 0]
     return null
   },
   'i64.mul': (a, b) => {
-    if (getConst(b)?.value === ZERO64 && isPure(a)) return ['i64.const', 0]
-    if (getConst(a)?.value === ZERO64 && isPure(b)) return ['i64.const', 0]
+    if (getConst(b)?.value === ZERO64 && isDiscardable(a)) return ['i64.const', 0]
+    if (getConst(a)?.value === ZERO64 && isDiscardable(b)) return ['i64.const', 0]
     return null
   },
   'i32.and': (a, b) => {
-    if (equal(a, b) && isPure(b)) return a
-    if (getConst(b)?.value === 0 && isPure(a)) return ['i32.const', 0]
-    if (getConst(a)?.value === 0 && isPure(b)) return ['i32.const', 0]
+    if (equal(a, b) && isDiscardable(b)) return a
+    if (getConst(b)?.value === 0 && isDiscardable(a)) return ['i32.const', 0]
+    if (getConst(a)?.value === 0 && isDiscardable(b)) return ['i32.const', 0]
     return null
   },
   'i64.and': (a, b) => {
-    if (equal(a, b) && isPure(b)) return a
-    if (getConst(b)?.value === ZERO64 && isPure(a)) return ['i64.const', 0]
-    if (getConst(a)?.value === ZERO64 && isPure(b)) return ['i64.const', 0]
+    if (equal(a, b) && isDiscardable(b)) return a
+    if (getConst(b)?.value === ZERO64 && isDiscardable(a)) return ['i64.const', 0]
+    if (getConst(a)?.value === ZERO64 && isDiscardable(b)) return ['i64.const', 0]
     return null
   },
   'i32.or': (a, b) => {
-    if (equal(a, b) && isPure(b)) return a
-    if (getConst(b)?.value === -1 && isPure(a)) return ['i32.const', -1]
-    if (getConst(a)?.value === -1 && isPure(b)) return ['i32.const', -1]
+    if (equal(a, b) && isDiscardable(b)) return a
+    if (getConst(b)?.value === -1 && isDiscardable(a)) return ['i32.const', -1]
+    if (getConst(a)?.value === -1 && isDiscardable(b)) return ['i32.const', -1]
     return null
   },
   'i64.or': (a, b) => {
-    if (equal(a, b) && isPure(b)) return a
-    if (getConst(b)?.value === NEG164 && isPure(a)) return ['i64.const', -1]
-    if (getConst(a)?.value === NEG164 && isPure(b)) return ['i64.const', -1]
+    if (equal(a, b) && isDiscardable(b)) return a
+    if (getConst(b)?.value === NEG164 && isDiscardable(a)) return ['i64.const', -1]
+    if (getConst(a)?.value === NEG164 && isDiscardable(b)) return ['i64.const', -1]
     return null
   },
 
@@ -7295,11 +7305,20 @@ const stripmut = (ast) => {
 const unnest = (l) => typeof l === 'string' && l[0] === '$' ? l : +l > 0 ? +l - 1 : null
 
 /** Ops that can trap even when 'pure': int div/rem, float→int trunc. */
+/** Pure value ops that can still trap: integer div/rem (zero, overflow), float→int
+ *  truncation (NaN, range), null-checked reference ops. Loads and stores trap out of
+ *  bounds as well; loads are pure by isPure's contract and are ordered by readsMemory,
+ *  so a site that discards or speculates a subtree pairs this with that. */
+const TRAP_OPS = new Set(['ref.as_non_null', 'ref.cast', 'struct.get', 'struct.get_s', 'struct.get_u', 'array.get', 'array.get_s', 'array.get_u', 'array.len', 'unreachable'])
 const hasTrap = (n) => {
   let t = false
-  walk(n, c => { const o = Array.isArray(c) ? c[0] : c; if (typeof o === 'string' && /\.(div|rem)_[su]$|\.trunc_f/.test(o)) t = true })
+  walk(n, c => { const o = Array.isArray(c) ? c[0] : c; if (typeof o === 'string' && (TRAP_OPS.has(o) || /\.(div|rem)_[su]$|\.trunc_f/.test(o))) t = true })
   return t
 }
+/** A subtree whose evaluation can be dropped: no effect and no trap. `isPure` alone
+ *  admits a trapping value (it is movable, ordered against effects by scanVal and
+ *  sinkSets); discarding one would discard its trap. */
+const isDiscardable = (n) => isPure(n) && !hasTrap(n)
 
 // In TEST position (if/br_if/select condition) only non-zero-ness matters, so a
 // double eqz is a no-op there: (i32.eqz (i32.eqz X)) → X. (In value contexts it

@@ -308,3 +308,20 @@ test('propagate-locals: nested control, a zero-trip loop, an early exit and a ha
     (local.set $r) (local.get $r)))`
   check(handler, [['f'], ['f']], (s, a) => assert.deepEqual(a.out, [['ok', P0 + 1], ['ok', 8]], 'the handler receives the pre-write value'), {}, PATTERN)
 })
+
+// ── traps are never discarded ────────────────────────────────────────────────
+test('propagate-locals: a dead trapping value, a self-cancelling trapping operand and a dropped trap keep trapping', () => {
+  const dead = `(module (func (export "f") (param $d i32) (result i32) (local $t i32)
+    (local.set $t (i32.div_s (i32.const 100) (local.get $d))) (i32.const 1)))`
+  check(dead, [['f', 0], ['f', 5]], (s, a) => { assert.deepEqual(a.out.map(o => o[0]), ['throws', 'ok']); assert.ok(/i32\.div_s/.test(s), 'the dead store keeps its division') })
+  const cancel = `(module (func (export "f") (param $d i32) (result i32)
+    (i32.sub (i32.div_s (i32.const 100) (local.get $d)) (i32.div_s (i32.const 100) (local.get $d)))))`
+  check(cancel, [['f', 0], ['f', 5]], (s, a) => assert.ok(/i32\.div_s/.test(s), 'x - x keeps a trapping x'))
+  const dropped = `(module (func (export "f") (param $x f64) (result i32) (drop (i32.trunc_f64_s (local.get $x))) (i32.const 1)))`
+  check(dropped, [['f', NaN], ['f', 1]], (s, a) => { assert.deepEqual(a.out.map(o => o[0]), ['throws', 'ok']); assert.ok(/trunc_f64_s/.test(s)) })
+  const zeroed = `(module (func (export "f") (param $d i32) (result i32) (i32.mul (i32.rem_u (i32.const 7) (local.get $d)) (i32.const 0))))`
+  check(zeroed, [['f', 0], ['f', 5]], (s, a) => assert.ok(/i32\.rem_u/.test(s), 'x * 0 keeps a trapping x'))
+  const singleUse = `(module (func (export "f") (param $x f64) (result i32) (local $t i32)
+    (local.set $t (i32.trunc_f64_s (local.get $x))) (i32.add (local.get $t) (i32.const 1))))`
+  check(singleUse, [['f', 2.5], ['f', NaN]], (s, a) => assert.equal((s.match(/trunc_f64_s/g) || []).length, 1, 'a moved trapping value evaluates once, at its use'))
+})
