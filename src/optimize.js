@@ -3727,12 +3727,14 @@ const sinkSets = (funcNode, params, useCounts) => {
       if (S.touch.has(name)) {
         skipped = new Set()
         hitJ = j
-        const state = { reads: false }
+        const state = { reads: false, writes: new Set() }
         hit = stmt[0] === 'local.get' && stmt[1] === name && stmt.length === 2
           ? [funcNode, j] : firstEvalGet(stmt, name, skipped, state)
         // crossed pure subtrees may read globals/memory — an effectful value must
         // not move past them unless its summarized callees write neither
         if (hit && state.reads && !vPure && !(vFx && !vFx.wMem && !vFx.wGlob.size)) hit = null
+        // a crossed local write clobbers the value's input, or the target before its read
+        if (hit && state.writes.size && (state.writes.has(name) || [...vLocals].some(x => state.writes.has(x)))) hit = null
         break
       }
       // a PURE value crosses on interference rules alone; a summarized call-valued
@@ -3812,14 +3814,18 @@ const firstEvalGet = (stmt, name, skipped, state) => {
         skipped?.add(c[1])
         continue
       }
-      if (isPure(c) && !hasTrap(c)) {
-        let containsTarget = false
-        walkN(c, x => { if (Array.isArray(x) && x[0] === 'local.get' && x[1] === name) containsTarget = true })
-        if (containsTarget) return scan(c) // the target lives here — descend, same rules
-        // crossable — collect what it observes
+      let containsTarget = false
+      walkN(c, x => { if (Array.isArray(x) && x[0] === 'local.get' && x[1] === name) containsTarget = true })
+      if (containsTarget) return scan(c) // the target lives here — descend, same rules
+      // crossable — a pure trap-free subtree, or one whose only effects are writes to
+      // locals (a tee, a set) over such values: collect what it observes, and the locals
+      // it writes (the caller refuses a value reading one of them, or the target itself)
+      const writes = state?.writes
+      if ((isPure(c) && !hasTrap(c)) || (writes && localWritesOnly(c))) {
         walkN(c, x => {
           if (!Array.isArray(x)) return
           if (x[0] === 'local.get' && typeof x[1] === 'string') skipped?.add(x[1])
+          else if ((x[0] === 'local.set' || x[0] === 'local.tee') && typeof x[1] === 'string') writes?.add(x[1])
           else if (x[0] === 'global.get' || (typeof x[0] === 'string' && x[0].includes('.load'))) state && (state.reads = true)
         })
         continue
@@ -3831,6 +3837,18 @@ const firstEvalGet = (stmt, name, skipped, state) => {
   }
   const ok = scan(stmt)
   return ok && hit ? hit : null
+}
+
+/** A subtree whose only effects are `local.set`/`local.tee` of named locals over pure,
+ *  trap-free operands: no call, store, global write, branch or trap anywhere in it. */
+const localWritesOnly = (n) => {
+  if (!Array.isArray(n)) return typeof n !== 'string' || !impureOp(n)
+  const op = n[0]
+  if (typeof op !== 'string') return false
+  if (op === 'local.set' || op === 'local.tee') { if (typeof n[1] !== 'string') return false }
+  else if (impureOp(op) || /\.(div|rem)_[su]$|\.trunc_f/.test(op)) return false
+  for (let i = 1; i < n.length; i++) if (Array.isArray(n[i]) && !localWritesOnly(n[i])) return false
+  return true
 }
 
 /**

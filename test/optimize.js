@@ -4498,3 +4498,22 @@ test('propagate: a trapping value is not moved past a store, a global write or a
     assert.equal(inst.exports.g.value, 0, `${passes}: the global write after the trap did not run`)
   }
 })
+
+test('propagate: a set sinks past a sibling that only writes another local', () => {
+  // the first read of $b0 comes after a tee of $a1 in the same expression; the tee
+  // writes nothing the value reads, so the value lands at its read as a tee
+  const src = `(module (func (export "f") (param $a i64) (param $b i64) (result i64) (local $a1 i64) (local $b0 i64)
+    (local.set $b0 (i64.and (local.get $b) (i64.const 0xFFFFFFFF)))
+    (i64.add (i64.mul (local.tee $a1 (i64.shr_u (local.get $a) (i64.const 32))) (local.get $b0)) (i64.mul (local.get $a1) (local.get $b0)))))`
+  const out = print(optimize(parse(src), 'propagate'))
+  assert(/\(local\.tee \$b0/.test(out) && !/\(local\.set \$b0/.test(out), 'the set became a tee at the first read')
+  const f = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(out))).exports.f
+  assert.equal(f(0x100000000n, 7n), 14n)
+  // a crossed write of a local the value reads, or of the target itself, keeps the set
+  const clobber = `(module (func (export "g") (param $a i64) (result i64) (local $t i64)
+    (local.set $t (i64.add (local.get $a) (i64.const 1)))
+    (i64.add (i64.add (local.tee $a (i64.const 100)) (local.get $t)) (i64.add (local.get $t) (local.get $a)))))`
+  const g = print(optimize(parse(clobber), 'propagate'))
+  assert(/\(local\.set \$t/.test(g) && !/\(local\.tee \$t/.test(g), 'the value reads $a, which the crossed tee writes: it stays')
+  assert.equal(new WebAssembly.Instance(new WebAssembly.Module(srcCompile(g))).exports.g(5n), 212n)
+})
