@@ -3010,8 +3010,9 @@ const purgeRefs = (known, name) => {
  *  (`let s = f`, where `f` is a reassignable module-level binding) would survive an
  *  intervening `f = …` and substitute the NEW global. That silently breaks the canonical
  *  pointer swap `let s = f; f = g; g = s` (g would read post-swap f, i.e. itself). */
+/** A global write is an effect a trapping value must not move past, whichever global. */
 const purgeGlobalRefs = (known, name) => {
-  for (const [key, tracked] of known) if (tracked.grefs.has(name)) known.delete(key)
+  for (const [key, tracked] of known) if (tracked.grefs.has(name) || tracked.trap) known.delete(key)
 }
 
 /** One walk over a tracked value collecting every fact the invalidation paths ask
@@ -3029,7 +3030,12 @@ const scanVal = (val) => {
              o === 'table.get' || o === 'table.size') ext = true
     else if (typeof o === 'string' && (o.includes('.load') || o === 'memory.copy' || o === 'memory.size')) mem = ext = true
   })
-  return { refs, grefs, mem, ext }
+  // A value that can trap (div/rem/trunc) is stale past any store, global write or
+  // call the same way a memory read is: moved after them, the trap would leave their
+  // effects behind where the original left none.
+  const trap = hasTrap(val)
+  if (trap) mem = ext = true
+  return { refs, grefs, mem, ext, trap }
 }
 
 /** True if `node` recursively contains an op that may read linear memory.
@@ -3330,7 +3336,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       const facts = scanVal(instr[2])
       known.set(instr[1], {
         val: instr[2], pure: isPure(instr[2]),
-        refs: facts.refs, grefs: facts.grefs, readsMem: facts.mem, ext: facts.ext,
+        refs: facts.refs, grefs: facts.grefs, readsMem: facts.mem, ext: facts.ext, trap: facts.trap,
         singleUse: uses.gets <= 1 && uses.sets <= 1 && uses.tees === 0,
         copy: isLocalCopy(instr[2], instr[1]),
         depth
@@ -3686,6 +3692,9 @@ const sinkSets = (funcNode, params, useCounts) => {
     })
     const vMem = readsMemory(val)
     const vPure = isPure(val)
+    // A pure value that can trap (div/rem/trunc) must not cross a store, a global
+    // write or a call: moved past them, its trap would leave their effects behind.
+    const vTrap = hasTrap(val)
     // A value impure ONLY through calls with a known read-only-ish summary may
     // still cross local-only statements — collect the union of callee effects,
     // or null when anything unsummarizable makes the value opaque.
@@ -3730,8 +3739,8 @@ const sinkSets = (funcNode, params, useCounts) => {
       // one additionally requires the crossed statement to be free of OBSERVABLE
       // writes and calls (the call may trap — a skipped store would be visible
       // post-trap), with reads disjoint from the callee-side writes
-      let bad = (!vPure && !vFx) || (vMem && S.wMem) || S.flat || S.branchy ||
-        (S.calls && (vMem || vGlobals.size))
+      let bad = (!vPure && !vFx) || ((vMem || vTrap) && S.wMem) || S.flat || S.branchy ||
+        (S.calls && (vMem || vTrap || vGlobals.size)) || (vTrap && S.gSAny)
       if (!bad) for (const x of vLocals) if (S.wL.has(x)) { bad = true; break }
       if (!bad && S.gS.size) for (const x of vGlobals) if (S.gS.has(x)) { bad = true; break }
       if (!bad && !vPure) {

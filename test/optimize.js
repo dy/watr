@@ -4475,3 +4475,26 @@ test('propagate: a load is not moved past a call nested in a later statement', (
     assert.deepEqual([f(), f()], [10, 15], `${passes}: the load before the sibling call keeps the old value`)
   }
 })
+
+test('propagate: a trapping value is not moved past a store, a global write or a call', () => {
+  // the division traps before the store runs: memory must stay 0 after the trap
+  const src = `(module (memory (export "memory") 1) (func (export "f") (param $d i32) (result i32) (local $q i32)
+    (local.set $q (i32.div_s (i32.const 100) (local.get $d)))
+    (i32.store (i32.const 0) (i32.const 7))
+    (i32.add (local.get $q) (i32.load (i32.const 0)))))`
+  for (const passes of ['propagate', true]) {
+    const inst = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(print(optimize(parse(src), passes)))))
+    assert.throws(() => inst.exports.f(0), WebAssembly.RuntimeError, `${passes}: divide by zero traps`)
+    assert.equal(new Uint8Array(inst.exports.memory.buffer)[0], 0, `${passes}: the store after the trap did not run`)
+    assert.equal(inst.exports.f(5), 27)
+  }
+  const global = `(module (global $g (export "g") (mut i32) (i32.const 0)) (func (export "f") (param $d i32) (result i32) (local $q i32)
+    (local.set $q (i32.rem_u (i32.const 100) (local.get $d)))
+    (global.set $g (i32.const 7))
+    (local.get $q)))`
+  for (const passes of ['propagate', true]) {
+    const inst = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(print(optimize(parse(global), passes)))))
+    assert.throws(() => inst.exports.f(0), WebAssembly.RuntimeError)
+    assert.equal(inst.exports.g.value, 0, `${passes}: the global write after the trap did not run`)
+  }
+})
