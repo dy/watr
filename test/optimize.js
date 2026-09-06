@@ -4447,3 +4447,31 @@ test('region-arena: every value live past regionExit is rooted and rebound', () 
   assert.equal(exitCalls, 2, 'rebound empty dirty terminates at the first top-stable round')
   assert.equal(markCalls, exitCalls, 'mark/exit paired 1:1')
 })
+
+// ==================== PROPAGATE: EVALUATION ORDER ====================
+
+test('propagate: a load is not moved past a call nested in a later statement', () => {
+  // $m reads memory before $a's call stores to it; the read must stay first
+  const src = `(module (memory 1) (type $fn (func (result i32))) (table 2 funcref) (elem (i32.const 0) $a $b)
+    (func $a (result i32) (i32.store (i32.const 0) (i32.const 1)) (i32.const 10))
+    (func $b (result i32) (i32.const 20))
+    (func (export "f") (param $i i32) (result i32) (local $v i32) (local $m i32)
+      (local.set $m (i32.load (i32.const 0)))
+      (local.set $v (call_indirect (type $fn) (local.get $i)))
+      (i32.add (i32.add (local.get $v) (local.get $m)) (i32.load (i32.const 0)))))`
+  for (const passes of ['propagate', true]) {
+    const bytes = srcCompile(print(optimize(parse(src), passes)))
+    const f = new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports.f
+    assert.deepEqual([f(1), f(0), f(1)], [20, 11, 22], `${passes}: the load before the call keeps the old value`)
+  }
+  // the same, the call as an operand beside the use: `(i32.add (call) (local.get $m))`
+  const sibling = `(module (memory 1) (func $a (result i32) (i32.store (i32.const 0) (i32.const 5)) (i32.const 10))
+    (func (export "f") (result i32) (local $m i32)
+      (local.set $m (i32.load (i32.const 0)))
+      (i32.add (call $a) (local.get $m))))`
+  for (const passes of ['propagate', true]) {
+    const bytes = srcCompile(print(optimize(parse(sibling), passes)))
+    const f = new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports.f
+    assert.deepEqual([f(), f()], [10, 15], `${passes}: the load before the sibling call keeps the old value`)
+  }
+})

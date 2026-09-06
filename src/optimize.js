@@ -3116,6 +3116,11 @@ let substHits = 0
 // gets rebound to its relocated (or unchanged, if durable) pointer.
 let SW = []
 let SW_MEM = false
+// A call (or a throw) inside the statement substGets walked: tracked values that
+// read state a callee can mutate are stale after it, as after a statement-level call.
+let SW_EXT = false
+const purgeMem = (m) => { for (const [key, t] of m) if (t.readsMem) m.delete(key) }
+const purgeExt = (m) => { for (const [key, t] of m) if (t.ext) m.delete(key) }
 const substGets = (node, known) => {
   if (!Array.isArray(node)) return node
   const op = node[0]
@@ -3129,6 +3134,8 @@ const substGets = (node, known) => {
     else if (op === 'global.set' && typeof node[1] === 'string') SW.push('\0g' + node[1])
     else if (op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow' ||
              (op.includes('.atomic.') && !op.endsWith('.load'))) SW_MEM = true
+    else if (op === 'call' || op === 'call_indirect' || op === 'call_ref' || op === 'return_call' || op === 'return_call_indirect' ||
+             op === 'return_call_ref' || op === 'throw' || op === 'throw_ref') SW_EXT = true
   }
   let inner = known
   if (isBranchScope(op)) {
@@ -3151,7 +3158,7 @@ const substGets = (node, known) => {
     if (cloned) inner = cloned
   }
   for (let i = 1; i < node.length; i++) {
-    const w0 = SW.length
+    const w0 = SW.length, m0 = SW_MEM, e0 = SW_EXT
     const r = substGets(node[i], inner)
     if (r !== node[i]) { cntSub(node[i]); cntAdd(r); node[i] = r; substHits++ }
     // WASM evaluates operands left-to-right. A `local.set`/`local.tee` in this
@@ -3160,13 +3167,23 @@ const substGets = (node, known) => {
     // sibling's `local.get` (visible after `coalesceLocals` aliases the tee'd
     // local with a sibling-read local, e.g. `alloc($x<<3, $x)` collapsing to
     // `alloc(BIG, SMALL)`). The child's writes are exactly SW[w0..] — logged
-    // during its own recursion, no re-walk.
-    if (SW.length > w0 && i + 1 < node.length) {
-      if (inner === known) inner = new Map(known)
-      for (let k = w0; k < SW.length; k++) {
-        const w = SW[k]
-        if (w.charCodeAt(0) === 0) purgeGlobalRefs(inner, w.slice(2))
-        else { inner.delete(w); purgeRefs(inner, w) }
+    // during its own recursion, no re-walk. A store or a call in this child
+    // likewise precedes the next sibling: a tracked load, global read, call or
+    // trapping value substituted there would evaluate after an effect it was
+    // defined before.
+    if (i + 1 < node.length) {
+      if (SW.length > w0) {
+        if (inner === known) inner = new Map(known)
+        for (let k = w0; k < SW.length; k++) {
+          const w = SW[k]
+          if (w.charCodeAt(0) === 0) purgeGlobalRefs(inner, w.slice(2))
+          else { inner.delete(w); purgeRefs(inner, w) }
+        }
+      }
+      if ((SW_MEM && !m0) || (SW_EXT && !e0)) {
+        if (inner === known) inner = new Map(known)
+        if (SW_MEM && !m0) purgeMem(inner)
+        if (SW_EXT && !e0) purgeExt(inner)
       }
     }
   }
@@ -3290,7 +3307,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       // substGets returns its argument unchanged unless the whole subtree
       // resolves to a substitution (bare `(local.get $x)` root case) — assign
       // back so the bare-RHS pattern actually propagates.
-      SW.length = 0; SW_MEM = false
+      SW.length = 0; SW_MEM = false; SW_EXT = false
       const sr = substGets(instr[2], known)
       if (sr !== instr[2]) { cntSub(instr[2]); cntAdd(sr); instr[2] = sr; changed = true }
       // Nested `local.set`/`local.tee` inside the RHS already ran when the next
@@ -3306,10 +3323,10 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       purgeRefs(known, instr[1]) // entries that read this local just went stale
       // Any tracked value whose RHS reads memory must be invalidated by the
       // RHS itself if it writes memory (rare — only via nested store/copy/etc.,
-      // which would also pass through the post-statement purge below).
-      if (SW_MEM) {
-        for (const [key, tracked] of known) if (tracked.readsMem) known.delete(key)
-      }
+      // which would also pass through the post-statement purge below); one
+      // whose RHS reads callable state, by a call nested in this RHS.
+      if (SW_MEM) purgeMem(known)
+      if (SW_EXT) purgeExt(known)
       const facts = scanVal(instr[2])
       known.set(instr[1], {
         val: instr[2], pure: isPure(instr[2]),
@@ -3332,7 +3349,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       const { condIdx, cond } = parseIf(instr)
       if (Array.isArray(cond)) {
         const h0 = substHits
-        SW.length = 0; SW_MEM = false   // log unused: the branch-scope clear below covers cond writes
+        SW.length = 0; SW_MEM = false; SW_EXT = false   // log unused: the branch-scope clear below covers cond writes
         const r = substGets(cond, known)
         if (r !== cond) { cntSub(cond); cntAdd(r); instr[condIdx] = r; changed = true }
         else if (substHits !== h0) changed = true
@@ -3361,7 +3378,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     // Substitute nested local.gets (skip control-flow nodes — locals may be reassigned inside)
     if (op !== 'block' && op !== 'loop' && op !== 'if') {
       const h0 = substHits
-      SW.length = 0; SW_MEM = false
+      SW.length = 0; SW_MEM = false; SW_EXT = false
       substGets(instr, known)
       if (substHits !== h0) changed = true
       // Invalidate tracking for any names written by a nested set/tee — those
@@ -3379,9 +3396,10 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       //   (local.set $t (f64.load $p)) (f64.store $p (f64.load $q)) (f64.store $q (local.get $t))
       // collapses to two stores that round-trip the same value:
       //   (f64.store $p (f64.load $q)) (f64.store $q (f64.load $p))   ;; bug
-      if (SW_MEM) {
-        for (const [key, tracked] of known) if (tracked.readsMem) known.delete(key)
-      }
+      if (SW_MEM) purgeMem(known)
+      // A call nested in this statement (`(drop (i32.add (call $f) …))`, a set whose
+      // RHS calls) is the statement-level call above, one level down.
+      if (SW_EXT) purgeExt(known)
     }
   }
 
@@ -8630,7 +8648,7 @@ export default function optimize(ast, opts = true) {
         // from the returned bundle. Module-scope scratch is dead here, so drain it
         // instead. CNT/CNT_FN (propagate's use counts) are normally already null;
         // SW/SW_MEM (substGets' write log) retain the last statement of the round.
-        CNT = null; CNT_FN = null; SW.length = 0; SW_MEM = false
+        CNT = null; CNT_FN = null; SW.length = 0; SW_MEM = false; SW_EXT = false
         // constF64 survives into the next round through opts and is rebuilt only
         // AFTER its old .size is read, so it is a real root alongside the tree and
         // convergence maps. `next` is merely dirty's pre-safepoint alias: never
@@ -8734,5 +8752,5 @@ optimize.resetNameUids = resetNameUids
 // SW_MEM — runRounds' regionExit clear, see above) are drained right now. Not
 // part of the optimize() pipeline; used by test/optimize.js's regionHooks test
 // to verify the clear actually holds at the boundary, not just "no throw".
-export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === false
+export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === false && SW_EXT === false
 export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }
