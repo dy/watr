@@ -46,8 +46,19 @@ const cleanup = (node, result) => {
     node
   )
   if (!Array.isArray(node)) return node
-  result = node.filter(c => !isDroppable(c)).map(cleanup)
-  result.loc = node.loc
+  // Copy a node only above a change (a dropped comment, a converted literal):
+  // the rest of the tree stays the caller's, shared, and nothing after this
+  // point mutates a node it did not make (the section items are copies of the
+  // top-level nodes; typedef and the readers work on copies or work stacks).
+  for (let i = 0; i < node.length; i++) {
+    const c = node[i]
+    if (isDroppable(c)) { if (!result) result = node.slice(0, i); continue }
+    const r = cleanup(c)
+    if (result) result.push(r)
+    else if (r !== c) { result = node.slice(0, i); result.push(r) }
+  }
+  if (!result) result = node
+  else result.loc = node.loc
   // unwrap single-element array containing module (after dropping comments), preserve .loc
   return result.length === 1 && result[0]?.[0] === 'module' ? result[0] : result
 }
@@ -122,6 +133,7 @@ function assemble(nodes, sizeOnly) {
   const ctx = []
   for (let kind in SECTION) (ctx[SECTION[kind]] = ctx[kind] = []).name = kind
   ctx.metadata = {} // code metadata storage: { type: [[funcIdx, [[pos, data]...]]] }
+  ctx.tokens = [] // one body's flattened tokens, reused per function
 
   // initialize types
   nodes.slice(idx).filter((n) => {
@@ -248,19 +260,25 @@ function assemble(nodes, sizeOnly) {
         // ;;@ markers between the func head and its params belong to the body
         let locs = []
         while (node[0]?.[0] === '@loc') locs.push(node.shift())
+        // the rest is a work stack (its end is the next node): the type use, then the body
+        node.reverse()
         let [idx, param, result] = typeuse(node, ctx);
         idx ??= regtype(param, result, ctx)
 
-        // flatten + normalize function body
+        // flatten + normalize function body into the shared scratch, then copy it out exact-size
+        // after the header and the ;;@ markers (a body grown in place pays every doubling)
         if (!imported) {
           pendingLoc && (locs.unshift(pendingLoc), pendingLoc = null)
-          ctx.code.push([[idx, param, result], ...locs, ...normalize(node, ctx)])
+          const tokens = normalize(node, ctx, ctx.tokens)
+          ctx.code.push([[idx, param, result], ...locs, ...tokens])
+          tokens.length = 0
         }
         node = [['type', idx]]
       }
 
       // tag has a type similar to func
       else if (kind === 'tag') {
+        node.reverse()
         let [idx, param] = typeuse(node, ctx);
         idx ??= regtype(param, [], ctx)
         node = [['type', idx]]
@@ -527,42 +545,67 @@ for (const k in OPCODE) {
 }
 const nclsOf = (op) => NCLS[op]
 
-function normalize(nodes, ctx, out = [], owned = false) {
-  if (!owned) nodes = [...nodes]
-  while (nodes.length) {
-    let node = nodes.shift()
+// A folded node's leading immediates: not an array, a string literal (its own
+// valueOf) or one of the type forms.
+const isImm = (n) => !Array.isArray(n) || n.valueOf !== Array.prototype.valueOf || 'type,param,result,ref,exact,on'.includes(n[0])
+// Push `node[from..to)` onto the work stack so they surface in order.
+const pushRev = (stk, node, from, to = node.length) => { for (let j = to - 1; j >= from; j--) stk.push(node[j]) }
+// Markers on the work stack: a folded block's `end`, an `if`'s `else`, and an
+// `if`'s head (`if`, its label and blocktype), pushed under its condition and
+// emitted after it.
+const END = ['end'], ELSE = ['else'], IF_HEAD = ['if']
+
+/**
+ * Normalize and flatten a function body to stack form: `stk` is a work stack
+ * (its end is the next node), consumed. A folded S-expression is linearized by
+ * pushing its operands, then its op and immediates, back onto the stack in
+ * reverse, so no node is copied, shifted or re-queued. Handles blocks,
+ * if/then/else, try_table, and metadata annotations.
+ *
+ * @param {Array} stk - Function body nodes, reversed
+ * @param {Object} ctx - Compilation context with type info
+ * @param {Array} [out=[]] - Output, appended to
+ * @returns {Array} Flattened instruction sequence
+ */
+function normalize(stk, ctx, out = []) {
+  while (stk.length) {
+    let node = stk.pop()
     if (typeof node === 'string') {
       out.push(node)
       const cls = nclsOf(node)
       if (cls === undefined) continue
       if (cls === 1) {
-        if (isId(nodes[0])) out.push(nodes.shift())
-        out.push(blocktype(nodes, ctx))
+        if (isId(top(stk))) out.push(stk.pop())
+        out.push(blocktype(stk, ctx))
       }
       else if (cls === 2) {
-        if (isId(nodes[0])) nodes.shift()
+        if (isId(top(stk))) stk.pop()
       }
-      else if (cls === 3) out.push(paramres(nodes)[1])
+      else if (cls === 3) out.push(paramres(stk)[1])
       else if (cls === 4) {
-        let tableidx = isIdx(nodes[0]) ? nodes.shift() : 0, [idx, param, result] = typeuse(nodes, ctx)
+        let tableidx = isIdx(top(stk)) ? stk.pop() : 0, [idx, param, result] = typeuse(stk, ctx)
         out.push(tableidx, ['type', idx ?? regtype(param, result, ctx)])
       }
-      else if (cls === 5) out.push(isIdx(nodes[1]) ? nodes.shift() : 0, nodes.shift())
-      else if (cls === 6) out.push(isIdx(nodes[0]) ? nodes.shift() : 0, isIdx(nodes[0]) ? nodes.shift() : 0)
-      else if (cls === 7) out.push(isIdx(nodes[0]) ? nodes.shift() : 0)
+      else if (cls === 5) out.push(isIdx(top(stk, 1)) ? stk.pop() : 0, stk.pop())
+      else if (cls === 6) out.push(isIdx(top(stk)) ? stk.pop() : 0, isIdx(top(stk)) ? stk.pop() : 0)
+      else if (cls === 7) out.push(isIdx(top(stk)) ? stk.pop() : 0)
       else if (cls === 8) {
-        out.push(...(isIdx(nodes[1]) ? [nodes.shift(), nodes.shift()].reverse() : [nodes.shift(), 0]))
+        if (isIdx(top(stk, 1))) { const a = stk.pop(), b = stk.pop(); out.push(b, a) }
+        else out.push(stk.pop(), 0)
         ctx.datacount && (ctx.datacount[0] = true)
       }
       else if (cls === 9) {
-        node === 'data.drop' && out.push(nodes.shift())
+        node === 'data.drop' && out.push(stk.pop())
         ctx.datacount && (ctx.datacount[0] = true)
       }
       // memory.* instructions and load/store with optional memory index
-      else if (isIdx(nodes[0])) out.push(nodes.shift())
+      else if (isIdx(top(stk))) out.push(stk.pop())
     }
+    else if (node === END) out.push('end')
+    else if (node === ELSE) out.push('else')
     else if (Array.isArray(node)) {
       let op = node[0]
+      if (op === IF_HEAD) { for (let i = 1; i < node.length; i++) out.push(node[i]); continue }
       node.loc != null && setErrLoc(node.loc) // track position for errors
 
       // code metadata annotations - pass through as marker with metadata type and data
@@ -575,55 +618,55 @@ function normalize(nodes, ctx, out = [], owned = false) {
 
       // Check if node is a valid instruction (string with a known opcode)
       if (typeof op !== 'string' || typeof OPCODE[op] !== 'number') { out.push(node); continue }
-      const parts = node.slice(1)
       if (op === 'block' || op === 'loop') {
         out.push(op)
-        if (isId(parts[0])) out.push(parts.shift())
-        out.push(blocktype(parts, ctx))
-        normalize(parts, ctx, out, true)
-        out.push('end')
+        stk.push(END)
+        pushRev(stk, node, 1)
+        if (isId(top(stk))) out.push(stk.pop())
+        out.push(blocktype(stk, ctx))
       }
       else if (op === 'if') {
-        // then/else normalize BEFORE the condition but EMIT after it — the temp
-        // arrays preserve the original type-registration order exactly
-        let then = [], els = []
-        if (parts.at(-1)?.[0] === 'else') els = normalize(parts.pop().slice(1), ctx, [], true)
-        if (parts.at(-1)?.[0] === 'then') then = normalize(parts.pop().slice(1), ctx, [], true)
-        let immed = [op]
-        if (isId(parts[0])) immed.push(parts.shift())
-        immed.push(blocktype(parts, ctx))
-        normalize(parts, ctx, out, true)
-        for (let i = 0; i < immed.length; i++) out.push(immed[i])
-        for (let i = 0; i < then.length; i++) out.push(then[i])
-        if (els.length) { out.push('else'); for (let i = 0; i < els.length; i++) out.push(els[i]) }
-        out.push('end')
+        // (if label? blocktype? cond* (then …) (else …)?): the condition, the
+        // head, the bodies and `end` surface in that order, straight into
+        // `out`; types register in source order (the blocktype, the condition,
+        // then, else).
+        let end = node.length, els = null, then = null
+        if (node[end - 1]?.[0] === 'else') els = node[--end]
+        if (node[end - 1]?.[0] === 'then') then = node[--end]
+        stk.push(END)
+        if (els && els.length > 1) { pushRev(stk, els, 1); stk.push(ELSE) }
+        if (then) pushRev(stk, then, 1)
+        const head = [IF_HEAD, op]
+        stk.push(head)
+        pushRev(stk, node, 1, end)
+        if (isId(top(stk))) head.push(stk.pop())
+        head.push(blocktype(stk, ctx))
       }
       else if (op === 'try_table') {
         out.push(op)
-        if (isId(parts[0])) out.push(parts.shift())
-        out.push(blocktype(parts, ctx))
+        stk.push(END)
+        pushRev(stk, node, 1)
+        if (isId(top(stk))) out.push(stk.pop())
+        out.push(blocktype(stk, ctx))
         // Collect catch clauses
-        while (parts[0]?.[0] === 'catch' || parts[0]?.[0] === 'catch_ref' || parts[0]?.[0] === 'catch_all' || parts[0]?.[0] === 'catch_all_ref') {
-          out.push(parts.shift())
+        while (top(stk)?.[0] === 'catch' || top(stk)?.[0] === 'catch_ref' || top(stk)?.[0] === 'catch_all' || top(stk)?.[0] === 'catch_all_ref') {
+          out.push(stk.pop())
         }
-        normalize(parts, ctx, out, true)
-        out.push('end')
       }
       else if (op === 'ref.test' || op === 'ref.cast') {
-        const type = parts[0]
+        const type = node[1]
         const isNullable = !Array.isArray(type) || type[1] === 'null' || type[0] !== 'ref'
         if (isNullable) op += '_null'
-        normalize(parts.slice(1), ctx, out, true)
-        out.push(op, type)
-        nodes.unshift(...out.splice(out.length - 2))
+        stk.push(type, op)
+        pushRev(stk, node, 2)
       }
       else {
-        const imm = []
-        // Collect immediate operands (non-arrays or special forms like type/param/result/ref)
-        while (parts.length && (!Array.isArray(parts[0]) || parts[0].valueOf !== Array.prototype.valueOf || 'type,param,result,ref,exact,on'.includes(parts[0][0]))) imm.push(parts.shift())
-        normalize(parts, ctx, out, true)
-        out.push(op, ...imm)
-        nodes.unshift(...out.splice(out.length - 1 - imm.length))
+        // the operands surface first, then the op with its immediates behind it
+        let k = 1
+        while (k < node.length && isImm(node[k])) k++
+        pushRev(stk, node, 1, k)
+        stk.push(op)
+        pushRev(stk, node, k)
       }
     } else out.push(node)
   }
@@ -646,14 +689,16 @@ const regtype = (param, result, ctx, idx = '$' + param + '>' + result) => (ctx.t
  * Collect field sequence: (field a) (field b c) → [a, b, c].
  * Tracks named fields for index lookup.
  *
- * @param {Array} nodes - Nodes to consume from
+ * @param {Array} stk - Work stack to consume from (its end is the next node)
  * @param {string} field - Field keyword ('param', 'result', 'field')
  * @returns {Array} Collected values with named indices
  */
-const fieldseq = (nodes, field) => {
+// The readers take a work stack: the next node is its last.
+const top = (stk, back = 0) => stk[stk.length - 1 - back]
+const fieldseq = (stk, field) => {
   let seq = []
-  while (nodes[0]?.[0] === field) {
-    let [, ...args] = nodes.shift(), nm = isId(args[0]) && args.shift()
+  while (top(stk)?.[0] === field) {
+    let [, ...args] = stk.pop(), nm = isId(args[0]) && args.shift()
     if (nm) nm in seq ? (() => { throw Error(`Duplicate ${field} ${nm}`) })() : seq[nm] = seq.length
     seq.push(...args)
   }
@@ -663,12 +708,12 @@ const fieldseq = (nodes, field) => {
 /**
  * Consume (param ...)* (result ...)* from nodes.
  *
- * @param {Array} nodes - Nodes to consume from
+ * @param {Array} stk - Work stack to consume from (its end is the next node)
  * @returns {[string[], string[]]} [params, results]
  */
-const paramres = (nodes) => {
-  let param = fieldseq(nodes, 'param'), result = fieldseq(nodes, 'result')
-  if (nodes[0]?.[0] === 'param') throw Error('Unexpected param')
+const paramres = (stk) => {
+  let param = fieldseq(stk, 'param'), result = fieldseq(stk, 'result')
+  if (top(stk)?.[0] === 'param') throw Error('Unexpected param')
   return [param, result]
 }
 
@@ -676,13 +721,13 @@ const paramres = (nodes) => {
  * Consume typeuse: (type idx)? (param ...)* (result ...)*.
  * Resolves type reference or returns inline signature.
  *
- * @param {Array} nodes - Nodes to consume from
+ * @param {Array} stk - Work stack to consume from (its end is the next node)
  * @param {Object} ctx - Compilation context with type table
  * @returns {[string|undefined, string[], string[]]} [typeIdx, params, results]
  */
-const typeuse = (nodes, ctx) => {
-  if (nodes[0]?.[0] !== 'type') return [, ...paramres(nodes)]
-  let [, idx] = nodes.shift(), [param, result] = paramres(nodes)
+const typeuse = (stk, ctx) => {
+  if (top(stk)?.[0] !== 'type') return [, ...paramres(stk)]
+  let [, idx] = stk.pop(), [param, result] = paramres(stk)
   const entry = ctx.type[(typeof idx === 'string' && isNaN(idx)) ? ctx.type[idx] : +idx]
   if (!entry) throw Error(`Unknown type ${idx}`)
   if ((param.length || result.length) && entry[1].join('>') !== param + '>' + result) throw Error(`Type ${idx} mismatch`)
@@ -693,12 +738,19 @@ const typeuse = (nodes, ctx) => {
  * Resolve blocktype: void | (result t) | (type idx).
  * Returns abbreviated form when possible.
  *
- * @param {Array} nodes - Nodes to consume from
+ * @param {Array} stk - Work stack to consume from (its end is the next node)
  * @param {Object} ctx - Compilation context
  * @returns {Array|undefined} Blocktype node or undefined for void
  */
-const blocktype = (nodes, ctx) => {
-  let [idx, param, result] = typeuse(nodes, ctx)
+const blocktype = (stk, ctx) => {
+  const t = top(stk), form = t?.[0]
+  if (form !== 'type' && form !== 'param' && form !== 'result') return
+  // (result t) alone, the common block: the node itself
+  if (form === 'result' && t.length === 2 && !isId(t[1])) {
+    const next = top(stk, 1)?.[0]
+    if (next !== 'result' && next !== 'param') return stk.pop()
+  }
+  let [idx, param, result] = typeuse(stk, ctx)
   if (!param.length && !result.length) return
   if (!param.length && result.length === 1) return ['result', ...result]
   return ['type', idx ?? regtype(param, result, ctx)]
@@ -731,13 +783,17 @@ const name = (node, list) => {
 const typedef = ([dfn], ctx) => {
   let subkind = 'subfinal', supertypes = [], compkind, desc = []
   if (dfn[0] === 'sub') {
-    subkind = dfn.shift(), dfn[0] === 'final' && (subkind += dfn.shift())
-    dfn = (supertypes = dfn).pop() // last item is definition
+    // (sub final? $super* dfn): read without mutating the node (it is the caller's tree)
+    let at = 1
+    subkind = 'sub', dfn[1] === 'final' && (subkind += dfn[at++])
+    supertypes = dfn.slice(at, -1)
+    dfn = dfn[dfn.length - 1] // last item is definition
     // extract descriptor/describes from supertypes (custom descriptors, Phase 3)
     supertypes = supertypes.filter(n => Array.isArray(n) && (n[0] === 'descriptor' || n[0] === 'describes') ? (desc.push(n), false) : true)
   }
 
   [compkind, ...dfn] = dfn // composite type kind
+  dfn.reverse() // a work stack for the readers
 
   if (compkind === 'func') dfn = paramres(dfn), ctx.type['$' + dfn.join('>')] ??= ctx.type.length
   else if (compkind === 'struct') dfn = fieldseq(dfn, 'field')
