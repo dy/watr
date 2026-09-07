@@ -783,6 +783,34 @@ test('coalesce: zero-trip loop write must not join a dead slot (implicit-zero re
   assert.equal(full(3), before(3))
 })
 
+test('coalesce: a write after a block that never falls through is conditional (the catch handler)', () => {
+  // `$env` is dead after the try body; `$caught` is first written in the handler,
+  // which runs on the thrown path alone: `(block $catch …)` ends with `(br $out)`,
+  // so everything after it in `$out` is reached only by a branch to `$catch`. The
+  // interval model saw the handler's write as unconditional and joined `$caught`
+  // into `$env`'s slot, and the normal path read the pointer as `caught`.
+  const src = `(module (memory 1) (tag $e (param i32)) (func (export "f") (param $t i32) (result i32)
+    (local $env i32) (local $caught i32)
+    (local.set $env (i32.const 1112))
+    (i32.store (i32.const 0) (local.get $env))
+    (block $out
+      (block $catch (result i32)
+        (try_table (catch $e $catch)
+          (if (i32.eq (local.get $t) (i32.const 1)) (then (throw $e (i32.const 1)))))
+        (br $out))
+      (drop)
+      (local.set $caught (i32.const 1)))
+    (local.get $caught)))`
+  const before = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(src)))).exports.f
+  const after = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'coalesce')))).exports.f
+  assert.equal(before(2), 0)
+  assert.equal(after(2), 0, 'the normal path reads the implicit zero, not a slot residue')
+  assert.equal(after(1), 1, 'the thrown path reads the handler write')
+  const full = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src))))).exports.f
+  assert.equal(full(2), 0)
+  assert.equal(full(1), 1)
+})
+
 // ==================== LOOP-INVARIANT CODE MOTION ====================
 
 // A loop recomputing an invariant guard pair (`select` over `f64.ne` of an unwritten

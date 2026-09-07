@@ -6451,6 +6451,14 @@ const mergeBlocks = (ast) => {
  * @param {Array} ast
  * @returns {Array}
  */
+// The last statement of a block or loop is an unconditional exit.
+const neverFallsThrough = (node) => {
+  const last = node[node.length - 1]
+  const o = Array.isArray(last) ? last[0] : last
+  return o === 'br' || o === 'br_table' || o === 'return' || o === 'return_call' || o === 'return_call_indirect' ||
+    o === 'unreachable' || o === 'throw' || o === 'throw_ref' || o === 'rethrow'
+}
+
 const coalesceLocals = (ast) => {
   walkN(ast, (funcNode) => {
     if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
@@ -6556,6 +6564,12 @@ const coalesceLocals = (ast) => {
           visit(c)
           if (cond) condStack.pop()
           if (Array.isArray(c) && (c[0] === 'br_if' || c[0] === 'br' || c[0] === 'br_table' || c[0] === 'return' || c[0] === 'return_call' || c[0] === 'return_call_indirect' || c[0] === 'unreachable')) branched = true
+          // A block or loop that never falls through (its last statement is an
+          // unconditional exit) is left only by a branch to its label: the try/catch
+          // shape `(block $out (block $catch (try_table (catch … $catch) …) (br $out)) handler…)`
+          // runs the handler on the thrown path alone, so the rest of the list is
+          // conditional too (a `caught = 1` there joined the slot of a dead pointer).
+          if (Array.isArray(c) && (c[0] === 'block' || c[0] === 'loop') && neverFallsThrough(c)) branched = true
         }
       }
 
