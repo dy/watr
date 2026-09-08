@@ -11,7 +11,7 @@ import { numdata, size } from './compile.js'
 import { f32 as _f32enc, f64 as _f64enc } from './encode.js'
 import { IMM, OPCODE, resultType } from './const.js'
 import parse from './parse.js'
-import { clone, copyAnnotations, walk, walkN, walkPost, walkPostN } from './util.js'
+import { clone, walk, walkN, walkPost, walkPostN } from './util.js'
 
 // Fixpoint round caps — empirical convergence bounds, not correctness limits.
 // Each pass only makes monotonic progress, so hitting a cap merely leaves a few
@@ -3407,7 +3407,6 @@ const forwardPropagate = (funcNode, params, useCounts) => {
         const replacement = clone(tracked.val)
         cntSub(instr)
         instr.length = 0; instr.push(...(Array.isArray(replacement) ? replacement : [replacement]))
-        if (Array.isArray(replacement)) copyAnnotations(instr, replacement)
         cntAdd(instr)
         changed = true; continue
       }

@@ -1904,8 +1904,7 @@ test('vacuum: a drop keeps only the effects under it: a tee becomes a set, an ea
     (local.get $x)))`
   const fn = optimize(parse(src), 'vacuum').find(n => Array.isArray(n) && n[0] === 'func' && n[1] !== '$g')
   const body = fn.slice(fn.findIndex(n => Array.isArray(n) && n[0] === 'local') + 1)
-  // Compare instructions; source locations now survive the optimizer's clone.
-  assert.deepEqual(JSON.parse(JSON.stringify(body)), [['local.set', '$x', ['call', '$g']], ['block', ['drop', ['call', '$g']], ['drop', ['call', '$g']]], ['local.get', '$x']])
+  assert.deepEqual(body, [['local.set', '$x', ['call', '$g']], ['block', ['drop', ['call', '$g']], ['drop', ['call', '$g']]], ['local.get', '$x']])
   assert.equal(run(src, 'vacuum').f(), 1)
 })
 
