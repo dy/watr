@@ -14,6 +14,46 @@ const i64has = (src, v) =>
   [...src.matchAll(/\(i64\.const\s+(-?(?:0x[0-9a-fA-F]+|\d+))\)/g)]
     .some(m => BigInt.asUintN(64, toBig(m[1])) === BigInt.asUintN(64, toBig(String(v))))
 
+test('ifset: numeric local copies preserve values and condition writes', () => {
+  const run = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+  for (const type of ['i32', 'i64', 'f32', 'f64']) {
+    const ast = parse(`(module (func (export "f") (param $c i32)
+      (param $x ${type}) (param $v ${type}) (result ${type})
+      (if (local.get $c) (then (local.set $x (local.get $v))))
+      (local.get $x)))`)
+    const original = run(ast), opt = optimize(clone(ast), 'ifset')
+    assert(print(opt).includes('(select'), `${type} local copy uses select`)
+    const converted = run(opt)
+    const pairs = type === 'i64' ? [[7n, -9n]] : type === 'i32' ? [[7, -9]] : [[7, -9], [0, -0], [NaN, 2]]
+    for (const [x, v] of pairs) for (const c of [0, 1])
+      assert(Object.is(converted(c, x, v), original(c, x, v)), `${type} condition ${c}`)
+
+    for (const changed of ['$x', '$v']) {
+      const mutating = parse(`(module (func (export "f") (param $c i32)
+        (param $x ${type}) (param $v ${type}) (result ${type})
+        (if (block (result i32) (local.set ${changed} (${type}.const 13)) (local.get $c))
+          (then (local.set $x (local.get $v))))
+        (local.get $x)))`)
+      const before = run(mutating), after = optimize(clone(mutating), 'ifset')
+      assert(!print(after).includes('(select'), `${changed} condition write keeps branch`)
+      const f = run(after), x = type === 'i64' ? 7n : 7, v = type === 'i64' ? -9n : -9
+      for (const c of [0, 1]) assert.equal(f(c, x, v), before(c, x, v))
+    }
+  }
+})
+
+test('ifset: reference local copies retain their branch', () => {
+  const ast = parse(`(module (func (export "f") (param $c i32)
+    (param $x externref) (param $v externref) (result externref)
+    (if (local.get $c) (then (local.set $x (local.get $v)))) (local.get $x)))`)
+  const opt = optimize(ast, 'ifset')
+  assert(!print(opt).includes('(select'), 'untyped select cannot carry externref')
+  const f = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
+  const x = {}, v = {}
+  assert.equal(f(0, x, v), x)
+  assert.equal(f(1, x, v), v)
+})
+
 // ==================== CONSTANT FOLDING ====================
 
 test('fold: i32 arithmetic', () => {
