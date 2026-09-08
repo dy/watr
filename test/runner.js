@@ -13,6 +13,8 @@
  */
 
 import { readFileSync } from 'fs'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { compile as tcompile, watr as twatr } from '../src/template.js'
 // polyfill/optimize are JS-only library transforms (watr.wasm is the bare
 // encoder, and the default JS entry no longer bundles them), so both backends
@@ -29,7 +31,8 @@ let compile, parse, print, watr
 
 if (isWasm) {
   // the PACKAGED jz interop — its ABI must match the jz that built dist/watr.wasm
-  const { instantiate } = await import('jz/interop')
+  const runtime = process.env.JZ_ROOT ? pathToFileURL(resolve(process.env.JZ_ROOT, 'interop.js')).href : 'jz/interop'
+  const { instantiate } = await import(runtime)
   const wasmBytes = readFileSync(new URL('../dist/watr.wasm', import.meta.url))
   const { exports } = instantiate(wasmBytes, { memory: 4096 })
 

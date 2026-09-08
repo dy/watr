@@ -27,6 +27,19 @@ npm run test:repl           # REPL integration tests
 
 Tests must pass on Node 24+ with `--experimental-wasm-exnref`.
 
+For the compiled backend, use the same JZ checkout for both compilation and
+interop. Current watr needs fixes newer than the published JZ 0.9.2:
+
+```bash
+JZ_ROOT=../jz npm run build:wasm
+JZ_ROOT=../jz npm run test:wasm
+```
+
+`JZ_ROOT` is explicit; without it the build and runner both use installed JZ.
+Do not test an older `dist/watr.wasm` after a failed build. A section-length
+error even for `(func)` can indicate an obsolete build compiler; JZ 0.8.1
+truncates the code section with the current packed encoder.
+
 ## Code Style
 
 - Abbreviated but clear naming
