@@ -5,11 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v5.10.2
 
-- optimize: CSE now tracks numeric local indices as well as named locals, so a write to `local 0` invalidates expressions that read `local 0`.
-- optimize: `sortLocals` (default on) orders local declarations for the encoding once every other pass has run: grouped by type so the locals vector is one entry per type, and past 128 declarations the most-used locals take the one-byte indices. A pipeline that renumbers locals (`coalesce`) no longer leaves the layout where it fell.
-- optimize: `memory.size` is a read, not a mutator: `vacuum` drops its unused value, and the purity model orders it against `memory.grow` as it does a load.
+- Fix optimizer evaluation order, trap preservation, numeric-local tracking, and effect-state leakage between calls.
+- Improve local propagation and final local layout without changing the public API.
+- Reduce encoder allocations with packed code buffers and work-stack traversal; handle large locals vectors without exceeding the host argument limit.
+- Add regression coverage for buffer growth, input/output reuse, and optimizer effects; propagation-test failures now fail `npm test`.
+
+[Compare](https://github.com/dy/watr/compare/v5.10.1...v5.10.2)
 
 ## v5.10.1
 
