@@ -10,7 +10,7 @@
 // calls and indirect calls, memory.size/grow, loads and stores, v128 lanes.
 import { test } from 'node:test'
 import assert from 'node:assert'
-import optimize, { binarySize } from '../src/optimize.js'
+import optimize, { binarySize, cse } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 
 const MEM = '(memory (export "memory") 1)'
@@ -307,6 +307,105 @@ test('propagate-locals: nested control, a zero-trip loop, an early exit and a ha
     (block $h (result i32) (try_table (result i32) (catch $e $h) (throw $e (i32.add (call $write) (local.get $v)))))
     (local.set $r) (local.get $r)))`
   check(handler, [['f'], ['f']], (s, a) => assert.deepEqual(a.out, [['ok', P0 + 1], ['ok', 8]], 'the handler receives the pre-write value'), {}, PATTERN)
+})
+
+test('propagate-locals: a dead if with discardable arms retains only its condition', () => {
+  for (const condition of ['(local.get $x)', '(call $log (local.get $x))']) {
+    const src = `(module (import "env" "log" (func $log (param i32) (result i32)))
+      (func (export "f") (param $x i32) (result i32) (local $c i32) (local $dead i32)
+        (local.set $dead (if (result i32) (local.tee $c ${condition})
+          (then (i32.const 100)) (else (i32.const 200))))
+        (local.get $c)))`
+    check(src, [['f', 0], ['f', 7], ['f', -1]], (s, a) => {
+      assert.deepEqual(a.out, [['ok', 0], ['ok', 7], ['ok', -1]])
+      assert.ok(!/\(if\b/.test(s), 'no dead branch calculation survives')
+      assert.ok(!s.includes('$dead'), 'the dead local is removed too')
+      if (condition.includes('call')) assert.deepEqual(a.log, [0, 7, -1], 'the condition runs exactly once')
+    })
+  }
+})
+
+test('propagate-locals: a dead if retains conditional traps and effects, including flat instructions', () => {
+  for (const arm of [
+    '(i32.load (i32.const 65536))',
+    '(i32.div_s (i32.const 7) (i32.const 0))',
+    '(block (result i32) (i32.store (i32.const 0) (i32.const 99)) (i32.const 1))',
+    '(call $log (i32.const 7))',
+    '(i32.const 7) global.set $g (i32.const 1)',
+    '(i32.const 7) call $log',
+    '(throw $e (i32.const 7))',
+  ]) {
+    const src = `(module (import "env" "log" (func $log (param i32) (result i32))) ${MEM}
+      (global $g (export "g") (mut i32) (i32.const 3)) (tag $e (param i32))
+      (func (export "f") (param $x i32) (result i32) (local $dead i32) (local $c i32)
+        (local.set $dead (if (result i32) (local.tee $c (local.get $x))
+          (then ${arm}) (else (i32.const 2))))
+        (local.get $c)))`
+    check(src, [['f', 0], ['f', 1], ['f', 0]], null, {}, PATTERN)
+  }
+})
+
+test('propagate-locals: dead loads and trapping operations over tees retain their traps', () => {
+  for (const value of [
+    '(i32.load (local.get $x))', '(f64.load (local.get $x))', '(v128.load (local.get $x))',
+    '(i32.load (local.tee $c (local.get $x)))',
+    '(i32.div_s (i32.const 7) (local.tee $c (local.get $x)))',
+  ]) {
+    const src = `(module ${MEM} (func (export "f") (param $x i32) (result i32) (local $c i32)
+      (drop ${value}) (i32.store (i32.const 0) (i32.const 99)) (local.get $c)))`
+    check(src, [['f', 65536], ['f', 0], ['f', 65536]], null, {}, PATTERN)
+  }
+})
+
+test('propagate-locals: a set consuming the previous set sinks before its next operand read', () => {
+  const src = `(module ${MEM} (func (export "f") (param $h i32) (result i32) (local $w i32)
+    (local.set $w (i32.load (i32.const 0)))
+    (local.set $h (i32.mul (i32.xor (local.get $h) (local.get $w)) (i32.const 33)))
+    (local.set $h (i32.mul (i32.xor (local.get $h) (local.get $w)) (i32.const 33)))
+    (local.get $h)))`
+  check(src, [['f', 0], ['f', 17], ['f', -1]], (s, a) => {
+    assert.deepEqual(a.out, [0, 17, -1].map(x => ['ok', Math.imul(Math.imul(x ^ P0, 33) ^ P0, 33)]))
+    assert.ok(!/local\.set/.test(s), 'both sets sink into their uses')
+    assert.ok(/local\.tee \$w/.test(s), 'the load is captured once for both reads')
+  }, {}, PATTERN)
+})
+
+test('propagate-locals: a discarded if does not lose its stack parameters', () => {
+  const src = `(module (func (export "f") (param $x i32) (result i32) (local $c i32) (local $d i32)
+    (i32.const 10)
+    (local.set $d (if (param i32) (result i32) (local.tee $c (local.get $x))
+      (then i32.const 1 i32.add) (else i32.const 2 i32.add)))
+    (local.get $c)))`
+  check(src, [['f', 0], ['f', 7]])
+  check(`(module (table $t (export "table") 1 funcref) (func (export "f") (param $x i32) (result i32)
+    (drop (table.get $t (local.get $x))) (local.get $x)))`, [['f', 0], ['f', 1], ['f', 0]])
+})
+
+test('propagate-locals: independent sets still commute into source-order calls', () => {
+  check(`(module (import "env" "log" (func $log (param i32) (result i32)))
+    (func (export "f") (result i32) (local $a i32) (local $b i32)
+      (local.set $a (call $log (i32.const 1))) (local.set $b (call $log (i32.const 2)))
+      (i32.add (local.get $b) (local.get $a))))`, [['f']], (s, a) => {
+        assert.deepEqual(a.log, [1, 2])
+        assert.ok(!s.includes('local.set'), 'both independent sets sink too')
+      })
+})
+
+test('standalone passes cannot borrow another optimization\'s callee effects, even after an error', () => {
+  const prime = '(module (func $next (export "n") (param i32) (result i32) (i32.const 1)))'
+  const call = '(call $next (i32.mul (local.get $x) (i32.const 7)))'
+  const src = `(module (global $g (export "g") (mut i32) (i32.const 0))
+    (func $next (param i32) (result i32)
+      (global.set $g (i32.add (global.get $g) (i32.const 1))) (global.get $g))
+    (func (export "f") (param $x i32) (result i32) (i32.add ${call} ${call})))`
+  const calls = [['f', 1], ['f', 2]]
+  const expected = run(compile(src), calls).steps
+  for (const fail of [false, true]) {
+    if (fail) assert.throws(() => optimize(parse(prime), { log() { throw Error('stop') } }), /stop/)
+    else optimize(parse(prime))
+    assert.deepEqual(run(compile(cse(parse(src))), calls).steps, expected,
+      'the current $next mutates its global; the earlier same-named function did not')
+  }
 })
 
 // ── traps are never discarded ────────────────────────────────────────────────

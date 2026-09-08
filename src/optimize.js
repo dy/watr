@@ -2774,6 +2774,9 @@ const localReuse = (ast) => {
 
 /** Operators with side effects: calls, mutators, control flow, exceptions, drops. */
 const IMPURE_OPS = new Set([
+  // A block signature may consume implicit stack inputs: it is not movable or
+  // discardable as a closed expression, even if its explicit children are pure.
+  'param', 'type',
   'call', 'call_indirect', 'return_call', 'return_call_indirect',
   'table.set', 'table.grow', 'table.fill', 'table.copy', 'table.init',
   'struct.set', 'struct.new',
@@ -2786,9 +2789,8 @@ const IMPURE_OPS = new Set([
   'data.drop', 'elem.drop',
 ])
 
-/** Substrings that flag an op as side-effecting (stores/atomics/memory ops mutate). Loads stay
- * PURE here — value-pure between stores — so any site that SPECULATES evaluation (runs an expr
- * on paths that didn't run it before) must pair isPure/hasTrap with readsMemory: loads trap OOB. */
+/** Loads are value-pure between stores, but hasTrap prevents discarding or
+ *  speculating them: even a dead read can trap out of bounds. */
 const IMPURE_SUBSTRINGS = ['.store', 'memory.', '.atomic.']
 /** `memory.size` is a read like a load — no effect, no trap — and `readsMemory` already
  * orders it against `memory.grow`; the `memory.` substring is for the mutators. */
@@ -2806,7 +2808,10 @@ const isPure = (node) => {
   const op = node[0]
   if (typeof op !== 'string') return false
   if (impureOp(op)) return false
-  for (let i = 1; i < node.length; i++) if (Array.isArray(node[i]) && !isPure(node[i])) return false
+  for (let i = 1; i < node.length; i++) {
+    const c = node[i]
+    if ((Array.isArray(c) || typeof c === 'string' && OPCODE[c] !== undefined) && !isPure(c)) return false
+  }
   return true
 }
 
@@ -2889,7 +2894,7 @@ const STRUCTURED_OPS = new Set(['if', 'then', 'else', 'block', 'loop', 'try'])
 // and only computes a result (arithmetic, compare, convert, select, load) — so
 // discarding its value leaves just the operands' side effects. Excludes impure
 // ops and the structured forms above.
-const isEagerValueOp = (op) => typeof op === 'string' && !impureOp(op) && !STRUCTURED_OPS.has(op)
+const isEagerValueOp = (op) => typeof op === 'string' && !impureOp(op) && !trappingOp(op) && !STRUCTURED_OPS.has(op)
 
 // Statements that preserve `node`'s side effects when its VALUE is discarded.
 // A fully-pure value contributes nothing; an eager value op contributes only its
@@ -2903,6 +2908,15 @@ const dropEffects = (node) => {
   if (isPure(node)) return [['drop', node]]   // pure but trapping: the trap stays
   const op = node[0]
   if (op === 'local.tee' && node.length === 3) return [['local.set', node[1], node[2]]]
+  if (op === 'if') {
+    const { condIdx, cond } = parseIf(node)
+    // Only a folded, parameter-free if: removing a block signature could leave
+    // its stack arguments behind. Non-discardable arms keep their conditionality.
+    if (Array.isArray(cond) && node.every((c, i) => i === 0 || i === condIdx ||
+      Array.isArray(c) && (c[0] === 'result' || c[0] === 'then' || c[0] === 'else') && isDiscardable(c)))
+      return dropEffects(cond)
+    return [['drop', node]]
+  }
   if (isEagerValueOp(op)) {
     const eff = []
     for (let i = 1; i < node.length; i++) eff.push(...dropEffects(node[i]))
@@ -3639,6 +3653,8 @@ const commuteForSink = (scope) => {
     if (!Array.isArray(b) || b[0] !== 'local.set' || b.length !== 3 || typeof b[1] !== 'string' || a[1] === b[1]) continue
     if (!Array.isArray(stmt)) continue
     const gets = (sub, name) => { let k = 0; walkN(sub, c => { if (Array.isArray(c) && c[0] === 'local.get' && c[1] === name) k++ }); return k }
+    // a sinks into b first; swapping stmt would put a read before b's own sink.
+    if (gets(b[2], a[1])) continue
     walkN(stmt, n => {
       if (!Array.isArray(n) || !COMMUTATIVE.has(n[0]) || n.length !== 3) return
       const l = n[1], r = n[2]
@@ -3859,12 +3875,15 @@ const firstEvalGet = (stmt, name, skipped, state) => {
 /** A subtree whose only effects are `local.set`/`local.tee` of named locals over pure,
  *  trap-free operands: no call, store, global write, branch or trap anywhere in it. */
 const localWritesOnly = (n) => {
-  if (!Array.isArray(n)) return typeof n !== 'string' || !impureOp(n)
+  if (!Array.isArray(n)) return typeof n !== 'string' || (!impureOp(n) && !trappingOp(n))
   const op = n[0]
   if (typeof op !== 'string') return false
   if (op === 'local.set' || op === 'local.tee') { if (typeof n[1] !== 'string') return false }
-  else if (impureOp(op) || TRAP_OPS.has(op) || /\.(div|rem)_[su]$|\.trunc_f/.test(op)) return false
-  for (let i = 1; i < n.length; i++) if (Array.isArray(n[i]) && !localWritesOnly(n[i])) return false
+  else if (impureOp(op) || trappingOp(op)) return false
+  for (let i = 1; i < n.length; i++) {
+    const c = n[i]
+    if ((Array.isArray(c) || typeof c === 'string' && OPCODE[c] !== undefined) && !localWritesOnly(c)) return false
+  }
   return true
 }
 
@@ -7318,15 +7337,14 @@ const stripmut = (ast) => {
 // if's own end — no equivalent exists one level up, so that shape is not rewritten.
 const unnest = (l) => typeof l === 'string' && l[0] === '$' ? l : +l > 0 ? +l - 1 : null
 
-/** Ops that can trap even when 'pure': int div/rem, float→int trunc. */
-/** Pure value ops that can still trap: integer div/rem (zero, overflow), float→int
- *  truncation (NaN, range), null-checked reference ops. Loads and stores trap out of
- *  bounds as well; loads are pure by isPure's contract and are ordered by readsMemory,
- *  so a site that discards or speculates a subtree pairs this with that. */
-const TRAP_OPS = new Set(['ref.as_non_null', 'ref.cast', 'struct.get', 'struct.get_s', 'struct.get_u', 'array.get', 'array.get_s', 'array.get_u', 'array.len', 'unreachable'])
+/** Value-pure ops can still trap: integer division, truncation, memory/table
+ *  reads and checked references. One rule serves motion and dead-value removal. */
+const TRAP_OPS = new Set(['ref.as_non_null', 'ref.cast', 'struct.get', 'struct.get_s', 'struct.get_u', 'array.get', 'array.get_s', 'array.get_u', 'array.len', 'table.get', 'unreachable'])
+const trappingOp = (op) => typeof op === 'string' && (TRAP_OPS.has(op) ||
+  /\.(div|rem)_[su]$|\.trunc_f|^(i32|i64|f32|f64|v128)\.load/.test(op))
 const hasTrap = (n) => {
   let t = false
-  walk(n, c => { const o = Array.isArray(c) ? c[0] : c; if (typeof o === 'string' && (TRAP_OPS.has(o) || /\.(div|rem)_[su]$|\.trunc_f/.test(o))) t = true })
+  walk(n, c => { if (trappingOp(Array.isArray(c) ? c[0] : c)) t = true })
   return t
 }
 /** A subtree whose evaluation can be dropped: no effect and no trap. `isPure` alone
@@ -8496,6 +8514,14 @@ const hashNode = (node) => {
 }
 
 export default function optimize(ast, opts = true) {
+  // Standalone passes must not inherit another module's same-named callees.
+  // Restore an enclosing optimization when a logging hook invokes us recursively.
+  const outer = CALLFX
+  try { return optimizeModule(ast, opts) }
+  finally { CALLFX = outer }
+}
+
+function optimizeModule(ast, opts) {
   CALLFX = null
   if (typeof ast === 'string') ast = parse(ast)   // accept WAT source directly
   const strictGuard = opts === true  // default: zero tolerance for bloat
