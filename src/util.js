@@ -123,9 +123,14 @@ export const clone = (node) => {
   if (!Array.isArray(node)) return node
   // Copy annotations as well as children: clients transport semantic facts
   // through forward substitution and sinking on these same expressions.
-  const copy = node.map(clone)
-  for (const key of Object.keys(node)) if (!Object.hasOwn(copy, key)) copy[key] = node[key]
-  return copy
+  return copyAnnotations(node.map(clone), node)
+}
+
+/** Copy expression annotations without replacing array children. */
+export const copyAnnotations = (target, source) => {
+  for (const key of Object.keys(source))
+    if (key !== String(key >>> 0) || key === '4294967295') target[key] = source[key]
+  return target
 }
 
 /**
