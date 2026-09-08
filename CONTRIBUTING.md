@@ -27,8 +27,10 @@ npm run test:repl           # REPL integration tests
 
 Tests must pass on Node 24+ with `--experimental-wasm-exnref`.
 
-For the compiled backend, use the same JZ checkout for both compilation and
-interop. Current watr needs fixes newer than the published JZ 0.9.2:
+The lockfile pins the working JZ source revision for both compilation and
+interop; `npm ci`, `npm run build:wasm`, and `npm run test:wasm` need no override.
+Replace the source pin with an npm release once it includes these fixes.
+To test a different JZ checkout, use it for both steps:
 
 ```bash
 JZ_ROOT=../jz npm run build:wasm
