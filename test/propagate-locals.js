@@ -12,6 +12,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import optimize, { binarySize, cse, propagate } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
+import { clone } from '../src/util.js'
 
 const MEM = '(memory (export "memory") 1)'
 // A run: the calls in order, and after EVERY call the result or trap, the host log so far,
@@ -437,24 +438,43 @@ test('propagate-locals: a dead trapping value, a self-cancelling trapping operan
 })
 
 
-test('propagation preserves client annotations on cloned expressions', () => {
+test('propagation preserves source, type and schema annotations', () => {
   for (const value of ['(i32.const 7)', '(i32.load (i32.const 0))', '(call $source)']) {
     for (const uses of [1, 2]) {
       const fn = parse(`(func $f (result i32) (local $x i32)
         (local.set $x ${value})
         ${uses === 1 ? '(local.get $x)' : '(i32.add (local.get $x) (local.get $x))'})`)
       const producer = fn.find(n => Array.isArray(n) && n[0] === 'local.set')[2]
-      producer.schemaSid = 17
-      producer.clientNote = 'value identity'
+      producer.loc = 0
+      producer.type = 'i32'
+      producer.schemaSid = 0
       propagate(fn)
       const found = []
       const visit = n => { if (!Array.isArray(n)) return
-        if (n.schemaSid === 17) found.push(n)
+        if (n.schemaSid === 0) found.push(n)
         for (const child of n) visit(child)
       }
       visit(fn)
       assert.ok(found.length, `${value}, ${uses} uses: annotation survives`)
-      for (const n of found) assert.equal(n.clientNote, 'value identity')
+      for (const n of found) {
+        assert.equal(n.loc, 0)
+        assert.equal(n.type, 'i32')
+      }
     }
   }
+})
+
+test('cloning keeps only supported expression annotations', () => {
+  const child = ['i32.const', 7]
+  child.loc = 0
+  child.type = 'i32'
+  child.schemaSid = 0
+  child.scratch = 'temporary'
+  const copy = clone(['drop', child])
+  assert.notStrictEqual(copy[1], child)
+  assert.deepStrictEqual([...copy[1]], ['i32.const', 7])
+  assert.equal(copy[1].loc, 0)
+  assert.equal(copy[1].type, 'i32')
+  assert.equal(copy[1].schemaSid, 0)
+  assert.ok(!Object.hasOwn(copy[1], 'scratch'))
 })

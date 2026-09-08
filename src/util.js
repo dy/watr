@@ -121,15 +121,14 @@ export const unescape = s => tdec.decode(new Uint8Array(str(s)))
  */
 export const clone = (node) => {
   if (!Array.isArray(node)) return node
-  // Copy annotations as well as children: clients transport semantic facts
-  // through forward substitution and sinking on these same expressions.
   return copyAnnotations(node.map(clone), node)
 }
 
-/** Copy expression annotations without replacing array children. */
+/** Preserve source offsets and client type/schema facts when copying expressions. */
 export const copyAnnotations = (target, source) => {
-  for (const key of Object.keys(source))
-    if (key !== String(key >>> 0) || key === '4294967295') target[key] = source[key]
+  if (source.loc != null) target.loc = source.loc
+  if (source.type != null) target.type = source.type
+  if (source.schemaSid != null) target.schemaSid = source.schemaSid
   return target
 }
 
