@@ -123,8 +123,8 @@ export const clone = (node) => {
   if (!Array.isArray(node)) return node
   // Copy annotations as well as children: clients transport semantic facts
   // through forward substitution and sinking on these same expressions.
-  const copy = Object.assign([], node)
-  for (let i = 0; i < node.length; i++) copy[i] = clone(node[i])
+  const copy = node.map(clone)
+  for (const key of Object.keys(node)) if (!Object.hasOwn(copy, key)) copy[key] = node[key]
   return copy
 }
 
