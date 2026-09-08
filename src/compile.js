@@ -1068,7 +1068,7 @@ const build = [
     ;(ctx.codeSizePrefix ??= [])[codeIdx] = size.length // = vec prefix width
     const at = out.length
     out.push(...size)
-    out.push(...locals)
+    for (const byte of locals) out.push(byte)
     out.append(bytes)
     return out.length - at
   },
