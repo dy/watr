@@ -3406,7 +3406,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
         retireMovedDef(tracked)
         const replacement = clone(tracked.val)
         cntSub(instr)
-        instr.length = 0; instr.push(...(Array.isArray(replacement) ? replacement : [replacement]))
+        instr.length = 0; Object.assign(instr, Array.isArray(replacement) ? replacement : [replacement])
         cntAdd(instr)
         changed = true; continue
       }

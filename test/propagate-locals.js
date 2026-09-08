@@ -10,7 +10,7 @@
 // calls and indirect calls, memory.size/grow, loads and stores, v128 lanes.
 import { test } from 'node:test'
 import assert from 'node:assert'
-import optimize, { binarySize, cse } from '../src/optimize.js'
+import optimize, { binarySize, cse, propagate } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 
 const MEM = '(memory (export "memory") 1)'
@@ -434,4 +434,27 @@ test('propagate-locals: a dead trapping value, a self-cancelling trapping operan
   const singleUse = `(module (func (export "f") (param $x f64) (result i32) (local $t i32)
     (local.set $t (i32.trunc_f64_s (local.get $x))) (i32.add (local.get $t) (i32.const 1))))`
   check(singleUse, [['f', 2.5], ['f', NaN]], (s, a) => assert.equal((s.match(/trunc_f64_s/g) || []).length, 1, 'a moved trapping value evaluates once, at its use'))
+})
+
+
+test('propagation preserves client annotations on cloned expressions', () => {
+  for (const value of ['(i32.const 7)', '(i32.load (i32.const 0))', '(call $source)']) {
+    for (const uses of [1, 2]) {
+      const fn = parse(`(func $f (result i32) (local $x i32)
+        (local.set $x ${value})
+        ${uses === 1 ? '(local.get $x)' : '(i32.add (local.get $x) (local.get $x))'})`)
+      const producer = fn.find(n => Array.isArray(n) && n[0] === 'local.set')[2]
+      producer.schemaSid = 17
+      producer.clientNote = 'value identity'
+      propagate(fn)
+      const found = []
+      const visit = n => { if (!Array.isArray(n)) return
+        if (n.schemaSid === 17) found.push(n)
+        for (const child of n) visit(child)
+      }
+      visit(fn)
+      assert.ok(found.length, `${value}, ${uses} uses: annotation survives`)
+      for (const n of found) assert.equal(n.clientNote, 'value identity')
+    }
+  }
 })

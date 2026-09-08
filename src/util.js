@@ -119,7 +119,14 @@ export const unescape = s => tdec.decode(new Uint8Array(str(s)))
  * @param {any} node
  * @returns {any}
  */
-export const clone = (node) => Array.isArray(node) ? node.map(clone) : node
+export const clone = (node) => {
+  if (!Array.isArray(node)) return node
+  // Copy annotations as well as children: clients transport semantic facts
+  // through forward substitution and sinking on these same expressions.
+  const copy = Object.assign([], node)
+  for (let i = 0; i < node.length; i++) copy[i] = clone(node[i])
+  return copy
+}
 
 /**
  * Walk AST depth-first (pre-order), call fn on each node. Read-only.
