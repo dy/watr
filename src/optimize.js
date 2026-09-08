@@ -4065,11 +4065,11 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
         }
       }
       // `(local.set $x VALUE)` — drop the store with its value, but only when
-      // VALUE is pure (its side effects would otherwise still need to run);
-      // an impure but trap-free VALUE reduces to its side-effect core.
+      // VALUE is discardable; otherwise retain its effects, including traps.
+      // A trapping tee still reduces to a set of its live local.
       if (sub.length === 3) {
         if (isDiscardable(sub[2])) { cntSub(sub); funcNode.splice(i, 1); changed = true }
-        else if (!hasTrap(sub[2])) {
+        else {
           cntSub(sub)
           const eff = dropEffects(sub[2])
           for (const e of eff) cntAdd(e)

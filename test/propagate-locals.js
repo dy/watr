@@ -357,6 +357,17 @@ test('propagate-locals: dead loads and trapping operations over tees retain thei
   }
 })
 
+test('propagate-locals: a dead destination leaves a live trapping tee as a set', () => {
+  const src = `(module ${MEM} (func (export "f") (param $x i32) (result i32)
+    (local $dead i32) (local $live i32)
+    (local.set $dead (local.tee $live (i32.load (local.get $x))))
+    (i32.store (i32.const 8) (local.get $live)) (local.get $live)))`
+  check(src, [['f', 0], ['f', 65536], ['f', 0]], s => {
+    assert.ok(!s.includes('$dead'), 'the unused destination has no surviving set or declaration')
+    assert.equal((s.match(/i32\.load/g) || []).length, 1, 'the trapping load still runs once')
+  }, {}, PATTERN)
+})
+
 test('propagate-locals: a set consuming the previous set sinks before its next operand read', () => {
   const src = `(module ${MEM} (func (export "f") (param $h i32) (result i32) (local $w i32)
     (local.set $w (i32.load (i32.const 0)))
