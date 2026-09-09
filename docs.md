@@ -211,6 +211,8 @@ sense when you control the host are **opt-in** (marked ◌); the rest are on by 
 | `identity` | Remove identity ops | `(i32.add x (i32.const 0))` → `x` |
 | `strength` | Strength reduction | `(i32.mul x (i32.const 2))` → `(i32.shl x (i32.const 1))` |
 | `branch` | Simplify constant branches | `(if (i32.const 1) A B)` → `A` |
+| `bool` | Simplify zero/nonzero conditions | Remove `x != 0` and double `eqz` wrappers in conditions; preserve canonical 0/1 values elsewhere |
+| `conditions` ◌ | Short-circuit condition diamonds → branch chains | Evaluate each operand once, only when reached; runs once before local propagation |
 | `propagate` | Forward single-use locals & tiny consts | `(local.set $x (i32.const 1)) … (local.get $x)` → `(i32.const 1)` |
 | `inline` ◌ | Inline tiny functions | Single-expression functions without locals — may duplicate bodies |
 | `inlineOnce` | Inline functions called from exactly one site | Drops the callee and its `call` site; never duplicates |
@@ -233,6 +235,10 @@ sense when you control the host are **opt-in** (marked ◌); the rest are on by 
 | `minifyImports` ◌ | Shorten import module/field names | `a`, `b`, `aa`… — only safe when you control the host |
 
 ◌ = opt-in (`optimize(ast, 'foldarms')` or `optimize(ast, { foldarms: true })`).
+
+`conditions` can trade bytes for fewer branches, so it runs before the size guard’s
+entry measurement. Functions with relative branch depths, flat instructions or
+exception scopes retain their original form. Labeled `if` nodes also retain their scopes.
 
 **`pin`** — array (or `Set`) of function names `inline`/`inlineOnce` must never dissolve, even
 when single-caller. Use it when a later pass of yours rewrites those `call` nodes and needs them

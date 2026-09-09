@@ -1,8 +1,7 @@
 /**
  * WAT AST optimizer — size/runtime passes over watr's s-expression IR.
  *
- * jz owns its optimizer; watr is used *only* as the WAT→binary encoder.
- * Pairs with src/optimize/ (jz-IR-level) — folder context disambiguates.
+ * Generic Wasm rewrites shared by standalone WAT and compiler frontends.
  *
  * @module wat/optimize
  */
@@ -6891,6 +6890,117 @@ const peepholeNode = (node) => {
 /** Peephole rules as a standalone pass. */
 const peephole = (ast) => walkPost(ast, peepholeNode)
 
+// A condition observes zero/nonzero, not the canonical 0/1 value.
+const boolValue = (n) => {
+  while (Array.isArray(n)) {
+    if (n[0] === 'i32.ne' && n.length === 3) {
+      if (getConst(n[2])?.value === 0) { n = n[1]; continue }
+      if (getConst(n[1])?.value === 0) { n = n[2]; continue }
+    }
+    if (n[0] === 'i32.eqz' && n.length === 2 && n[1]?.[0] === 'i32.eqz' && n[1].length === 2) {
+      n = n[1][1]; continue
+    }
+    break
+  }
+  return n
+}
+const boolNode = (n) => {
+  if (!Array.isArray(n)) return
+  let i = -1
+  if (n[0] === 'if') i = parseIf(n).condIdx
+  else if (n[0] === 'i32.eqz' && n.length === 2) i = 1
+  else if ((n[0] === 'br_if' || n[0] === 'select') && Array.isArray(n[n.length - 1])) i = n.length - 1
+  if (i < 0) return
+  const c = boolValue(n[i])
+  if (c !== n[i]) { n[i] = c; return n }
+}
+const bool = (ast) => walkPostN(ast, boolNode)
+
+// Short-circuit value diamonds used only as conditions become branch chains.
+// Run once before local propagation dissolves their tee/get shape. Ordinary
+// local liveness removes unused declarations without a second index remapper.
+const conditions = (ast) => {
+  walkN(ast, (f) => {
+    if (!Array.isArray(f) || f[0] !== 'func') return
+    const names = new Set()
+    let unsafe = false, candidate = false, numericLocals = false, uid = 0
+    walk(f, (n) => {
+      if (typeof n === 'string' && n[0] === '$') names.add(n)
+      if (!Array.isArray(n)) return
+      if (n[0] === 'if' && n[2]?.[0] === 'local.tee') candidate = true
+      if ((n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee') &&
+          !(typeof n[1] === 'string' && n[1][0] === '$')) numericLocals = true
+      // New blocks change relative depths. Leave these functions unchanged;
+      // named branches need no remapping. Flat control and EH stay unchanged too.
+      if (n[0] === 'try' || n[0] === 'try_table') unsafe = true
+      if (typeof n[0] === 'string' && n[0].startsWith('br'))
+        for (let i = 1; i < n.length; i++) if (!Array.isArray(n[i]) && !(typeof n[i] === 'string' && n[i][0] === '$')) unsafe = true
+      for (let i = 1; i < n.length; i++) if (typeof n[i] === 'string' && OPCODE[n[i]] !== undefined) unsafe = true
+    })
+    if (unsafe || !candidate) return
+    const counts = countLocalUses(f)
+    const fresh = () => {
+      let s
+      do { s = `$__cc${uid++}` } while (names.has(s))
+      names.add(s)
+      return s
+    }
+    const diamond = (n) => {
+      if (!Array.isArray(n) || n[0] !== 'if' || n.length !== 5 ||
+          n[1]?.[0] !== 'result' || n[1].length !== 2 || n[1][1] !== 'i32' ||
+          n[2]?.[0] !== 'local.tee' || n[2].length !== 3 ||
+          n[3]?.[0] !== 'then' || n[3].length !== 2 || n[4]?.[0] !== 'else' || n[4].length !== 2) return null
+      const a = n[2], t = n[3][1], e = n[4][1]
+      if (e?.[0] === 'local.get' && e[1] === a[1]) return { and: true, a, b: t }
+      if (t?.[0] === 'local.get' && t[1] === a[1]) return { and: false, a, b: e }
+      return null
+    }
+    const left = (d) => {
+      const uses = counts.get(d.a[1])
+      return !numericLocals && uses?.gets === 1 && uses.sets + uses.tees === 1 ? d.a[2] : d.a
+    }
+    const hasDiamond = (c) => {
+      c = boolValue(c)
+      return !!diamond(c) || (c?.[0] === 'i32.eqz' && c.length === 2 && hasDiamond(c[1]))
+    }
+    // Branch on the requested truth value; the other path falls through.
+    const jump = (c, label, truth) => {
+      c = boolValue(c)
+      const d = diamond(c)
+      if (d) {
+        if (d.and !== truth) return [...jump(left(d), label, truth), ...jump(d.b, label, truth)]
+        const skip = fresh()
+        return [['block', skip, ...jump(left(d), skip, !truth), ...jump(d.b, label, truth)]]
+      }
+      if (c?.[0] === 'i32.eqz' && c.length === 2) return jump(c[1], label, !truth)
+      return [['br_if', label, truth ? c : ['i32.eqz', c]]]
+    }
+    const visit = (n) => {
+      if (!Array.isArray(n)) return n
+      let out = n
+      if (n[0] === 'br_if' && n.length === 3 && hasDiamond(n[2])) out = ['block', ...jump(n[2], n[1], true)]
+      else if (n[0] === 'if') {
+        const i = n[1]?.[0] === 'result' ? 2 : 1
+        const t = n[i + 1], e = n[i + 2]
+        if ((n.length === i + 2 || n.length === i + 3) && t?.[0] === 'then' &&
+            (!e || e[0] === 'else') && (i === 1 || e) && hasDiamond(n[i])) {
+          const skip = fresh(), inner = ['block', skip, ...jump(n[i], skip, false)]
+          if (e) {
+            const end = fresh(), result = i === 2 ? [n[1]] : []
+            const yes = i === 2 ? [['block', n[1], ...t.slice(1)]] : []
+            inner.push(...(i === 1 ? t.slice(1) : []), ['br', end, ...yes])
+            out = ['block', end, ...result, inner, ...e.slice(1)]
+          } else { inner.push(...t.slice(1)); out = inner }
+        }
+      }
+      for (let i = 1; i < out.length; i++) if (Array.isArray(out[i])) out[i] = visit(out[i])
+      return out
+    }
+    for (let i = 1; i < f.length; i++) if (Array.isArray(f[i])) f[i] = visit(f[i])
+  })
+  return ast
+}
+
 /**
  * Fused algebraic sweep — fold → identity → strength → peephole applied per node in
  * ONE bottom-up traversal instead of four, re-running the family on a node until it
@@ -6898,7 +7008,7 @@ const peephole = (ast) => walkPost(ast, peepholeNode)
  * converge in-walk instead of across driver rounds). The rule set follows the same
  * option keys as the standalone passes.
  */
-const SIMPLIFY = [['fold', foldNode], ['identity', identityNode], ['strength', strengthNode], ['peephole', peepholeNode]]
+const SIMPLIFY = [['fold', foldNode], ['identity', identityNode], ['strength', strengthNode], ['peephole', peepholeNode], ['bool', boolNode]]
 const SIMPLIFY_KEYS = new Set(SIMPLIFY.map(([k]) => k))
 const simplify = (ast, opts) => {
   const rules = SIMPLIFY.filter(([k]) => opts[k]).map(([, f]) => f)
@@ -8327,6 +8437,8 @@ const PASSES = [
   // gates rightly refuse (the round-2-shapes trap).
   ['unclamp',       unclamp,        false, 'select-clamped checked reads → predicted-branch if-form (surviving = unvectorized; speed profile)'],
   ['intguard',      intguard,       true,  'ToInt32 guard select over an exact i32 convert → the raw value'],
+  ['bool',          bool,           true,  'simplify zero/nonzero condition operands'],
+  ['conditions',    conditions,     false, 'short-circuit condition diamonds → branch chains (once before rounds)'],
   ['branch',        branch,         true,  'simplify constant branches'],
   ['zeroinit',      zeroinit,       true,  'drop local.set of zero when the local provably still holds its spec zero'],
   ['ifset',         ifset,          false, 'one-armed conditional update \u2192 branchless select \u2014 unconditional-update trade (speed profile)'],
@@ -8547,6 +8659,7 @@ function optimizeModule(ast, opts) {
 
   ast = clone(ast)
   CALLFX = computeCallEffects(ast)
+  if (opts.conditions) conditions(ast)
 
   // devirt trades bytes for speed by design (guards + duplicated args), so it
   // runs ONCE after the rounds — its candidate shape (select of two i64 closure
@@ -8708,7 +8821,7 @@ function optimizeModule(ast, opts) {
       }
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'unroll2' || key === 'sortLocals' ||
+        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'conditions' || key === 'unroll2' || key === 'sortLocals' ||
             (skipInline && key === 'inlineOnce')) continue
         if (SIMPLIFY_KEYS.has(key)) {
           if (!fused) {
@@ -8857,4 +8970,4 @@ optimize.resetNameUids = resetNameUids
 // part of the optimize() pipeline; used by test/optimize.js's regionHooks test
 // to verify the clear actually holds at the boundary, not just "no throw".
 export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === 0 && SW_EXT === 0
-export { optimize, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }
+export { optimize, bool, conditions, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }
