@@ -4658,3 +4658,18 @@ test('propagate: a set sinks past a sibling that only writes another local', () 
   assert(/\(local\.set \$t/.test(g) && !/\(local\.tee \$t/.test(g), 'the value reads $a, which the crossed tee writes: it stays')
   assert.equal(new WebAssembly.Instance(new WebAssembly.Module(srcCompile(g))).exports.g(5n), 212n)
 })
+
+
+test('licm: a local read after a zero-trip loop is not private to its expression', () => {
+  const ast = parse(`(module
+    (func $f (export "f") (param $n i32) (param $x f64) (result i32) (local $t i32)
+      (block $exit (loop $L
+        (br_if $exit (i32.eqz (local.get $n)))
+        (drop (local.tee $t (i32.trunc_sat_f64_s (local.get $x))))
+        (br $exit)))
+      (local.get $t)))`)
+  hoistInvariants(ast[1], { analyze: () => n => n[0] === 'local.tee' || n[0] === 'i32.trunc_sat_f64_s' })
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(ast))).exports
+  assert.equal(f(0, 7), 0)
+  assert.equal(f(1, 7), 7)
+})

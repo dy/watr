@@ -88,7 +88,7 @@ export function hoistInvariants(fn, { analyze, callType, prefix = '$__licm' }) {
       if (op === 'local.get' || op === 'global.get' || op.endsWith('.const')) return
       const bound = writesOf(n)
       let privateWrites = true
-      for (const k of bound) if (countsOf(loop).get(k) !== countsOf(n).get(k)) { privateWrites = false; break }
+      for (const k of bound) if (countsOf(fn).get(k) !== countsOf(n).get(k)) { privateWrites = false; break }
       if (privateWrites && accept(n, bound) && (refs.get(n) || 0) <= 1 && (refs.get(parent) || 0) <= 1 && typeOf(n)) {
         const key = structuralKey(n)
         let found = sites.get(key)
