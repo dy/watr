@@ -249,6 +249,17 @@ mirrors after `optimize` runs. Keeps the no-inline policy with the caller, not h
 optimize(ast, { pin: ['$math.exp', '$math.log'] })   // these calls survive inlining
 ```
 
+**Shared LICM engine** — `hoistInvariants(func, { analyze, callType?, prefix? })`
+from `watr/optimize` mutates a folded function in place. `analyze(loop, nested)`
+returns a predicate `(expression, privateLocals) => boolean`. Accepting an expression
+promises an invariant result, no observable effects, and safe speculative execution,
+including when the loop executes zero times. The engine checks private local writes,
+extracts maximal expressions, deduplicates them without conflating Wasm literals,
+and creates typed temporaries. `callType(name)` supplies a proven single-result call
+type when the predicate admits calls. Proofs are rebuilt after inner-loop rewrites;
+no caller metadata is stored on instructions. This is the same engine used by the
+standalone `licm` pass, whose conservative proof excludes loads and calls.
+
 **Profiles** — named presets that layer pass overrides under your own opts (an explicit
 key always wins over the profile, same rule as `pin`). Never consulted by `optimize(ast)`
 or `optimize(ast, true)` — profiles are opt-in, so default behavior is unchanged.

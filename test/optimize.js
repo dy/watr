@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import { readdirSync, readFileSync } from 'node:fs'
 import { clone } from '../src/util.js'
-import optimize, { treeshake, fold, deadcode, localReuse, count, binarySize, normalize, devirt, __regionScratchDrained } from '../src/optimize.js'
+import optimize, { hoistInvariants, treeshake, fold, deadcode, localReuse, count, binarySize, normalize, devirt, __regionScratchDrained } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 import srcCompile, { size } from '../src/compile.js'
 
@@ -924,6 +924,65 @@ test('licm: identical invariant subtrees share one hoisted local (loop-level CSE
   assert.equal(muls, 1, `identical invariant exprs must compute once, got ${muls}`)
   const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(src)))).exports
   assert.equal(f(2, 3), 18, 'hoisted invariant behaves')
+})
+
+
+test('licm: numeric signed-zero literals remain distinct when deduplicating', () => {
+  const ast = parse(`(module (func (export "f") (param $x f64) (param $n i32) (result f64)
+    (local $i i32) (local $a f64) (local $b f64)
+    (block $exit (loop $loop
+      (br_if $exit (i32.ge_s (local.get $i) (local.get $n)))
+      (local.set $a (f64.copysign (f64.const 1) (f64.add (local.get $x) (f64.const 0))))
+      (local.set $b (f64.copysign (f64.const 1) (f64.add (local.get $x) (f64.const -0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)))
+    (f64.sub (local.get $a) (local.get $b))))`)
+  const numeric = n => {
+    if (!Array.isArray(n)) return
+    if (n[0] === 'f64.const') n[1] = Number(n[1])
+    for (let i = 1; i < n.length; i++) numeric(n[i])
+  }
+  numeric(ast)
+  const before = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+  const after = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'licm')))).exports.f
+  for (const x of [0, -0, 1, -1, Infinity, -Infinity, NaN])
+    for (const n of [0, 1, 4]) assert.equal(after(x, n), before(x, n))
+  assert.equal(after(-0, 1), 2)
+})
+
+test('licm: a zero-trip loop does not speculate an integer division trap', () => {
+  const ast = parse(`(module (func (export "f") (param $n i32) (result i32)
+    (local $i i32) (local $sum i32)
+    (block $exit (loop $loop
+      (br_if $exit (i32.ge_s (local.get $i) (local.get $n)))
+      (local.set $sum (i32.add (local.get $sum) (i32.div_s (i32.const 10) (local.get $n))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)))
+    (local.get $sum)))`)
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'licm')))).exports
+  assert.equal(f(0), 0)
+  assert.equal(f(1), 10)
+  assert.equal(f(3), 9)
+})
+
+
+test('licm: a shared ancestor protects descendants used before the loop', () => {
+  const ast = parse(`(module (func $f (export "f") (param $x f64) (result f64)
+    (local $y f64) (local $before f64)
+    (local.set $y (f64.const 2))
+    (local.set $before (f64.mul (f64.mul (f64.add (local.get $x) (f64.const 1)) (f64.const 2)) (local.get $y)))
+    (loop $loop
+      (local.set $y (f64.add (local.get $y) (f64.const 1)))
+      (drop (f64.const 0))
+      (br_if $loop (f64.lt (local.get $y) (f64.const 4))))
+    (local.get $before)))`)
+  const fn = ast.find(n => n[0] === 'func')
+  const shared = fn.find(n => n[0] === 'local.set' && n[1] === '$before')[2]
+  fn.find(n => n[0] === 'loop').find(n => n[0] === 'drop')[1] = shared
+  // This candidate reads only $x, an unwritten parameter, and cannot trap.
+  hoistInvariants(fn, { analyze: () => n => n[0] === 'f64.add' && n[1]?.[1] === '$x' })
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
+  assert.equal(f(3), 16, 'the earlier shared occurrence must not read an uninitialized hoist')
 })
 
 // ==================== LOCAL REUSE ====================

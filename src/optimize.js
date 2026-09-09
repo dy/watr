@@ -7,6 +7,8 @@
  */
 
 import { numdata, size } from './compile.js'
+import { hoistInvariants } from './licm.js'
+export { hoistInvariants, structuralKey } from './licm.js'
 import { f32 as _f32enc, f64 as _f64enc } from './encode.js'
 import { IMM, OPCODE, resultType } from './const.js'
 import parse from './parse.js'
@@ -3162,7 +3164,7 @@ const retireMovedDef = (k) => {
   cntSub(k.def); k.def.length = 1; k.def[0] = 'nop'; k.def = null
 }
 const purgeExt = (m) => { for (const [key, t] of m) if (t.ext) m.delete(key) }
-const isMemWrite = (op) => op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow' ||
+export const isMemWrite = (op) => op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow' ||
   (op.includes('.atomic.') && !op.endsWith('.load')) || op === 'table.set' || op === 'table.grow' || op === 'table.fill' || op === 'table.copy' || op === 'table.init'
 const isExtEffect = (op) => op === 'call' || op === 'call_indirect' || op === 'call_ref' || op === 'return_call' || op === 'return_call_indirect' ||
   op === 'return_call_ref' || op === 'throw' || op === 'throw_ref'
@@ -8274,55 +8276,15 @@ const licmPure = (op) => {
 }
 
 const licm = (ast) => {
+  const immutGlobals = new Set()
+  for (const g of ast) {
+    if (!Array.isArray(g)) continue
+    if (g[0] === 'global' && typeof g[1] === 'string' && !g.some(c => Array.isArray(c) && c[0] === 'mut')) immutGlobals.add(g[1])
+    if (g[0] === 'import') { const d = g[g.length - 1]; if (Array.isArray(d) && d[0] === 'global' && typeof d[1] === 'string' && !d.some(c => Array.isArray(c) && c[0] === 'mut')) immutGlobals.add(d[1]) }
+  }
   for (const func of ast) {
     if (!Array.isArray(func) || func[0] !== 'func') continue
-
-    // Local/param types (for typing hoisted expressions through local.get leaves).
-    const localTypes = new Map()
-    let declEnd = 1   // insertion point for fresh (local …) decls: after params/result/locals
-    for (let i = 1; i < func.length; i++) {
-      const c = func[i]
-      if (!Array.isArray(c)) { if (typeof c === 'string' && c[0] === '$') declEnd = i + 1; continue }
-      if (c[0] === 'param' || c[0] === 'local') {
-        if (typeof c[1] === 'string' && c[1][0] === '$') localTypes.set(c[1], c[2])
-        declEnd = i + 1
-      } else if (c[0] === 'result' || c[0] === 'export' || c[0] === 'type') declEnd = i + 1
-      else break
-    }
-
-    // Immutable module globals: declared without (mut …) — reads are invariant everywhere.
-    const immutGlobals = new Set()
-    for (const g of ast) {
-      if (!Array.isArray(g)) continue
-      if (g[0] === 'global' && typeof g[1] === 'string' && !g.some(c => Array.isArray(c) && c[0] === 'mut')) immutGlobals.add(g[1])
-      if (g[0] === 'import') { const d = g[g.length - 1]; if (Array.isArray(d) && d[0] === 'global' && typeof d[1] === 'string' && !d.some(c => Array.isArray(c) && c[0] === 'mut')) immutGlobals.add(d[1]) }
-    }
-
-    // Result type of a hoistable subtree (null ⇒ untypeable ⇒ don't hoist).
-    const typeOf = (n) => {
-      if (!Array.isArray(n)) return null
-      const op = n[0]
-      if (op === 'select') return typeOf(n[1])
-      if (op === 'local.get') return localTypes.get(n[1]) ?? null
-      if (/\.extract_lane/.test(op)) { const p = op.slice(0, op.indexOf('.')); return p === 'f64x2' ? 'f64' : p === 'f32x4' ? 'f32' : p === 'i64x2' ? 'i64' : 'i32' }
-      if (/^(v128|[if](8x16|16x8|32x4|64x2))\./.test(op)) return op.endsWith('any_true') || op.endsWith('all_true') || op.endsWith('bitmask') ? 'i32' : 'v128'
-      return resultType(op)
-    }
-
-    let minted = 0
-    const freshName = () => {
-      let n
-      do { n = `$__licm${minted++}` } while (localTypes.has(n))
-      return n
-    }
-    const newDecls = []
-
-    const processLoop = (loop, parent, idx) => {
-      // Only hoist when the loop sits in a statement list we can splice into.
-      const pop = Array.isArray(parent) ? parent[0] : null
-      if (pop !== 'func' && pop !== 'block' && pop !== 'loop' && pop !== 'then' && pop !== 'else') return
-
-      // Loop effect summary: the write-set of locals, and whether globals stay stable.
+    hoistInvariants(func, { analyze: loop => {
       const writes = new Set()
       let hasCall = false, hasGlobalSet = false
       walkN(loop, (n) => {
@@ -8356,53 +8318,8 @@ const licm = (ast) => {
         for (let i = 1; i < n.length; i++) c += opCount(n[i])
         return c
       }
-
-      const hoisted = []            // [ ['local.set', name, expr] … ]
-      const byKey = new Map()       // stringified expr → local name (dedupe within this loop)
-      const tryHoist = (node, par, i) => {
-        if (!Array.isArray(node)) return
-        const op = node[0]
-        // Never lift a bare statement/decl; only value expressions match the pure set.
-        // Cost gate: ≥2 real ops — except a v128 SPLAT root, worth hoisting even alone: a
-        // broadcast re-materialized per iteration occupies a vector unit + widens live ranges
-        // (the colorpq 1M-iteration splat(coeff) recompute), where scalar 1-op trees are
-        // register-trivial and V8 folds them anyway.
-        const isSplat = typeof node[0] === 'string' && node[0].endsWith('.splat')
-        if (inv(node) && (opCount(node) >= 2 || isSplat)) {
-          const ty = typeOf(node)
-          if (ty) {
-            let key
-            try { key = JSON.stringify(node) } catch { key = null }
-            let name = key != null ? byKey.get(key) : undefined
-            if (name === undefined) {
-              name = freshName()
-              localTypes.set(name, ty)
-              newDecls.push(['local', name, ty])
-              hoisted.push(['local.set', name, node])
-              if (key != null) byKey.set(key, name)
-            }
-            par[i] = ['local.get', name]
-            return
-          }
-        }
-        for (let i2 = 1; i2 < node.length; i2++) tryHoist(node[i2], node, i2)
-      }
-      for (let i = 1; i < loop.length; i++) if (Array.isArray(loop[i])) tryHoist(loop[i], loop, i)
-      if (hoisted.length) parent.splice(idx, 0, ...hoisted)
-    }
-
-    // Innermost-first: recurse before processing, and track (parent, idx) for splicing.
-    // Indices shift as hoists are spliced in — iterate by live position.
-    const visit = (parent) => {
-      for (let i = 1; i < parent.length; i++) {
-        const n = parent[i]
-        if (!Array.isArray(n)) continue
-        visit(n)
-        if (n[0] === 'loop') { const before = parent.length; processLoop(n, parent, i); i += parent.length - before }
-      }
-    }
-    visit(func)
-    if (newDecls.length) func.splice(declEnd, 0, ...newDecls)
+      return n => inv(n) && (opCount(n) >= 2 || n[0].endsWith('.splat'))
+    } })
   }
   return ast
 }
