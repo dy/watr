@@ -8269,7 +8269,7 @@ const licmPure = (op) => {
   if (op === 'select') return true
   if (/^(v128|[if](8x16|16x8|32x4|64x2))\./.test(op)) return !/\.(load|store)/.test(op)
   if (!/^[if](32|64)\./.test(op) && !/^f(32|64)\./.test(op)) return false
-  if (/\.(load|store)/.test(op)) return false
+  if (/\.(load|store)/.test(op) || isMemWrite(op)) return false
   if (/\.(div_[su]|rem_[su])$/.test(op)) return false
   if (/^i(32|64)\.trunc_f/.test(op) && !op.includes('trunc_sat')) return false
   return true

@@ -985,6 +985,20 @@ test('licm: a shared ancestor protects descendants used before the loop', () => 
   assert.equal(f(3), 16, 'the earlier shared occurrence must not read an uninitialized hoist')
 })
 
+test('licm: atomic read-modify-write is never speculative arithmetic', () => {
+  const ast = parse(`(module (memory 1 1 shared)
+    (func (export "f") (param $n i32) (result i32) (local $i i32)
+      (block $exit (loop $loop
+        (br_if $exit (i32.ge_u (local.get $i) (local.get $n)))
+        (drop (i32.add (i32.atomic.rmw.add (i32.const 0) (i32.const 1)) (i32.const 1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+      (i32.load (i32.const 0))))`)
+  const before = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+  const after = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'licm')))).exports.f
+  for (const n of [0, 1, 3]) assert.equal(after(n), before(n))
+})
+
 // ==================== LOCAL REUSE ====================
 
 test('locals: removes unused', () => {
