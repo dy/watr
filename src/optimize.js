@@ -2154,9 +2154,14 @@ const armLight = (body) => {
 }
 const chainTable = (ast) => {
   const scrutOf = (c) => {
-    if (!Array.isArray(c) || c[0] !== 'i32.eq' || c.length !== 3) return null
-    const [, a, b] = c
+    if (!Array.isArray(c)) return null
     const name = (x) => Array.isArray(x) && x[0] === 'local.get' && typeof x[1] === 'string' ? x[1] : null
+    if (c[0] === 'i32.eqz' && c.length === 2) {
+      const s = name(c[1])
+      return s == null ? null : { s, k: 0 }
+    }
+    if (c[0] !== 'i32.eq' || c.length !== 3) return null
+    const [, a, b] = c
     const k = (x) => Array.isArray(x) && x[0] === 'i32.const' && Number.isInteger(+x[1]) ? +x[1] : null
     const na = name(a), kb = k(b)
     if (na != null && kb != null) return { s: na, k: kb }

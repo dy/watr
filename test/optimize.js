@@ -388,6 +388,13 @@ test('chainTable: dense same-scrutinee if/else-if chain → br_table', () => {
   const ref = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(chain))), {}).exports
   for (let op = -1; op <= 6; op++) for (const pc of [0, 5])
     assert.equal(mod.f(op, pc), ref.f(op, pc), `op ${op} pc ${pc}`)
+  // Identity folding canonicalizes the zero arm before table selection.
+  for (const ast of [optimize(optimize(parse(chain), 'identity'), 'chainTable'), optimize(parse(chain), { chainTable: true })]) {
+    assert.equal((print(ast).match(/br_table/g) || []).length, 1, 'folded zero stays in the complete table')
+    const folded = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
+    for (let op = -1; op <= 6; op++) for (const pc of [0, 5])
+      assert.equal(folded.f(op, pc), ref.f(op, pc), `folded op ${op} pc ${pc}`)
+  }
   // short chain (< 5 arms) keeps the branchy form
   const short = `(module (func (export "g") (param $op i32) (result i32)
     (if (result i32) (i32.eq (local.get $op) (i32.const 0)) (then (i32.const 1))
