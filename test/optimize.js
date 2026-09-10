@@ -4709,3 +4709,16 @@ test('constant pool: preserves shared initializers and avoids unprofitable pools
   assert.equal(optimized.filter(n => n[0] === 'global').length, 0)
   assert.equal(new WebAssembly.Instance(new WebAssembly.Module(srcCompile(optimized))).exports.f(), 2.5)
 })
+
+
+test('constant pool: imported globals keep numeric indices', () => {
+  const ast = parse(`(module (import "env" "g" (global $g f64))
+    (func (export "f") (result f64)
+      (f64.add (global.get 0) (f64.add (f64.const 2.5)
+        (f64.add (f64.const 2.5) (f64.const 2.5))))))`)
+  const run = tree => new WebAssembly.Instance(new WebAssembly.Module(compile(tree)), { env: { g: 10 } }).exports.f()
+  const expected = run(ast)
+  const pooled = poolConstants(clone(ast))
+  assert(print(pooled).includes('global.get $__fc0'))
+  assert.equal(run(pooled), expected)
+})

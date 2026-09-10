@@ -8276,6 +8276,7 @@ export function poolConstants(ast) {
   for (let i = 1; i < ast.length; i++) {
     const n = ast[i]
     if (!Array.isArray(n)) continue
+    if (n[0] === 'import') at = i + 1
     const g = n[0] === 'import' ? n[n.length - 1] : n
     if (Array.isArray(g) && g[0] === 'global') {
       globals++
