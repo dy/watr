@@ -960,6 +960,15 @@ const INVERT = {
 
 const identityNode = (node) => {
     if (!Array.isArray(node)) return
+    // Integer equality with zero has a unary opcode. Keep the other operand
+    // once, including calls/tees; either constant position is safe to remove.
+    if ((node[0] === 'i32.eq' || node[0] === 'i64.eq') && node.length === 3) {
+      for (let k = 1; k <= 2; k++) {
+        const c = getConst(node[k])
+        if (c && c.type === node[0].slice(0, 3) && (c.value === 0 || c.value === ZERO64))
+          return [node[0].slice(0, 3) + '.eqz', node[3 - k]]
+      }
+    }
     // (i32.eqz (REL a b)) → (INVREL a b) — one byte, same operands, same order
     if (node[0] === 'i32.eqz' && node.length === 2 && Array.isArray(node[1]) && INVERT[node[1][0]] && node[1].length === 3)
       return [INVERT[node[1][0]], node[1][1], node[1][2]]

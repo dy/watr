@@ -4756,3 +4756,26 @@ test('constant pool: outlining prices expressions after literal sharing', () => 
   const f = tree => new WebAssembly.Instance(new WebAssembly.Module(srcCompile(tree))).exports.f
   assert.equal(f(out)(Infinity, 0, -Infinity), f(ast)(Infinity, 0, -Infinity))
 })
+
+
+test('identity: integer equality to zero uses eqz and evaluates effects once', () => {
+  for (const type of ['i32', 'i64']) for (const left of [false, true]) {
+    const value = '(call $value (local.get 0))', zero = `(${type}.const 0)`
+    const ast = parse(`(module
+      (global $calls (mut i32) (i32.const 0))
+      (func $value (param ${type}) (result ${type})
+        (global.set $calls (i32.add (global.get $calls) (i32.const 1))) (local.get 0))
+      (func (export "f") (param ${type}) (result i32)
+        (${type}.eq ${left ? zero : value} ${left ? value : zero}))
+      (func (export "calls") (result i32) (global.get $calls)))`)
+    const opt = optimize(clone(ast), 'identity')
+    assert(print(opt).includes(type + '.eqz'), 'use the shorter unary instruction')
+    assert(compile(opt).length < compile(ast).length, 'fold saves encoded bytes')
+    const a = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
+    const b = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports
+    for (const n of [0, 1, -1, 2147483647, -2147483648]) {
+      const x = type === 'i64' ? BigInt(n) : n
+      assert.equal(b.f(x), a.f(x)); assert.equal(b.calls(), a.calls())
+    }
+  }
+})
