@@ -4601,8 +4601,8 @@ const specializeParams = (ast) => {
       const first = sites[0][2 + k]
       if (!sites.every(c => sameConst(c[2 + k], first))) continue
       const pd = params[k]
-      // never-written single-read param: splice the const straight onto the one
-      // get — no local, no set, no coalesce slot. A const is a pure leaf, so any
+      // Never-written parameters can substitute at each read when the constant
+      // is tiny, or at the sole read otherwise. No local/set/coalesce slot. Any
       // position the read occupied is equivalent (invariance guaranteed by
       // writes === 0, including across loop back-edges).
       let reads = 0, writes = 0, readSite = null
@@ -4611,7 +4611,7 @@ const specializeParams = (ast) => {
         if (n[0] === 'local.get') { reads++; readSite = n }
         else if (n[0] === 'local.set' || n[0] === 'local.tee') writes++
       })
-      const direct = writes === 0 && reads <= 1
+      const direct = writes === 0 && (reads <= 1 || isTinyConst(first))
       const cost = direct ? (reads === 0 ? 0 : Math.max(0, constInstrSize(first) - 2))
         : 4 + constInstrSize(first) // local decl + set + const at callee
       const gain = sites.length * constInstrSize(first) + 1
@@ -4619,7 +4619,10 @@ const specializeParams = (ast) => {
       const pi = fn.indexOf(pd)
       fn.splice(pi, 1)
       if (direct) {
-        if (readSite) { readSite.length = 0; readSite.push(...clone(first)) }
+        if (reads === 1) { readSite.length = 0; readSite.push(...clone(first)) }
+        else if (reads > 1) walkN(fn, n => {
+          if (n[0] === 'local.get' && n[1] === pd[1]) { n.length = 0; n.push(...clone(first)) }
+        })
       } else {
         let at = 2
         while (at < fn.length && Array.isArray(fn[at]) &&

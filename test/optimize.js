@@ -4866,3 +4866,48 @@ test('inlineWrappers: large workers stay shared behind public adapters', () => {
     for (const n of [0, 1, -1, 12345]) assert.equal(after(n), before(n))
   }
 })
+
+
+test('spec: reused tiny constant parameters need no local, including loop reads', () => {
+  const instantiate = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
+  for (const type of ['i32', 'i64']) for (const value of [-64, 0, 20, 63]) {
+    const src = `(module
+      (func $work (param $n i32) (param $c ${type}) (result ${type})
+        (local $sum ${type})
+        (local.set $sum (local.get $c))
+        (block $done (loop $again
+          (br_if $done (i32.eqz (local.get $n)))
+          (local.set $sum (${type}.add (local.get $sum) (local.get $c)))
+          (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+          (br $again)))
+        (${type}.add (local.get $sum) (local.get $c)))
+      (func (export "f") (param $n i32) (result ${type})
+        (call $work (local.get $n) (${type}.const ${value}))))`
+    const ast = parse(src), before = instantiate(ast), optimized = optimize(clone(ast), 'spec')
+    assert(!/\((?:param|local|local.get) \$c\b/.test(print(optimized)), 'all reads substitute without a new local')
+    assert(compile(optimized).length < compile(ast).length, 'substitution shrinks the binary')
+    const after = instantiate(optimized)
+    for (const n of [0, 1, 4, 0, 4]) assert.equal(after.f(n), before.f(n), `${type} ${value} n=${n}`)
+  }
+  for (const [body, other] of [
+    ['(local.set $c (i32.add (local.get $c) (local.get $n))) (i32.add (local.get $c) (local.get $c))', 20],
+    ['(i32.add (local.get $c) (local.get $c))', 21],
+  ]) {
+    const ast = parse(`(module
+      (func $work (param $n i32) (param $c i32) (result i32) ${body})
+      (func (export "f") (param $n i32) (result i32) (call $work (local.get $n) (i32.const 20)))
+      (func (export "g") (param $n i32) (result i32) (call $work (local.get $n) (i32.const ${other})))
+      (func (export "h") (param $n i32) (result i32) (call $work (local.get $n) (i32.const 20))))`)
+    const before = instantiate(ast), after = instantiate(optimize(clone(ast), 'spec'))
+    for (const n of [-3, 0, 5]) for (const f of ['f', 'g', 'h']) assert.equal(after[f](n), before[f](n))
+  }
+  for (const value of [-65, 64]) {
+    const ast = parse(`(module
+      (func $work (param $c i32) (result i32) (i32.add (local.get $c) (local.get $c)))
+      (func (export "f") (result i32) (call $work (i32.const ${value}))))`)
+    const optimized = optimize(clone(ast), 'spec')
+    assert(print(optimized).includes('(param $c'), 'wider reused constants retain the size guard')
+    assert.equal(instantiate(optimized).f(), value * 2)
+  }
+
+})
