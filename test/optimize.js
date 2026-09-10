@@ -4722,3 +4722,24 @@ test('constant pool: imported globals keep numeric indices', () => {
   assert(print(pooled).includes('global.get $__fc0'))
   assert.equal(run(pooled), expected)
 })
+
+
+test('constant pool: scalar types preserve exact bytes and signed encoding cost', () => {
+  const ast = parse(`(module (memory (export "memory") 1)
+    (func (export "f")
+      ${['i32:0xffffffff', 'i32:0x7fffffff', 'i64:0xffffffffffffffff',
+        'i64:0x7fffffffffffffff', 'i64:0x8000000000000000',
+        'f32:-0', 'f32:nan:0x400001', 'f32:-nan:0x400002', 'f64:-0']
+        .map((s, i) => { const at = s.indexOf(':'), type = s.slice(0, at), value = s.slice(at + 1)
+          return Array.from({ length: 8 }, (_, j) => `(${type}.store (i32.const ${(i * 8 + j) * 8}) (${type}.const ${value}))`).join('\n') }).join('\n')}))`)
+  const run = tree => {
+    const { exports } = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(tree)))
+    exports.f()
+    return new Uint8Array(exports.memory.buffer).slice(0, 9 * 8 * 8)
+  }
+  const out = poolConstants(clone(ast))
+  assert.deepEqual(run(out), run(ast))
+  assert(srcCompile(out).length < srcCompile(ast).length)
+  assert(!out.some(n => n[0] === 'global' && n[3][1] === '0xffffffff'))
+  assert(!out.some(n => n[0] === 'global' && n[3][1] === '0xffffffffffffffff'))
+})

@@ -7077,7 +7077,8 @@ const slebSize = (v) => {
 const constInstrSize = (node) => {
   if (!Array.isArray(node)) return 4
   switch (node[0]) {
-    case 'i32.const': case 'i64.const': return 1 + slebSize(node[1])
+    case 'i32.const': return 1 + slebSize(getConst(node).value)
+    case 'i64.const': return 1 + slebSize(node[1])
     case 'f32.const': return 5
     case 'f64.const': return 9
     case 'v128.const': return 18
@@ -8267,9 +8268,10 @@ const reorder = (ast) => {
   return ['module', ...imports, ...funcs, ...others]
 }
 
-/** Pool repeated f64 constants after folding and inlining have finished. */
+/** Pool repeated scalar constants after folding and inlining have finished. */
 export function poolConstants(ast) {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  const scalarOps = ['f64.const', 'f32.const', 'i32.const', 'i64.const']
   const counts = new Map(), literals = new Map(), sites = [], protectedConsts = new Set()
   const names = new Set(), scratch = new Float64Array(1), words = new Uint32Array(scratch.buffer)
   let globals = 0, at = 1, localGlobals = false
@@ -8283,19 +8285,20 @@ export function poolConstants(ast) {
       if (typeof g[1] === 'string' && g[1][0] === '$') names.add(g[1])
       if (n[0] === 'global') { at = i + 1; localGlobals = true }
     }
-    if (n[0] !== 'func') walkN(n, v => { if (Array.isArray(v) && v[0] === 'f64.const') protectedConsts.add(v) })
+    if (n[0] !== 'func') walkN(n, v => { if (Array.isArray(v) && scalarOps.includes(v[0])) protectedConsts.add(v) })
   }
   for (const n of ast) {
     if (!Array.isArray(n) || n[0] !== 'func') continue
     walkN(n, (v, parent, index) => {
-      if (!Array.isArray(v) || v[0] !== 'f64.const' || v.length !== 2 || protectedConsts.has(v)) return
+      if (!Array.isArray(v) || !scalarOps.includes(v[0]) || v.length !== 2 || protectedConsts.has(v)) return
       const value = v[1]
       let key
       if (typeof value === 'number') { scratch[0] = value; key = words[0] + ':' + words[1] }
-      else if (typeof value === 'string') key = 's:' + value
+      else if (typeof value === 'string' || typeof value === 'bigint') key = 's:' + value
       else return
+      key = v[0] + ':' + key
       counts.set(key, (counts.get(key) || 0) + 1)
-      if (!literals.has(key)) literals.set(key, value)
+      if (!literals.has(key)) literals.set(key, v)
       sites.push(parent, index, key)
     })
   }
@@ -8305,12 +8308,13 @@ export function poolConstants(ast) {
   for (const [key, n] of candidates) {
     let width = 1, index = globals + decls.length
     while (index >= 128) { width++; index = Math.floor(index / 128) }
-    const saved = n * (8 - width) - 12
+    const literal = literals.get(key), bytes = constInstrSize(literal)
+    const saved = n * (bytes - 1 - width) - (bytes + 3)
     if (saved <= 0) continue
     let name
     do { name = '$__fc' + serial++ } while (names.has(name))
     chosen.set(key, name)
-    decls.push(['global', name, 'f64', ['f64.const', literals.get(key)]])
+    decls.push(['global', name, literal[0].slice(0, 3), literal.slice()])
     savings += saved
   }
   // Reserve two bytes for growth of section/count length encodings.
@@ -8482,7 +8486,7 @@ const PASSES = [
   ['mergeBlocks',   mergeBlocks,    true,  'unwrap `(block $L …)` whose label is never targeted'],
   ['coalesce',      coalesceLocals, true,  'share local slots between same-type non-overlapping locals'],
   ['locals',        localReuse,     true,  'remove unused locals'],
-  ['poolConstants', poolConstants, false, 'pool repeated f64 constants after folding (once after rounds)'],
+  ['poolConstants', poolConstants, false, 'pool repeated scalar constants after folding (once after rounds)'],
   ['sortLocals',    sortLocals,     true,  'order local declarations for the encoding: hot indices one byte, one locals-vector entry per type — runs once after rounds'],
   ['outline',       outline,        true,  'extract repeated pure expressions into shared helper functions'],
   ['dedupTypes',    dedupTypes,     true,  'merge identical type definitions'],
