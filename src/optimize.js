@@ -5819,6 +5819,7 @@ const WRAPPER_INLINE_MAX = 360
 const inlineWrappers = (ast, { pin = EMPTY_SET, touched = null } = {}) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
   const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
+  const exported = new Set(ast.filter(n => Array.isArray(n) && n[0] === 'export' && n[2]?.[0] === 'func').map(n => n[2][1]))
   const byName = new Map()
   for (const f of funcs) if (typeof f[1] === 'string') byName.set(f[1], f)
 
@@ -5841,7 +5842,11 @@ const inlineWrappers = (ast, { pin = EMPTY_SET, touched = null } = {}) => {
     if (calleeName === w[1] || pin.has(calleeName)) continue
     const callee = byName.get(calleeName)
     if (!callee) continue                                    // import / intrinsic
-    if (inlBodySize(callee) > WRAPPER_INLINE_MAX) continue
+    // Public adapters keep a shared large worker outlined. The ordinary
+    // small-function budget still removes cheap frames; internal dispatch
+    // trampolines retain their larger speed budget. inlineOnce owns unique uses.
+    const publicEntry = exported.has(w[1]) || w.some(n => Array.isArray(n) && n[0] === 'export')
+    if (inlBodySize(callee) > (publicEntry ? INLINE_MAX_NODES : WRAPPER_INLINE_MAX)) continue
     if (inlCallsSelf(callee, calleeName)) continue           // recursive worker
     if (typeof w[1] === 'string' && inlCallsSelf(callee, w[1])) continue  // would re-enter the wrapper
     const p = inlParse(callee)

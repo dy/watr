@@ -4843,3 +4843,26 @@ test('identity: integer equality to zero uses eqz and evaluates effects once', (
     }
   }
 })
+
+
+test('inlineWrappers: large workers stay shared behind public adapters', () => {
+  const body = Array.from({length: 35}, (_, i) => i).reduce((x, i) =>
+    `(i32.xor (i32.mul ${x} (i32.const 3)) (i32.const ${i}))`, '(local.get $x)')
+  for (const inlineExport of [true, false]) {
+    const src = `(module
+      (func $work (param $x i32) (result i32) ${body})
+      (func $adapter ${inlineExport ? '(export "run")' : ''} (param $x i32) (result f64)
+        (f64.convert_i32_s (call $work (local.get $x))))
+      ${inlineExport ? '' : '(export "run" (func $adapter))'}
+      (func $internal (param $x i32) (result f64)
+        (f64.convert_i32_s (call $work (local.get $x)))))`
+    const ast = optimize(parse(src), 'inlineWrappers')
+    const adapter = ast.find(n => n[0] === 'func' && n[1] === '$adapter')
+    const internal = ast.find(n => n[0] === 'func' && n[1] === '$internal')
+    assert(print(adapter).includes('call $work'), 'public adapter retains its shared worker')
+    assert(!print(internal).includes('call $work'), 'internal trampoline keeps the speed budget')
+    const run = a => new WebAssembly.Instance(new WebAssembly.Module(compile(a))).exports.run
+    const before = run(parse(src)), after = run(ast)
+    for (const n of [0, 1, -1, 12345]) assert.equal(after(n), before(n))
+  }
+})
