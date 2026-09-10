@@ -916,6 +916,19 @@ const TRUNC_OF_CONVERT = {
   'i64.trunc_f64_u': { 'f64.convert_i32_u': 'i64.extend_i32_u' },
 }
 
+/** Simplify exact unary conversions without walking or mutating their operands. */
+export const simplifyCast = (node) => {
+  if (node.length !== 2 || !Array.isArray(node[1]) || node[1].length !== 2) return
+  const [op, inner] = node
+  const inv = ROUNDTRIP[op]
+  if (inv && (typeof inv === 'string' ? inner[0] === inv : inv.has(inner[0]))) return inner[1]
+  const toc = TRUNC_OF_CONVERT[op]
+  if (toc && inner[0] in toc) return toc[inner[0]] ? [toc[inner[0]], inner[1]] : inner[1]
+  // Every i32 is exactly representable in f64 and is already integral.
+  if ((op === 'f64.ceil' || op === 'f64.floor' || op === 'f64.trunc' || op === 'f64.nearest') &&
+      (inner[0] === 'f64.convert_i32_s' || inner[0] === 'f64.convert_i32_u')) return inner
+}
+
 // An f64 compare of a convert_i32 result against a constant NO i32 can convert to
 // (NaN, ±inf, fractional, outside the i32 range) has one statically-known outcome:
 // unequal. eq → 0, ne → 1. The convert's operand is untouched (stays evaluated via
@@ -972,6 +985,18 @@ const identityNode = (node) => {
     // (i32.eqz (REL a b)) → (INVREL a b) — one byte, same operands, same order
     if (node[0] === 'i32.eqz' && node.length === 2 && Array.isArray(node[1]) && INVERT[node[1][0]] && node[1].length === 3)
       return [INVERT[node[1][0]], node[1][1], node[1][2]]
+    // Stores consume only their lane width. Eliminate a cast that changes
+    // none of those bits, retaining address/value evaluation and all memargs.
+    const store = node[0], value = node[node.length - 1]
+    if (Array.isArray(value) && value.length === 2) {
+      let op
+      if ((store === 'i32.store' || store === 'i32.store8' || store === 'i32.store16') && value[0] === 'i32.wrap_i64')
+        op = store === 'i32.store' ? 'i64.store32' : 'i64' + store.slice(3)
+      else if ((store === 'i64.store8' || store === 'i64.store16' || store === 'i64.store32') &&
+               (value[0] === 'i64.extend_i32_s' || value[0] === 'i64.extend_i32_u'))
+        op = store === 'i64.store32' ? 'i32.store' : 'i32' + store.slice(3)
+      if (op) { node[0] = op; node[node.length - 1] = value[1]; return node }
+    }
     // Narrowing store ignores the value's high bits — an and-mask that keeps
     // every stored bit is dead: (iNN.storeW addr (and X M)) → (iNN.storeW addr X)
     // when (M & widthMask) == widthMask. Byte codecs mask before every store.
@@ -982,8 +1007,8 @@ const identityNode = (node) => {
         if (Array.isArray(v) && (v[0] === 'i32.and' || v[0] === 'i64.and') && v.length === 3) {
           for (const k of [1, 2]) {
             const m = getConst(v[k])
-            if (m && (typeof m.value === 'bigint' || typeof m.value === 'number')) {
-              const mv = typeof m.value === 'bigint' ? m.value : BigInt(m.value)
+            if (m && (m.type === 'i32' || m.type === 'i64')) {
+              const mv = BigInt(m.value)
               if ((mv & w) === w) { node[node.length - 1] = v[k === 1 ? 2 : 1]; return node }
             }
           }
@@ -1001,18 +1026,8 @@ const identityNode = (node) => {
       if (Array.isArray(tail) && (tail[0] === 'f64.convert_i32_s' || tail[0] === 'f64.convert_i32_u') && node.length > 2)
         return [tail[0], ['block', ['result', 'i32'], ...node.slice(2, -1), tail[1]]]
     }
-    // Unary cast round-trip: outer(inner(x)) → x (post-order, so an inner pair already
-    // collapsed before the outer op sees it — the whole box/unbox chain unwinds in one walk).
-    if (node.length === 2 && Array.isArray(node[1]) && node[1].length === 2) {
-      const inv = ROUNDTRIP[node[0]]
-      if (inv && (typeof inv === 'string' ? node[1][0] === inv : inv.has(node[1][0]))) return node[1][1]
-      const toc = TRUNC_OF_CONVERT[node[0]]
-      if (toc && node[1][0] in toc) {
-        const ext = toc[node[1][0]]
-        return ext ? [ext, node[1][1]] : node[1][1]
-      }
-      return
-    }
+    const cast = simplifyCast(node)
+    if (cast) return cast
     // wrap of a 64-bit OR with a HIGH-ONLY constant: wrap keeps the low 32 bits,
     // which the constant doesn't touch — (i32.wrap_i64 (i64.or C_hi X)) →
     // (i32.wrap_i64 X) when (C & 0xFFFFFFFF) == 0. The NaN-box pointer BOX is
@@ -8264,7 +8279,10 @@ export function poolConstants(ast) {
     if (!Array.isArray(n) || n[0] !== 'func') continue
     walkN(n, (v, parent, index) => {
       if (!Array.isArray(v) || !scalarOps.includes(v[0]) || v.length !== 2 || protectedConsts.has(v)) return
-      const value = v[1]
+      // A global.get costs at least two bytes; these literals can never save.
+      if (constInstrSize(v) <= 2) return
+      // Pool integer bits, independent of decimal/hex/signed source spelling.
+      const value = v[0] === 'i64.const' || v[0] === 'i32.const' ? getConst(v)?.value : v[1]
       let key
       if (typeof value === 'number') { scratch[0] = value; key = words[0] + ':' + words[1] }
       else if (typeof value === 'string' || typeof value === 'bigint') key = 's:' + value

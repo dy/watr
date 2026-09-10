@@ -4911,3 +4911,104 @@ test('spec: reused tiny constant parameters need no local, including loop reads'
   }
 
 })
+
+test('identity: stores discard only conversions outside their stored width', () => {
+  const cases = [
+    ['i32.store8', 'i32.wrap_i64', 'i64.store8', 'i64', 1],
+    ['i32.store16', 'i32.wrap_i64', 'i64.store16', 'i64', 2],
+    ['i32.store', 'i32.wrap_i64', 'i64.store32', 'i64', 4],
+    ...['s', 'u'].flatMap(sign => [
+      ['i64.store8', `i64.extend_i32_${sign}`, 'i32.store8', 'i32', 1],
+      ['i64.store16', `i64.extend_i32_${sign}`, 'i32.store16', 'i32', 2],
+      ['i64.store32', `i64.extend_i32_${sign}`, 'i32.store', 'i32', 4],
+    ]),
+  ]
+  for (const [store, cast, folded, type, width] of cases) {
+    const src = `(module (memory (export "memory") 1)
+      (global $order (export "order") (mut i32) (i32.const 0))
+      (func $addr (param $p i32) (result i32)
+        (global.set $order (i32.add (i32.mul (global.get $order) (i32.const 10)) (i32.const 1))) (local.get $p))
+      (func $value (param $v ${type}) (result ${type})
+        (global.set $order (i32.add (i32.mul (global.get $order) (i32.const 10)) (i32.const 2))) (local.get $v))
+      (func (export "f") (param $p i32) (param $v ${type})
+        (global.set $order (i32.const 0))
+        (${store} offset=3 align=1 (call $addr (local.get $p)) (${cast} (call $value (local.get $v))))))`
+    const ast = optimize(parse(src), 'identity'), out = print(ast)
+    assert(out.includes(folded) && !out.includes(cast), `${store} removes ${cast}`)
+    const run = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
+    const ref = run(parse(src)), opt = run(ast)
+    const vals = type === 'i64' ? [0n, -1n, 0x123456789abcdef0n, -(1n << 63n)] : [0, -1, 2147483647, -2147483648]
+    for (const p of [0, 0, 65536 - width - 3, 1]) for (const v of vals) {
+      ref.f(p, v); opt.f(p, v)
+      assert.deepEqual(new Uint8Array(opt.memory.buffer), new Uint8Array(ref.memory.buffer))
+      assert.equal(opt.order.value, 12, 'address then value, once each')
+    }
+    assert.throws(() => ref.f(65536 - width - 2, vals[0]), WebAssembly.RuntimeError)
+    assert.throws(() => opt.f(65536 - width - 2, vals[0]), WebAssembly.RuntimeError)
+    assert.equal(opt.order.value, 12, 'both operands run before bounds trap')
+    assert.deepEqual(new Uint8Array(opt.memory.buffer), new Uint8Array(ref.memory.buffer), 'trap writes nothing')
+  }
+  for (const sign of ['s', 'u']) {
+    const src = `(module (memory 1) (func (param $v i32)
+      (i64.store (i32.const 0) (i64.extend_i32_${sign} (local.get $v)))))`
+    assert(print(optimize(parse(src), 'identity')).includes(`i64.extend_i32_${sign}`), 'full-width store retains extension')
+  }
+})
+
+test('identity: rounding an exact i32-to-f64 conversion is redundant', () => {
+  for (const round of ['ceil', 'floor', 'trunc', 'nearest']) for (const sign of ['s', 'u']) {
+    const src = `(module (func (export "f") (param $x i32) (result f64)
+      (f64.${round} (f64.convert_i32_${sign} (local.get $x)))))`
+    const ast = optimize(parse(src), 'identity')
+    assert(!print(ast).includes(`f64.${round}`))
+    const { f } = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
+    for (const x of [0, -1, 2147483647, -2147483648]) assert.equal(f(x), sign === 'u' ? x >>> 0 : x)
+    const plain = `(module (func (param $x f64) (result f64) (f64.${round} (local.get $x))))`
+    assert(print(optimize(parse(plain), 'identity')).includes(`f64.${round}`), 'unknown f64 still needs rounding')
+  }
+})
+
+test('identity: canonical i64 masks obey the narrowing store width', () => {
+  for (const [store, mask, keep] of [
+    ['store8', '0xff', false], ['store16', '65535', false],
+    ['store32', '0xffffffff', false], ['store16', '-1', false],
+    ['store8', '0x7f', true], ['store16', '0xff', true], ['store32', '0xffff', true],
+  ]) {
+    const src = `(module (memory (export "memory") 1)
+      (func (export "f") (param $v i64)
+        (i64.${store} (i32.const 0) (i64.and (local.get $v) (i64.const ${mask})))))`
+    const ast = optimize(parse(src), 'identity')
+    assert.equal(print(ast).includes('i64.and'), keep, `${store}, mask ${mask}`)
+    const run = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
+    const ref = run(parse(src)), opt = run(ast)
+    for (const v of [0n, -1n, 0x123456789abcdef0n]) {
+      ref.f(v); opt.f(v)
+      assert.deepEqual(new Uint8Array(opt.memory.buffer), new Uint8Array(ref.memory.buffer))
+    }
+  }
+})
+
+test('constant pool: integer spellings share one bit-exact entry', () => {
+  for (const [type, values] of [
+    ['i32', [1000000, '1000000', '0xf4240', '1_000_000']],
+    ['i32', [-2147483648, '2147483648', '0x80000000', '-2147483648']],
+    ['i64', [1000000, 1000000n, '0xf4240', '1_000_000']],
+    ['i64', ['-9223372036854775808', '9223372036854775808', '0x8000000000000000', '-0x8000000000000000']],
+  ]) {
+    const ast = ['module', ['memory', ['export', '"memory"'], '1']]
+    const f = ['func', ['export', '"f"']]
+    for (let i = 0; i < values.length * 3; i++)
+      f.push([type + '.store', ['i32.const', i * 8], [type + '.const', values[i % values.length]]])
+    ast.push(f)
+    const out = poolConstants(clone(ast))
+    assert.equal(out.filter(n => n[0] === 'global').length, 1, `${type}: one bit pattern, one global`)
+    const run = tree => {
+      const { exports } = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(tree)))
+      exports.f(); return new Uint8Array(exports.memory.buffer)
+    }
+    assert.deepEqual(run(out), run(ast))
+    assert(srcCompile(out).length < srcCompile(ast).length)
+  }
+  const cheap = parse(`(module (func ${Array.from({length: 40}, () => '(drop (i64.const -1)) (drop (i32.const 63))').join(' ')}))`)
+  assert.equal(print(poolConstants(clone(cheap))), print(cheap), 'cheap repeated literals stay inline')
+})
