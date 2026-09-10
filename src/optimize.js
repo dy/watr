@@ -5421,8 +5421,8 @@ let inlineUid = 0
 let inflations = 0
 const INL_HEAD = new Set(['export', 'type', 'param', 'result', 'local'])
 const inlBodyStart = (fn) => {
-  let i = 2
-  while (i < fn.length && (typeof fn[i] === 'string' || (Array.isArray(fn[i]) && INL_HEAD.has(fn[i][0])))) i++
+  let i = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
+  while (i < fn.length && Array.isArray(fn[i]) && INL_HEAD.has(fn[i][0])) i++
   return i
 }
 const inlIsBranch = op => op === 'br' || op === 'br_if' || op === 'br_table'
@@ -5434,9 +5434,12 @@ const inlIsBranch = op => op === 'br' || op === 'br_if' || op === 'br_table'
 const FLAT_CTRL = new Set(['block', 'loop', 'if', 'else', 'end', 'br', 'br_if', 'br_table',
   'try_table', 'catch', 'catch_all', 'delegate', 'rethrow', 'return_call', 'return_call_indirect'])
 const inlUnsafe = (n) => {
-  if (typeof n === 'string') return FLAT_CTRL.has(n)
+  if (typeof n === 'string') return FLAT_CTRL.has(n) || n === 'local.get' || n === 'local.set' || n === 'local.tee'
   if (!Array.isArray(n)) return false
   const op = n[0]
+  // The splice renames local references; numeric/flat references lack that map.
+  if ((op === 'local.get' || op === 'local.set' || op === 'local.tee') &&
+      (typeof n[1] !== 'string' || n[1][0] !== '$')) return true
   if (op === 'return_call' || op === 'return_call_indirect' || op === 'return_call_ref') return true
   if (op === 'try' || op === 'try_table' || op === 'delegate' || op === 'rethrow') return true  // exception labels — not handled by the relabeler below
   // NUMERIC branch labels are safe to splice: internal depths are preserved verbatim,
@@ -5616,14 +5619,31 @@ const buildInline = (params, locals, inlResult, cBody, args) => {
   for (const l of locals) rename.set(l.name, `$__inl${uid}_${l.name.slice(1)}`)
   // The callee's own block/loop/if labels would shadow same-named caller labels (and
   // break depth resolution) under the added nesting — give them fresh names too.
-  const labelRename = new Map()
-  const collectLabels = (n) => {
+  const labelRename = new Map(), writes = new Set()
+  const collectBindings = (n, written, labels) => {
     if (!Array.isArray(n)) return
-    if (isBranchScope(n[0]) && typeof n[1] === 'string' && n[1][0] === '$' && !labelRename.has(n[1]))
+    if (n[0] === 'local.set' || n[0] === 'local.tee')
+      written.add(typeof n[1] === 'string' && n[1][0] === '$' ? n[1] : null)
+    if (labels && isBranchScope(n[0]) && typeof n[1] === 'string' && n[1][0] === '$' && !labelRename.has(n[1]))
       labelRename.set(n[1], `$__inl${uid}L_${n[1].slice(1)}`)
-    for (let i = 1; i < n.length; i++) collectLabels(n[i])
+    for (let i = 1; i < n.length; i++) {
+      if (n[i] === 'local.set' || n[i] === 'local.tee')
+        written.add(typeof n[i + 1] === 'string' && n[i + 1][0] === '$' ? n[i + 1] : null)
+      collectBindings(n[i], written, labels)
+    }
   }
-  for (const n of cBody) collectLabels(n)
+  for (const n of cBody) collectBindings(n, writes, true)
+  // Read-only parameters can use the caller's local directly. Keep snapshots
+  // if ANY argument writes that local: operands are evaluated left-to-right.
+  // Callee locals are renamed, and calls cannot modify their caller's locals.
+  const argWrites = new Set(), aliases = new Set()
+  for (const arg of args) collectBindings(arg, argWrites, false)
+  for (let k = 0; k < params.length; k++) {
+    const p = params[k], arg = args[k]
+    if (!Array.isArray(arg) || arg[0] !== 'local.get' || typeof arg[1] !== 'string' || writes.has(p.name)) continue
+    if (argWrites.has(null) || argWrites.has(arg[1])) continue
+    rename.set(p.name, arg[1]); aliases.add(p.name)
+  }
   const sub = (n) => {
     if (n === 'return') return ['br', exit] // bare stack-style return — value already on stack
     if (!Array.isArray(n)) return n
@@ -5636,13 +5656,13 @@ const buildInline = (params, locals, inlResult, cBody, args) => {
     if (inlIsBranch(op)) return [op, ...n.slice(1).map(c => (typeof c === 'string' && labelRename.has(c)) ? labelRename.get(c) : sub(c))]
     return n.map((c, i) => i === 0 ? c : sub(c))
   }
-  const setup = params.map((p, k) => ['local.set', rename.get(p.name), args[k]])
+  const setup = params.flatMap((p, k) => aliases.has(p.name) ? [] : [['local.set', rename.get(p.name), args[k]]])
   const resets = locals.filter(l => inlNeedsReset(cBody, l.name)).map(l => ['local.set', rename.get(l.name), inlZeroFor(l.type)])
   const inner = cBody.map(sub)
   const block = inlResult
     ? ['block', exit, ['result', inlResult], ...setup, ...resets, ...inner]
     : ['block', exit, ...setup, ...resets, ...inner]
-  const decls = [...params, ...locals].map(p => ['local', rename.get(p.name), p.type])
+  const decls = [...params.filter(p => !aliases.has(p.name)), ...locals].map(p => ['local', rename.get(p.name), p.type])
   return { block, decls }
 }
 
@@ -6207,8 +6227,7 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
 
   // Lift primitives are shared with `inline` (defined once above buildInline). inlineOnce
   // splices into a SINGLE caller (never duplicating); `inline` duplicates into every caller.
-  const bodyStart = inlBodyStart, callsSelf = inlCallsSelf, unsafe = inlUnsafe, isBranch = inlIsBranch
-  const zeroFor = inlZeroFor, needsReset = inlNeedsReset
+  const bodyStart = inlBodyStart, callsSelf = inlCallsSelf, unsafe = inlUnsafe
 
   // Count plain-call references across the WHOLE module ONCE (anonymous exported
   // funcs call helpers too); flag any non-call reference (return_call etc.).
@@ -6233,7 +6252,7 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
   for (let round = 0; round < MAX_INLINE_ROUNDS; round++) {
 
     // Pick a callee.
-    let calleeName = null
+    let calleeName = null, parsed = null
     for (const [name, fn] of funcByName) {
       if (pinned.has(name) || otherRef.has(name)) continue
       if (callRefs.get(name) !== 1) continue
@@ -6242,78 +6261,21 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
       // its auto-vectorizer later rewrites to f64x2 mirrors). The policy lives with the caller.
       if (pin.has(name)) continue
       if (callsSelf(fn, name)) continue
-      // named params/locals only (we'll rename them); reject locals with types
-      // we can't zero-init on block re-entry.
-      let ok = true, nResult = 0
-      for (let i = 2; i < fn.length; i++) {
-        const c = fn[i]
-        if (typeof c === 'string') continue
-        if (!Array.isArray(c)) { ok = false; break }
-        if (c[0] === 'param' || c[0] === 'local') {
-          if (typeof c[1] !== 'string' || c[1][0] !== '$') { ok = false; break }
-          if (c[0] === 'local' && !zeroFor(c[2])) { ok = false; break }
-        }
-        else if (c[0] === 'result') nResult += c.length - 1
-        else if (c[0] === 'export') { ok = false; break }
-        else if (c[0] === 'type') continue
-        else break
-      }
-      if (!ok || nResult > 1) continue
+      const p = inlParse(fn)
+      if (!p) continue
       let bad = false
       for (let i = bodyStart(fn); i < fn.length; i++) if (unsafe(fn[i])) { bad = true; break }
       if (bad) continue
-      calleeName = name; break
+      calleeName = name; parsed = p; break
     }
     if (!calleeName) break
 
     const callee = funcByName.get(calleeName)
-    const params = [], locals = []
-    let inlResult = null
-    for (let i = 2; i < callee.length; i++) {
-      const c = callee[i]
-      if (typeof c === 'string' || !Array.isArray(c)) continue
-      if (c[0] === 'param') params.push({ name: c[1], type: c[2] })
-      else if (c[0] === 'result') { if (c.length > 1) inlResult = c[1] }
-      else if (c[0] === 'local') locals.push({ name: c[1], type: c[2] })
-      else if (c[0] === 'export' || c[0] === 'type') continue
-      else break
-    }
+    const { params, locals, inlResult } = parsed
     const cBody = callee.slice(bodyStart(callee))
 
-    inflations++
-    const uid = ++inlineUid
-    const exit = `$__inl${uid}`
-    const rename = new Map()
-    for (const p of params) rename.set(p.name, `$__inl${uid}_${p.name.slice(1)}`)
-    for (const l of locals) rename.set(l.name, `$__inl${uid}_${l.name.slice(1)}`)
-    // The callee's own block/loop/if labels would shadow same-named labels in the
-    // caller after nesting (and break depth resolution) — give them fresh names too.
-    const labelRename = new Map()
-    const collectLabels = (n) => {
-      if (!Array.isArray(n)) return
-      if (isBranchScope(n[0]) && typeof n[1] === 'string' && n[1][0] === '$' && !labelRename.has(n[1]))
-        labelRename.set(n[1], `$__inl${uid}L_${n[1].slice(1)}`)
-      for (let i = 1; i < n.length; i++) collectLabels(n[i])
-    }
-    for (const n of cBody) collectLabels(n)
-    const sub = (n) => {
-      // bare stack-style `return` (flat/wax form) copied verbatim would become a
-      // hard FUNCTION return inside the caller, truncating everything after the
-      // splice — same rewrite as the folded form: exit the inline block instead
-      if (n === 'return') return ['br', exit]
-      if (!Array.isArray(n)) return n
-      const op = n[0]
-      if ((op === 'local.get' || op === 'local.set' || op === 'local.tee') && typeof n[1] === 'string' && rename.has(n[1]))
-        return [op, rename.get(n[1]), ...n.slice(2).map(sub)]
-      if (op === 'return') return ['br', exit, ...n.slice(1).map(sub)]
-      if (isBranchScope(op) && typeof n[1] === 'string' && labelRename.has(n[1]))
-        return [op, labelRename.get(n[1]), ...n.slice(2).map(sub)]
-      if (isBranch(op)) return [op, ...n.slice(1).map(c => (typeof c === 'string' && labelRename.has(c)) ? labelRename.get(c) : sub(c))]
-      return n.map((c, i) => i === 0 ? c : sub(c))
-    }
-
     // Splice into the (unique) caller (which may be an anonymous exported func).
-    let done = false
+    let done = false, decls = []
     for (const fn of funcs) {
       if (fn === callee || done) continue
       const start = bodyStart(fn)
@@ -6322,24 +6284,13 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
           if (done || !Array.isArray(n) || n[0] !== 'call' || n[1] !== calleeName) return
           const args = n.slice(2)
           if (args.length !== params.length) return  // arity mismatch — leave it
-          const setup = params.map((p, k) => ['local.set', rename.get(p.name), args[k]])
-          // Re-zero only the callee locals that actually depend on the per-call
-          // zero-init (read-before-write, or first-write inside a conditional
-          // branch). Unconditionally-written-before-read scratch locals don't
-          // need a reset, and emitting one inflates their set-count enough to
-          // break propagation/coalescing of the helper that follows.
-          const resets = locals
-            .filter(l => needsReset(cBody, l.name))
-            .map(l => ['local.set', rename.get(l.name), zeroFor(l.type)])
-          const inner = cBody.map(sub)
+          const lifted = buildInline(params, locals, inlResult, cBody, args)
+          decls = lifted.decls
           done = true
-          return inlResult
-            ? ['block', exit, ['result', inlResult], ...setup, ...resets, ...inner]
-            : ['block', exit, ...setup, ...resets, ...inner]
+          return lifted.block
         })
         if (replaced !== fn[i]) fn[i] = replaced
         if (done) {
-          const decls = [...params, ...locals].map(p => ['local', rename.get(p.name), p.type])
           if (decls.length) fn.splice(bodyStart(fn), 0, ...decls)
           break
         }

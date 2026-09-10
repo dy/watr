@@ -1250,6 +1250,63 @@ test('inline: callee with return_call is NOT inlined into different-typed caller
 
 // ==================== INLINE-ONCE ====================
 
+test('inliners: read-only local arguments need no parameter copies inside loops', () => {
+  const src = `(module
+    (func $h (param $p i32) (param $q i32) (result i32)
+      (i32.add (local.get $p) (local.get $q)))
+    (func (export "f") (param $x i32) (param $n i32) (result i32)
+      (local $i i32) (local $sum i32)
+      (block $done (loop $L
+        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+        (local.set $sum (i32.add (local.get $sum) (call $h (local.get $x) (local.get $i))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $L)))
+      (local.get $sum)))`
+  const ref = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(src)))).exports.f
+  for (const pass of ['inlineOnce', 'inline']) {
+    const ast = optimize(parse(src), pass), text = print(ast)
+    assert(!text.includes('call $h'), `${pass}: call removed`)
+    assert(!/local(?:.set|.tee)? \$__inl\d+_[pq]\b/.test(text), `${pass}: no copied parameter storage`)
+    const f = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    for (const x of [-2147483648, -1, 0, 17, 2147483647]) for (const n of [0, 1, 17])
+      assert.equal(f(x, n), ref(x, n), `${pass}: ${x}, ${n}`)
+  }
+})
+
+test('inliners: local aliases preserve argument snapshots, parameter writes and effects', () => {
+  const cases = [
+    ['(i32.add (local.get $p) (local.get $q))', '(local.get $x) (local.tee $x (i32.const 5))'],
+    ['(i32.add (local.get $p) (local.get $q))', '(local.get $x) (local.tee 0 (i32.const 5))'],
+    ['(local.set $p (i32.const 7)) (i32.add (local.get $p) (local.get $q))', '(local.get $x) (local.get $x)'],
+    ['(i32.add (local.tee $p (i32.const 7)) (local.get $q))', '(local.get $x) (local.get $x)'],
+    ['(local $x i32) (local.set $x (i32.const 9)) (i32.add (local.get $p) (local.get $x))', '(local.get $x) (local.get $x)'],
+    ['(global.set $g (i32.const 99)) (i32.add (local.get $p) (local.get $q))', '(global.get $g) (local.get $x)'],
+    ['(i32.sub (local.get $p) (local.get $q))', '(call $next) (call $next)'],
+  ]
+  for (const [body, args] of cases) for (const pass of ['inlineOnce', 'inline', 'inlineWrappers']) {
+    const src = `(module (global $g (mut i32) (i32.const 0))
+      (func $next (result i32) (global.set $g (i32.add (global.get $g) (i32.const 1))) (global.get $g))
+      (func $h (param $p i32) (param $q i32) (result i32) ${body})
+      (func (export "f") (param $x i32) (result i32) (call $h ${args})))`
+    const ref = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(src)))).exports.f
+    const ast = optimize(parse(src), pass)
+    assert(!print(ast).includes('call $h'), `${pass}: tested the splice`)
+    const f = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    for (const x of [0, 1, -1, 2147483647]) assert.equal(f(x), ref(x), `${pass}: ${body}, ${args}, ${x}`)
+  }
+})
+
+test('inliners: leave unmapped numeric and flat callee locals in their own frame', () => {
+  for (const body of ['(local.get 0)', 'local.get $p']) for (const pass of ['inlineOnce', 'inline', 'inlineWrappers']) {
+    const src = `(module (func $h (param $p i32) (result i32) ${body})
+      (func (export "f") (param $pad i32) (param $x i32) (result i32) (call $h (local.get $x))))`
+    const ast = optimize(parse(src), pass)
+    assert(print(ast).includes('call $h'), `${pass}: preserve the local index space`)
+    const f = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    assert.equal(f(17, 9), 9)
+  }
+})
+
 test('inlineOnce: single-call function is inlined and removed', () => {
   const ast = parse(`(module
     (func $helper (param $x i32) (result i32) (i32.add (local.get $x) (i32.const 1)))
