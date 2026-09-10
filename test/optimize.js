@@ -4743,3 +4743,16 @@ test('constant pool: scalar types preserve exact bytes and signed encoding cost'
   assert(!out.some(n => n[0] === 'global' && n[3][1] === '0xffffffff'))
   assert(!out.some(n => n[0] === 'global' && n[3][1] === '0xffffffffffffffff'))
 })
+
+
+test('constant pool: outlining prices expressions after literal sharing', () => {
+  const ast = parse(`(module (func (export "f") (param f64 f64 f64) (result i32)
+    (i32.add (f64.ne (local.get 0) (f64.const inf))
+      (i32.add (f64.ne (local.get 1) (f64.const inf))
+        (f64.ne (local.get 2) (f64.const inf))))))`)
+  const out = optimize(clone(ast), { poolConstants: true })
+  const unoutlined = optimize(clone(ast), { poolConstants: true, outline: false })
+  assert(srcCompile(out).length <= srcCompile(unoutlined).length)
+  const f = tree => new WebAssembly.Instance(new WebAssembly.Module(srcCompile(tree))).exports.f
+  assert.equal(f(out)(Infinity, 0, -Infinity), f(ast)(Infinity, 0, -Infinity))
+})

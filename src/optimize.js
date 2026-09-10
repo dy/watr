@@ -8764,11 +8764,12 @@ function optimizeModule(ast, opts) {
       if (opts.coalesce) a = coalesceLocals(a)
       if (opts.locals) a = localReuse(a)
     }
+    // Pool after folding/inlining, before outlining prices repeated expressions.
+    if (opts.poolConstants) a = poolConstants(a)
     if (opts.outline) a = outline(a)
     // Last: every pass above may declare, drop or renumber a local; the order
     // is read off the final body.
     if (opts.sortLocals) a = sortLocals(a)
-    if (opts.poolConstants) a = poolConstants(a)
     return wrapper ? (wrapper[slot] = a, wrapper) : a
   }
 
