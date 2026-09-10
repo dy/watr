@@ -802,6 +802,8 @@ const foldNode = (node) => {
     if (node.length === 2) {
       const a = getConst(node[1])
       if (!a) return
+      // abs/neg change only the sign bit, including a NaN's payload.
+      if ((node[0].endsWith('.abs') || node[0].endsWith('.neg')) && Number.isNaN(a.value)) return
       const r = fn(a.value)
       if (r === null || r === undefined) return
       // Never inflate: a fixed-width f32/f64.const (5/9 B) or wide-sleb i64.const can
@@ -3168,9 +3170,35 @@ export const isMemWrite = (op) => op.includes('.store') || op === 'memory.copy' 
   (op.includes('.atomic.') && !op.endsWith('.load')) || op === 'table.set' || op === 'table.grow' || op === 'table.fill' || op === 'table.copy' || op === 'table.init'
 const isExtEffect = (op) => op === 'call' || op === 'call_indirect' || op === 'call_ref' || op === 'return_call' || op === 'return_call_indirect' ||
   op === 'return_call_ref' || op === 'throw' || op === 'throw_ref'
+// Evaluate pure constant expressions through dominating local definitions without
+// expanding wide constants at every use. Keep the original encoding cost so a
+// folded value replaces the expression only when it does not grow the body.
+const constantExpr = (node, known, depth = 0) => {
+  if (!Array.isArray(node) || depth > 32) return null
+  if (getConst(node)) return [node, constInstrSize(node)]
+  if (node[0] === 'local.get') {
+    const value = known.get(node[1])?.val
+    return getConst(value) ? [value, 2] : null
+  }
+  if (!FOLDABLE[node[0]] || (node.length !== 2 && node.length !== 3)) return null
+  const expr = [node[0]]
+  let bytes = ownBytes(node)
+  for (let i = 1; i < node.length; i++) {
+    const child = constantExpr(node[i], known, depth + 1)
+    if (!child) return null
+    expr.push(child[0]); bytes += child[1]
+  }
+  const folded = foldNode(expr)
+  return folded && getConst(folded) ? [folded, bytes] : null
+}
+
 const substGets = (node, known) => {
   if (!Array.isArray(node)) return node
   const op = node[0]
+  if (known.size && FOLDABLE[op]) {
+    const folded = constantExpr(node, known)
+    if (folded && constInstrSize(folded[0]) <= folded[1]) return folded[0]
+  }
   if (op === 'local.get' && node.length === 2) {
     const k = typeof node[1] === 'string' && known.get(node[1])
     if (k && canSubst(k)) { retireMovedDef(k); return clone(k.val) }
@@ -3428,8 +3456,9 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     if (op !== 'block' && op !== 'loop' && op !== 'if') {
       const h0 = substHits
       SW.length = 0; SW_MEM = 0; SW_EXT = 0
-      substGets(instr, known)
-      if (substHits !== h0) changed = true
+      const replacement = substGets(instr, known)
+      if (replacement !== instr) { cntSub(instr); cntAdd(replacement); funcNode[i] = replacement; changed = true }
+      else if (substHits !== h0) changed = true
       // Invalidate tracking for any names written by a nested set/tee — those
       // writes happened mid-expression and the substGets above used the
       // pre-write tracked value (correct), but later reads must see the new
@@ -8238,6 +8267,61 @@ const reorder = (ast) => {
   return ['module', ...imports, ...funcs, ...others]
 }
 
+/** Pool repeated f64 constants after folding and inlining have finished. */
+export function poolConstants(ast) {
+  if (!Array.isArray(ast) || ast[0] !== 'module') return ast
+  const counts = new Map(), literals = new Map(), sites = [], protectedConsts = new Set()
+  const names = new Set(), scratch = new Float64Array(1), words = new Uint32Array(scratch.buffer)
+  let globals = 0, at = 1, localGlobals = false
+  for (let i = 1; i < ast.length; i++) {
+    const n = ast[i]
+    if (!Array.isArray(n)) continue
+    const g = n[0] === 'import' ? n[n.length - 1] : n
+    if (Array.isArray(g) && g[0] === 'global') {
+      globals++
+      if (typeof g[1] === 'string' && g[1][0] === '$') names.add(g[1])
+      if (n[0] === 'global') { at = i + 1; localGlobals = true }
+    }
+    if (n[0] !== 'func') walkN(n, v => { if (Array.isArray(v) && v[0] === 'f64.const') protectedConsts.add(v) })
+  }
+  for (const n of ast) {
+    if (!Array.isArray(n) || n[0] !== 'func') continue
+    walkN(n, (v, parent, index) => {
+      if (!Array.isArray(v) || v[0] !== 'f64.const' || v.length !== 2 || protectedConsts.has(v)) return
+      const value = v[1]
+      let key
+      if (typeof value === 'number') { scratch[0] = value; key = words[0] + ':' + words[1] }
+      else if (typeof value === 'string') key = 's:' + value
+      else return
+      counts.set(key, (counts.get(key) || 0) + 1)
+      if (!literals.has(key)) literals.set(key, value)
+      sites.push(parent, index, key)
+    })
+  }
+  const candidates = [...counts].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1])
+  const chosen = new Map(), decls = []
+  let serial = 0, savings = localGlobals ? 0 : -3
+  for (const [key, n] of candidates) {
+    let width = 1, index = globals + decls.length
+    while (index >= 128) { width++; index = Math.floor(index / 128) }
+    const saved = n * (8 - width) - 12
+    if (saved <= 0) continue
+    let name
+    do { name = '$__fc' + serial++ } while (names.has(name))
+    chosen.set(key, name)
+    decls.push(['global', name, 'f64', ['f64.const', literals.get(key)]])
+    savings += saved
+  }
+  // Reserve two bytes for growth of section/count length encodings.
+  if (!decls.length || savings <= 2) return ast
+  ast.splice(at, 0, ...decls)
+  for (let i = 0; i < sites.length; i += 3) {
+    const name = chosen.get(sites[i + 2])
+    if (name !== undefined) sites[i][sites[i + 1]] = ['global.get', name]
+  }
+  return ast
+}
+
 // ==================== LOOP-INVARIANT CODE MOTION ====================
 
 /**
@@ -8397,6 +8481,7 @@ const PASSES = [
   ['mergeBlocks',   mergeBlocks,    true,  'unwrap `(block $L …)` whose label is never targeted'],
   ['coalesce',      coalesceLocals, true,  'share local slots between same-type non-overlapping locals'],
   ['locals',        localReuse,     true,  'remove unused locals'],
+  ['poolConstants', poolConstants, false, 'pool repeated f64 constants after folding (once after rounds)'],
   ['sortLocals',    sortLocals,     true,  'order local declarations for the encoding: hot indices one byte, one locals-vector entry per type — runs once after rounds'],
   ['outline',       outline,        true,  'extract repeated pure expressions into shared helper functions'],
   ['dedupTypes',    dedupTypes,     true,  'merge identical type definitions'],
@@ -8678,6 +8763,7 @@ function optimizeModule(ast, opts) {
     // Last: every pass above may declare, drop or renumber a local; the order
     // is read off the final body.
     if (opts.sortLocals) a = sortLocals(a)
+    if (opts.poolConstants) a = poolConstants(a)
     return wrapper ? (wrapper[slot] = a, wrapper) : a
   }
 
@@ -8738,7 +8824,7 @@ function optimizeModule(ast, opts) {
       }
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'conditions' || key === 'unroll2' || key === 'sortLocals' ||
+        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'conditions' || key === 'unroll2' || key === 'sortLocals' || key === 'poolConstants' ||
             (skipInline && key === 'inlineOnce')) continue
         if (SIMPLIFY_KEYS.has(key)) {
           if (!fused) {

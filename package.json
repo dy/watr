@@ -109,7 +109,7 @@
   "devDependencies": {
     "@playwright/test": "^1.57.0",
     "esbuild": "^0.24.2",
-    "jz": "https://codeload.github.com/dy/jz/tar.gz/df25e1ba6fda5c0400cd0a5bd77d7e308c20278c",
+    "jz": "https://codeload.github.com/dy/jz/tar.gz/0a1c45db0ae4dfc58b6b673ed189e7e9d68b9a96",
     "tst": "^9.0.0"
   }
 }

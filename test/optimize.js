@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import { readdirSync, readFileSync } from 'node:fs'
 import { clone } from '../src/util.js'
-import optimize, { hoistInvariants, treeshake, fold, deadcode, localReuse, count, binarySize, normalize, devirt, __regionScratchDrained } from '../src/optimize.js'
+import optimize, { poolConstants, hoistInvariants, treeshake, fold, deadcode, localReuse, count, binarySize, normalize, devirt, __regionScratchDrained } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 import srcCompile, { size } from '../src/compile.js'
 
@@ -3267,14 +3267,15 @@ test('size: default propagates single-use locals & tiny consts', () => {
     (local.get $x)
   ))`
   assert(!print(optimize(parse(src))).includes('local.set'), 'default should propagate the single-use local')
-  // A wide constant reused many times would inflate — left in its local by default.
+  // Folding the entire expression avoids expanding a wide constant at each read.
   const reuse = `(module (func (export "g") (result i32)
     (local $k i32)
     (local.set $k (i32.const 1000000))
     (i32.add (i32.add (local.get $k) (local.get $k)) (i32.add (local.get $k) (local.get $k)))
   ))`
-  // the wide const must materialize exactly once (as a set or a tee), never per use
-  assert.equal(print(optimize(parse(reuse))).split('1000000').length - 1, 1, 'wide reused const written once')
+  const folded = optimize(parse(reuse))
+  assert.ok(print(folded).includes('i32.const 4000000'), 'the complete expression folds')
+  assert.ok(binarySize(folded) < binarySize(parse(reuse)))
 })
 
 test('size: empty module not inflated', () => {
@@ -4672,4 +4673,39 @@ test('licm: a local read after a zero-trip loop is not private to its expression
   const { f } = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(ast))).exports
   assert.equal(f(0, 7), 0)
   assert.equal(f(1, 7), 7)
+})
+
+
+test('constant pool: exact bits, occupied names and wide global indices', () => {
+  const values = [0, -0, 'nan:0x8000000000001', 'nan:0x8000000000002', 1.23456789012345]
+  const ast = ['module', ['memory', ['export', '"memory"'], 1]]
+  for (let i = 0; i < 130; i++) ast.push(['global', '$__fc' + i, 'i32', ['i32.const', i]])
+  const f = ['func', '$f', ['export', '"f"']]
+  for (let i = 0; i < values.length; i++) for (let j = 0; j < 4; j++)
+    f.push(['f64.store', ['i32.const', (i * 4 + j) * 8], ['f64.const', values[i]]])
+  ast.push(f)
+  const run = ast => {
+    const { exports } = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(ast)))
+    exports.f()
+    return new Uint8Array(exports.memory.buffer).slice(0, values.length * 32)
+  }
+  const out = poolConstants(clone(ast))
+  assert.deepEqual(run(out), run(ast))
+  assert.ok(srcCompile(out).length < srcCompile(ast).length)
+  assert.equal(out.filter(n => n[0] === 'global').length, 135)
+  assert.equal(new Set(out.filter(n => n[0] === 'global').map(n => n[1])).size, 135)
+})
+
+test('constant pool: preserves shared initializers and avoids unprofitable pools', () => {
+  const literal = ['f64.const', 7.25]
+  const ast = ['module', ['global', '$g', 'f64', literal],
+    ['func', '$f', ['drop', literal], ['drop', literal], ['drop', literal]]]
+  poolConstants(ast)
+  assert.equal(ast[1][3][0], 'f64.const')
+  assert.ok(WebAssembly.validate(srcCompile(ast)))
+  const small = parse('(module (func (result f64) (f64.add (f64.const 1.25) (f64.const 1.25))))')
+  assert.equal(print(poolConstants(clone(small))), print(small))
+  const optimized = optimize(parse('(module (func (export "f") (result f64) (f64.add (f64.const 1.25) (f64.const 1.25))))'), { poolConstants: true })
+  assert.equal(optimized.filter(n => n[0] === 'global').length, 0)
+  assert.equal(new WebAssembly.Instance(new WebAssembly.Module(srcCompile(optimized))).exports.f(), 2.5)
 })

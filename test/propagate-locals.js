@@ -435,3 +435,28 @@ test('propagate-locals: a dead trapping value, a self-cancelling trapping operan
     (local.set $t (i32.trunc_f64_s (local.get $x))) (i32.add (local.get $t) (i32.const 1))))`
   check(singleUse, [['f', 2.5], ['f', NaN]], (s, a) => assert.equal((s.match(/trunc_f64_s/g) || []).length, 1, 'a moved trapping value evaluates once, at its use'))
 })
+
+
+test('propagate-locals: fold wide constants through known locals without expanding reads', () => {
+  check(`(module (import "env" "log" (func $log (param f64) (result f64)))
+    (func (export "f") (result f64) (local $x f64)
+      (local.set $x (f64.const 3.25))
+      (drop (call $log (local.get $x)))
+      (f64.add (f64.mul (local.get $x) (local.get $x)) (f64.const 2))))`, [['f']],
+    (s, a) => { assert.equal(a.out[0][1], 12.5625); assert.ok(!s.includes('f64.mul')) })
+  check(`(module (func (export "f") (param $c i32) (result f64) (local $x f64)
+    (local.set $x (f64.const 3.25))
+    (if (local.get $c) (then (local.set $x (f64.const 7.5))))
+    (f64.add (f64.mul (local.get $x) (local.get $x)) (f64.const 2))))`, [['f', 0], ['f', 1]])
+  check(`(module (func (export "f") (result i32) (local $x i32)
+    (local.set $x (i32.const 0))
+    (i32.div_s (i32.const 7) (local.get $x))))`, [['f']])
+})
+
+test('propagate-locals: sign operations retain NaN payloads through known locals', () => {
+  for (const op of ['neg', 'abs']) check(`(module ${MEM}
+    (func (export "f") (local $x f64)
+      (local.set $x (f64.const -nan:0x8000000000001))
+      (f64.store (i32.const 0) (f64.${op} (local.get $x)))
+      (f64.store (i32.const 8) (local.get $x))))`, [['f']])
+})
