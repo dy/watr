@@ -7283,13 +7283,16 @@ const offset = (ast) => {
     else if (cb && cb.type === 'i32') { addend = cb.value; base = a }
     if (base === null || addend === null) return
 
+    // Memargs are unsigned and do not wrap like i32 arithmetic. A negative
+    // adjustment must stay in the address even when an existing offset hides it.
     const newOffset = currentOffset + addend
+    if (addend < 0 || newOffset < 0 || newOffset > 0xFFFFFFFF) return
     const newNode = [op]
     if (memIdx !== null) newNode.push(memIdx)
     newNode.push(`offset=${newOffset}`)
     // Preserve align if present
     let alignParam = null
-    for (let i = argStart; i < ptrIdx; i++) {
+    for (let i = memIdx === null ? 1 : 2; i < ptrIdx; i++) {
       if (typeof node[i] === 'string' && node[i].startsWith('align=')) {
         alignParam = node[i]
       }

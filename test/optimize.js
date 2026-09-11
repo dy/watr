@@ -2222,6 +2222,31 @@ test('offset: accumulates existing offset', () => {
   assert(src.includes('offset=12'), 'should accumulate offsets')
 })
 
+test('offset: negative adjustments and oversized memargs stay in the address', () => {
+  for (const op of ['i32.load', 'i32.store']) for (const offset of [0, 8, 0xFFFFFFFF]) {
+    const store = op === 'i32.store'
+    const ast = parse(`(module (memory 1) (func (export "f") (param $p i32) ${store ? '' : '(result i32)'}
+      (${op} offset=${offset} align=1 (i32.add (local.get $p) (i32.const -4)) ${store ? '(i32.const 7)' : ''})))`)
+    const opt = optimize(clone(ast), 'offset')
+    assert(print(opt).includes('i32.add'), 'subtraction keeps its wrapping address semantics')
+    const run = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const a = run(ast), b = run(opt)
+    for (const p of [4, 4, 8, 0, 65532, 65536, 4]) {
+      let expected, failed = false
+      try { expected = a(p) } catch (e) { assert(e instanceof WebAssembly.RuntimeError); failed = true }
+      if (failed) assert.throws(() => b(p), WebAssembly.RuntimeError)
+      else assert.equal(b(p), expected)
+    }
+  }
+  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load offset=4294967295 (i32.add (local.get $p) (i32.const 4)))))')
+  assert(print(optimize(ast, 'offset')).includes('i32.add'), 'offset addition cannot overflow the memarg')
+})
+
+test('offset: folding retains explicit alignment', () => {
+  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load align=1 (i32.add (local.get $p) (i32.const 4)))))')
+  assert(print(optimize(ast, 'offset')).includes('align=1'))
+})
+
 // ==================== REDUNDANT BR REMOVAL ====================
 
 test('unbranch: removes redundant br at end of block', () => {
