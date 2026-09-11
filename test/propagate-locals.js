@@ -460,3 +460,51 @@ test('propagate-locals: sign operations retain NaN payloads through known locals
       (f64.store (i32.const 0) (f64.${op} (local.get $x)))
       (f64.store (i32.const 8) (local.get $x))))`, [['f']])
 })
+
+
+test('propagate-locals: dominating small constants reach nested control and zero-trip loops', () => {
+  for (const type of ['i32', 'i64']) {
+    const src = `(module (func (export "f") (param $n i32) (result ${type})
+      (local $bound ${type}) (local $i i32) (local $sum ${type})
+      (local.set $bound (${type}.const 64))
+      (block $done (loop $l
+        (br_if $done (i32.ge_s (local.get $i) (local.get $n)))
+        (local.set $sum (${type}.add (local.get $sum) (local.get $bound)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $l)))
+      (local.get $sum)))`
+    check(src, [['f', 0], ['f', 1], ['f', 1], ['f', 3], ['f', -1], ['f', 0]], (s, a) => {
+      assert.ok(!s.includes('$bound'), 'single-definition constant needs no storage across control')
+      assert.deepEqual(a.out.map(x => x[1]), [0, 64, 64, 192, 0, 0].map(x => type === 'i64' ? BigInt(x) : x))
+    })
+  }
+})
+
+test('propagate-locals: control propagation preserves writes, conditional initialization and costly constants', () => {
+  const changing = `(module (func (export "f") (param $n i32) (result i32)
+    (local $v i32) (local $i i32) (local $sum i32)
+    (local.set $v (i32.const 7))
+    (block $done (loop $l
+      (br_if $done (i32.ge_s (local.get $i) (local.get $n)))
+      (local.set $sum (i32.add (local.get $sum) (local.get $v)))
+      (local.set $v (i32.add (local.get $v) (i32.const 1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (local.get $sum)))`
+  for (const src of [changing, changing.replace('(local.set $v (i32.add', '(local.set 1 (i32.add'),
+    changing.replace('(local.set $v (i32.add (local.get $v) (i32.const 1)))', '(i32.add (local.get $v) (i32.const 1)) local.set 1')])
+    check(src, [['f', 0], ['f', 1], ['f', 3], ['f', 1]], (s, a) =>
+      assert.deepEqual(a.out.map(x => x[1]), [0, 7, 24, 7]))
+  const conditional = `(module (func (export "f") (param $c i32) (result i32) (local $v i32)
+    (if (local.get $c) (then (local.set $v (i32.const 7))))
+    (block $b (br_if $b (local.get $c)) (return (local.get $v)))
+    (local.get $v)))`
+  check(conditional, [['f', 0], ['f', 1], ['f', 0]], (s, a) =>
+    assert.deepEqual(a.out.map(x => x[1]), [0, 7, 0]))
+  const large = changing.replace('(i32.const 7)', '(i32.const 305419896)')
+    .replace('(local.set $v (i32.add (local.get $v) (i32.const 1)))', '')
+  check(large, [['f', 0], ['f', 1], ['f', 2]], (s, a) => {
+    assert.ok(s.includes('$v'), 'wide constants stay available for loop reuse')
+    assert.deepEqual(a.out.map(x => x[1]), [0, 305419896, 610839792])
+  })
+})

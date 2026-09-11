@@ -2997,7 +2997,7 @@ const tallyLocals = (node, counts, d) => {
   const ensure = name => { let c = counts.get(name); if (!c) counts.set(name, c = { gets: 0, sets: 0, tees: 0 }); return c }
   const rec = (n) => {
     const op = n[0]
-    if (typeof n[1] === 'string' && n.length >= 2) {
+    if ((typeof n[1] === 'string' || typeof n[1] === 'number') && n.length >= 2) {
       if (op === 'local.get') ensure(n[1]).gets += d
       else if (op === 'local.set') ensure(n[1]).sets += d
       else if (op === 'local.tee') ensure(n[1]).tees += d
@@ -3009,7 +3009,7 @@ const tallyLocals = (node, counts, d) => {
       // would let exact-occurrence passes treat a flat-referenced local as dead.
       else if (c === 'local.get' || c === 'local.set' || c === 'local.tee') {
         const tgt = n[i + 1]
-        if (typeof tgt === 'string' && tgt[0] === '$')
+        if (typeof tgt === 'string' || typeof tgt === 'number')
           ensure(tgt)[c === 'local.get' ? 'gets' : c === 'local.set' ? 'sets' : 'tees'] += d
       }
     }
@@ -3477,7 +3477,21 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       }
     }
     // Invalidate at control-flow boundaries
-    if (isBranchScope(op)) known.clear()
+    if (isBranchScope(op)) {
+      // A dominating, sole definition of a small constant remains valid inside
+      // control flow. Reuse the function census; no loop-body proof scan needed.
+      for (const [name, k] of known) {
+        const uses = getUseCount(name)
+        if (!getConst(k.val) || constInstrSize(k.val) > 3 || !canSubst(k) || uses.sets + uses.tees !== 1) known.delete(name)
+      }
+      if (known.size) {
+        const h0 = substHits
+        SW.length = 0; SW_MEM = 0; SW_EXT = 0
+        substGets(instr, known)
+        if (substHits !== h0) changed = true
+      }
+      known.clear()
+    }
     // Calls invalidate tracked values that read state a callee can mutate
     // (memory, globals, tables, nested calls). Pure expressions over locals
     // and constants survive — callees can't reach caller locals.
@@ -5393,6 +5407,10 @@ const propagate = (ast) => {
     // missed-refresh bug class) goes away. The oracle flag re-derives and compares
     // after every sub-pass; the test battery runs with it on.
     CNT = countLocalUses(funcNode)
+    // Numeric and named references may alias the same slot. Occurrence-based
+    // rewrites need one spelling per local; mixed functions remain unchanged.
+    const refs = [...CNT.keys()]
+    if (refs.some(n => n[0] !== '$') && refs.some(n => n[0] === '$')) return
     CNT_FN = funcNode
     for (let round = 0; round < MAX_PROP_ROUNDS; round++) {
       // Scopes RE-COLLECT each round: a spliced statement detaches any scope
