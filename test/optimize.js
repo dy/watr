@@ -2199,7 +2199,7 @@ test('globals: preserves written global', () => {
 // ==================== LOAD/STORE OFFSET FOLDING ====================
 
 test('offset: load add+const', () => {
-  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load (i32.add (local.get $p) (i32.const 4)))))')
+  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load (i32.add (i32.and (local.get $p) (i32.const 65535)) (i32.const 4)))))')
   const opt = optimize(ast, 'offset')
   const src = print(opt)
   assert(src.includes('offset=4'), 'should fold const into load offset')
@@ -2207,7 +2207,7 @@ test('offset: load add+const', () => {
 })
 
 test('offset: store add+const', () => {
-  const ast = parse('(module (memory 1) (func (param $p i32) (i32.store (i32.add (local.get $p) (i32.const 8)) (i32.const 99))))')
+  const ast = parse('(module (memory 1) (func (param $p i32) (i32.store (i32.add (i32.and (local.get $p) (i32.const 65535)) (i32.const 8)) (i32.const 99))))')
   const opt = optimize(ast, 'offset')
   const src = print(opt)
   assert(src.includes('offset=8'), 'should fold const into store offset')
@@ -2216,7 +2216,7 @@ test('offset: store add+const', () => {
 })
 
 test('offset: accumulates existing offset', () => {
-  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load offset=4 (i32.add (local.get $p) (i32.const 8)))))')
+  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load offset=4 (i32.add (i32.and (local.get $p) (i32.const 65535)) (i32.const 8)))))')
   const opt = optimize(ast, 'offset')
   const src = print(opt)
   assert(src.includes('offset=12'), 'should accumulate offsets')
@@ -2242,8 +2242,52 @@ test('offset: negative adjustments and oversized memargs stay in the address', (
   assert(print(optimize(ast, 'offset')).includes('i32.add'), 'offset addition cannot overflow the memarg')
 })
 
+test('offset: unknown bases retain wrapping addresses and trap behaviour', () => {
+  for (const op of ['i32.load', 'i32.store']) for (const off of [0, 8]) {
+    const store = op === 'i32.store'
+    const ast = parse(`(module (memory (export "memory") 1)
+      (data (i32.const 0) "\\2a\\00\\00\\00")
+      (func (export "f") (param $p i32) (param $v i32) ${store ? '' : '(result i32)'}
+        (${op} offset=${off} (i32.add (local.get $p) (i32.const 4)) ${store ? '(local.get $v)' : ''})))`)
+    const run = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
+    for (const preset of ['offset', undefined]) {
+      const a = run(ast), b = run(optimize(clone(ast), preset))
+      for (const p of [-4, -4, -8, 0, 65528, 65529, 2147483647, -1, -4]) {
+        let expected, failed = false
+        try { expected = a.f(p, p + 101) } catch (e) { assert(e instanceof WebAssembly.RuntimeError); failed = true }
+        if (failed) assert.throws(() => b.f(p, p + 101), WebAssembly.RuntimeError)
+        else assert.equal(b.f(p, p + 101), expected)
+        assert.deepEqual(new Uint8Array(b.memory.buffer), new Uint8Array(a.memory.buffer), 'stores and traps preserve memory')
+      }
+    }
+  }
+})
+
+test('offset: masked and shifted bases fold only when addition cannot wrap', () => {
+  for (const [base, foldable] of [
+    ['(i32.and (local.get $p) (i32.const 65535))', true],
+    ['(i32.and (i32.const 255) (local.get $p))', true],
+    ['(i32.shr_u (local.get $p) (i32.const 1))', true],
+    ['(i32.shr_u (local.get $p) (i32.const 32))', false],
+    ['(i32.and (local.get $p) (i32.const -1))', false],
+  ]) {
+    const ast = parse(`(module (memory 1) (func (export "f") (param $p i32) (result i32)
+      (i32.load (i32.add ${base} (i32.const 4)))))`)
+    const opt = optimize(clone(ast), 'offset')
+    assert.equal(print(opt).includes('offset=4'), foldable, base)
+    const run = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const a = run(ast), b = run(opt)
+    for (const p of [0, 1, 65527, 65532, -4, -1, 0]) {
+      let expected, failed = false
+      try { expected = a(p) } catch (e) { assert(e instanceof WebAssembly.RuntimeError); failed = true }
+      if (failed) assert.throws(() => b(p), WebAssembly.RuntimeError)
+      else assert.equal(b(p), expected)
+    }
+  }
+})
+
 test('offset: folding retains explicit alignment', () => {
-  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load align=1 (i32.add (local.get $p) (i32.const 4)))))')
+  const ast = parse('(module (memory 1) (func (param $p i32) (result i32) (i32.load align=1 (i32.add (i32.and (local.get $p) (i32.const 65535)) (i32.const 4)))))')
   assert(print(optimize(ast, 'offset')).includes('align=1'))
 })
 

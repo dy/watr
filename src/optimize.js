@@ -7236,6 +7236,19 @@ const globals = (ast) => {
 
 /** Match (type.load/store (i32.add ptr (type.const N))) and fold offset */
 const offset = (ast) => {
+  // Unsigned value bounds prove that moving an addend into the memarg cannot
+  // remove i32 wraparound. Unknown bases retain their explicit arithmetic.
+  function upper(n) {
+    const c = getConst(n)
+    if (c?.type === 'i32') return c.value >>> 0
+    if (!Array.isArray(n)) return 0xFFFFFFFF
+    if (n[0] === 'i32.and') return Math.min(upper(n[1]), upper(n[2]))
+    if (n[0] === 'i32.shr_u') {
+      const shift = getConst(n[2])
+      if (shift?.type === 'i32') return upper(n[1]) >>> (shift.value & 31)
+    }
+    return 0xFFFFFFFF
+  }
   return walkPostN(ast, (node) => {
     if (!Array.isArray(node)) return
     const op = node[0]
@@ -7286,7 +7299,7 @@ const offset = (ast) => {
     // Memargs are unsigned and do not wrap like i32 arithmetic. A negative
     // adjustment must stay in the address even when an existing offset hides it.
     const newOffset = currentOffset + addend
-    if (addend < 0 || newOffset < 0 || newOffset > 0xFFFFFFFF) return
+    if (addend < 0 || newOffset < 0 || newOffset > 0xFFFFFFFF || upper(base) > 0xFFFFFFFF - addend) return
     const newNode = [op]
     if (memIdx !== null) newNode.push(memIdx)
     newNode.push(`offset=${newOffset}`)
