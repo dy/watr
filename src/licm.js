@@ -45,6 +45,17 @@ export function hoistInvariants(fn, { analyze, callType, prefix = '$__licm' }) {
   }
   countRefs(fn)
   if (!hasLoop) return
+  // One function-wide census. Hoisting moves references unchanged; merging
+  // duplicate expressions removes their extra copies. Keep those deltas below
+  // instead of rebuilding every subtree's counts for each loop.
+  const localCounts = new Map()
+  const countLocals = n => {
+    if (!Array.isArray(n)) return
+    if (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')
+      localCounts.set(n[1], (localCounts.get(n[1]) || 0) + 1)
+    for (let i = 1; i < n.length; i++) countLocals(n[i])
+  }
+  countLocals(fn)
   const typeOf = n => {
     const op = n[0]
     if (op === 'local.get' || op === 'local.tee') return types.get(n[1])
@@ -88,7 +99,7 @@ export function hoistInvariants(fn, { analyze, callType, prefix = '$__licm' }) {
       if (op === 'local.get' || op === 'global.get' || op.endsWith('.const')) return
       const bound = writesOf(n)
       let privateWrites = true
-      for (const k of bound) if (countsOf(fn).get(k) !== countsOf(n).get(k)) { privateWrites = false; break }
+      for (const k of bound) if (localCounts.get(k) !== countsOf(n).get(k)) { privateWrites = false; break }
       if (privateWrites && accept(n, bound) && (refs.get(n) || 0) <= 1 && (refs.get(parent) || 0) <= 1 && typeOf(n)) {
         const key = structuralKey(n)
         let found = sites.get(key)
@@ -107,6 +118,9 @@ export function hoistInvariants(fn, { analyze, callType, prefix = '$__licm' }) {
       types.set(name, type)
       decls.push(['local', name, type])
       hoisted.push(['local.set', name, node])
+      if (found.length > 1) for (const [k, v] of countsOf(node))
+        localCounts.set(k, localCounts.get(k) - v * (found.length - 1))
+      localCounts.set(name, found.length + 1)
       for (const site of found) site.parent[site.idx] = ['local.get', name]
     }
     return hoisted

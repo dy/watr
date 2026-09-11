@@ -682,7 +682,7 @@ test('identity: and-mask dead before a narrowing store', () => {
 
 test('identity: f64 compare distributes into a checked-read if-form', () => {
   // the interpreter JNZ shape: `reg[a] !== 0` over an if-form checked read —
-  // hit arm convert_i32(load) → raw i32.ne, UNDEF-NaN miss arm → const 1;
+  // hit arm convert_i32(load) → raw integer zero test, UNDEF-NaN miss arm → const 1;
   // the outer f64.ne, the convert and the NaN materialization all die.
   const mod = `(module
     (memory 1)
@@ -696,7 +696,7 @@ test('identity: f64 compare distributes into a checked-read if-form', () => {
   assert(!out.includes('f64.ne'), 'outer f64 compare gone')
   assert(!out.includes('f64.convert_i32_s'), 'convert gone')
   assert(!out.includes('nan:'), 'NaN materialization gone')
-  assert(out.includes('i32.ne'), 'raw i32 compare in the hit arm')
+  assert(/\(i32.eqz\s+\(i32.eqz/.test(out), 'raw integer zero test in the hit arm')
   assert(/\(if\s+\(result i32\)/.test(out), 'if retyped i32')
   // eq twin: NaN arm folds to 0
   const eq = print(optimize(parse(mod.replace('f64.ne', 'f64.eq')), 'identity'))
@@ -4822,22 +4822,22 @@ test('constant pool: outlining prices expressions after literal sharing', () => 
 })
 
 
-test('identity: integer equality to zero uses eqz and evaluates effects once', () => {
-  for (const type of ['i32', 'i64']) for (const left of [false, true]) {
+test('identity: integer zero tests use eqz and evaluate effects once', () => {
+  for (const type of ['i32', 'i64']) for (const left of [false, true]) for (const op of ['eq', 'ne']) {
     const value = '(call $value (local.get 0))', zero = `(${type}.const 0)`
     const ast = parse(`(module
       (global $calls (mut i32) (i32.const 0))
       (func $value (param ${type}) (result ${type})
         (global.set $calls (i32.add (global.get $calls) (i32.const 1))) (local.get 0))
       (func (export "f") (param ${type}) (result i32)
-        (${type}.eq ${left ? zero : value} ${left ? value : zero}))
+        (${type}.${op} ${left ? zero : value} ${left ? value : zero}))
       (func (export "calls") (result i32) (global.get $calls)))`)
     const opt = optimize(clone(ast), 'identity')
     assert(print(opt).includes(type + '.eqz'), 'use the shorter unary instruction')
     assert(compile(opt).length < compile(ast).length, 'fold saves encoded bytes')
     const a = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
     const b = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports
-    for (const n of [0, 1, -1, 2147483647, -2147483648]) {
+    for (const n of [0, 1, -1, 2147483647, -2147483648, ...(type === 'i64' ? [1n << 32n, -(1n << 63n)] : [])]) {
       const x = type === 'i64' ? BigInt(n) : n
       assert.equal(b.f(x), a.f(x)); assert.equal(b.calls(), a.calls())
     }
@@ -5011,4 +5011,45 @@ test('constant pool: integer spellings share one bit-exact entry', () => {
   }
   const cheap = parse(`(module (func ${Array.from({length: 40}, () => '(drop (i64.const -1)) (drop (i32.const 63))').join(' ')}))`)
   assert.equal(print(poolConstants(clone(cheap))), print(cheap), 'cheap repeated literals stay inline')
+})
+
+test('licm: nested deduplication keeps the enclosing private-local proof current', () => {
+  const ast = parse(`(module (func $f (export "f") (param $n i32) (param $x i32) (result i32)
+    (local $scratch i32) (local $out i32)
+    (block $exit (loop $outer
+      (br_if $exit (i32.eqz (local.get $n)))
+      (local.set $out (block (result i32)
+        (local.set $scratch (local.get $x))
+        (loop $inner
+          (drop (i32.add (local.get $scratch) (i32.const 1)))
+          (drop (i32.add (local.get $scratch) (i32.const 1))))
+        (local.get $scratch)))
+      (br $exit)))
+    (local.get $out)))`)
+  const before = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(ast))).exports.f
+  hoistInvariants(ast[1], { analyze: () => n => n[0] === 'i32.add' || (n[0] === 'block' && n[1]?.[0] === 'result') })
+  const after = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(ast))).exports.f
+  for (const n of [0, 1]) for (const x of [-2147483648, 0, 2147483647]) assert.equal(after(n, x), before(n, x))
+  assert.equal((print(ast).match(/\(i32.add/g) || []).length, 1, 'inner duplicates share one expression')
+  const outer = ast[1].find(n => n[0] === 'block')
+  assert.equal(outer[2][0], 'local.set', 'the enclosing expression hoists with its new private temporary')
+  const once = print(ast)
+  hoistInvariants(ast[1], { analyze: () => n => n[0] === 'i32.add' || (n[0] === 'block' && n[1]?.[0] === 'result') })
+  assert.equal(print(ast), once, 'repeating the pass does not move references again')
+})
+
+test('licm: sibling-loop references prevent a private write from being speculated', () => {
+  const ast = parse(`(module (func $f (export "f") (param $n i32) (param $x i32) (result i32)
+    (local $scratch i32) (local $out i32)
+    (block $first (loop $a
+      (br_if $first (i32.eqz (local.get $n)))
+      (drop (local.tee $scratch (i32.add (local.get $x) (i32.const 1))))
+      (br $first)))
+    (loop $b (local.set $out (local.get $scratch)))
+    (local.get $out)))`)
+  hoistInvariants(ast[1], { analyze: () => n => n[0] === 'local.tee' || n[0] === 'i32.add' })
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(srcCompile(ast))).exports
+  assert.equal(f(0, 41), 0)
+  assert.equal(f(1, 41), 42)
+  assert.equal(f(0, 99), 0, 'each invocation starts with the original zeroed local')
 })
