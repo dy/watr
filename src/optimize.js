@@ -4198,9 +4198,23 @@ const eliminateAdjacentDeadStores = (funcNode, params) => {
 
 // Conservative LOW estimate of a subtree's encoded bytes (under-estimating keeps the
 // CSE profit gate honest: never fire on a loss).
+// Memory instructions encode alignment and offset even when WAT omits them.
+// Explicit attributes are counted as leaves; account for the implicit bytes here.
+const estHeadBytes = (n) => {
+  let b = OPCODE[n[0]] > 0xffff ? 2 : 1
+  if (IMM[n[0]]?.startsWith('memarg')) {
+    let align = false, offset = false
+    for (let i = 1; i < n.length; i++) if (typeof n[i] === 'string') {
+      if (n[i].startsWith('align=')) align = true
+      if (n[i].startsWith('offset=')) offset = true
+    }
+    b += (align ? 0 : 1) + (offset ? 0 : 1)
+  }
+  return b
+}
 const estBytes = (n) => {
   if (!Array.isArray(n)) return typeof n === 'number' ? 2 : 1
-  let b = OPCODE[n[0]] > 0xffff ? 2 : 1
+  let b = estHeadBytes(n)
   for (let i = 1; i < n.length; i++) b += estBytes(n[i])
   return b
 }
@@ -4256,7 +4270,7 @@ const cseFactsOf = (n, sigT, memo) => {
   let f = memo.get(n)
   if (f) return f
   const op = n[0]
-  f = { pure: true, est: OPCODE[op] > 0xffff ? 2 : 1, h1: 0x811c9dc5, h2: 0x1000193 }
+  f = { pure: true, est: estHeadBytes(n), h1: 0x811c9dc5, h2: 0x1000193 }
   if (typeof op !== 'string') f.pure = false
   else if (op === 'call') { if (!cseCallOk(n, sigT)) f.pure = false }
   else if (impureOp(op)) f.pure = false

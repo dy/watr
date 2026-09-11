@@ -5053,3 +5053,30 @@ test('licm: sibling-loop references prevent a private write from being speculate
   assert.equal(f(1, 41), 42)
   assert.equal(f(0, 99), 0, 'each invocation starts with the original zeroed local')
 })
+
+
+test('cse: implicit memory immediates make repeated loads profitable', () => {
+  for (const type of ['i32', 'f64']) for (const attrs of ['', 'offset=8', 'offset=8 align=1']) {
+    const source = parse(`(module (memory (export "memory") 1)
+      (func (export "f") (param $p i32) (result ${type}) (local $spare ${type})
+        (${type}.add (${type}.load ${attrs} (local.get $p)) (${type}.load ${attrs} (local.get $p)))))`)
+    const optimized = optimize(clone(source), 'cse')
+    assert.equal((print(optimized).match(new RegExp(type + '\\.load', 'g')) || []).length, 1, `${type} ${attrs}: one load`)
+    const before = compile(source), after = compile(optimized)
+    assert(after.length < before.length, `${type} ${attrs}: smaller encoded module`)
+    const a = new WebAssembly.Instance(new WebAssembly.Module(before)).exports
+    const b = new WebAssembly.Instance(new WebAssembly.Module(after)).exports
+    const offset = attrs ? 8 : 0, width = type === 'i32' ? 4 : 8
+    const set = type === 'i32' ? 'setInt32' : 'setFloat64'
+    assert.equal(b.f(0), a.f(0), 'zero-filled memory')
+    for (const value of [7, 7, -13]) {
+      for (const e of [a, b]) new DataView(e.memory.buffer)[set](offset, value, true)
+      assert.equal(b.f(0), a.f(0), 'repeated call observes current memory')
+    }
+    const last = 65536 - width - offset
+    for (const e of [a, b]) new DataView(e.memory.buffer)[set](last + offset, 21, true)
+    assert.equal(b.f(last), a.f(last), 'last complete load')
+    for (const e of [a, b]) assert.throws(() => e.f(last + 1), WebAssembly.RuntimeError)
+    assert.equal(b.f(0), a.f(0), 'valid call after a trapping load')
+  }
+})
