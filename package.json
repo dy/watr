@@ -108,7 +108,7 @@
   "homepage": "https://dy.github.io/watr/",
   "devDependencies": {
     "@playwright/test": "^1.57.0",
-    "esbuild": "^0.24.2",
+    "esbuild": "^0.28.2",
     "jz": "https://codeload.github.com/dy/jz/tar.gz/0a1c45db0ae4dfc58b6b673ed189e7e9d68b9a96",
     "tst": "^9.0.0"
   }
