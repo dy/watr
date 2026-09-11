@@ -5080,3 +5080,27 @@ test('cse: implicit memory immediates make repeated loads profitable', () => {
     assert.equal(b.f(0), a.f(0), 'valid call after a trapping load')
   }
 })
+
+
+test('strength: compose same-direction shifts without masking their sum', () => {
+  for (const type of ['i32', 'i64']) for (const op of ['shl', 'shr_s', 'shr_u']) {
+    const width = type === 'i64' ? 64 : 32
+    for (const [a, b] of [[1, 3], [0, 0], [width + 1, width + 2], [-1, 1], [width - 1, 1], [width - 1, width - 1]]) {
+      const src = `(module
+        (global $count (mut i32) (i32.const 0))
+        (func $read (param $x ${type}) (result ${type})
+          (global.set $count (i32.add (global.get $count) (i32.const 1))) (local.get $x))
+        (func (export "count") (result i32) (global.get $count))
+        (func (export "f") (param $x ${type}) (result ${type})
+          (${type}.${op} (${type}.${op} (call $read (local.get $x)) (${type}.const ${a})) (${type}.const ${b}))))`
+      const ast = parse(src), opt = optimize(clone(ast), 'strength')
+      const run = n => new WebAssembly.Instance(new WebAssembly.Module(compile(n))).exports
+      const before = run(ast), after = run(opt)
+      const values = type === 'i64' ? [0n, 1n, -1n, -(1n << 63n), (1n << 63n) - 1n] : [0, 1, -1, -2147483648, 2147483647]
+      for (const x of values) assert.equal(after.f(x), before.f(x), `${type}.${op} ${a}/${b}: ${x}`)
+      assert.equal(after.count(), values.length, 'operand effects occur exactly once per call')
+      if (((a & (width - 1)) + (b & (width - 1))) < width)
+        assert.equal((print(opt).match(new RegExp(`${type}\\.${op}`, 'g')) || []).length, 1, 'two shifts become one')
+    }
+  }
+})

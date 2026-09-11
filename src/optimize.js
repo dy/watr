@@ -1118,6 +1118,20 @@ const strengthNode = (node) => {
     if (!Array.isArray(node) || node.length !== 3) return
     const [op, a, b] = node
 
+    // Same-direction shifts compose only before the word-width boundary:
+    // each Wasm count is masked separately, so summing then masking is wrong.
+    if ((op === 'i32.shl' || op === 'i32.shr_u' || op === 'i32.shr_s' ||
+         op === 'i64.shl' || op === 'i64.shr_u' || op === 'i64.shr_s') &&
+        Array.isArray(a) && a[0] === op && a.length === 3) {
+      const outer = getConst(b), inner = getConst(a[2])
+      if (outer && inner) {
+        const width = op.startsWith('i64') ? 64 : 32
+        const count = Number(BigInt(outer.value) & BigInt(width - 1)) +
+          Number(BigInt(inner.value) & BigInt(width - 1))
+        if (count < width) return [op, a[1], [width === 64 ? 'i64.const' : 'i32.const', count]]
+      }
+    }
+
     // x * 2^n → x << n
     if (op === 'i32.mul') {
       const cb = getConst(b)
