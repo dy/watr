@@ -508,3 +508,33 @@ test('propagate-locals: control propagation preserves writes, conditional initia
     assert.deepEqual(a.out.map(x => x[1]), [0, 305419896, 610839792])
   })
 })
+
+test('propagate-locals: zero-preserving recurrences are inductive constants', () => {
+  for (const [type, update] of [['f64', '(f64.add (local.get $x) (local.get $x))'],
+    ['i32', '(i32.mul (local.get $x) (i32.const 7))'],
+    ['f32', '(f32.sub (local.get $x) (local.get $x))']]) {
+    check(`(module (func (export "f") (param $n i32) (result ${type}) (local $x ${type}) (local $i i32)
+      (block $out (loop $loop
+        (br_if $out (i32.ge_s (local.get $i) (local.get $n)))
+        (local.set $x ${update})
+        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $loop)))
+      (local.get $x)))`, [['f', 0], ['f', 1], ['f', 5], ['f', 5], ['f', 0]],
+      wat => assert.ok(!wat.includes('$x'), 'the constant recurrence and local disappear'))
+  }
+})
+
+test('propagate-locals: zero induction rejects changing, trapping and signed-zero writes', () => {
+  check(`(module (func (export "f") (param $p i32) (result f64) (local $x f64)
+    (if (local.get $p) (then (local.set $x (f64.const 1))))
+    (local.set $x (f64.add (local.get $x) (local.get $x))) (local.get $x)))`, [['f', 0], ['f', 1], ['f', 0]])
+  check(`(module (func (export "f") (param $x f64) (result f64)
+    (local.set $x (f64.add (local.get $x) (local.get $x))) (local.get $x)))`, [['f', 0], ['f', 1.5], ['f', -0]])
+  check(`(module (func (export "f") (result f64) (local $x f64)
+    (local.set $x (f64.neg (local.get $x))) (local.get $x)))`, [['f'], ['f']])
+  check(`(module (func (export "f") (param $p i32) (result i32) (local $x i32)
+    (local.set $x (i32.div_s (local.get $x) (local.get $p))) (local.get $x)))`, [['f', 1], ['f', 0], ['f', 2]])
+  check(`(module (func (export "f") (result i32) (local $x i32) (local $y i32)
+    (local.set $y (i32.const 1)) (local.set $x (local.get $y)) (local.get $x)))`, [['f']])
+  check(`(module (func (export "f") (result i32) (local $x i32)
+    i32.const 3 local.set $x (local.get $x)))`, [['f']])
+})

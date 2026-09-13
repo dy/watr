@@ -5381,6 +5381,49 @@ const isScopeNode = (n) => Array.isArray(n) &&
 /** Branch-target scopes: ops that carry an optional label/result header and can be jumped to via br/br_if. */
 const isBranchScope = (op) => op === 'block' || op === 'loop' || op === 'if'
 
+// A wasm local starts at zero. If every write maps that value back to the
+// same bits, induction proves the local constant across all control flow.
+// Reuse the constant evaluator; calls, traps and reads of other locals fail
+// the proof. Keep only substitutions that pay for their literal encodings.
+const foldZeroLocals = (fn) => {
+  const candidates = new Map()
+  for (const n of fn) if (Array.isArray(n) && n[0] === 'local' && n.length === 3 &&
+      typeof n[1] === 'string' && n[1][0] === '$' && /^(i32|i64|f32|f64)$/.test(n[2])) {
+    const val = [n[2] + '.const', 0]
+    candidates.set(n[1], { val, gain: 2 })
+  }
+  if (!candidates.size) return
+  let flat = false
+  const known = new Map()
+  walk(fn, (n, parent, i) => {
+    if (!Array.isArray(n)) {
+      if (i > 0 && (n === 'local.get' || n === 'local.set' || n === 'local.tee')) flat = true
+      return
+    }
+    const op = n[0]
+    if (op !== 'local.get' && op !== 'local.set' && op !== 'local.tee') return
+    if (typeof n[1] !== 'string' || n[1][0] !== '$') { flat = true; return }
+    const c = candidates.get(n[1])
+    if (!c) return
+    if (op === 'local.get') { c.gain += 2 - constInstrSize(c.val); return }
+    known.clear(); known.set(n[1], c)
+    const folded = n.length === 3 && constantExpr(n[2], known)
+    const k = folded && getConst(folded[0]), zero = getConst(c.val)
+    if (!k || k.type !== zero.type || !Object.is(k.value, zero.value)) { candidates.delete(n[1]); return }
+    c.gain += binarySize(n) - (op === 'local.set' ? 1 : constInstrSize(c.val))
+  })
+  if (flat) return
+  for (const [name, c] of candidates) if (c.gain < 0) candidates.delete(name)
+  if (!candidates.size) return
+  walkPostN(fn, n => {
+    const c = candidates.get(n[1])
+    if (!c) return
+    if (n[0] === 'local.get' || n[0] === 'local.tee') return clone(c.val)
+    if (n[0] === 'local.set') return ['nop']
+  })
+  for (let i = fn.length - 1; i > 0; i--) if (Array.isArray(fn[i]) && fn[i][0] === 'local' && candidates.has(fn[i][1])) fn.splice(i, 1)
+}
+
 const propagate = (ast) => {
   walkN(ast, (funcNode) => {
     if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
@@ -5406,6 +5449,7 @@ const propagate = (ast) => {
     // in the family reports its delta — the old per-round double recount (and its
     // missed-refresh bug class) goes away. The oracle flag re-derives and compares
     // after every sub-pass; the test battery runs with it on.
+    foldZeroLocals(funcNode)
     CNT = countLocalUses(funcNode)
     // Numeric and named references may alias the same slot. Occurrence-based
     // rewrites need one spelling per local; mixed functions remain unchanged.
