@@ -538,3 +538,11 @@ test('propagate-locals: zero induction rejects changing, trapping and signed-zer
   check(`(module (func (export "f") (result i32) (local $x i32)
     i32.const 3 local.set $x (local.get $x)))`, [['f']])
 })
+
+test('propagate-locals: invariant float literals must pay for every retained read', () => {
+  check(`(module (func (export "f") (param $p f64) (result f64) (local $x f64) (local $y f64)
+    (local.set $y (local.get $p))
+    (local.set $x (f64.add (local.get $x) (local.get $x)))
+    (f64.add (local.get $x) (f64.add (local.get $x) (local.get $y)))))`, [['f', 2], ['f', -0]],
+    wat => assert.ok(wat.includes('$x'), 'repeated f64 constants would enlarge the body'))
+})

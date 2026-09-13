@@ -5386,32 +5386,43 @@ const isBranchScope = (op) => op === 'block' || op === 'loop' || op === 'if'
 // Reuse the constant evaluator; calls, traps and reads of other locals fail
 // the proof. Keep only substitutions that pay for their literal encodings.
 const foldZeroLocals = (fn) => {
-  const candidates = new Map()
+  const candidates = new Map(), typeCounts = new Map()
+  for (const n of fn) if (Array.isArray(n) && n[0] === 'local')
+    for (let i = typeof n[1] === 'string' && n[1][0] === '$' ? 2 : 1; i < n.length; i++)
+      typeCounts.set(n[i], (typeCounts.get(n[i]) || 0) + 1)
   for (const n of fn) if (Array.isArray(n) && n[0] === 'local' && n.length === 3 &&
       typeof n[1] === 'string' && n[1][0] === '$' && /^(i32|i64|f32|f64)$/.test(n[2])) {
     const val = [n[2] + '.const', 0]
-    candidates.set(n[1], { val, gain: 2 })
+    candidates.set(n[1], { val, gain: typeCounts.get(n[2]) === 1 ? 2 : 0 })
   }
   if (!candidates.size) return
   let flat = false
   const known = new Map()
-  walk(fn, (n, parent, i) => {
+  const scan = (n) => {
     if (!Array.isArray(n)) {
-      if (i > 0 && (n === 'local.get' || n === 'local.set' || n === 'local.tee')) flat = true
+      if (n === 'local.get' || n === 'local.set' || n === 'local.tee') flat = true
       return
     }
     const op = n[0]
-    if (op !== 'local.get' && op !== 'local.set' && op !== 'local.tee') return
-    if (typeof n[1] !== 'string' || n[1][0] !== '$') { flat = true; return }
-    const c = candidates.get(n[1])
-    if (!c) return
-    if (op === 'local.get') { c.gain += 2 - constInstrSize(c.val); return }
-    known.clear(); known.set(n[1], c)
-    const folded = n.length === 3 && constantExpr(n[2], known)
-    const k = folded && getConst(folded[0]), zero = getConst(c.val)
-    if (!k || k.type !== zero.type || !Object.is(k.value, zero.value)) { candidates.delete(n[1]); return }
-    c.gain += binarySize(n) - (op === 'local.set' ? 1 : constInstrSize(c.val))
-  })
+    if (op === 'local.get' || op === 'local.set' || op === 'local.tee') {
+      if (typeof n[1] !== 'string' || n[1][0] !== '$') { flat = true; return }
+      const c = candidates.get(n[1])
+      if (c) {
+        if (op === 'local.get') { c.gain += 2 - constInstrSize(c.val); return }
+        known.clear(); known.set(n[1], c)
+        const folded = n.length === 3 && constantExpr(n[2], known)
+        const k = folded && getConst(folded[0]), zero = getConst(c.val)
+        if (k && k.type === zero.type && Object.is(k.value, zero.value)) {
+          // The whole RHS disappears; its reads must not be charged again.
+          c.gain += 2 + folded[1] - (op === 'local.set' ? 1 : constInstrSize(c.val))
+          return
+        }
+        candidates.delete(n[1])
+      }
+    }
+    for (let i = 1; i < n.length; i++) scan(n[i])
+  }
+  scan(fn)
   if (flat) return
   for (const [name, c] of candidates) if (c.gain < 0) candidates.delete(name)
   if (!candidates.size) return
