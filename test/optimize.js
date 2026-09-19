@@ -242,6 +242,45 @@ test('identity: trunc∘convert exact round-trips through f64', () => {
   }
 })
 
+test('identity: mixed-sign trunc∘convert folds under a non-negative operand', () => {
+  // A signed truncation inverts an UNSIGNED convert exactly where the converted
+  // i32 is non-negative, and the unsigned truncation inverts a SIGNED convert on
+  // the same condition. The operand proves it by its own opcode.
+  const run = (ast, mem) => {
+    const inst = new WebAssembly.Instance(new WebAssembly.Module(compile(ast)))
+    return inst.exports
+  }
+  const mod = (body, result = 'i32') =>
+    `(module (memory (export "mem") 1) (func (export "f") (param $x i32) (param $y i32) (result ${result}) ${body}))`
+  const FOLDS = [
+    ['i32.trunc_sat_f64_s', 'f64.convert_i32_u', '(i32.load8_u (i32.and (local.get $x) (i32.const 15)))'],
+    ['i32.trunc_sat_f64_s', 'f64.convert_i32_u', '(i32.load16_u (i32.and (local.get $x) (i32.const 14)))'],
+    ['i32.trunc_sat_f64_s', 'f64.convert_i32_u', '(i32.and (local.get $x) (i32.const 2147483647))'],
+    ['i32.trunc_sat_f64_s', 'f64.convert_i32_u', '(i32.shr_u (local.get $x) (i32.const 1))'],
+    ['i32.trunc_sat_f64_s', 'f64.convert_i32_u', '(i32.eqz (local.get $x))'],
+    ['i32.trunc_sat_f64_s', 'f64.convert_i32_u', '(i32.lt_s (local.get $x) (local.get $y))'],
+    ['i32.trunc_sat_f64_s', 'f64.convert_i32_u', '(i32.const 5)'],
+    ['i32.trunc_f64_s', 'f64.convert_i32_u', '(i32.load8_u (i32.and (local.get $x) (i32.const 15)))'],
+    ['i32.trunc_sat_f64_u', 'f64.convert_i32_s', '(i32.shr_u (local.get $x) (i32.const 3))'],
+  ]
+  for (const [outer, inner, operand] of FOLDS) {
+    const ast = parse(mod(`(${outer} (${inner} ${operand}))`))
+    const before = run(clone(ast)).f
+    const opt = optimize(clone(ast), 'identity')
+    assert(!print(opt).match(/trunc|convert/), `${outer}∘${inner} over ${operand.slice(0, 24)} folds to the operand`)
+    const after = run(opt).f
+    for (const x of [0, 1, 7, 15, 128, 255, 65535, -1, -2147483648, 2147483647])
+      for (const y of [0, -1, 2147483647]) assert.equal(after(x, y), before(x, y), `${operand.slice(0, 20)} x=${x} y=${y}`)
+  }
+  // Operands whose sign the opcode does not settle keep the conversion: a wide
+  // load, an unshifted value, an all-ones mask, and plain arithmetic.
+  for (const operand of ['(local.get $x)', '(i32.load (i32.const 0))', '(i32.shr_u (local.get $x) (i32.const 0))',
+                         '(i32.and (local.get $x) (i32.const -1))', '(i32.add (local.get $x) (local.get $y))']) {
+    const opt = optimize(parse(mod(`(i32.trunc_sat_f64_s (f64.convert_i32_u ${operand}))`)), 'identity')
+    assert(print(opt).match(/trunc/), `${operand.slice(0, 24)} must keep the truncation`)
+  }
+})
+
 test('identity: f64 eq/ne of convert_i32 vs impossible const → known', () => {
   const F = (cst, op = 'f64.ne', conv = 'f64.convert_i32_s') =>
     print(optimize(parse(`(module (func (param $x i32) (result i32) (${op} (${conv} (local.get $x)) (f64.const ${cst}))))`), 'identity'))

@@ -916,6 +916,38 @@ const TRUNC_OF_CONVERT = {
   'i64.trunc_f64_u': { 'f64.convert_i32_u': 'i64.extend_i32_u' },
 }
 
+// An i32 expression that is non-negative as a SIGNED i32 (< 2^31), read off its
+// own opcode: a zero-extending narrow load tops out at 0xFFFF, a zero-fill shift
+// by 1..31 clears the sign bit, a mask by a non-negative constant cannot set it,
+// a comparison or eqz is 0 or 1, and a tee carries its value through. One level
+// of operand inspection, no range analysis — everything else answers false.
+const NON_NEG_OPS = new Set(['i32.load8_u', 'i32.load16_u', 'i32.eqz',
+  'i32.eq', 'i32.ne', 'i32.lt_s', 'i32.lt_u', 'i32.le_s', 'i32.le_u', 'i32.gt_s', 'i32.gt_u', 'i32.ge_s', 'i32.ge_u',
+  'i64.eq', 'i64.ne', 'i64.lt_s', 'i64.lt_u', 'i64.le_s', 'i64.le_u', 'i64.gt_s', 'i64.gt_u', 'i64.ge_s', 'i64.ge_u',
+  'f32.eq', 'f32.ne', 'f32.lt', 'f32.le', 'f32.gt', 'f32.ge',
+  'f64.eq', 'f64.ne', 'f64.lt', 'f64.le', 'f64.gt', 'f64.ge'])
+const nonNegI32 = (n) => {
+  if (!Array.isArray(n)) return false
+  const op = n[0]
+  if (NON_NEG_OPS.has(op)) return true
+  if (op === 'i32.const') { const c = getConst(n); return c != null && c.value >= 0 }
+  if (op === 'local.tee' && n.length === 3) return nonNegI32(n[2])
+  if (op === 'i32.shr_u' && n.length === 3) { const c = getConst(n[2]); return c != null && (c.value & 31) >= 1 }
+  if (op === 'i32.and' && n.length === 3) {
+    for (let i = 1; i <= 2; i++) { const c = getConst(n[i]); if (c != null && c.value >= 0) return true }
+  }
+  return false
+}
+// The truncation whose sign disagrees with its convert: exact only where the
+// value stays in BOTH ranges, i.e. the converted i32 is non-negative. A wider
+// uint32 converts above INT32_MAX (signed truncation saturates there instead of
+// returning the bit pattern), and a negative i32 converts below zero (unsigned
+// truncation saturates to 0).
+const TRUNC_OF_CONVERT_MIXED = {
+  'i32.trunc_sat_f64_s': 'f64.convert_i32_u', 'i32.trunc_f64_s': 'f64.convert_i32_u',
+  'i32.trunc_sat_f64_u': 'f64.convert_i32_s', 'i32.trunc_f64_u': 'f64.convert_i32_s',
+}
+
 /** Simplify exact unary conversions without walking or mutating their operands. */
 export const simplifyCast = (node) => {
   if (node.length !== 2 || !Array.isArray(node[1]) || node[1].length !== 2) return
@@ -924,6 +956,7 @@ export const simplifyCast = (node) => {
   if (inv && (typeof inv === 'string' ? inner[0] === inv : inv.has(inner[0]))) return inner[1]
   const toc = TRUNC_OF_CONVERT[op]
   if (toc && inner[0] in toc) return toc[inner[0]] ? [toc[inner[0]], inner[1]] : inner[1]
+  if (TRUNC_OF_CONVERT_MIXED[op] === inner[0] && nonNegI32(inner[1])) return inner[1]
   // Every i32 is exactly representable in f64 and is already integral.
   if ((op === 'f64.ceil' || op === 'f64.floor' || op === 'f64.trunc' || op === 'f64.nearest') &&
       (inner[0] === 'f64.convert_i32_s' || inner[0] === 'f64.convert_i32_u')) return inner
