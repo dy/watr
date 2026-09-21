@@ -42,6 +42,22 @@ test('ifset: numeric local copies preserve values and condition writes', () => {
   }
 })
 
+test('ifset: a branchy condition keeps the branch', () => {
+  // a short-circuit `&&` lowers to an `if (result i32)`: heapsort's child pick
+  const ast = parse(`(module (memory 1) (func (export "f") (param $c i32) (param $n i32) (result i32)
+    (if (if (result i32) (i32.lt_s (i32.add (local.get $c) (i32.const 1)) (local.get $n))
+          (then (f64.lt (f64.load (i32.shl (local.get $c) (i32.const 3))) (f64.load offset=8 (i32.shl (local.get $c) (i32.const 3)))))
+          (else (i32.const 0)))
+      (then (local.set $c (i32.add (local.get $c) (i32.const 1)))))
+    (local.get $c)))`)
+  const opt = optimize(clone(ast), 'ifset')
+  assert(!print(opt).includes('(select'), 'a condition that branches is not selected over')
+  const plain = parse(`(module (func (export "f") (param $c i32) (param $n i32) (result i32)
+    (if (i32.lt_s (local.get $c) (local.get $n)) (then (local.set $c (i32.add (local.get $c) (i32.const 1)))))
+    (local.get $c)))`)
+  assert(print(optimize(clone(plain), 'ifset')).includes('(select'), 'a plain compare still selects')
+})
+
 test('ifset: reference local copies retain their branch', () => {
   const ast = parse(`(module (func (export "f") (param $c i32)
     (param $x externref) (param $v externref) (result externref)

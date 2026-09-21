@@ -1446,11 +1446,15 @@ const branch = (ast) => {
  *   - V must have a numeric result, proven by its opcode or local declaration,
  *     so the untyped select validates (reference locals remain branches);
  *   - an impure C must not write $X or anything V reads (both V and the
- *     synthesized `local.get $X` would see pre-condition state).
+ *     synthesized `local.get $X` would see pre-condition state);
+ *   - C must not branch itself (an `if`, a block value): materializing a
+ *     branchy condition for a select runs slower than the branch.
  * Default OFF: converting makes the update unconditional — a latency-for-
  * predictability trade that belongs to the speed profile (mirrors jz's
  * boolConvertToSelect tiering); it is also a small size win (~2 B/site).
  */
+const BRANCH_OPS = new Set(['if', 'block', 'loop', 'br', 'br_if', 'br_table'])
+const branches = (node) => { let b = false; walkN(node, (n) => { if (Array.isArray(n) && BRANCH_OPS.has(n[0])) b = true }); return b }
 const ifset = (ast) => {
   walkN(ast, (fn) => {
     if (!Array.isArray(fn) || fn[0] !== 'func') return
@@ -1470,6 +1474,11 @@ const ifset = (ast) => {
       if (!(typeof v[0] === 'string' && /^[if](32|64)\./.test(v[0])) &&
           !(v[0] === 'local.get' && numeric.has(v[1]))) return
       if (!isPure(v) || count(v) > 12 || hasTrap(v) || readsMemory(v)) return
+      // A condition that branches itself (a short-circuit `&&` lowered to an
+      // `if (result i32)`, a block value) keeps the branch: the select would
+      // materialize the branchy value and then choose, and V8 runs that
+      // slower than the branch (heapsort's child pick, 6.5 → 4.2 ms).
+      if (branches(cond)) return
       if (!isPure(cond)) {
         const vw = scanVal(v)
         let clash = false
