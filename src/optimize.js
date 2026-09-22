@@ -6592,6 +6592,7 @@ const mergeBlocks = (ast) => {
     for (const tok of only) node.push(tok)
   })
 
+  const prefix = []
   walkN(ast, (node) => {
     if (!isScopeNode(node)) return
     let i = 1
@@ -6599,9 +6600,8 @@ const mergeBlocks = (ast) => {
       const child = node[i]
       if (!Array.isArray(child)) { i++; continue }
 
-
       if (child[0] !== 'block') {
-        const prefix = []
+        prefix.length = 0
         liftPrelude(child, prefix)
         if (prefix.length) {
           node.splice(i, 0, ...prefix)
