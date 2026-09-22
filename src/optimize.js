@@ -6531,18 +6531,47 @@ const targetsLabel = (body, label) => {
  *    single value expression. Catches the wrappers jz codegen leaves around
  *    arena allocations once `propagate` has folded the intermediate
  *    set/get pairs to a single call.
- * 3. **Result-typed block as the sole operand of a void consumer** at scope:
- *    `(local.set $x (block (result T) stmt* expr))` → splice `stmt*` into
- *    the parent scope and rewrite the consumer to `(local.set $x expr)`.
- *    Same shape for `global.set` and `drop`. Cleans up the multi-stmt
- *    wrappers `inlineOnce` leaves when inlining helpers whose return value
- *    is fed into a single set/drop.
+ * 3. **Result-typed block in a first operand's evaluation chain**: lift its
+ *    statement prefix into the enclosing scope and keep its final expression
+ *    in place. No earlier operand is crossed, so reads, calls and traps keep
+ *    their order. Loop/branch regions, multi-result interfaces and depth-relative
+ *    exits stay intact. This includes the former sole-operand set/drop case.
  *
  * Pattern 2 runs first (post-order) so patterns 1+3 see cleaned-up parents.
  * @param {Array} ast
  * @returns {Array}
  */
 const mergeBlocks = (ast) => {
+  // Lift a first operand's statement prefix without crossing any evaluation.
+  const liftPrelude = (node, prefix) => {
+    if (!Array.isArray(node)) return node
+    if (node[0] === 'block') {
+      let i = 1, label = null
+      if (typeof node[i] === 'string' && node[i][0] === '$') label = node[i++]
+      if (node[i]?.[0] !== 'result' || node[i].length !== 2) return node
+      const body = node.slice(i + 1)
+      if (body.length < 2 || !body.every(Array.isArray) || (label && targetsLabel(body, label))) return node
+      let depthBranch = false
+      walkN(node, n => {
+        if (typeof n[0] === 'string' && (n[0].startsWith('br') || n[0].startsWith('catch')))
+          for (let j = 1; j < n.length && !Array.isArray(n[j]); j++)
+            if (typeof n[j] === 'number' || typeof n[j] === 'string' && !n[j].startsWith('$')) depthBranch = true
+        for (let j = 1; j < n.length; j++)
+          if (typeof n[j] === 'string' && typeof OPCODE[n[j]] === 'number') depthBranch = true
+      })
+      if (depthBranch) return node
+      prefix.push(...body.slice(0, -1))
+      return liftPrelude(body[body.length - 1], prefix)
+    }
+    if (typeof OPCODE[node[0]] !== 'number' || isBranchScope(node[0]) || node[0].startsWith('try')) return node
+    for (let i = 1; i < node.length; i++) {
+      if (!Array.isArray(node[i]) || typeof OPCODE[node[i][0]] !== 'number') continue
+      node[i] = liftPrelude(node[i], prefix)
+      break
+    }
+    return node
+  }
+
   walkPostN(ast, (node) => {
     if (!Array.isArray(node) || node[0] !== 'block') return
     let bi = 1, label = null
@@ -6570,39 +6599,13 @@ const mergeBlocks = (ast) => {
       const child = node[i]
       if (!Array.isArray(child)) { i++; continue }
 
-      // Pattern 3: void-consumer wrapping a result-typed block at scope level.
-      //   (local.set $x (block $L (result T) stmt* expr))   →   stmt* (local.set $x expr)
-      // Same logic for `global.set` and `drop`. The block's body produces a
-      // single value at the end; the leading stmts run for side-effect and
-      // can move into the parent scope unchanged. Label must be unreferenced
-      // (an inner `br $L value` would skip later stmts after splicing).
-      // Catches the (block (result T) … (local.get $tmp)) wrappers inlineOnce
-      // leaves around inlined helper bodies.
-      {
-        const cop = child[0]
-        const oi = (cop === 'local.set' || cop === 'global.set') ? 2
-                 : cop === 'drop' ? 1 : -1
-        if (oi >= 0 && child.length === oi + 1) {
-          const operand = child[oi]
-          if (Array.isArray(operand) && operand[0] === 'block') {
-            let bi = 1, label = null
-            if (typeof operand[1] === 'string' && operand[1][0] === '$') { label = operand[1]; bi = 2 }
-            let hasResult = false
-            while (bi < operand.length) {
-              const c = operand[bi]
-              if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'type')) { bi++; continue }
-              if (Array.isArray(c) && c[0] === 'result') { hasResult = true; bi++; continue }
-              break
-            }
-            const body = hasResult ? operand.slice(bi) : null
-            if (body && body.length >= 2 && !(label && targetsLabel(body, label))) {
-              const expr = body[body.length - 1]
-              const setup = body.slice(0, -1)
-              child[oi] = expr
-              node.splice(i, 1, ...setup, child)
-              continue  // re-examine position i (now setup[0]) — may itself be a splice candidate
-            }
-          }
+
+      if (child[0] !== 'block') {
+        const prefix = []
+        liftPrelude(child, prefix)
+        if (prefix.length) {
+          node.splice(i, 0, ...prefix)
+          continue
         }
       }
 

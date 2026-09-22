@@ -5228,3 +5228,86 @@ test('strength: compose same-direction shifts without masking their sum', () => 
     }
   }
 })
+
+const preludePair = source => {
+  const build = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
+  const before = parse(source), after = optimize(parse(source), 'mergeBlocks')
+  return [build(before), build(after), print(after)]
+}
+
+test('mergeBlocks: first-operand setup keeps calls and repeated invocation order', () => {
+  const [a,b,wat] = preludePair(`(module
+    (global $g (export "trace") (mut i32) (i32.const 0))
+    (func $touch (param $v i32) (result i32)
+      (global.set $g (i32.add (i32.mul (global.get $g) (i32.const 10)) (local.get $v)))
+      (local.get $v))
+    (func (export "f") (param $n i32) (result i32)
+      (global.set $g (i32.const 0))
+      (return (i32.add
+        (block (result i32) (drop (call $touch (i32.const 1))) (call $touch (local.get $n)))
+        (call $touch (i32.const 3))))))`)
+  assert(!wat.includes('(block'))
+  for(const n of [2,2,4,0]) {
+    assert.equal(b.f(n),a.f(n))
+    assert.equal(b.trace.value,a.trace.value)
+    assert.equal(b.trace.value,103+10*n)
+  }
+})
+
+test('mergeBlocks: later operands keep earlier reads and traps ahead of their setup', () => {
+  const [a,b,wat] = preludePair(`(module
+    (global $g (export "trace") (mut i32) (i32.const 0))
+    (func (export "f") (param $n i32) (result i32) (local $x i32)
+      (global.set $g (i32.const 0))
+      (local.set $x (i32.const 1))
+      (i32.add (i32.div_s (local.get $x) (local.get $n))
+        (block (result i32) (global.set $g (i32.const 7))
+          (local.set $x (i32.const 7)) (local.get $x)))))`)
+  assert(wat.includes('(block'))
+  for(const f of [a,b]) {
+    assert.equal(f.f(1),8)
+    assert.throws(()=>f.f(0),WebAssembly.RuntimeError)
+    assert.equal(f.trace.value,0)
+    assert.equal(f.f(2),7)
+  }
+})
+
+test('mergeBlocks: named and depth-relative exits retain the operand block', () => {
+  for(const label of ['$exit','0','0x0']) {
+    const [a,b,wat] = preludePair(`(module (global $g (mut i32) (i32.const 0))
+      (func (export "f") (result i32)
+        (i32.add (block $exit (result i32) (global.set $g (i32.const 1))
+          (br ${label} (i32.const 7)) (i32.const 8)) (i32.const 1))))`)
+    assert(wat.includes('(block'))
+    assert.equal(a.f(),8)
+    assert.equal(b.f(),8)
+  }
+})
+
+test('mergeBlocks: multi-result operands keep their stack interface', () => {
+  const [a,b,wat] = preludePair(`(module
+    (func $sum (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))
+    (func (export "f") (result i32)
+      (call $sum (block (result i32 i32) (i32.const 2) (i32.const 3)))))`)
+  assert(wat.includes('(block'))
+  assert.equal(a.f(),5)
+  assert.equal(b.f(),5)
+})
+
+test('mergeBlocks: loop and conditional prefixes stay within their execution region', () => {
+  const [a,b] = preludePair(`(module (global $g (export "trace") (mut i32) (i32.const 0))
+    (func (export "f") (param $n i32) (result i32) (local $i i32)
+      (global.set $g (i32.const 0))
+      (block $done (loop $again
+        (br_if $done (i32.ge_s (local.get $i) (local.get $n)))
+        (if (i32.and (local.get $i) (i32.const 1)) (then
+          (drop (i32.add (block (result i32)
+            (global.set $g (i32.add (global.get $g) (i32.const 1)))
+            (global.get $g)) (i32.const 1)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $again)))
+      (global.get $g)))`)
+  for(const n of [0,1,4,4,7,0]) {
+    assert.equal(a.f(n),Math.floor(n/2))
+    assert.equal(b.f(n),Math.floor(n/2))
+  }
+})
