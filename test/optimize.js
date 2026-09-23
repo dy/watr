@@ -4426,6 +4426,60 @@ test('devirt: guard reads the closure local FRESH, not stale-before-its-own-tee 
   }
 })
 
+test('devirt: heavy arguments evaluate once, in order, before the guard ladder', () => {
+  // An error path's message build passed to a devirtualized constructor was
+  // cloned into every arm (1350 bytes in one webaudio function). A heavy
+  // argument now evaluates into a local first and appears once. A light read
+  // stays in the arms unless a later bound argument writes what it reads:
+  // `$w` before the heavy argument that tees it binds, `$w` after it stays.
+  // The guard reads the closure after the argument that tees it.
+  const src = `(module
+    (type $sig (func (param f64 i32 i32 i32) (result i32)))
+    (global $log (mut i32) (i32.const 0))
+    (func $hit (param $x i32) (result i32)
+      (global.set $log (i32.add (i32.mul (global.get $log) (i32.const 3)) (local.get $x))) (local.get $x))
+    (func $A (param $clos f64) (param $x i32) (param $y i32) (param $z i32) (result i32)
+      (i32.add (i32.add (i32.mul (local.get $x) (i32.const 100)) (i32.mul (local.get $y) (i32.const 10))) (local.get $z)))
+    (func $B (param $clos f64) (param $x i32) (param $y i32) (param $z i32) (result i32)
+      (i32.add (i32.sub (i32.mul (local.get $x) (i32.const 100)) (i32.mul (local.get $y) (i32.const 10))) (local.get $z)))
+    (table 2 funcref)
+    (elem (i32.const 0) func $A $B)
+    (func (export "main") (param $n i32) (result i32)
+      (local $i i32) (local $s i32) (local $w i32) (local $clos f64)
+      (global.set $log (i32.const 0))
+      (block $brk (loop $l
+        (br_if $brk (i32.ge_s (local.get $i) (local.get $n)))
+        (local.set $s (i32.add (local.get $s)
+          (call_indirect (type $sig)
+            (local.tee $clos (f64.reinterpret_i64 (select
+              (i64.const 0x7ffd000000000000) (i64.const 0x7ffd000100000000)
+              (i32.eqz (i32.rem_s (local.get $i) (i32.const 2))))))
+            (local.get $w)
+            (call $hit (i32.add (local.tee $w (i32.mul (local.get $i) (i32.const 3))) (i32.const 1)))
+            (local.get $w)
+            (i32.wrap_i64 (i64.and (i64.shr_u (i64.reinterpret_f64 (local.get $clos)) (i64.const 32)) (i64.const 32767))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $l)))
+      (i32.add (local.get $s) (i32.mul (global.get $log) (i32.const 1000)))))`
+  const txt = print(devirt(parse(src)))
+  assert.ok(/\(call \$A/.test(txt) && /\(call \$B/.test(txt), 'both candidates direct-called')
+  assert.equal(txt.match(/\(call \$hit/g).length, 1, 'the heavy argument is evaluated once, not cloned per arm')
+  assert.equal(txt.match(/\(local \$__dv\d+/g).length, 3, 'the closure, the earlier read and the heavy argument bind; the later read stays')
+  assert.ok(/call_indirect/.test(txt), 'original call_indirect kept as the fallback arm')
+  const ref = (n) => {
+    let s = 0, log = 0, w = 0
+    for (let i = 0; i < n; i++) {
+      const x = w; w = i * 3; const y = w + 1; log = (log * 3 + y) | 0
+      s += (i % 2 === 0 ? x * 100 + y * 10 : x * 100 - y * 10) + w
+    }
+    return (s + Math.imul(log, 1000)) | 0
+  }
+  for (const out of [txt, print(optimize(parse(src), { devirt: true }))]) {
+    const { main } = run(out)
+    for (const n of [0, 1, 2, 3, 6, 11]) assert.equal(main(n), ref(n), `n=${n}`)
+  }
+})
+
 test('cse: a re-tee between two sites of one statement kills the group (intra-statement write order)', () => {
   // jz's Math.round(x) + Math.round(-x) shape after local coalescing: ONE statement
   // holds two textually-identical `(f64.eq (get $n) (f64.sub (get $t) 0.5))` subtrees,

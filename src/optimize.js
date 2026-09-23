@@ -6262,6 +6262,17 @@ const devirt = (ast) => {
       } else cands.set(n[1], null)
     })
 
+    // Argument locals the rewritten call sites declare, appended after the walk.
+    const argLocals = []
+    let names = null
+    const freshArg = (t) => {
+      if (!names) { names = new Set(); walk(fn, x => { if (typeof x === 'string' && x[0] === '$') names.add(x) }) }
+      let s, k = argLocals.length
+      do { s = `$__dv${k++}` } while (names.has(s))
+      names.add(s)
+      argLocals.push(['local', s, t])
+      return s
+    }
     walkPostN(fn, (n, parent) => {
       if (!Array.isArray(n) || n[0] !== 'call_indirect') return
       // A call_indirect sitting directly under an `else` is (or looks exactly
@@ -6316,6 +6327,50 @@ const devirt = (ast) => {
         arms.push([cNode, name, slot])
       }
       const readBack = f.local != null ? ['local.get', f.local] : ['global.get', f.global]
+      // An argument heavier than one operation would be cloned into every arm:
+      // it evaluates once into a local before the ladder instead. The arms
+      // evaluate the others after every bound argument, so one stays in the arms
+      // only where that is unobservable: a constant, or a light value that is
+      // pure, trap-free, reads no memory and reads no local or global a later
+      // bound argument writes (numeric local indices may alias names: all bind).
+      // The guard reads the closure after the bound arguments, where the index
+      // read it (no primer).
+      const types = []
+      for (const s of sig.slice(1)) if (Array.isArray(s) && s[0] === 'param')
+        for (const t of s.slice(1)) if (typeof t === 'string' && t[0] !== '$') types.push(t)
+      const bind = types.length === args.length && args.some(a => count(a) > 8) &&
+        types.every(t => /^([if](32|64)|v128|funcref|externref)$/.test(t))
+      const bound = args.map(a => bind && !getConst(a))
+      if (bind) {
+        let numeric = false
+        walkN(args, n => { if (Array.isArray(n) && /^(local|global)\.(get|set|tee)$/.test(n[0]) && !(typeof n[1] === 'string' && n[1][0] === '$')) numeric = true })
+        const wLocals = new Set(), wGlobals = new Set()
+        let wCalls = false
+        for (let i = args.length - 1; i >= 0 && !numeric; i--) {
+          const a = args[i]
+          if (!bound[i]) continue
+          if (count(a) <= 8 && isPure(a) && !hasTrap(a) && !readsMemory(a)) {
+            let stale = false
+            walkN(a, n => {
+              if (Array.isArray(n) && ((n[0] === 'local.get' && wLocals.has(n[1])) || (n[0] === 'global.get' && (wCalls || wGlobals.has(n[1]))))) stale = true
+            })
+            if (!stale) { bound[i] = false; continue }
+          }
+          walkN(a, n => {
+            if (!Array.isArray(n) || typeof n[0] !== 'string') return
+            if (n[0] === 'local.set' || n[0] === 'local.tee') wLocals.add(n[1])
+            else if (n[0] === 'global.set') wGlobals.add(n[1])
+            else if (n[0].includes('call')) wCalls = true
+          })
+        }
+      }
+      const sets = []
+      const passed = args.map((a, i) => {
+        if (!bound[i]) return a
+        const s = freshArg(types[i])
+        sets.push(['local.set', s, a])
+        return ['local.get', s]
+      })
       // idxLocal==null means the guard reads f.local BACK via a bare local.get — sound
       // only if f.local already holds its final value at guard time. The common producer
       // shape (jz's closure select) writes it via a `local.tee` living INSIDE this very
@@ -6331,7 +6386,7 @@ const devirt = (ast) => {
       // the same value (cands is non-poisoned here, so every write devirt has seen for
       // this local is a pure const/select tree — safe to evaluate twice).
       let primer = null
-      if (idxLocal == null && f.local != null) {
+      if (!bind && idxLocal == null && f.local != null) {
         const findTeeProducer = (node) => {
           if (!Array.isArray(node)) return null
           if (node[0] === 'local.tee' && node[1] === f.local) return node[2]
@@ -6339,24 +6394,30 @@ const devirt = (ast) => {
           return null
         }
         for (const a of args) { primer = findTeeProducer(a); if (primer) break }
+        if (primer) sets.push(['local.set', f.local, clone(primer)])
       }
-      let out = n
+      let out = bind ? ['call_indirect', typeUse, ...passed.map(clone), idx] : n
       for (let i = arms.length - 1; i >= 0; i--) {
         const [cNode, name, slot] = arms[i]
         out = ['if', ...(results.length ? [['result', ...results]] : []),
           idxLocal != null
             ? ['i32.eq', ['local.get', idxLocal], ['i32.const', String(slot)]]
             : ['i64.eq', ['i64.reinterpret_f64', clone(readBack)], clone(cNode)],
-          ['then', ['call', name, ...args.map(clone)]],
+          ['then', ['call', name, ...passed.map(clone)]],
           ['else', out]]
       }
-      if (primer) {
-        out = ['block', ...(results.length ? [['result', ...results]] : []),
-          ['local.set', f.local, clone(primer)],
-          out]
-      }
+      if (sets.length) out = ['block', ...(results.length ? [['result', ...results]] : []), ...sets, out]
       return out
     })
+    if (argLocals.length) {
+      let declEnd = 1
+      for (let i = 1; i < fn.length; i++) {
+        const c = fn[i]
+        if (!Array.isArray(c)) { if (typeof c === 'string' && c[0] === '$') declEnd = i + 1; continue }
+        if (c[0] === 'param' || c[0] === 'local' || c[0] === 'result' || c[0] === 'export' || c[0] === 'type') declEnd = i + 1
+      }
+      fn.splice(declEnd, 0, ...argLocals)
+    }
   }
   return ast
 }
