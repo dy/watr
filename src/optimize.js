@@ -7083,7 +7083,26 @@ const boolNode = (n) => {
 }
 const bool = (ast) => walkPostN(ast, boolNode)
 
-// Short-circuit value diamonds used only as conditions become branch chains.
+// An i32 diamond read for its truth: `a && b` or `a || b`. The tee forms are
+// the value short-circuit (the arm that skips b rereads a's temporary); a
+// constant arm is the boolean one: 0 in the else arm makes `a && b`, a nonzero
+// then arm `a || b`, and the other two test `!a`.
+const diamond = (n) => {
+  if (!Array.isArray(n) || n[0] !== 'if' || n.length !== 5 ||
+      n[1]?.[0] !== 'result' || n[1].length !== 2 || n[1][1] !== 'i32' || !Array.isArray(n[2]) ||
+      n[3]?.[0] !== 'then' || n[3].length !== 2 || n[4]?.[0] !== 'else' || n[4].length !== 2) return null
+  const a = n[2], t = n[3][1], e = n[4][1]
+  if (a[0] === 'local.tee' && a.length === 3) {
+    if (e?.[0] === 'local.get' && e[1] === a[1]) return { and: true, a, tee: true, b: t }
+    if (t?.[0] === 'local.get' && t[1] === a[1]) return { and: false, a, tee: true, b: e }
+  }
+  const tc = getConst(t), ec = getConst(e)
+  if (ec) return ec.value === 0 ? { and: true, a, b: t } : { and: false, a: ['i32.eqz', a], b: t }
+  if (tc) return tc.value === 0 ? { and: true, a: ['i32.eqz', a], b: e } : { and: false, a, b: e }
+  return null
+}
+
+// Short-circuit diamonds used only as conditions become branch chains.
 // Run once before local propagation dissolves their tee/get shape. Ordinary
 // local liveness removes unused declarations without a second index remapper.
 const conditions = (ast) => {
@@ -7094,7 +7113,7 @@ const conditions = (ast) => {
     walk(f, (n) => {
       if (typeof n === 'string' && n[0] === '$') names.add(n)
       if (!Array.isArray(n)) return
-      if (n[0] === 'if' && n[2]?.[0] === 'local.tee') candidate = true
+      if (diamond(n)) candidate = true
       if ((n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee') &&
           !(typeof n[1] === 'string' && n[1][0] === '$')) numericLocals = true
       // New blocks change relative depths. Leave these functions unchanged;
@@ -7112,17 +7131,8 @@ const conditions = (ast) => {
       names.add(s)
       return s
     }
-    const diamond = (n) => {
-      if (!Array.isArray(n) || n[0] !== 'if' || n.length !== 5 ||
-          n[1]?.[0] !== 'result' || n[1].length !== 2 || n[1][1] !== 'i32' ||
-          n[2]?.[0] !== 'local.tee' || n[2].length !== 3 ||
-          n[3]?.[0] !== 'then' || n[3].length !== 2 || n[4]?.[0] !== 'else' || n[4].length !== 2) return null
-      const a = n[2], t = n[3][1], e = n[4][1]
-      if (e?.[0] === 'local.get' && e[1] === a[1]) return { and: true, a, b: t }
-      if (t?.[0] === 'local.get' && t[1] === a[1]) return { and: false, a, b: e }
-      return null
-    }
     const left = (d) => {
+      if (!d.tee) return d.a
       const uses = counts.get(d.a[1])
       return !numericLocals && uses?.gets === 1 && uses.sets + uses.tees === 1 ? d.a[2] : d.a
     }
