@@ -37,22 +37,32 @@ export default function print(tree, options = {}) {
   function printNode(node, level = 0) {
     if (!Array.isArray(node)) return node
 
-    let content = node[0]
+    const content = node[0]
     if (!content) return ''
     let afterLineComment = false // track if we just printed a line comment
+    // Keep fragments until the node is complete. Repeated prefix copying is
+    // quadratic for wide functions/data sections on hosts without string ropes.
+    const parts = [content]
+    let last = content[content.length - 1]
+    function append(value) {
+      const text = '' + value
+      if (!text) return
+      parts.push(text)
+      last = text[text.length - 1]
+    }
 
     // Special handling for try_table: keep catch clauses inline
     if (content === 'try_table') {
       let i = 1
       // Add label if present
-      if (typeof node[i] === 'string' && node[i][0] === '$') content += ' ' + node[i++]
+      if (typeof node[i] === 'string' && node[i][0] === '$') append(' ' + node[i++])
       // Add blocktype if present
-      if (Array.isArray(node[i]) && (node[i][0] === 'result' || node[i][0] === 'type')) content += ' ' + printNode(node[i++], level)
+      if (Array.isArray(node[i]) && (node[i][0] === 'result' || node[i][0] === 'type')) append(' ' + printNode(node[i++], level))
       // Add catch clauses inline
-      while (Array.isArray(node[i]) && /^catch/.test(node[i][0])) content += ' ' + printNode(node[i++], level).trim()
+      while (Array.isArray(node[i]) && /^catch/.test(node[i][0])) append(' ' + printNode(node[i++], level).trim())
       // Rest is body - print normally
-      for (; i < node.length; i++) content += Array.isArray(node[i]) ? newline + indent.repeat(level + 1) + printNode(node[i], level + 1) : ' ' + node[i]
-      return `(${content + newline + indent.repeat(level)})`
+      for (; i < node.length; i++) append(Array.isArray(node[i]) ? newline + indent.repeat(level + 1) + printNode(node[i], level + 1) : ' ' + node[i])
+      return `(${parts.join('') + newline + indent.repeat(level)})`
     }
 
     // flat node (no deep subnodes), eg. (i32.const 1), (module (export "") 1)
@@ -81,52 +91,47 @@ export default function print(tree, options = {}) {
         if (sub[0] === ';') {
           if (newline) {
             // prettified: own line with indent, next element adds its own newline
-            content += newline + curIndent + sub.trimEnd()
+            append(newline + curIndent + sub.trimEnd())
             afterLineComment = true
           } else {
             // minified: keep inline but must have newline after
-            const last = content[content.length - 1]
-            if (last && last !== ' ' && last !== '(') content += ' '
-            content += sub.trimEnd() + '\n'
+            if (last && last !== ' ' && last !== '(') append(' ')
+            append(sub.trimEnd() + '\n')
           }
         }
         // block comments ((;...;)) can stay inline
         else {
-          const last = content[content.length - 1]
-          if (last && last !== ' ' && last !== '(') content += ' '
-          content += sub.trimEnd()
+          if (last && last !== ' ' && last !== '(') append(' ')
+          append(sub.trimEnd())
         }
       }
       // (<keyword> ...)
       else if (Array.isArray(sub)) {
         if (flat) flat = sub.every(sub => !Array.isArray(sub))
-        content += newline + curIndent + printNode(sub, level + 1)
+        append(newline + curIndent + printNode(sub, level + 1))
         afterLineComment = false
       }
       // data chunks "\00..."
       else if (node[0] === 'data')   {
         flat = false;
-        if (newline || content[content.length-1] !== ')') content += newline || ' '
-        content += curIndent + sub
+        if (newline || last !== ')') append(newline || ' ')
+        append(curIndent + sub)
         afterLineComment = false
       }
       // inline nodes
       else {
-        const last = content[content.length - 1]
         // after line comment in prettified mode, need newline + indent
-        if (afterLineComment && newline) content += newline + curIndent
+        if (afterLineComment && newline) append(newline + curIndent)
         // after newline from line comment (minified), add indent
-        else if (last === '\n') content += ''
-        else if (last && last !== ')' && last !== ' ') content += ' '
-        else if (newline || last === ')') content += ' '
-        content += sub
+        else if (last !== '\n' && (newline || (last && last !== ' '))) append(' ')
+        append(sub)
         afterLineComment = false
       }
     }
 
     // shrink unnecessary spaces
-    if (flat) return `(${content.replaceAll(newline + curIndent + '(', ' (')})`
+    if (flat) return `(${parts.join('').replaceAll(newline + curIndent + '(', ' (')})`
 
-    return `(${content + newline + indent.repeat(level)})`
+    return `(${parts.join('') + newline + indent.repeat(level)})`
   }
 }

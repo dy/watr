@@ -139,3 +139,20 @@ t('print: non-finite and -0 JS-number leaves emit WAT tokens', () => {
   ok(out.includes('(f64.const -0)'), '-0 keeps its sign')
   compile(parse(out.replace('(f64.const NaN)', '(f64.const nan)')))   // round-trips and validates (NaN normalized for the kernel leg)
 })
+
+
+t('print: wide nodes, empty work and repeated inputs keep exact formatting', () => {
+  const body = Array.from({length: 1024}, () => ['nop'])
+  const wide = ['module', ['func', ...body]]
+  const pretty = '(module\n  (func' + '\n    (nop)'.repeat(1024) + '\n  )\n)'
+  const compact = '(module(func' + '(nop)'.repeat(1024) + '))'
+  for (const tree of [[], ['module'], wide, wide, ['module'], wide]) {
+    const expected = !tree.length ? '' : tree.length === 1 ? '(module)' : pretty
+    is(print(tree), expected)
+    is(print(tree, {indent: '', newline: ''}), !tree.length ? '' : tree.length === 1 ? '(module)' : compact)
+  }
+  const data = ['data', ['i32.const', 0], ...Array(1024).fill('"ab"')]
+  is(print(data, {indent: '', newline: ''}), '(data(i32.const 0)' + '"ab" '.repeat(1023) + '"ab")')
+  const caught = ['try_table', '$t', ['result', 'i32'], ['catch', '$e', '$t'], ['i32.const', 7]]
+  is(print(caught, {indent: '', newline: ''}), '(try_table $t (result i32) (catch $e $t)(i32.const 7))')
+})
