@@ -3,7 +3,7 @@
 // computations start together. Every case runs the module before and after.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { schedule } from '../src/optimize.js'
+import optimize, { schedule } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 
 const instance = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports
@@ -22,6 +22,24 @@ test('scheduling: independent chains start together', () => {
   const order = ast.find(n => n[1] === '$f').filter(n => n[0] === 'local.set').map(n => n[1])
   assert.deepEqual(order, ['$p', '$r', '$q', '$s'])
   for (const [a, b] of [[0.3, 0.9], [4, 16]]) assert.ok(Object.is(instance(ast).f(a, b), instance(parse(src)).f(a, b)))
+})
+
+test('scheduling: a block-result call stays after its void statements', () => {
+  const src = `(module
+    (func $k (param $x f64) (result f64) (f64.sqrt (local.get $x)))
+    (func $f (export "f") (param $x f64) (result f64) (local $p f64) (local $q f64)
+      (f64.add
+        (local.tee $q (block (result f64)
+          (local.set $p (call $k (local.get $x)))
+          (call $k (call $k (f64.const 16)))))
+        (local.get $p))))`
+  const ast = parse(src), before = print(ast)
+  schedule(ast, { pure: ['$k'] })
+  assert.equal(print(ast), before, 'the value stays in the final expression position')
+  for (const opts of [null, { schedule: true, pure: ['$k'] }]) {
+    const changed = instance(opts ? optimize(parse(src), opts) : ast)
+    for (const x of [0, 16, 16, 81]) assert.equal(changed.f(x), 2 + Math.sqrt(x))
+  }
 })
 
 test('scheduling: direct and read-only callee loads retain their trap order', () => {

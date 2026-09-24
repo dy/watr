@@ -30,7 +30,9 @@ import { isMemWrite as writesMemory, mayTrap as mayTrapOp, visit, bodyStart as f
 const isArr = Array.isArray
 const CONTROL = new Set(['block', 'loop', 'if', 'try_table', 'br', 'br_if', 'br_table', 'return', 'return_call', 'return_call_indirect', 'return_call_ref', 'unreachable', 'throw', 'throw_ref', 'rethrow'])
 const BRANCH = new Set(['try_table', 'br', 'br_if', 'br_table', 'return', 'return_call', 'return_call_indirect', 'return_call_ref', 'unreachable', 'throw', 'throw_ref', 'rethrow'])
-const VOID = new Set(['local.set', 'global.set', 'drop', 'nop', 'call'])
+// A call's effect proof says nothing about its result arity. Bare calls may
+// produce a block's result and must keep that position in the folded tree.
+const VOID = new Set(['local.set', 'global.set', 'drop', 'nop'])
 const HEAVY = /\.(div|div_s|div_u|sqrt)$/
 const isLoad = (op) => op.includes('.load')
 const intersects = (a, b) => { for (const x of a) if (b.has(x)) return true; return false }
