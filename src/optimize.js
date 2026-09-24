@@ -1364,23 +1364,7 @@ const branch = (ast) => {
         // (a tee'd local, a set global, memory a callee stores to), else the arm
         // sees pre-condition state (a NaN-boxed local read before its tee fed the
         // kernel a stale pointer — one wrong byte in a self-hosted compile)
-        if (!isPure(cond)) {
-          const aw = scanVal(a), bw = scanVal(b)
-          let clash = false
-          walkN(cond, (n, p2, i2) => {
-            if (!Array.isArray(n)) { if (i2 !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) clash = true; return }
-            const o = n[0]
-            if (typeof o !== 'string') return
-            if ((o === 'local.set' || o === 'local.tee') && (aw.refs.has(n[1]) || bw.refs.has(n[1]))) clash = true
-            else if (o === 'global.set' && (aw.grefs.has(n[1]) || bw.grefs.has(n[1]))) clash = true
-            else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') {
-              const e = callFx(n)
-              if (!e) { if (aw.grefs.size || bw.grefs.size) clash = true }
-              else if ([...aw.grefs, ...bw.grefs].some(g => e.wGlob.has(g))) clash = true
-            }
-          })
-          if (clash) return
-        }
+        if (!isPure(cond) && readsChangedBy(['block', a, b], cond)) return
         return ['select', a, b, cond]
       }
       const taken = c.value !== 0 && c.value !== ZERO64 ? thenBranch : elseBranch
@@ -1483,23 +1467,7 @@ const ifset = (ast) => {
       // materialize the branchy value and then choose, and V8 runs that
       // slower than the branch (heapsort's child pick, 6.5 → 4.2 ms).
       if (branches(cond)) return
-      if (!isPure(cond)) {
-        const vw = scanVal(v)
-        let clash = false
-        walkN(cond, (n, p2, i2) => {
-          if (!Array.isArray(n)) { if (i2 !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) clash = true; return }
-          const o = n[0]
-          if (typeof o !== 'string') return
-          if ((o === 'local.set' || o === 'local.tee') && (n[1] === X || vw.refs.has(n[1]))) clash = true
-          else if (o === 'global.set' && vw.grefs.has(n[1])) clash = true
-          else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') {
-            const e = callFx(n)
-            if (!e) { if (vw.grefs.size) clash = true }
-            else if ([...vw.grefs].some(g => e.wGlob.has(g))) clash = true
-          }
-        })
-        if (clash) return
-      }
+      if (!isPure(cond) && readsChangedBy(['block', v, ['local.get', X]], cond)) return
       return ['local.set', X, ['select', v, ['local.get', X], cond]]
     })
   })
@@ -2133,9 +2101,9 @@ const unclamp = (ast) => {
         // the clamp's guard slot: the bound read back (`local.get $bn`), or the
         // DEFINING tee itself (`local.tee $bn (i32.lt_u …)` — first evaluation
         // of the bound, len tee and all). A tee moves into the if condition:
-        // evaluation order is preserved (the address evaluated first in the
-        // select form; the condition evaluates first in the if form — the tee
-        // IS that first evaluation either way), and any shared inner tees
+        // the index and preceding base evaluate BEFORE that tee in the select
+        // form. Their reads must survive its writes (including slot reuse).
+        // Any shared inner tees
         // (`$o` = the element count reused by the arm's store guard) keep
         // defining for their later readers.
         let teeCond = null
@@ -2147,13 +2115,16 @@ const unclamp = (ast) => {
             (s[3][0] === 'local.tee' && s[3][1] === bn && (teeCond = s[3], true)))
         const unwrap = (x) => {
           if (isClamp(x)) return ['local.get', x[1][1]]
-          if (Array.isArray(x) && x[0] === 'i32.shl' && x.length === 3 && isClamp(x[1])) return ['i32.shl', ['local.get', x[1][1][1]], x[2]]
+          if (Array.isArray(x) && x[0] === 'i32.shl' && x.length === 3 && isPure(x[2]) && !hasTrap(x[2]) && isClamp(x[1])) return ['i32.shl', ['local.get', x[1][1][1]], x[2]]
           return null
         }
         for (const k of [1, 2]) {
           teeCond = null
           const u = unwrap(addr[k])
           if (!u) continue
+          const base = addr[3 - k]
+          if (!isPure(base) || hasTrap(base)) continue
+          if (teeCond && readsChangedBy(k === 2 ? ['block', base, u] : u, teeCond)) continue
           const newAddr = ['i32.add', k === 1 ? u : addr[1], k === 1 ? addr[2] : u]
           const newLoad = ai === 2 ? [ld[0], ld[1], newAddr] : [ld[0], newAddr]
           const ty = cvW ? 'f64' : ld[0].slice(0, 3) === 'v12' ? 'v128' : ld[0].slice(0, 3)
@@ -3173,8 +3144,8 @@ const scanVal = (val) => {
   walkN(val, n => {
     if (!Array.isArray(n)) return
     const o = n[0]
-    if (o === 'local.get' || o === 'local.tee') { if (typeof n[1] === 'string') refs.add(n[1]) }
-    else if (o === 'global.get') { if (typeof n[1] === 'string') grefs.add(n[1]); ext = true }
+    if (o === 'local.get' || o === 'local.tee') { if (typeof n[1] === 'string' || typeof n[1] === 'number') refs.add(n[1]) }
+    else if (o === 'global.get') { if (typeof n[1] === 'string' || typeof n[1] === 'number') grefs.add(n[1]); ext = true }
     else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect' ||
              o === 'table.get' || o === 'table.size') ext = true
     else if (typeof o === 'string' && (o.includes('.load') || o === 'memory.copy' || o === 'memory.size')) mem = ext = true
@@ -3185,6 +3156,25 @@ const scanVal = (val) => {
   const trap = hasTrap(val)
   if (trap) mem = ext = true
   return { refs, grefs, mem, ext, trap }
+}
+
+/** Whether moving a state read past `node` can change its value. Callers
+ *  separately prove that skipping/speculating the value has no effects or traps. */
+const readsChangedBy = (value, node) => {
+  const { refs, grefs } = scanVal(value)
+  let changed = false
+  walkN(node, (n, p, i) => {
+    if (!Array.isArray(n)) { if (i !== 0 && typeof n === 'string' && OPCODE[n] !== undefined) changed = true; return }
+    const op = n[0]
+    if ((op === 'local.set' || op === 'local.tee') && refs.has(n[1])) changed = true
+    else if (op === 'global.set' && grefs.has(n[1])) changed = true
+    else if (op === 'call' || op === 'call_indirect' || op === 'return_call' || op === 'return_call_indirect') {
+      const e = callFx(n)
+      if (!e) { if (grefs.size) changed = true }
+      else if ([...grefs].some(g => e.wGlob.has(g))) changed = true
+    }
+  })
+  return changed
 }
 
 /** True if `node` recursively contains an op that may read linear memory.

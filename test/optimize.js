@@ -4738,6 +4738,61 @@ test('unclamp: select-clamped checked read → if-form (speed profile; default o
   }
 })
 
+test('unclamp: a defining guard cannot overwrite an earlier index or base', () => {
+  const shapes = [
+    ['index slot', '(local.get $base)', '$i', '(i32.lt_u (local.get $i) (local.get $len))'],
+    ['nested index write', '(local.get $base)', '$bn', '(block (result i32) (local.set $i (i32.const 1)) (local.get $len))'],
+    ['base write', '(local.get $base)', '$bn', '(block (result i32) (local.set $base (i32.const 8)) (i32.lt_u (local.get $i) (local.get $len)))'],
+  ]
+  const make = tree => {
+    const e = new WebAssembly.Instance(new WebAssembly.Module(compile(tree))).exports
+    new Float64Array(e.memory.buffer).set([17, 29, -0, NaN, 53, 67])
+    return e.f
+  }
+  const result = (f, i, len) => {
+    try { return f(i, len, 0) }
+    catch (e) { if (e instanceof WebAssembly.RuntimeError) return 'trap'; throw e }
+  }
+  for (const [name, base, guard, condition] of shapes) for (const numeric of [false, true]) {
+    let src = `(module (memory (export "memory") 1)
+      (func (export "f") (param $i i32) (param $len i32) (param $base i32) (result f64) (local $bn i32)
+        (select (f64.load (i32.add ${base} (i32.shl
+          (select (local.get $i) (i32.const 0) (local.tee ${guard} ${condition})) (i32.const 3))))
+          (f64.const nan) (local.get ${guard}))))`
+    if (numeric) for (const [key, index] of [['$i', 0], ['$len', 1], ['$base', 2], ['$bn', 3]])
+      src = src.replaceAll(`local.get ${key}`, `local.get ${index}`).replaceAll(`local.set ${key}`, `local.set ${index}`).replaceAll(`local.tee ${key}`, `local.tee ${index}`)
+    const before = make(parse(src))
+    for (const opts of ['unclamp', { profile: 'speed' }]) {
+      const after = make(optimize(parse(src), opts))
+      for (const len of [0, 4]) for (const i of [-1, 0, 1, 2, 3, 4, 1, 1])
+        assert(Object.is(result(after, i, len), result(before, i, len)), `${name}, numeric=${numeric}, ${i}/${len}`)
+    }
+  }
+})
+
+test('unclamp: untaken reads retain address effects and traps', () => {
+  for (const address of [
+    '(i32.add (local.tee $base (i32.const 8)) CLAMP)',
+    '(i32.add (i32.div_u (i32.const 8) (local.get $len)) CLAMP)',
+    '(i32.add (local.get $base) (i32.shl CLAMP (local.tee $base (i32.const 3))))',
+  ]) {
+    const src = `(module (memory 1)
+      (func (export "f") (param $i i32) (param $len i32) (result i32) (local $base i32) (local $bn i32)
+        (local.set $bn (i32.lt_u (local.get $i) (local.get $len)))
+        (drop (select (i32.load ${address.replace('CLAMP', '(select (local.get $i) (i32.const 0) (local.get $bn))')})
+          (i32.const -1) (local.get $bn))) (local.get $base)))`
+    const run = tree => new WebAssembly.Instance(new WebAssembly.Module(compile(tree))).exports.f
+    const before = run(parse(src))
+    for (const opts of ['unclamp', { profile: 'speed' }]) {
+      const after = run(optimize(parse(src), opts))
+      for (const [i, len] of [[0, 4], [4, 4], [0, 0]]) {
+        if (address.includes('div_u') && len === 0) assert.throws(() => after(i, len), WebAssembly.RuntimeError)
+        else assert.equal(after(i, len), before(i, len))
+      }
+    }
+  }
+})
+
 test('strength: (x<<K)>>K folds to sign-extension ops (byte-codec idiom)', () => {
   const src = `(module (func (export "b") (param $x i32) (result i32)
     (i32.shr_s (i32.shl (local.get $x) (i32.const 24)) (i32.const 24)))
