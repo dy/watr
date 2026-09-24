@@ -9,6 +9,10 @@
 import { numdata, size } from './compile.js'
 import { hoistInvariants } from './licm.js'
 export { hoistInvariants, structuralKey } from './licm.js'
+import { isMemWrite } from './effect.js'
+export { isMemWrite } from './effect.js'
+import numberValues from './number.js'
+import scheduleRuns from './schedule.js'
 import { f32 as _f32enc, f64 as _f64enc } from './encode.js'
 import { IMM, OPCODE, resultType } from './const.js'
 import parse from './parse.js'
@@ -2978,6 +2982,35 @@ const computeCallEffects = (ast) => {
   return fx
 }
 
+/**
+ * What a call to each function is, for value numbering and scheduling: 'pure' when the caller
+ * vouches for it (`pure`: reads and writes nothing, cannot trap), 'read' when its transitive
+ * effects write nothing (a value of its arguments and the state it reads), else null.
+ */
+const callKinds = (ast, pure) => {
+  const fx = CALLFX ?? computeCallEffects(ast), vouched = pure instanceof Set ? pure : new Set(pure || [])
+  return (name) => {
+    if (vouched.has(name)) return 'pure'
+    const e = fx.get(name)
+    return e && !e.unknown && !e.wMem && e.wGlob.size === 0 ? 'read' : null
+  }
+}
+const funcsOf = (ast) => ast[0] === 'func' ? [ast] : ast.filter(n => Array.isArray(n) && n[0] === 'func')
+
+/** One computation per value through locals, in every function (number.js). */
+const valueNumber = (ast, opts = {}) => {
+  const call = callKinds(ast, opts.pure)
+  for (const f of funcsOf(ast)) numberValues(f, call)
+  return ast
+}
+
+/** Straight-line statements in order of the work depending on them, in every function (schedule.js). */
+const schedule = (ast, opts = {}) => {
+  const call = callKinds(ast, opts.pure)
+  for (const f of funcsOf(ast)) scheduleRuns(f, call)
+  return ast
+}
+
 /** Effect summary for a call NODE — null when the callee can't be summarized. */
 const callFx = (n) => {
   if (!CALLFX || !Array.isArray(n) || (n[0] !== 'call' && n[0] !== 'return_call') || typeof n[1] !== 'string') return null
@@ -3253,8 +3286,6 @@ const retireMovedDef = (k) => {
   cntSub(k.def); k.def.length = 1; k.def[0] = 'nop'; k.def = null
 }
 const purgeExt = (m) => { for (const [key, t] of m) if (t.ext) m.delete(key) }
-export const isMemWrite = (op) => op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow' ||
-  (op.includes('.atomic.') && !op.endsWith('.load')) || op === 'table.set' || op === 'table.grow' || op === 'table.fill' || op === 'table.copy' || op === 'table.init'
 const isExtEffect = (op) => op === 'call' || op === 'call_indirect' || op === 'call_ref' || op === 'return_call' || op === 'return_call_indirect' ||
   op === 'return_call_ref' || op === 'throw' || op === 'throw_ref'
 // Evaluate pure constant expressions through dominating local definitions without
@@ -8677,6 +8708,8 @@ const PASSES = [
   ['propagate',     propagate,      true,  'forward-propagate single-use locals & tiny consts (never inflates)'],
   ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
   ['deadset',       deadset,        true,  'drop const local.set overwritten on every path before any read (ONCE pre-rounds: coalesced slots would alias liveness)'],
+  ['valueNumber',   valueNumber,    false, 'one computation per value through locals, across chains named apart (ONCE pre-rounds; `pure` vouches for callees)'],
+  ['schedule',      schedule,       false, 'order straight-line statements by the work depending on them, so long independent work overlaps (ONCE pre-rounds)'],
   // default OFF: on a PREDICTABLE index stream the br_table hits (~1 cycle) and
   // the tree still pays every arm — a regression; on unpredictable streams the
   // tree wins the mispredict back. A static compiler can't know the stream —
@@ -8886,6 +8919,9 @@ function optimizeModule(ast, opts) {
   // optimizer policy with the CALLER — e.g. jz pins the scalar transcendentals its own
   // auto-vectorizer later rewrites to f64x2 mirrors, so no consumer-specific names live here.
   opts.pin = opts.pin instanceof Set ? opts.pin : new Set(opts.pin || [])
+  // `pure`: caller-vouched functions whose calls read and write nothing and cannot trap —
+  // value numbering and scheduling move them like arithmetic (jz vouches for its math runtime).
+  opts.pure = opts.pure instanceof Set ? opts.pure : new Set(opts.pure || [])
 
   const log = opts.log ? (msg, delta) => opts.log(msg, delta) : () => {}
   const verbose = opts.verbose || opts.log
@@ -8972,6 +9008,11 @@ function optimizeModule(ast, opts) {
   // inliner's zero-inits) is input-borne, so pre-rounds loses nothing.
   if (opts.deadset) deadset(ast)
 
+  // Value numbering and scheduling run ONCE before the rounds, on the caller's shapes: the
+  // rounds then clean the holders value numbering leaves (propagate, merge, coalesce).
+  if (opts.valueNumber) valueNumber(ast, opts)
+  if (opts.schedule) schedule(ast, opts)
+
   // licm runs ONCE after the rounds + inline: its invariants only exist after inlining, and a
   // later propagate round would forward a single-use hoist back into the loop, undoing it.
   // devirt must run BEFORE licm: its collector pattern-matches the in-loop closure-const
@@ -9056,7 +9097,7 @@ function optimizeModule(ast, opts) {
       }
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'conditions' || key === 'unroll2' || key === 'sortLocals' || key === 'poolConstants' ||
+        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'conditions' || key === 'unroll2' || key === 'sortLocals' || key === 'poolConstants' || key === 'valueNumber' || key === 'schedule' ||
             (skipInline && key === 'inlineOnce')) continue
         if (SIMPLIFY_KEYS.has(key)) {
           if (!fused) {
@@ -9205,4 +9246,4 @@ optimize.resetNameUids = resetNameUids
 // part of the optimize() pipeline; used by test/optimize.js's regionHooks test
 // to verify the clear actually holds at the boundary, not just "no throw".
 export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === 0 && SW_EXT === 0
-export { optimize, bool, conditions, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }
+export { optimize, valueNumber, schedule, bool, conditions, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }

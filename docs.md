@@ -214,6 +214,8 @@ sense when you control the host are **opt-in** (marked ◌); the rest are on by 
 | `bool` | Simplify zero/nonzero conditions | Remove `x != 0` and double `eqz` wrappers in conditions; preserve canonical 0/1 values elsewhere |
 | `conditions` ◌ | Short-circuit condition diamonds → branch chains | Evaluate each operand once, only when reached; runs once before local propagation |
 | `propagate` | Forward single-use locals & tiny consts | `(local.set $x (i32.const 1)) … (local.get $x)` → `(i32.const 1)` |
+| `valueNumber` ◌ | One computation per value, through locals | Two chains of locals holding the same values under different names (a helper inlined twice) compute once; runs once before the rounds |
+| `schedule` ◌ | Order straight-line statements by the work depending on them | Independent long computations (calls, divisions) start together and overlap; runs once before the rounds |
 | `inline` ◌ | Inline tiny functions | Single-expression functions without locals — may duplicate bodies |
 | `inlineOnce` | Inline functions called from exactly one site | Drops the callee and its `call` site; never duplicates |
 | `vacuum` | Remove no-ops | Nops, drop-of-pure, empty branches |
@@ -247,6 +249,16 @@ mirrors after `optimize` runs. Keeps the no-inline policy with the caller, not h
 
 ```js
 optimize(ast, { pin: ['$math.exp', '$math.log'] })   // these calls survive inlining
+```
+
+**`pure`** — array (or `Set`) of function names whose calls read and write nothing and cannot
+trap, which `valueNumber` and `schedule` then share and move like arithmetic. A function the
+optimizer can prove read-only on its own (no store, no global write, no unknown call) is shared
+too, in place, and keeps its order among effects: its reads can trap. Vouching is the caller's
+knowledge, e.g. a math runtime whose loads read constant tables.
+
+```js
+optimize(ast, { valueNumber: true, schedule: true, pure: ['$math.pow', '$math.exp'] })
 ```
 
 **Shared LICM engine** — `hoistInvariants(func, { analyze, callType?, prefix? })`
