@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import { readdirSync, readFileSync } from 'node:fs'
 import { clone } from '../src/util.js'
-import optimize, { poolConstants, hoistInvariants, treeshake, fold, deadcode, localReuse, count, binarySize, normalize, devirt, __regionScratchDrained } from '../src/optimize.js'
+import optimize, { poolConstants, hoistInvariants, treeshake, fold, deadcode, localReuse, coalesceLocals, count, binarySize, normalize, devirt, __regionScratchDrained } from '../src/optimize.js'
 import { parse, print, compile } from './runner.js'
 import srcCompile, { size } from '../src/compile.js'
 
@@ -5364,4 +5364,38 @@ test('mergeBlocks: loop and conditional prefixes stay within their execution reg
     assert.equal(a.f(n),Math.floor(n/2))
     assert.equal(b.f(n),Math.floor(n/2))
   }
+})
+
+
+test('coalesce: nested branches preserve a skipped local initialization', () => {
+  for (const branch of ['(br $out)', '(br_if $out (i32.const 1))', '(br_table $out $out (i32.const 0))', '(br 2)']) {
+    const src = `(module (func (export "f") (param $p i32) (param $skip i32) (result i32)
+      (local $flag i32)
+      (drop (local.get $p))
+      (block $out
+        (block $inner
+          (if (local.get $skip) (then ${branch}))
+          (local.set $flag (i32.const 1))))
+      (local.get $flag)))`
+    for (const pass of branch.includes('$') ? [coalesceLocals, optimize] : [coalesceLocals]) {
+      const opt = pass(parse(src))
+      const f = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
+      for (const [p, skip] of [[99, 1], [99, 1], [13, 0], [0, 1], [7, 0]])
+        assert.equal(f(p, skip), skip ? 0 : 1, `${branch}, p=${p}, skip=${skip}`)
+    }
+  }
+})
+
+
+test('coalesce: a catch target preserves zero on the exceptional path', () => {
+  const src = `(module (tag $e)
+    (func (export "f") (param $p i32) (param $skip i32) (result i32) (local $flag i32)
+      (drop (local.get $p))
+      (block $out (try_table (catch_all $out)
+        (if (local.get $skip) (then (throw $e)))
+        (local.set $flag (i32.const 1))))
+      (local.get $flag)))`
+  const bytes = compile(coalesceLocals(parse(src)))
+  const f = new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports.f
+  for (const skip of [1, 1, 0, 1, 0]) assert.equal(f(99, skip), skip ? 0 : 1)
 })

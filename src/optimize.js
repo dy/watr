@@ -6726,8 +6726,9 @@ const mergeBlocks = (ast) => {
  * Share local slots between same-type locals with non-overlapping live ranges.
  * Live range = [first pos, last pos] of any local.get/set/tee, extended over
  * any loop containing a reference (so a value read across loop iterations stays
- * intact). Greedy slot assignment by start position. Params and unnamed/numeric
- * references are left alone; `localReuse` later removes the renamed-away decls.
+ * intact). Greedy slot assignment by start position. Parameters keep their ABI
+ * positions but may lend slots after their last use. Numeric local references
+ * and label depths are left alone; `localReuse` later removes the renamed-away decls.
  *
  * Soundness: WASM zero-initializes locals at function entry, so a local whose
  * first reference (in walk order) is a `local.get` *relies* on that implicit
@@ -6766,7 +6767,7 @@ const coalesceLocals = (ast) => {
     // at statement level are transparent (the write happens on every path)
     const effArm = (name) => {
       let k = condStack.length - 1
-      while (k >= 0 && condStack[k].bothW && condStack[k].bothW.has(name)) k--
+      while (k >= 0 && (condStack[k].active === false || condStack[k].bothW?.has(name))) k--
       return k >= 0 ? condStack[k] : null
     }
     // statement-level writes of a branch-free arm; null when the arm can exit early
@@ -6794,6 +6795,12 @@ const coalesceLocals = (ast) => {
           n === 'br' || n === 'br_if' || n === 'br_table')) { abort = true; return }
       if (!Array.isArray(n)) return
       const op = n[0]
+      // A nested branch can bypass writes later in any enclosing region up to
+      // its target. Keep that region in the existing arm proof, inactive until
+      // a branch makes its continuation conditional. No second body scan.
+      const region = op === 'block' || op === 'loop' || op === 'if' || op === 'try_table' || op === 'try'
+        ? { label: typeof n[1] === 'string' && n[1][0] === '$' ? n[1] : null, active: false } : null
+      if (region) condStack.push(region)
       const isLoop = op === 'loop'
       if (isLoop) loopStack.push({ start: pos, end: pos })
       const isSet = op === 'local.set' || op === 'local.tee'
@@ -6861,6 +6868,22 @@ const coalesceLocals = (ast) => {
         }
       }
 
+      if (op === 'br' || op === 'br_if' || op === 'br_table' ||
+          op === 'br_on_null' || op === 'br_on_non_null' || op === 'br_on_cast' || op === 'br_on_cast_fail' ||
+          op === 'catch' || op === 'catch_ref' || op === 'catch_all' || op === 'catch_all_ref') {
+        const targets = op === 'br_table' ? n.slice(1).filter(x => !Array.isArray(x))
+          : op.startsWith('catch') ? [n[n.length - 1]] : [n[1]]
+        for (const label of targets) {
+          // Numeric label depths require a control-stack model distinct from
+          // the arm stack. Leave these functions uncoalesced.
+          if (typeof label !== 'string' || label[0] !== '$') { abort = true; break }
+          let k = condStack.length - 1
+          while (k >= 0 && condStack[k].label !== label) k--
+          if (k < 0) { abort = true; break }
+          for (; k < condStack.length; k++) condStack[k].active = true
+        }
+      }
+      if (region) condStack.pop()
       if (isLoop) { const ls = loopStack.pop(); ls.end = pos }
     }
     visit(funcNode)
