@@ -5,17 +5,17 @@ import { err } from "./util.js"
  * Each array node has a `.loc` source offset unless locations are disabled.
  *
  * @param {string} str - The input string with WAT code to parse.
- * @param {{locations?: boolean}} [options] - Retain source offsets (default true).
+ * @param {{loc?: boolean}} [options] - Retain source offsets (default true).
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
-export default (str, { locations = true } = {}) => {
+export default (str, { loc = true } = {}) => {
   let i = 0, level = [], start = -1, q = 0, depth = 0
 
   // Tokens preserve their source spelling, including quotes and comments.
   const commit = () => start < 0 || (level.push(str.slice(start, i)), start = -1)
 
   const parseLevel = (pos) => {
-    if (locations) level.loc = pos // source offset for downstream diagnostics
+    if (loc) level.loc = pos // source offset for downstream diagnostics
     for (let c, root, p; i < str.length;) {
       c = str.charCodeAt(i)
 
