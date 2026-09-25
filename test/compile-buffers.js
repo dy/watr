@@ -5,7 +5,7 @@ import parse from '../src/parse.js'
 // Independent framing oracle for one void function, including ULEB boundaries.
 const leb = n => { const a = []; do { const b = n % 128; n = Math.floor(n / 128); a.push(b + (n ? 128 : 0)) } while (n); return a }
 t('compile: packed function and section growth preserve exact framing', () => {
-  for (const n of [0, 125, 126, 127, 4094, 4095, 65533, 65534, 65535]) {
+  for (const n of [0, 125, 126, 127, 4091, 4092, 4093, 4094, 4095, 65533, 65534, 65535]) {
     const ast = ['module', ['func', ...Array(n).fill('nop')]]
     const body = [0, ...Array(n).fill(1), 11]
     const payload = [1, ...leb(body.length), ...body]
