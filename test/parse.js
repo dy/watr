@@ -192,3 +192,34 @@ t('parse: quotes', () => {
 t('parse: unclosed quote', () => {
   throws(() => parse(`(import "" ")`))
 })
+
+t('parse: source spans preserve token boundaries and parser reuse', () => {
+  const cases = [
+    ['', []], ['()', []], [' \t\r\n', []],
+    ['x', 'x'], ['(x)', ['x']], ['(x )', ['x']],
+    ['""', '""'], ['$"a b"', '$"a b"'],
+    ['x"y"', ['x', '"y"']], ['$$"y"', ['$$', '"y"']],
+    ['"a\\"b"', '"a\\"b"'], ['"a\\\\"', '"a\\\\"'],
+    ['(@a)', ['@a']], ['(@a "b")', ['@a', '"b"']],
+    ['(x(;a(;b;)c;)y)', ['x', '(;a(;b;)c;)', 'y']],
+    [';;', ';;'], [';;x', ';;x'], [';;x\n', ';;x\n'], [';;x\r', ';;x\r'],
+    ['(x;;y)', ['x', ';;y']], ['(x;;y\n)', ['x', ';;y\n']],
+    ['(x;;y\r)', ['x', ';;y\r']], ['(x;;y\r\nz)', ['x', ';;y\r', 'z']],
+    ['"😀\ud800"', '"😀\ud800"'],
+  ]
+  for (const [source, expected] of [...cases, ...cases, ...cases.slice().reverse()])
+    is(parse(source), expected, JSON.stringify(source))
+  const tree = parse(' (x (y))')
+  is(tree.loc, 1)
+  is(tree[1].loc, 4)
+  for (const source of ['(', '(x', '"', '"x', '"x\\', '(;', '(;x;', '(;x(;y;)']) {
+    throws(() => parse(source), source)
+    is(parse('(ok)'), ['ok'], 'an error leaves the next parse independent')
+  }
+})
+
+t('parse: long tokens retain exact source spelling', () => {
+  const text = 'a😀'.repeat(4000)
+  for (const token of [text, `"${text}"`, `$"${text}"`, `(;${text};)`, `;;${text}\n`])
+    is(parse(`(x ${token})`), ['x', token])
+})
