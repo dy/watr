@@ -30,7 +30,8 @@ import polyfill from 'watr/polyfill'   // newer features → MVP
 compile(optimize(polyfill(src)))
 
 // parse
-parse('(i32.const 42)') // ['i32.const', 42]
+parse('(i32.const 42)') // ['i32.const', '42'], with a .loc source offset
+parse('(i32.const 42)', { locations: false }) // omit offsets for generated WAT
 
 // print
 print('(module(func(result i32)i32.const 42))') // (module\n  (func (result i32)\n  ...

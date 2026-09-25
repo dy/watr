@@ -227,3 +227,32 @@ t('parse: long tokens retain exact source spelling', () => {
   for (const token of [text, `"${text}"`, `$"${text}"`, `(;${text};)`, `;;${text}\n`])
     is(parse(`(x ${token})`), ['x', token])
 })
+
+
+t('parse: optional source locations preserve tokens, errors and reuse', () => {
+  const sources = ['', '()', '(x)', ' (x (y))', '(x "😀\ud800" (; c ;) (z))', '(a)(b)']
+  for (const source of [...sources, ...sources, ...sources.slice().reverse()]) {
+    const plain = parse(source, { locations: false }), located = parse(source)
+    is(JSON.stringify(plain), JSON.stringify(located))
+    if (!isWasm) {
+      const check = node => {
+        if (!Array.isArray(node)) return
+        ok(!Object.hasOwn(node, 'loc'))
+        node.forEach(check)
+      }
+      check(plain)
+    }
+  }
+  for (const source of ['(', '(x', '"', '(;', '(x)) trailing']) {
+    let expected, actual
+    try { parse(source) } catch (e) { expected = e.message }
+    try { parse(source, { locations: false }) } catch (e) { actual = e.message }
+    ok(expected)
+    is(actual, expected, 'parse errors retain offsets without node locations')
+  }
+  if (!isWasm) {
+    is(parse(' (x)', { locations: true }).loc, 1)
+    is(parse(' (x)', {}).loc, 1)
+    is([' (x)', '  (y)'].map(parse).map(n => n.loc), [1, 2])
+  }
+})

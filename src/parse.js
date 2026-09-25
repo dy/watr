@@ -2,19 +2,20 @@ import { err } from "./util.js"
 
 /**
  * Parses a wasm text string and constructs a nested array structure (AST).
- * Each array node has `.loc` property with source offset for error reporting.
+ * Each array node has a `.loc` source offset unless locations are disabled.
  *
  * @param {string} str - The input string with WAT code to parse.
+ * @param {{locations?: boolean}} [options] - Retain source offsets (default true).
  * @returns {Array} An array representing the nested syntax tree (AST).
  */
-export default (str) => {
+export default (str, { locations = true } = {}) => {
   let i = 0, level = [], start = -1, q = 0, depth = 0
 
   // Tokens preserve their source spelling, including quotes and comments.
   const commit = () => start < 0 || (level.push(str.slice(start, i)), start = -1)
 
   const parseLevel = (pos) => {
-    level.loc = pos // store start position for error reporting
+    if (locations) level.loc = pos // source offset for downstream diagnostics
     for (let c, root, p; i < str.length;) {
       c = str.charCodeAt(i)
 
