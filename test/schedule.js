@@ -1,4 +1,4 @@
-// Statement scheduling (src/schedule.js): within a straight-line run, statements
+// Statement scheduling (src/optimize.js): within a straight-line run, statements
 // go by the longest chain of work still depending on them, so independent long
 // computations start together. Every case runs the module before and after.
 import { test } from 'node:test'
@@ -140,4 +140,34 @@ test('scheduling: partially folded expressions keep their stack inputs', () => {
   assert.equal(print(ast), print(parse(src)))
   const { f } = instance(ast)
   for (let i = 0; i < 2; i++) assert.equal(f(), 4 - Math.sqrt(3))
+})
+
+test('scheduling: result-producing calls remain sequence boundaries', () => {
+  const src = `(module
+    (func $k (param $x f64) (result f64) (f64.sqrt (local.get $x)))
+    (func $f (export "f") (param $x f64) (result f64 f64)
+      (call $k (local.get $x))
+      (call $k (call $k (local.get $x)))))`
+  const ast = parse(src), original = instance(ast)
+  schedule(ast, { pure: ['$k'] })
+  assert.equal(print(ast), print(parse(src)), 'result order is stack order')
+  const changed = instance(ast)
+  for (const x of [16, 16, 81, 0, -0, Infinity, NaN, 16])
+    assert.deepEqual(changed.f(x), original.f(x), `f(${x}) keeps both results in order`)
+})
+
+test('scheduling: memory.grow results remain sequence boundaries', () => {
+  const src = `(module (memory 1 2)
+    (func $k (param $x f64) (result f64) (f64.sqrt (local.get $x)))
+    (func $f (export "f") (param $pages i32) (result i32)
+      (local $a f64) (local $b f64)
+      (memory.grow (local.get $pages))
+      (local.set $a (call $k (f64.const 16)))
+      (local.set $b (call $k (local.get $a)))))`
+  const ast = parse(src), original = instance(ast)
+  schedule(ast, { pure: ['$k'] })
+  assert.equal(print(ast), print(parse(src)), 'growth leaves a live operand-stack result')
+  const changed = instance(ast)
+  for (const pages of [0, 0, 1, 1, -1, 0])
+    assert.equal(changed.f(pages), original.f(pages), `grow(${pages}) preserves success and failure results`)
 })

@@ -48,6 +48,7 @@ truncates the code section with the current packed encoder.
 - Minimal, functional
 - Early returns over nested ifs
 - No semicolons in watr.js (match source)
+- Keep optimizer passes and their private helpers in `src/optimize.js`; separate source files should represent a package entry or shared infrastructure
 
 ## What We're Looking For
 

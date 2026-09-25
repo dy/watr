@@ -2576,6 +2576,261 @@ test('coalesce: shares slot between non-overlapping same-type locals', () => {
   assert(!src.includes('$b'), 'second local merged into first')
 })
 
+test('coalesce: outer writes dominate reads in nested branches', () => {
+  for (const type of ['i32', 'i64', 'f32', 'f64']) {
+    const ast = parse(`(module (func (export "f") (param $outer i32) (param $inner i32) (result ${type})
+      (local $a ${type}) (local $b ${type}) (local $sum ${type})
+      (if (local.get $outer) (then
+        (local.set $a (${type}.const 10))
+        (if (local.get $inner) (then (local.set $sum (local.get $a))))
+        (local.set $b (${type}.const 20))
+        (if (local.get $inner) (then (local.set $sum (${type}.add (local.get $sum) (local.get $b)))))))
+      (local.get $sum)))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const opt = optimize(ast, 'coalesce locals')
+    assert(opt[1].filter(n => n[0] === 'local').length <= 2, `${type}: branch temporaries share a slot`)
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
+    for (const [outer, inner, expected] of [[1,1,30], [1,1,30], [1,0,0], [0,1,0], [0,0,0], [1,1,30]]) {
+      const want = type === 'i64' ? BigInt(expected) : expected
+      assert.equal(original(outer, inner), want)
+      assert.equal(changed(outer, inner), want)
+    }
+  }
+})
+
+test('coalesce: statements after one early exit share their conditional region', () => {
+  const ast = parse(`(module (func (export "f") (param $stop i32) (result i32)
+    (local $a i32) (local $b i32)
+    (block $out (br_if $out (local.get $stop))
+      (local.set $a (i32.const 1)) (drop (local.get $a))
+      (local.set $b (i32.const 2)) (return (local.get $b)))
+    (i32.const 7)))`)
+  const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+  const opt = optimize(ast, 'coalesce locals')
+  assert(opt[1].filter(n => n[0] === 'local').length <= 1, 'suffix temporaries share a slot')
+  const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
+  for (const [stop, want] of [[0,2], [0,2], [1,7], [-1,7], [0,2]]) {
+    assert.equal(original(stop), want)
+    assert.equal(changed(stop), want)
+  }
+})
+
+test('coalesce: sibling arms and skipped suffixes retain implicit zero', () => {
+  for (const body of [
+    `(if (i32.eq (local.get $c) (i32.const 1))
+       (then (local.set $value (i32.const 7))))`,
+    `(block $out (br_if $out (i32.ne (local.get $c) (i32.const 1)))
+       (local.set $value (i32.const 7)))`,
+    `(if (i32.eq (local.get $c) (i32.const 1))
+       (then (local.set $value (i32.const 7)))
+       (else (return (local.get $value))))`,
+  ]) {
+    const ast = parse(`(module (func (export "f") (param $c i32) (result i32)
+      (local $dead i32) (local $value i32)
+      (local.set $dead (i32.const 99)) (drop (local.get $dead))
+      ${body} (local.get $value)))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+    for (const c of [1, 1, 2, 0, -1, 1]) {
+      assert.equal(original(c), c === 1 ? 7 : 0)
+      assert.equal(changed(c), original(c))
+    }
+  }
+})
+
+test('coalesce: a value defined in an outer arm remains live across inner-loop backedges', () => {
+  const ast = parse(`(module (func (export "f") (param $n i32) (result i32)
+    (local $a i32) (local $b i32) (local $i i32) (local $sum i32)
+    (if (local.get $n) (then
+      (local.set $a (i32.const 11))
+      (loop $again
+        (local.set $sum (i32.add (local.get $sum) (local.get $a)))
+        (local.set $b (i32.const 3)) (drop (local.get $b))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $again (i32.lt_u (local.get $i) (local.get $n))))))
+    (local.get $sum)))`)
+  const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+  const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+  for (const n of [3, 3, 0, 1, 4, 0]) {
+    assert.equal(original(n), n * 11)
+    assert.equal(changed(n), n * 11)
+  }
+})
+
+test('coalesce: caught exceptions do not make skipped writes dominate later reads', () => {
+  for (const read of ['(return (local.get $value))', '(if (i32.const 1) (then (return (local.get $value))))']) {
+    const ast = parse(`(module (tag $e)
+      (func $maybe (param $fail i32) (if (local.get $fail) (then (throw $e))))
+      (func (export "f") (param $outer i32) (param $fail i32) (result i32)
+        (local $dead i32) (local $value i32)
+        (local.set $dead (i32.const 99)) (drop (local.get $dead))
+        (if (local.get $outer) (then
+          (block $caught (try_table (catch_all $caught)
+            (call $maybe (local.get $fail)) (local.set $value (i32.const 7))))
+          ${read}))
+        (i32.const -1)))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+    for (const [outer, fail, want] of [[1,0,7], [1,0,7], [1,1,0], [0,1,-1], [1,0,7], [1,1,0]]) {
+      assert.equal(original(outer, fail), want)
+      assert.equal(changed(outer, fail), want)
+    }
+  }
+})
+
+test('coalesce: branches inside values and reference branches preserve skipped writes', () => {
+  for (const [param, body, args] of [
+    ['(param $r externref)', '(drop (br_on_null $out (local.get $r)))', [[null,0], [{},7], [null,0]]],
+    ['(param $r i32)', '(drop (block (result i32) (br_if $out (local.get $r)) (i32.const 1)))', [[0,7], [0,7], [1,0], [0,7]]],
+    ['(param $r i32)', '(local.set $value (block (result i32) (br_if $out (local.get $r)) (i32.const 7)))', [[0,7], [1,0], [1,0], [0,7]]],
+  ]) {
+    const ast = parse(`(module (func (export "f") ${param} (result i32)
+      (local $dead i32) (local $value i32)
+      (local.set $dead (i32.const 99)) (drop (local.get $dead))
+      (block $out ${body} (local.set $value (i32.const 7)))
+      (local.get $value)))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+    for (const [arg, want] of args) {
+      assert.equal(original(arg), want)
+      assert.equal(changed(arg), want)
+    }
+  }
+})
+
+test('coalesce: a caught exception in a value can bypass the enclosing assignment', () => {
+  const ast = parse(`(module (tag $e)
+    (func $maybe (param $fail i32) (if (local.get $fail) (then (throw $e))))
+    (func (export "f") (param $fail i32) (result i32)
+      (local $dead i32) (local $value i32)
+      (local.set $dead (i32.const 99)) (drop (local.get $dead))
+      (block $caught
+        (local.set $value (try_table (result i32) (catch_all $caught)
+          (call $maybe (local.get $fail)) (i32.const 7))))
+      (local.get $value)))`)
+  const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+  const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+  for (const [fail, want] of [[0,7], [0,7], [1,0], [1,0], [0,7]]) {
+    assert.equal(original(fail), want)
+    assert.equal(changed(fail), want)
+  }
+})
+
+test('coalesce: nested exits make every crossed suffix conditional', () => {
+  for (const body of [
+    '(block $inner (br_if $out (local.get $c)))',
+    '(block $inner (br_if 1 (local.get $c)))',
+    '(block $inner (br_table $inner $out (local.get $c)))',
+    '(if (local.get $c) (then (br $out)))',
+    '(block $inner (try_table (catch_all $out) (call $maybe (local.get $c))))',
+    '(block $inner (try_table (catch_all 1) (call $maybe (local.get $c))))',
+  ]) {
+    const ast = parse(`(module (tag $e)
+      (func $maybe (param $fail i32) (if (local.get $fail) (then (throw $e))))
+      (func (export "f") (param $c i32) (result i32)
+        (local $dead i32) (local $value i32)
+        (local.set $dead (i32.const 99)) (drop (local.get $dead))
+        (block $out ${body} (local.set $value (i32.const 7)))
+        (local.get $value)))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+    for (const [arg, want] of [[0,7], [0,7], [1,0], [1,0], [0,7]]) {
+      assert.equal(original(arg), want)
+      assert.equal(changed(arg), want)
+    }
+  }
+})
+
+test('coalesce: local branch targets, including shadowed labels, do not escape', () => {
+  for (const body of ['(block $inner (br_if $inner (local.get $c)))', '(block $out (br_if $out (local.get $c)))']) {
+    const ast = parse(`(module (func (export "f") (param $c i32) (result i32)
+      (local $dead i32) (local $value i32)
+      (local.set $dead (i32.const 99)) (drop (local.get $dead))
+      (block $out ${body} (local.set $value (i32.const 7)))
+      (local.get $value)))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+    for (const c of [0,0,1,1,0]) {
+      assert.equal(original(c), 7)
+      assert.equal(changed(c), 7)
+    }
+  }
+})
+
+test('coalesce: mixed flat and folded local accesses retain the same storage', () => {
+  for (const [tail, want] of [
+    ['local.get $value', c => 7],
+    ['local.get $c local.set $value (local.get $value)', c => c],
+  ]) {
+    const ast = parse(`(module (func (export "f") (param $c i32) (result i32)
+      (local $dead i32) (local $value i32)
+      (local.set $dead (i32.const 99)) (drop (local.get $dead))
+      (local.set $value (i32.const 7)) ${tail}))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce')))).exports.f
+    for (const c of [1,1,0,9,1]) {
+      assert.equal(original(c), want(c))
+      assert.equal(changed(c), want(c))
+    }
+  }
+})
+
+test('coalesce: branches confined to a value retain the enclosing assignment', () => {
+  const ast = parse(`(module (func (export "f") (param $c i32) (result i32)
+    (local $a i32) (local $b i32) (local $sum i32)
+    (local.set $a (block $value (result i32)
+      (br_if $value (i32.const 10) (local.get $c)) (drop) (i32.const 20)))
+    (local.set $sum (local.get $a))
+    (local.set $b (i32.const 7))
+    (i32.add (local.get $sum) (local.get $b))))`)
+  const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+  const opt = optimize(ast, 'coalesce locals')
+  assert(opt[1].filter(n => n[0] === 'local').length <= 2, 'contained exits still permit local reuse')
+  const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
+  for (const c of [1,1,0,-1,0,1]) {
+    assert.equal(original(c), c ? 17 : 27)
+    assert.equal(changed(c), original(c))
+  }
+})
+
+test('coalesce: flat stack operations do not hide named-local lifetimes', () => {
+  for (const body of ['(local.get $a) drop', 'nop (drop (local.get $a))', '(local.get $a) (i32.const 1) i32.add drop']) {
+    const ast = parse(`(module (func (export "f") (param $c i32) (result i32)
+      (local $a i32) (local $b i32)
+      (local.set $a (i32.const 10)) ${body}
+      (local.set $b (i32.add (local.get $c) (i32.const 20)))
+      (local.get $b)))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const opt = optimize(ast, 'coalesce locals')
+    assert(opt[1].filter(n => n[0] === 'local').length <= 1, 'stack-only instructions retain slot reuse')
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
+    for (const c of [1,1,0,-1,9,1]) {
+      assert.equal(original(c), c + 20)
+      assert.equal(changed(c), c + 20)
+    }
+  }
+})
+
+test('coalesce: folded if conditions branch outside the if label', () => {
+  for (const target of ['1', '$out']) for (const writes of ['suffix', 'arms']) {
+    const ast = parse(`(module (func (export "f") (param $c i32) (result i32)
+      (local $dead i32) (local $x i32)
+      (local.set $dead (i32.const 99)) (drop (local.get $dead))
+      (block $out
+        (if $choice (block (result i32) (br_if ${target} (local.get $c)) (i32.const 1))
+          (then ${writes === 'arms' ? '(local.set $x (i32.const 7))' : '(nop)'})
+          (else ${writes === 'arms' ? '(local.set $x (i32.const 9))' : '(nop)'}))
+        ${writes === 'suffix' ? '(local.set $x (i32.const 7))' : ''})
+      (local.get $x)))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+    for (const c of [0, 0, 1, -1, 0]) {
+      assert.equal(original(c), c ? 0 : 7)
+      assert.equal(changed(c), c ? 0 : 7, `${target}, ${writes}, ${c}`)
+    }
+  }
+})
+
 test('coalesce: keeps overlapping locals separate', () => {
   const ast = parse(`(module (func (export "f") (result i32)
     (local $a i32) (local $b i32)

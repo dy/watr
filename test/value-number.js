@@ -1,4 +1,4 @@
-// Value numbering (src/number.js): one computation per value, through locals.
+// Value numbering (src/optimize.js): one computation per value, through locals.
 // Every case runs the module before and after the pass: the bits never change,
 // the call count may.
 import { test } from 'node:test'

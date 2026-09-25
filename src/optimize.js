@@ -7,12 +7,6 @@
  */
 
 import { numdata, size } from './compile.js'
-import { hoistInvariants } from './licm.js'
-export { hoistInvariants, structuralKey } from './licm.js'
-import { isMemWrite, hasFlat as hasFlatCode } from './effect.js'
-export { isMemWrite } from './effect.js'
-import numberValues from './number.js'
-import scheduleRuns from './schedule.js'
 import { f32 as _f32enc, f64 as _f64enc } from './encode.js'
 import { IMM, OPCODE, resultType } from './const.js'
 import parse from './parse.js'
@@ -2920,6 +2914,77 @@ const isPure = (node) => {
   return true
 }
 
+// ==================== INSTRUCTION EFFECTS ====================
+
+const isLoad = (op) => op.includes('.load')
+
+/** Writes memory or a table. */
+export const isMemWrite = (op) => op.includes('.store') || op === 'memory.copy' || op === 'memory.fill' || op === 'memory.init' || op === 'memory.grow' ||
+  (op.includes('.atomic.') && !op.endsWith('.load')) || op === 'table.set' || op === 'table.grow' || op === 'table.fill' || op === 'table.copy' || op === 'table.init'
+
+const TRAP_OPS = new Set(['unreachable', 'ref.as_non_null', 'ref.cast', 'table.get',
+  'struct.get', 'struct.get_s', 'struct.get_u', 'array.get', 'array.get_s', 'array.get_u', 'array.len'])
+
+/** May trap: a read, integer division, a non-saturating truncation, a checked reference. Stores
+ *  trap too, and are ordered as writes; a call's traps are its callee's. */
+const mayTrapOp = (op) => typeof op === 'string' && (isLoad(op) || TRAP_OPS.has(op) ||
+  /^(i32|i64)\.(div_s|div_u|rem_s|rem_u)$|\.trunc_f(32|64)_[su]$/.test(op))
+
+/** Pre-order over the array nodes under `node`: `enter` returns false to skip a node's children. */
+const visit = (node, enter, parent = null, idx = -1) => {
+  if (!Array.isArray(node) || enter(node, parent, idx) === false) return
+  for (let i = 1; i < node.length; i++) visit(node[i], enter, node, i)
+}
+
+/** The index of a function's first instruction, past its name and header. */
+const findBodyStart = (fn) => {
+  let i = typeof fn[1] === 'string' && fn[1][0] === '$' ? 2 : 1
+  while (i < fn.length && Array.isArray(fn[i]) && HEADER.has(fn[i][0])) i++
+  return i
+}
+const HEADER = new Set(['export', 'import', 'type', 'param', 'result', 'local'])
+
+/** The first child of a block, loop or arm past its label and signature. */
+const seqStart = (n) => {
+  let i = typeof n[1] === 'string' && n[1][0] === '$' ? 2 : 1
+  while (i < n.length && Array.isArray(n[i]) && SIGNATURE.has(n[i][0])) i++
+  return i
+}
+const SIGNATURE = new Set(['type', 'param', 'result'])
+
+const SEQ = { block: seqStart, loop: seqStart, try_table: seqStart, then: () => 1, else: () => 1 }
+
+// Operands a node takes; a folded node carries them as children, a flat one pops them.
+const OPERANDS = { 'local.set': 1, 'local.tee': 1, 'global.set': 1, drop: 1, select: 3, br_if: 1 }
+const TYPED = /^(i32|i64|f32|f64|v128|i8x16|i16x8|i32x4|i64x2|f32x4|f64x2)\./
+// A partially folded binary op still pops its missing input from the stack.
+const BINARY = /\.(add|sub|mul|div|rem|and|andnot|or|xor|shl|shr|rotl|rotr|min|max|pmin|pmax|copysign|eq|ne|lt|gt|le|ge|shuffle|swizzle|replace_lane|narrow|extmul|dot|q15mulr|avgr|store\d*|load\d+_lane)(_|$)/
+const TERNARY = /\.(bitselect|relaxed_madd|relaxed_nmadd|relaxed_laneselect)$/
+const takesStack = (n) => {
+  let args = 0
+  for (let i = 1; i < n.length; i++) if (Array.isArray(n[i]) && !SIGNATURE.has(n[i][0])) args++
+  const op = n[0]
+  if (op in OPERANDS) return args < OPERANDS[op]
+  if (typeof op !== 'string' || !TYPED.test(op) || op.endsWith('.const')) return false
+  return args === 0 || args === 1 && BINARY.test(op) || args < 3 && TERNARY.test(op)
+}
+
+/** Whether a function writes an instruction in the flat form: a bare token in an instruction
+ *  sequence other than `drop` or `nop`, or a node that pops its operands (the sets that unpack
+ *  a multi-value call). A pass that reads effects and data flow off folded nodes skips it. */
+const hasFlatCode = (fn) => {
+  let found = false
+  const check = (seq, from) => { for (let i = from; i < seq.length; i++) if (typeof seq[i] === 'string' && seq[i] !== 'drop' && seq[i] !== 'nop') found = true }
+  check(fn, findBodyStart(fn))
+  visit(fn, (n) => {
+    if (found) return false
+    if (n !== fn && takesStack(n)) { found = true; return false }
+    const start = n === fn ? null : SEQ[n[0]]
+    if (start) check(n, start(n))
+  })
+  return found
+}
+
 // ==================== INTERPROCEDURAL EFFECT SUMMARY ====================
 // Transitive per-function write effects: does calling $f (and everything it can
 // reach) write linear memory, or which globals can it set? Any escape from the
@@ -2997,19 +3062,555 @@ const callKinds = (ast, pure) => {
 }
 const funcsOf = (ast) => ast[0] === 'func' ? [ast] : ast.filter(n => Array.isArray(n) && n[0] === 'func')
 
-/** One computation per value through locals, in every function (number.js). */
+// ==================== VALUE NUMBERING ====================
+
+/**
+ * Value numbering: two expressions that compute one value compute it once.
+ *
+ * A helper inlined twice with the same arguments (`spow(L / 10000, nv)` in the
+ * numerator and the denominator of one fraction) leaves two chains of locals
+ * that hold the same values under different names: `a1 = L / c; v1 = |a1|;
+ * p1 = pow(v1, e)` and then `a2 = L / c; v2 = |a2|; p2 = pow(v2, e)`. CSE
+ * dedupes identical subtrees, and `L / c` is one; but `|a2|` is not `|a1|` to
+ * it, so the chains stay two and the kernel runs twice. This pass numbers
+ * values instead of names: a local's number is its definition's, an
+ * expression's is its operator over its operands' numbers, a load's adds the
+ * state clock (every store, global write, impure call and region boundary
+ * advances it). An expression whose number was computed before, into a local
+ * that still holds it, becomes a read of that local; a computation with no
+ * holder gets one when a later site will read it: a statement of its own
+ * before the statement it sits in (so scheduling can move it), or
+ * a tee in place when it reads a local that statement assigns, can trap,
+ * calls a read-only function, or sits under a condition. Only computations
+ * worth a local are shared: a call, a division, a square root, or three
+ * operators and more.
+ *
+ * Regions keep it sound. A loop's body may run any number of times, so
+ * every local it assigns is unknown on entry and on exit. An `if` arm is
+ * unknown to the other arm and to what follows: the arms start from the
+ * same state, and every local either assigns is unknown after the `if`. A
+ * block that a branch targets ends the same way. Straight-line code inside
+ * a region shares freely. Impure calls and stores touch no local, so the
+ * numbering survives them; state-dependent values, keyed by the clock, do not.
+ *
+ * `call(name)` says what a call is: 'pure' (reads and writes nothing and
+ * cannot trap: a value of its arguments), 'read' (writes nothing: a value
+ * under the clock, which may trap), or null (anything). A function written in
+ * the flat form is left alone: its effects are not on its folded nodes.
+ */
+
+const SCALAR = new Set(['i32', 'i64', 'f32', 'f64'])
+const VN_CONTROL = new Set(['block', 'loop', 'if', 'then', 'else', 'br', 'br_if', 'br_table', 'return', 'return_call', 'unreachable'])
+/** Operators that touch no local and no memory: their operands are straight-line code. */
+const VN_TRANSPARENT = new Set(['drop', 'nop', 'result'])
+const COMPARE = /^(eq|ne|lt|gt|le|ge|lt_s|lt_u|gt_s|gt_u|le_s|le_u|ge_s|ge_u|eqz)$/
+const OPERAND_OPS = /^(add|sub|mul|div|div_s|div_u|rem_s|rem_u|and|or|xor|not|andnot|shl|shr_s|shr_u|rotl|rotr|min|max|pmin|pmax|copysign|abs|neg|sqrt|ceil|floor|trunc|nearest|eqz|clz|ctz|popcnt|bitselect|eq|ne|lt|gt|le|ge|lt_s|lt_u|gt_s|gt_u|le_s|le_u|ge_s|ge_u)$/
+const laneScalar = (p) => p === 'f64x2' ? 'f64' : p === 'f32x4' ? 'f32' : p === 'i64x2' ? 'i64' : 'i32'
+
+/** An operator whose value comes from its operands: numeric, lane or select; loads join it under the memory clock. */
+const valueOp = (op) => (TYPED.test(op) && !isMemWrite(op) && !op.includes('atomic')) || op === 'select'
+
+/** The type an expression produces, from its operator; null for a call (see `consumerType`). */
+const selfType = (n, types) => {
+  const op = n[0]
+  if (op === 'local.get' || op === 'local.tee') return types.get(n[1]) ?? null
+  if (op === 'select') return Array.isArray(n[1]) ? selfType(n[1], types) : null
+  if (op === 'if' || op === 'block') { const r = n.find(c => Array.isArray(c) && c[0] === 'result'); return r ? r[1] : null }
+  const m = TYPED.exec(op)
+  if (!m) return null
+  const p = m[1], rest = op.slice(p.length + 1)
+  if (SCALAR.has(p)) return COMPARE.test(rest) ? 'i32' : p
+  if (rest.startsWith('extract_lane')) return laneScalar(p)
+  if (rest === 'any_true' || rest === 'all_true' || rest === 'bitmask') return 'i32'
+  return 'v128'
+}
+
+/** The type an operand position takes, from the operator that consumes it. */
+const consumerType = (parent, idx, types) => {
+  const op = parent[0]
+  if (op === 'local.set' || op === 'local.tee') return types.get(parent[1]) ?? null
+  const m = TYPED.exec(op)
+  if (!m) return null
+  const p = m[1], rest = op.slice(p.length + 1)
+  if (SCALAR.has(p)) return OPERAND_OPS.test(rest) ? p : null
+  if (rest === 'splat') return laneScalar(p)
+  if (rest === 'replace_lane') return idx === 3 ? laneScalar(p) : 'v128'
+  return OPERAND_OPS.test(rest) ? 'v128' : null
+}
+
+/** Whether a shared computation is worth a local: a call, a division, a root, or three operators and more. */
+const vnWorth = (n) => {
+  let ops = 0, heavy = false
+  visit(n, (c) => {
+    const op = c[0]
+    if (op === 'call' || /\.(div|div_s|div_u|sqrt)$/.test(op)) heavy = true
+    else if (op !== 'local.get' && !op.endsWith('.const')) ops++
+  })
+  return heavy || ops >= 3
+}
+
+/** Every local the subtree assigns. */
+const vnAssigned = (n, out = new Set()) => {
+  visit(n, (c) => { if ((c[0] === 'local.set' || c[0] === 'local.tee') && typeof c[1] === 'string') out.add(c[1]) })
+  return out
+}
+
+/** Whether a branch inside the block targets its label: a br, a br_table row, or a try_table catch clause. */
+const CATCHES = new Set(['catch', 'catch_ref', 'catch_all', 'catch_all_ref'])
+const vnTargeted = (block) => {
+  const label = typeof block[1] === 'string' && block[1].startsWith('$') ? block[1] : null
+  if (!label) return false
+  let hit = false
+  visit(block, (c) => {
+    if (hit) return false
+    if ((c[0] === 'br' || c[0] === 'br_if') && c[1] === label) hit = true
+    else if (c[0] === 'br_table' || CATCHES.has(c[0])) for (let i = 1; i < c.length && typeof c[i] === 'string'; i++) if (c[i] === label) hit = true
+  })
+  return hit
+}
+
+/** The children of an `if`: its condition, its `then` and its `else` (null when absent). */
+const ifParts = (n) => {
+  let cond = null, then = null, els = null
+  for (let i = 1; i < n.length; i++) {
+    const c = n[i]
+    if (!Array.isArray(c) || c[0] === 'result') continue
+    if (c[0] === 'then') then = c
+    else if (c[0] === 'else') els = c
+    else cond = i
+  }
+  return { cond, then, els }
+}
+
+/**
+ * @param fn a `(func …)` node, rewritten in place
+ * @param call what a call to a function is: 'pure', 'read' or null (see above)
+ */
+function numberValues(fn, call) {
+  if (!Array.isArray(fn) || fn[0] !== 'func' || hasFlatCode(fn)) return
+  const bodyStart = findBodyStart(fn)
+  if (bodyStart < 0) return
+  const types = new Map()
+  for (let i = 2; i < bodyStart; i++) {
+    const c = fn[i]
+    if (Array.isArray(c) && (c[0] === 'param' || c[0] === 'local') && typeof c[1] === 'string' && c[1].startsWith('$')) types.set(c[1], c[2])
+  }
+
+  // Region facts, computed once per node: the tree is fixed through the
+  // analysis, and the rewrite adds holders only, which it tracks by name.
+  const assignedMemo = new Map(), targetedMemo = new Map()
+  const assignedOf = (n) => { let s = assignedMemo.get(n); if (!s) assignedMemo.set(n, s = vnAssigned(n)); return s }
+  const targetedOf = (n) => { let t = targetedMemo.get(n); if (t == null) targetedMemo.set(n, t = vnTargeted(n)); return t }
+  const armsAssigned = (then, els) => { const out = new Set(then ? assignedOf(then) : []); if (els) for (const x of assignedOf(els)) out.add(x); return out }
+
+  // Analysis: a number per keyed node, a site count per number. Locals carry
+  // the number of their last definition; a kill gives them a fresh one.
+  const vnOf = new Map(), sites = new Map(), keys = new Map(), unstable = new Set()
+  let next = 1, clock = 0
+  const fresh = () => next++
+  let locals = new Map()
+  const readLocal = (name) => { let v = locals.get(name); if (v == null) locals.set(name, v = fresh()); return v }
+  const kill = (names) => { for (const name of names) locals.set(name, fresh()) }
+  const record = (n, v, site = n[0] !== 'local.get' && n[0] !== 'local.tee') => {
+    if (unstable.has(n)) return v
+    if (vnOf.has(n)) { if (vnOf.get(n) !== v) { vnOf.delete(n); unstable.add(n) } return v }
+    vnOf.set(n, v)
+    if (site) sites.set(v, (sites.get(v) || 0) + 1)
+    return v
+  }
+  const analyzeChildren = (n, from = 1) => { for (let i = from; i < n.length; i++) analyze(n[i]) }
+  /** Analyze a `local.set`: the local takes its value's number; returns that number (null when it has none). */
+  const analyzeSet = (n) => { const v = analyze(n[2]); locals.set(n[1], v ?? fresh()); return v }
+  /** Analyze a node in evaluation order; returns its value number, or null when it has none. */
+  const analyze = (n) => {
+    if (!Array.isArray(n)) return null
+    const op = n[0]
+    if (op === 'local.get') return record(n, readLocal(n[1]))
+    if (op === 'local.set') { analyzeSet(n); return null }
+    if (op === 'local.tee') {
+      const v = analyze(n[2])
+      locals.set(n[1], v ?? fresh())
+      return v != null ? record(n, v) : null
+    }
+    if (op === 'loop') { kill(assignedOf(n)); clock++; analyzeChildren(n); kill(assignedOf(n)); clock++; return null }
+    if (op === 'if') {
+      // A conditional whose condition and arms are single values is a value
+      // itself (a select that evaluates one arm); any other arm is a region.
+      const { cond, then, els } = ifParts(n)
+      const vc = cond != null ? analyze(n[cond]) : null
+      const before = new Map(locals), clockBefore = clock
+      const arm = (a) => { if (a.length === 2 && Array.isArray(a[1])) return analyze(a[1]); analyzeChildren(a); return null }
+      const vt = then ? arm(then) : null
+      locals = new Map(before); clock = clockBefore
+      const ve = els ? arm(els) : null
+      // Either arm's assignments (a tee inside a value) hold only on its own path.
+      kill(armsAssigned(then, els))
+      if (vc != null && vt != null && ve != null) return record(n, keyed(`if #${vc} #${vt} #${ve}`))
+      clock++
+      return null
+    }
+    if (op === 'block') {
+      if (targetedOf(n)) { analyzeChildren(n); kill(assignedOf(n)); clock++; return null }
+      // A block of pure `local.set`s ending in a value is that value: an
+      // inlined body's temporaries and its result (`(block (local.set $t …) (select … $t …))`).
+      let pure = n.some(c => Array.isArray(c) && c[0] === 'result'), last = null
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i]
+        if (!Array.isArray(c) || c[0] === 'result') continue
+        const v = c[0] === 'local.set' ? analyzeSet(c) : analyze(c)
+        const isLast = i === n.length - 1
+        if (isLast) last = c[0] === 'local.set' ? null : v
+        else if (c[0] !== 'local.set' || v == null) pure = false
+      }
+      return pure && last != null ? record(n, last, false) : null
+    }
+    if (VN_CONTROL.has(op) || VN_TRANSPARENT.has(op)) { analyzeChildren(n); return null }
+    if (op === 'global.get') return null
+    if (op === 'global.set') { analyzeChildren(n); clock++; return null }
+    if (op === 'call') {
+      const vs = []
+      for (let i = 2; i < n.length; i++) vs.push(analyze(n[i]))
+      const kind = call(n[1]), kernel = kind === 'pure', user = kind === 'read'
+      if (!kernel && !user) { clock++; return null }
+      return vs.some(v => v == null) ? null : record(n, keyed(`call ${n[1]} ${vs.join(' ')}${user ? ` @${clock}` : ''}`))
+    }
+    if (typeof op === 'string' && isMemWrite(op)) { analyzeChildren(n); clock++; return null }
+    if (typeof op !== 'string' || !valueOp(op)) {
+      // Unknown to this pass: its operands are code, its effect is any.
+      analyzeChildren(n); kill(assignedOf(n)); clock++
+      return null
+    }
+    // A stack-style operator (no folded operands) reads what an earlier instruction left.
+    if (!op.endsWith('.const') && !n.some(Array.isArray)) return null
+    const parts = [op]
+    let complete = true
+    for (let i = 1; i < n.length; i++) {
+      const c = n[i]
+      if (!Array.isArray(c)) { parts.push(Object.is(c, -0) ? '-0' : String(c)); continue }
+      const v = analyze(c)
+      if (v == null) complete = false
+      parts.push(`#${v}`)
+    }
+    if (!complete) return null
+    if (isLoad(op)) parts.push(`@${clock}`)
+    return record(n, keyed(parts.join(' ')))
+  }
+  const keyed = (key) => { let v = keys.get(key); if (v == null) keys.set(key, v = fresh()); return v }
+  for (let i = bodyStart; i < fn.length; i++) analyze(fn[i])
+
+  // Rewrite: a computation whose number a local still holds becomes a read
+  // of it; the first site of a number read again later becomes its holder.
+  // A replaced node's own assignments vanish with it, so a local it assigns
+  // may be read inside it only.
+  const reads = new Map()
+  visit(fn, (c) => { if (c[0] === 'local.get') reads.set(c[1], (reads.get(c[1]) || 0) + 1) })
+  const readOutside = (n) => {
+    const names = vnAssigned(n)
+    if (!names.size) return false
+    const inside = new Map()
+    visit(n, (c) => { if (c[0] === 'local.get' && names.has(c[1])) inside.set(c[1], (inside.get(c[1]) || 0) + 1) })
+    for (const name of names) if ((reads.get(name) || 0) > (inside.get(name) || 0)) return true
+    return false
+  }
+  const holders = new Map()
+  let held = new Map(), minted = vnNextId(fn)
+  const captures = new Map(), mintedNames = []
+  /** Forget a region's assignments: the tree's own, and the holders minted inside it. */
+  const forgetRegion = (names, mark) => { forget(names); for (let i = mark; i < mintedNames.length; i++) held.set(mintedNames[i], token()) }
+  // The statement being rewritten: its sequence and position, the conditional
+  // depth it starts at, and the holder statements to insert before it.
+  let stmt = null, depth = 0
+  const localReads = (n) => { const out = new Set(); visit(n, (c) => { if (c[0] === 'local.get') out.add(c[1]) }); return out }
+  const mayTrap = (n) => { let hit = false; visit(n, c => { if (hit) return false; if (mayTrapOp(c[0]) || (c[0] === 'call' && call(c[1]) !== 'pure')) hit = true }); return hit }
+  /** Whether `n` can precede its statement without conflicting local reads/writes or a trap.
+   *  A branch condition keeps
+   *  its computation in place (a tee): a statement before a loop's exit test would stop that
+   *  test from rotating to the loop's bottom. */
+  const hoistable = (n) => {
+    if (!stmt || stmt.depth !== depth || stmt.seq[stmt.at][0] === 'br_if') return false
+    if (mayTrap(n)) return false
+    const own = vnAssigned(n), outside = new Set(), outsideReads = new Set()
+    visit(stmt.seq[stmt.at], (c) => {
+      if (c === n) return false
+      if ((c[0] === 'local.set' || c[0] === 'local.tee') && typeof c[1] === 'string') outside.add(c[1])
+      else if (c[0] === 'local.get') outsideReads.add(c[1])
+    })
+    for (const name of localReads(n)) if (outside.has(name)) return false
+    for (const name of own) if (outside.has(name) || outsideReads.has(name)) return false
+    return true
+  }
+  const rewriteSeq = (seq, from) => {
+    const outer = stmt
+    for (let i = from; i < seq.length; i++) {
+      stmt = { seq, at: i, depth, hoisted: [] }
+      rewrite(seq[i], seq, i)
+      if (stmt.hoisted.length) { seq.splice(i, 0, ...stmt.hoisted); i += stmt.hoisted.length }
+    }
+    stmt = outer
+  }
+  const rewriteArm = (seq, from) => { depth++; rewriteSeq(seq, from); depth-- }
+  const token = () => -(next++)
+  const hold = (v, name) => { if (v == null) return; let list = holders.get(v); if (!list) holders.set(v, list = []); list.push(name); held.set(name, v) }
+  const holderOf = (v) => { const list = holders.get(v); if (list) for (let i = list.length - 1; i >= 0; i--) if (held.get(list[i]) === v) return list[i]; return null }
+  const forget = (names) => { for (const name of names) held.set(name, token()) }
+  const rewriteChildren = (n, from = 1) => { for (let i = from; i < n.length; i++) rewrite(n[i], n, i) }
+  const rewrite = (n, parent, idx) => {
+    if (!Array.isArray(n)) return
+    const op = n[0]
+    if (op === 'local.set' || op === 'local.tee') {
+      const v = vnOf.get(n[2]) ?? null
+      rewrite(n[2], n, 2)
+      held.set(n[1], v ?? token())
+      hold(v, n[1])
+      return
+    }
+    const v = op === 'local.get' ? null : vnOf.get(n)
+    const shared = v != null && (sites.get(v) || 0) >= 2 && vnWorth(n)
+    if (shared) {
+      const h = holderOf(v)
+      if (h != null && !readOutside(n)) {
+        const capture = captures.get(h)
+        if (capture) capture.used = true
+        parent[idx] = ['local.get', h]
+        return
+      }
+    }
+    const mark = mintedNames.length
+    if (op === 'loop') { forget(assignedOf(n)); rewriteArm(n, seqStart(n)); forgetRegion(assignedOf(n), mark) }
+    else if (op === 'if') {
+      const { cond, then, els } = ifParts(n)
+      if (cond != null) rewrite(n[cond], n, cond)
+      const before = new Map(held)
+      if (then) rewriteArm(then, 1)
+      held = new Map(before)
+      if (els) rewriteArm(els, 1)
+      forgetRegion(armsAssigned(then, els), mark)
+    }
+    else if (op === 'block') { if (targetedOf(n)) { rewriteArm(n, seqStart(n)); forgetRegion(assignedOf(n), mark) } else rewriteSeq(n, seqStart(n)) }
+    else if (op === 'local.get' || VN_CONTROL.has(op) || VN_TRANSPARENT.has(op) || (typeof op === 'string' && isMemWrite(op))) rewriteChildren(n)
+    else if (typeof op === 'string' && !valueOp(op) && op !== 'call') { rewriteChildren(n); forgetRegion(assignedOf(n), mark) }
+    else rewriteChildren(n, op === 'call' ? 2 : 1)
+    if (!shared || parent[0] === 'local.set' || parent[0] === 'local.tee') return
+    // The first site of a value read again later holds it for the rest.
+    const type = selfType(n, types) ?? consumerType(parent, idx, types)
+    if (!type) return
+    const name = `$__vn${minted++}`
+    types.set(name, type); mintedNames.push(name)
+    let set = null
+    if (hoistable(n)) { set = ['local.set', name, n]; stmt.hoisted.push(set); parent[idx] = ['local.get', name] }
+    else parent[idx] = ['local.tee', name, n]
+    captures.set(name, { replacement: parent[idx], value: n, set, used: false })
+    hold(v, name)
+  }
+  rewriteSeq(fn, bodyStart)
+  // The census counts occurrences, not dominating reuse. Restore captures
+  // whose later occurrences were behind a branch or invalidation boundary.
+  const decls = []
+  for (const [name, capture] of captures) {
+    if (capture.used) { decls.push(['local', name, types.get(name)]); continue }
+    // Keep the original node and its marks. The shared block cleanup removes
+    // this wrapper; Object.assign does not copy array elements in the kernel.
+    capture.replacement.splice(0, capture.replacement.length,
+      'block', ['result', types.get(name)], capture.value)
+    if (capture.set) capture.set.splice(0, capture.set.length, 'nop')
+  }
+  if (decls.length) fn.splice(bodyStart, 0, ...decls)
+}
+
+/** The next free `$__vnN` suffix: past the highest one the function declares. */
+function vnNextId(fn) {
+  let id = 0
+  for (const n of fn) if (Array.isArray(n) && n[0] === 'local' && typeof n[1] === 'string' && /^\$__vn\d+$/.test(n[1])) id = Math.max(id, +n[1].slice(5) + 1)
+  return id
+}
+
+/** One computation per value through locals, in every function. */
 const valueNumber = (ast, opts = {}) => {
   const call = callKinds(ast, opts.pure)
   for (const f of funcsOf(ast)) numberValues(f, call)
   return ast
 }
 
-/** Straight-line statements in order of the work depending on them, in every function (schedule.js). */
+// ==================== STATEMENT SCHEDULING ====================
+
+/**
+ * Statement scheduling for instruction-level parallelism.
+ *
+ * A straight-line run of statements keeps its data order and nothing else:
+ * each statement goes as early as the longest chain of work still depending
+ * on it warrants, so independent long computations (kernel calls,
+ * divisions) start together and the processor overlaps them. Three color
+ * channels each taking an inner and an outer pow, written channel by
+ * channel, leave each outer pow waiting for its inner one while the next
+ * channel's inner pow, independent of both, sits behind it in program order
+ * beyond the processor's window. Scheduled, the three inner pows run first,
+ * then the three outer ones.
+ *
+ * Dependencies: a local's write goes after its earlier reads and writes,
+ * its reads after its write; a memory read after a write and a write after
+ * a read or a write, globals likewise; statements with an effect (a store,
+ * a call with effects, a global write, an operator that can trap) keep
+ * their order among themselves. A control statement, or one that branches
+ * out of itself or leaves a value, bounds a run. A run is rescheduled only
+ * when it holds two computations worth overlapping.
+ *
+ * Runs after value numbering, whose holder statements are the
+ * shared computations this moves. `call(name)` says what a call is, as there:
+ * 'pure', 'read' or null. A function written in the flat form is left alone.
+ */
+
+const SCHED_CONTROL = new Set(['block', 'loop', 'if', 'try_table', 'br', 'br_if', 'br_table', 'return', 'return_call', 'return_call_indirect', 'return_call_ref', 'unreachable', 'throw', 'throw_ref', 'rethrow'])
+const SCHED_BRANCH = new Set(['try_table', 'br', 'br_if', 'br_table', 'return', 'return_call', 'return_call_indirect', 'return_call_ref', 'unreachable', 'throw', 'throw_ref', 'rethrow'])
+// Bare calls and memory.grow may leave stack results. Their uses inside
+// void statements still participate; a memory write alone is not a void proof.
+const SCHED_VOID = new Set(['local.set', 'global.set', 'drop', 'nop', 'memory.copy', 'memory.fill', 'memory.init'])
+const SCHED_HEAVY = /\.(div|div_s|div_u|sqrt)$/
+const intersects = (a, b) => { for (const x of a) if (b.has(x)) return true; return false }
+
+/** A statement that can move: void, and no branch inside it. */
+const schedMovable = (s) => {
+  if (!Array.isArray(s) || typeof s[0] !== 'string') return false
+  if (!(SCHED_VOID.has(s[0]) || s[0].includes('.store'))) return false
+  let branch = false
+  visit(s, (c) => { if (branch) return false; const op = c[0]; if (SCHED_BRANCH.has(op) || (typeof op === 'string' && (op.startsWith('table.') || op.includes('atomic') || op === 'memory.size'))) branch = true })
+  return !branch
+}
+
+/** What a statement reads and writes, whether its order is fixed, and the work it holds. */
+const schedFacts = (s, call) => {
+  const defs = new Set(), uses = new Set()
+  let memR = false, memW = false, globR = false, globW = false, ordered = false, lat = 0, heavy = 0
+  visit(s, (c) => {
+    const op = c[0]
+    if (typeof op !== 'string') return
+    if (op === 'local.get') uses.add(c[1])
+    else if (op === 'local.set' || op === 'local.tee') defs.add(c[1])
+    else if (op === 'global.get') globR = true
+    else if (op === 'global.set') { globW = true; ordered = true }
+    else if (op === 'call') {
+      const kind = call(c[1])
+      if (kind === 'pure') { lat += 40; heavy++ }
+      else if (kind === 'read') { lat += 40; heavy++; memR = true; globR = true; ordered = true }
+      else { ordered = true; memR = memW = globR = globW = true; lat += 40 }
+    }
+    else if (op === 'call_indirect' || op === 'call_ref') { ordered = true; memR = memW = globR = globW = true; lat += 40 }
+    else if (isMemWrite(op)) { memW = true; ordered = true; lat += 1 }
+    else if (isLoad(op)) { memR = true; ordered = true; lat += 4 }
+    else if (mayTrapOp(op)) { ordered = true; lat += 12 }
+    else if (SCHED_HEAVY.test(op)) { lat += 12; heavy++ }
+    else if (!op.endsWith('.const')) lat += 1
+  })
+  return { defs, uses, memR, memW, globR, globW, ordered, lat, heavy }
+}
+
+/** Whether statement `j` must follow statement `i`. */
+const schedAfter = (i, j) =>
+  intersects(j.uses, i.defs) || intersects(j.defs, i.uses) || intersects(j.defs, i.defs) ||
+  (i.memW && (j.memR || j.memW)) || (i.memR && j.memW) ||
+  (i.globW && (j.globR || j.globW)) || (i.globR && j.globW) ||
+  (i.ordered && j.ordered)
+
+/** Reorder the run seq[start..end) by height; returns whether it changed. */
+const scheduleRun = (seq, start, end, call) => {
+  const n = end - start
+  if (n < 2) return false
+  const f = []
+  for (let i = start; i < end; i++) f.push(schedFacts(seq[i], call))
+  let heavy = 0
+  for (const x of f) if (x.heavy) heavy++
+  if (heavy < 2) return false
+  const preds = f.map(() => []), succs = f.map(() => [])
+  for (let j = 1; j < n; j++) for (let i = 0; i < j; i++) if (schedAfter(f[i], f[j])) { preds[j].push(i); succs[i].push(j) }
+  const height = new Array(n)
+  for (let i = n - 1; i >= 0; i--) { let h = 0; for (const j of succs[i]) if (height[j] > h) h = height[j]; height[i] = f[i].lat + h }
+  const left = preds.map(p => p.length), order = []
+  for (let k = 0; k < n; k++) {
+    let pick = -1
+    for (let i = 0; i < n; i++) if (left[i] === 0 && (pick < 0 || height[i] > height[pick])) pick = i
+    order.push(pick); left[pick] = -1
+    for (const j of succs[pick]) left[j]--
+  }
+  if (order.every((i, k) => i === k)) return false
+  const items = order.map(i => seq[start + i])
+  for (let k = 0; k < n; k++) seq[start + k] = items[k]
+  return true
+}
+
+// Integer min/max updates commute. When one input carries this reduction's
+// previous result, consume it last so independent comparisons can run first.
+// The dependency check chooses an order only; the matcher proves commuting.
+const minMaxUpdate = n => {
+  if (n?.[0] !== 'if' || n.length !== 3) return null
+  const c = n[1], b = n[2], s = b?.[1]
+  if (!/^i32\.(lt|le|gt|ge)_[su]$/.test(c?.[0]) ||
+      c[1]?.[0] !== 'local.get' || c[2]?.[0] !== 'local.get' ||
+      b?.[0] !== 'then' || b.length !== 2 || s?.[0] !== 'local.set' || s[2]?.[0] !== 'local.get') return null
+  const acc = s[1], input = s[2][1]
+  if (acc === input) return null
+  const left = c[1][1] === input && c[2][1] === acc
+  if (!left && !(c[1][1] === acc && c[2][1] === input)) return null
+  return { acc, input, kind: c[0].slice(-1) + ((c[0][4] === 'l') === left ? 'min' : 'max') }
+}
+
+const deferCarriedReduction = (seq, from, i) => {
+  const a = minMaxUpdate(seq[i]), b = a && minMaxUpdate(seq[i + 1])
+  if (!b || a.acc !== b.acc || a.kind !== b.kind) return
+  const carries = new Set([a.acc])
+  for (let j = i + 2; j < seq.length; j++) {
+    const s = seq[j]
+    if (SCHED_CONTROL.has(s?.[0]) || s?.[0] === 'local.set' && s[1] === a.acc) break
+    if (s?.[0] === 'local.set' && s[2]?.[0] === 'local.get' && s[2][1] === a.acc) carries.add(s[1])
+  }
+  const carried = name => {
+    for (let j = i - 1; j >= from; j--) {
+      const s = seq[j]
+      if (SCHED_CONTROL.has(s?.[0])) break
+      if (s?.[0] !== 'local.set' || s[1] !== name) continue
+      let found = false
+      visit(s[2], n => { if (n[0] === 'local.get' && carries.has(n[1])) found = true })
+      return found
+    }
+    return carries.has(name)
+  }
+  if (carried(a.input) && !carried(b.input)) {
+    const first = seq[i]; seq[i] = seq[i + 1]; seq[i + 1] = first
+  }
+}
+
+/** Schedule every run of movable statements in the sequence seq[from..]. */
+const scheduleSeq = (seq, from, call) => {
+  let start = from
+  for (let i = from; i <= seq.length; i++) {
+    if (seq[0] === 'loop') deferCarriedReduction(seq, from, i)
+    if (i < seq.length && schedMovable(seq[i])) continue
+    scheduleRun(seq, start, i, call)
+    start = i + 1
+  }
+}
+
+/**
+ * @param fn a `(func …)` node, rewritten in place
+ * @param call what a call to a function is: 'pure', 'read' or null
+ */
+function scheduleRuns(fn, call) {
+  if (!Array.isArray(fn) || fn[0] !== 'func' || hasFlatCode(fn)) return
+  const bodyStart = findBodyStart(fn)
+  if (bodyStart < 0) return
+  scheduleSeq(fn, bodyStart, call)
+  visit(fn, (c) => {
+    if (c[0] === 'loop' || c[0] === 'block') scheduleSeq(c, seqStart(c), call)
+    else if (c[0] === 'then' || c[0] === 'else') scheduleSeq(c, 1, call)
+  })
+}
+
+/** Order straight-line statements by the work depending on them, in every function. */
 const schedule = (ast, opts = {}) => {
   const call = callKinds(ast, opts.pure)
   for (const f of funcsOf(ast)) scheduleRuns(f, call)
   return ast
 }
+
+// Shared expression effects for propagation and elimination.
 
 /** Effect summary for a call NODE — null when the callee can't be summarized. */
 const callFx = (n) => {
@@ -6829,14 +7430,6 @@ const mergeBlocks = (ast) => {
  * @param {Array} ast
  * @returns {Array}
  */
-// The last statement of a block or loop is an unconditional exit.
-const neverFallsThrough = (node) => {
-  const last = node[node.length - 1]
-  const o = Array.isArray(last) ? last[0] : last
-  return o === 'br' || o === 'br_table' || o === 'return' || o === 'return_call' || o === 'return_call_indirect' ||
-    o === 'unreachable' || o === 'throw' || o === 'throw_ref' || o === 'rethrow'
-}
-
 const coalesceLocals = (ast) => {
   walkN(ast, (funcNode) => {
     if (!Array.isArray(funcNode) || funcNode[0] !== 'func') return
@@ -6850,8 +7443,16 @@ const coalesceLocals = (ast) => {
     if (!decls.size || decls.size + params.size < 2) return
 
     const uses = new Map()
-    const loopStack = [], condStack = []
+    const loopStack = [], condStack = [], labels = []
     let pos = 0, abort = false
+    // Propagate a branch to its enclosing label; each crossed suffix is conditional.
+    const targetDepth = (label, depth = labels.length) => {
+      if (typeof label === 'string' && label[0] === '$') {
+        for (let i = depth - 1; i >= 0; i--) if (labels[i] === label) return i + 1
+      } else if (Number.isInteger(+label) && +label >= 0 && +label < depth) return depth - +label
+      abort = true
+      return Infinity
+    }
     // effective innermost arm for a local: frames where BOTH sibling arms write it
     // at statement level are transparent (the write happens on every path)
     const effArm = (name) => {
@@ -6876,35 +7477,50 @@ const coalesceLocals = (ast) => {
       return set
     }
 
-    const visit = (n) => {
-      if (abort) return
-      // flat-form control tokens make loop/arm boundaries invisible to the interval
-      // model — a joined slot could leak residue across an unseen back-edge
-      if (typeof n === 'string' && (n === 'loop' || n === 'block' || n === 'if' || n === 'else' || n === 'end' ||
-          n === 'br' || n === 'br_if' || n === 'br_table')) { abort = true; return }
-      if (!Array.isArray(n)) return
+    const visit = (n, writeDepth = 0) => {
+      if (abort) return Infinity
+      // Flat local accesses and control tokens hide lifetimes from this walk.
+      // Other stack instructions use captured values, not the locals' storage.
+      if (typeof n === 'string' && (IMM[n] === 'localidx' || IMM[n] === 'labelidx' ||
+          IMM[n] === 'block' || IMM[n] === 'try_table' || IMM[n] === 'end' ||
+          n === 'else' || n === 'br_table' || n.startsWith('br_on_'))) { abort = true; return Infinity }
+      if (!Array.isArray(n)) return Infinity
       const op = n[0]
+      // Reference branches also carry stack values outside this interval proof.
+      if (op.startsWith('br_on_')) { abort = true; return Infinity }
+      const isIf = op === 'if'
+      const scope = op === 'func' || (!isIf && isBranchScope(op)) || op === 'try_table'
+      if (scope) labels.push(typeof n[1] === 'string' && n[1][0] === '$' ? n[1] : null)
+      let escape = Infinity
+      if (op === 'br' || op === 'br_if') escape = targetDepth(n[1])
+      else if (op === 'br_table') {
+        for (let i = 1; i < n.length && !Array.isArray(n[i]); i++) escape = Math.min(escape, targetDepth(n[i]))
+      } else if (op === 'catch' || op === 'catch_ref' || op === 'catch_all' || op === 'catch_all_ref') {
+        // Catch labels are outside their try_table; their body can skip writes.
+        escape = targetDepth(n[n.length - 1], labels.length - 1)
+      }
+      // An exit contained by the value still reaches its enclosing assignment.
+      // One that leaves it can skip the write the interval would credit.
+      if (escape <= writeDepth) { abort = true; return Infinity }
       const isLoop = op === 'loop'
       if (isLoop) loopStack.push({ start: pos, end: pos })
       const isSet = op === 'local.set' || op === 'local.tee'
 
       if (isSet || op === 'local.get') {
         const name = n[1]
-        if (typeof name !== 'string' || name[0] !== '$') { abort = true; return }
+        if (typeof name !== 'string' || name[0] !== '$') { abort = true; return Infinity }
         // Execution order: evaluate set/tee value BEFORE recording the write,
         // so a `(local.set $x (… (local.get $x) …))` is correctly seen as a
         // read-then-write of $x (firstOp = local.get).
-        if (isSet) for (let i = 2; i < n.length; i++) visit(n[i])
+        if (isSet) for (let i = 2; i < n.length; i++) visit(n[i], labels.length)
         const here = pos++
         if (decls.has(name) || params.has(name)) {
           let u = uses.get(name)
           // A first WRITE only licenses slot-joining when it executes on EVERY path that
           // reaches a later read — else the read must see the local's implicit ZERO, and a
-          // joined slot would leak the previous occupant's residue. Three skippable
-          // contexts break the guarantee: an if/else arm (condDepth), a LOOP body (a
-          // zero-trip loop skips the write but a read after the loop still runs — the
-          // mat4 `iters=0` miscompile), and any statement AFTER a br/br_if/return in the
-          // same list (the rotated-loop entry guard `(block (br_if $out …) …)` shape).
+          // joined slot would leak the previous occupant's residue. An if/else arm,
+          // a loop body, a suffix after an exit, or a try body can skip the write
+          // while a later read still runs. Such reads need the implicit zero.
           if (!u) {
             u = { start: here, end: here, firstOp: op,
                   firstArm: effArm(name), armEscapes: false,
@@ -6917,14 +7533,14 @@ const coalesceLocals = (ast) => {
             // at statement level in BOTH branch-free arms of an if is written on
             // every path through it, so those arm frames are transparent for it.)
             if ((loopStack[loopStack.length - 1] ?? null) !== u.firstLoop) u.escapes = true
-            if (effArm(name) !== u.firstArm) u.armEscapes = true
+            // Nested reads remain dominated by the write in their enclosing arm.
+            if (u.firstArm !== null && !condStack.includes(u.firstArm)) u.armEscapes = true
           }
           if (here > u.end) u.end = here
           for (const ls of loopStack) u.loops.add(ls)
         }
       } else {
         pos++
-        const isIf = op === 'if'
         let bothW = null
         if (isIf) {
           const { thenBranch, elseBranch } = parseIf(n)
@@ -6933,25 +7549,30 @@ const coalesceLocals = (ast) => {
             if (a && b) { bothW = new Set(); for (const x of a) if (b.has(x)) bothW.add(x); if (!bothW.size) bothW = null }
           }
         }
-        let branched = false   // a direct-child br/br_if/return makes the REST of this list conditional
+        let branched = null   // one shared region for the suffix after each exit
         for (let i = 1; i < n.length; i++) {
           const c = n[i]
           const isArm = isIf && Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')
-          const cond = isArm || branched
-          if (cond) condStack.push({ bothW: isArm ? bothW : null })
-          visit(c)
-          if (cond) condStack.pop()
-          if (Array.isArray(c) && (c[0] === 'br_if' || c[0] === 'br' || c[0] === 'br_table' || c[0] === 'return' || c[0] === 'return_call' || c[0] === 'return_call_indirect' || c[0] === 'unreachable')) branched = true
-          // A block or loop that never falls through (its last statement is an
-          // unconditional exit) is left only by a branch to its label: the try/catch
-          // shape `(block $out (block $catch (try_table (catch … $catch) …) (br $out)) handler…)`
-          // runs the handler on the thrown path alone, so the rest of the list is
-          // conditional too (a `caught = 1` there joined the slot of a dead pointer).
-          if (Array.isArray(c) && (c[0] === 'block' || c[0] === 'loop') && neverFallsThrough(c)) branched = true
+          if (branched) condStack.push(branched)
+          // A folded if's condition runs before its label enters scope.
+          if (isArm) {
+            labels.push(typeof n[1] === 'string' && n[1][0] === '$' ? n[1] : null)
+            condStack.push({ bothW })
+          }
+          let childExit = visit(c, writeDepth)
+          if (isArm) {
+            if (childExit >= labels.length) childExit = Infinity
+            labels.pop(); condStack.pop()
+          }
+          if (branched) condStack.pop()
+          if (childExit < Infinity) branched = { bothW: null }
+          escape = Math.min(escape, childExit)
         }
       }
 
       if (isLoop) { const ls = loopStack.pop(); ls.end = pos }
+      if (scope) { if (escape >= labels.length) escape = Infinity; labels.pop() }
+      return escape
     }
     visit(funcNode)
     if (abort) return
@@ -7836,7 +8457,6 @@ const unnest = (l) => typeof l === 'string' && l[0] === '$' ? l : +l > 0 ? +l - 
 
 /** Value-pure ops can still trap: integer division, truncation, memory/table
  *  reads and checked references. One rule serves motion and dead-value removal. */
-const TRAP_OPS = new Set(['ref.as_non_null', 'ref.cast', 'struct.get', 'struct.get_s', 'struct.get_u', 'array.get', 'array.get_s', 'array.get_u', 'array.len', 'table.get', 'unreachable'])
 const trappingOp = (op) => typeof op === 'string' && (TRAP_OPS.has(op) ||
   /\.(div|rem)_[su]$|\.trunc_f|^(i32|i64|f32|f64|v128)\.load/.test(op))
 const hasTrap = (n) => {
@@ -8675,6 +9295,147 @@ export function poolConstants(ast) {
 }
 
 // ==================== LOOP-INVARIANT CODE MOTION ====================
+
+// A structural key must distinguish every Wasm literal, including signed zero,
+// infinities and BigInt. JSON alone silently conflates several of these.
+export function structuralKey(v) {
+  if (Array.isArray(v)) { let s = '['; for (let i = 0; i < v.length; i++) s += (i ? ',' : '') + structuralKey(v[i]); return s + ']' }
+  if (typeof v === 'bigint') return `${v}n`
+  if (typeof v === 'number' && (Number.isNaN(v) || v === Infinity || v === -Infinity || Object.is(v, -0)))
+    return Number.isNaN(v) ? '#NaN' : v === Infinity ? '#Inf' : v === -Infinity ? '#-Inf' : '#-0'
+  if (typeof v === 'string') return JSON.stringify(v)
+  return String(v)
+}
+
+/**
+ * Hoist maximal invariant expressions, innermost loops first, in one function.
+ * `analyze(loop, nested)` returns a predicate `(node, privateLocals) => boolean`:
+ * acceptance guarantees an invariant result, no observable effects, and safe
+ * speculative execution (including a zero-trip loop). The engine independently
+ * checks that every local written by a candidate is private to that candidate.
+ * Proofs belong to this invocation; they are rebuilt after inner-loop rewrites.
+ * `callType(name)` supplies a proven single-result call signature when needed.
+ * No proofs are stored on instruction arrays or survive a transformation.
+ * @param {any[]} fn
+ * @param {{analyze: Function, callType?: Function, prefix?: string}} opts
+ */
+export function hoistInvariants(fn, { analyze, callType, prefix = '$__licm' }) {
+  if (!Array.isArray(fn) || fn[0] !== 'func') return
+  const types = new Map()
+  let start = 1
+  for (; start < fn.length; start++) {
+    const n = fn[start]
+    if (!Array.isArray(n)) continue
+    if (n[0] === 'local' || n[0] === 'param') { if (typeof n[1] === 'string') types.set(n[1], n[2]); continue }
+    if (n[0] !== 'result' && n[0] !== 'export' && n[0] !== 'type') break
+  }
+  const refs = new Map()
+  let hasLoop = false
+  const countRefs = n => {
+    if (!Array.isArray(n)) return
+    const count = (refs.get(n) || 0) + 1
+    refs.set(n, count)
+    if (count > 1) return
+    if (n[0] === 'loop') hasLoop = true
+    for (let i = 1; i < n.length; i++) countRefs(n[i])
+  }
+  countRefs(fn)
+  if (!hasLoop) return
+  // One function-wide census. Hoisting moves references unchanged; merging
+  // duplicate expressions removes their extra copies. Keep those deltas below
+  // instead of rebuilding every subtree's counts for each loop.
+  const localCounts = new Map()
+  const countLocals = n => {
+    if (!Array.isArray(n)) return
+    if (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee')
+      localCounts.set(n[1], (localCounts.get(n[1]) || 0) + 1)
+    for (let i = 1; i < n.length; i++) countLocals(n[i])
+  }
+  countLocals(fn)
+  const typeOf = n => {
+    const op = n[0]
+    if (op === 'local.get' || op === 'local.tee') return types.get(n[1])
+    if (op === 'select') return typeOf(n[1])
+    if (op === 'block' || op === 'if') { const r = n.find(c => Array.isArray(c) && c[0] === 'result'); return r?.length === 2 ? r[1] : null }
+    if (op === 'call') return callType?.(n[1])
+    if (op.includes('.extract_lane')) { const p = op.slice(0, op.indexOf('.')); return p === 'f64x2' ? 'f64' : p === 'f32x4' ? 'f32' : p === 'i64x2' ? 'i64' : 'i32' }
+    if (/^(v128|[if](8x16|16x8|32x4|64x2))\./.test(op)) return op.endsWith('any_true') || op.endsWith('all_true') || op.endsWith('bitmask') ? 'i32' : 'v128'
+    return resultType(op)
+  }
+  let minted = 0
+  const decls = []
+  const processLoop = (loop, nested) => {
+    visit(loop, true)
+    const accept = analyze(loop, nested)
+    const counts = new Map(), writes = new Map(), emptyCounts = new Map(), emptyWrites = new Set()
+    const countsOf = n => {
+      if (!Array.isArray(n)) return emptyCounts
+      let m = counts.get(n)
+      if (m) return m
+      m = new Map()
+      if (n[0] === 'local.get' || n[0] === 'local.set' || n[0] === 'local.tee') m.set(n[1], 1)
+      for (let i = 1; i < n.length; i++) for (const [k, v] of countsOf(n[i])) m.set(k, (m.get(k) || 0) + v)
+      counts.set(n, m)
+      return m
+    }
+    const writesOf = n => {
+      if (!Array.isArray(n)) return emptyWrites
+      let s = writes.get(n)
+      if (s) return s
+      s = new Set()
+      if (n[0] === 'local.set' || n[0] === 'local.tee') s.add(n[1])
+      for (let i = 1; i < n.length; i++) for (const k of writesOf(n[i])) s.add(k)
+      writes.set(n, s)
+      return s
+    }
+    const sites = new Map()
+    const collect = (n, parent, idx) => {
+      if (!Array.isArray(n) || n[0] === 'loop' || refs.get(n) > 1) return
+      const op = n[0]
+      if (op === 'local.get' || op === 'global.get' || op.endsWith('.const')) return
+      const bound = writesOf(n)
+      let privateWrites = true
+      for (const k of bound) if (localCounts.get(k) !== countsOf(n).get(k)) { privateWrites = false; break }
+      if (privateWrites && accept(n, bound) && (refs.get(n) || 0) <= 1 && (refs.get(parent) || 0) <= 1 && typeOf(n)) {
+        const key = structuralKey(n)
+        let found = sites.get(key)
+        if (!found) sites.set(key, found = [])
+        found.push({ parent, idx, node: n })
+        return
+      }
+      for (let i = 1; i < n.length; i++) collect(n[i], n, i)
+    }
+    for (let i = 1; i < loop.length; i++) collect(loop[i], loop, i)
+    const hoisted = []
+    for (const [, found] of sites) {
+      let name
+      do { name = prefix + minted++ } while (types.has(name))
+      const node = found[0].node, type = typeOf(node)
+      types.set(name, type)
+      decls.push(['local', name, type])
+      hoisted.push(['local.set', name, node])
+      if (found.length > 1) for (const [k, v] of countsOf(node))
+        localCounts.set(k, localCounts.get(k) - v * (found.length - 1))
+      localCounts.set(name, found.length + 1)
+      for (const site of found) site.parent[site.idx] = ['local.get', name]
+    }
+    return hoisted
+  }
+  const visit = (parent, nested) => {
+    for (let i = 1; i < parent.length; i++) {
+      const n = parent[i]
+      if (!Array.isArray(n) || refs.get(n) > 1) continue
+      if (n[0] !== 'loop') { visit(n, nested); continue }
+      // A preheader must be a statement list, never another instruction's operands.
+      const op = parent[0]
+      if (op !== 'func' && op !== 'block' && op !== 'loop' && op !== 'then' && op !== 'else') continue
+      const hoisted = processLoop(n, nested)
+      if (hoisted.length) { parent.splice(i, 0, ...hoisted); i += hoisted.length }
+    }
+  }
+  visit(fn, false)
+  if (decls.length) fn.splice(start, 0, ...decls)
+}
 
 /**
  * licm — hoist loop-invariant PURE, NON-TRAPPING value expressions out of loops into
