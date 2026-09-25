@@ -123,3 +123,21 @@ test('scheduling: a function that unpacks a multi-value call is left alone', () 
   assert.equal(print(ast), print(parse(src)))
   assert.equal(instance(ast).f(), 62)
 })
+
+
+test('scheduling: partially folded expressions keep their stack inputs', () => {
+  const src = `(module
+    (func $k (param $x f64) (result f64) (f64.sqrt (local.get $x)))
+    (func $f (export "f") (result f64) (local $a f64) (local $b f64) (local $p f64) (local $q f64)
+      (f64.const 9) (f64.const 16)
+      (local.set $a (f64.add (f64.const 0)))
+      (local.set $p (call $k (local.get $a)))
+      (local.set $b (f64.add (f64.const 0)))
+      (local.set $q (call $k (call $k (local.get $b))))
+      (f64.sub (local.get $p) (local.get $q))))`
+  const ast = parse(src)
+  schedule(ast, { pure: ['$k'] })
+  assert.equal(print(ast), print(parse(src)))
+  const { f } = instance(ast)
+  for (let i = 0; i < 2; i++) assert.equal(f(), 4 - Math.sqrt(3))
+})

@@ -9,7 +9,7 @@
 import { numdata, size } from './compile.js'
 import { hoistInvariants } from './licm.js'
 export { hoistInvariants, structuralKey } from './licm.js'
-import { isMemWrite } from './effect.js'
+import { isMemWrite, hasFlat as hasFlatCode } from './effect.js'
 export { isMemWrite } from './effect.js'
 import numberValues from './number.js'
 import scheduleRuns from './schedule.js'
@@ -3714,6 +3714,96 @@ const hasConditional = (n) => {
   walkN(n, x => { if (Array.isArray(x) && (x[0] === 'if' || x[0] === 'loop' || x[0] === 'block' ||
     x[0] === 'then' || x[0] === 'else' || x[0] === 'try_table')) found = true })
   return found
+}
+
+/**
+ * Defer a costly pure local initializer to its exclusive value arms. A select
+ * tree evaluates every arm, even when each value is consumed on only one path.
+ * Copying the initializer into those paths and using `if` avoids that work.
+ *
+ * One static definition, all reads in one nearby expression, at most one read
+ * per taken path and some path with no read. Crossed statements cannot change
+ * inputs; expressions contain only named locals and trap-free scalar ops.
+ * Bounded duplication is an explicit speed-profile trade, before local reuse.
+ */
+const lazySelect = (ast) => {
+  const pure = n => {
+    if (!Array.isArray(n)) return false
+    const op = n[0]
+    if (op === 'local.get') return n.length === 2
+    if (op === 'select') return n.length === 4 && n.slice(1).every(pure)
+    if (op === 'if') return n.length === 5 && n[1]?.[0] === 'result' && n[1].length === 2 &&
+      n[3]?.[0] === 'then' && n[3].length === 2 && n[4]?.[0] === 'else' && n[4].length === 2 &&
+      pure(n[2]) && pure(n[3][1]) && pure(n[4][1])
+    if (typeof op !== 'string' || !(SELTREE_OK.test(op) || /^(f32|f64)\.div$/.test(op))) return false
+    return op.endsWith('.const') ? n.length === 2 : n.slice(1).every(pure)
+  }
+  const cost = n => {
+    let c = 0
+    walkN(n, x => { if (x[0] !== 'local.get' && !x[0].endsWith('.const')) c++ })
+    return c
+  }
+  for (const fn of funcsOf(ast)) {
+    if (hasFlatCode(fn)) continue
+    let counts = countLocalUses(fn)
+    if ([...counts.keys()].some(n => typeof n !== 'string' || n[0] !== '$')) continue
+    const types = new Map(fn.filter(n => Array.isArray(n) && (n[0] === 'param' || n[0] === 'local')).map(n => [n[1], n[2]]))
+    const type = n => n[0] === 'local.get' ? types.get(n[1]) : n[0] === 'select' ? type(n[1]) : n[0] === 'if' ? n[1][1] : resultType(n[0])
+    const scopes = []
+    walkN(fn, n => { if (isScopeNode(n)) scopes.push(n) })
+    for (const scope of scopes) for (let i = 1; i < scope.length - 1; i++) {
+      const set = scope[i]
+      if (!Array.isArray(set) || set[0] !== 'local.set' || set.length !== 3 || !pure(set[2])) continue
+      const name = set[1], uses = counts.get(name), work = cost(set[2])
+      if (!uses || uses.sets !== 1 || uses.tees || uses.gets < 1 || uses.gets > 4 || work < 8 || work > 32) continue
+      const inputs = new Set()
+      walkN(set[2], n => { if (n[0] === 'local.get') inputs.add(n[1]) })
+      if (inputs.has(name)) continue
+      for (let j = i + 1; j < scope.length && j <= i + 5; j++) {
+        const stmt = scope[j]
+        if (!Array.isArray(stmt)) break
+        const reads = countLocalUses(stmt).get(name)?.gets || 0
+        if (!reads) {
+          if (stmt[0] !== 'local.set' || stmt.length !== 3 || !pure(stmt[2]) || inputs.has(stmt[1])) break
+          continue
+        }
+        const val = stmt[0] === 'local.set' && stmt.length === 3 ? stmt[2] : stmt
+        if (reads !== uses.gets || !pure(val)) break
+        // [least reads on a path, most reads on a path, static reads]. Selects
+        // are priced as lazy here; only the selected arm will remain eager.
+        const ranges = new Map()
+        const range = n => {
+          let r = [0, 0, 0]
+          if (n[0] === 'local.get') r = n[1] === name ? [1, 1, 1] : r
+          else if (n[0] === 'select' || n[0] === 'if') {
+            const sel = n[0] === 'select', c = range(n[sel ? 3 : 2])
+            const a = range(sel ? n[1] : n[3][1]), b = range(sel ? n[2] : n[4][1])
+            r = [c[0] + Math.min(a[0], b[0]), c[1] + Math.max(a[1], b[1]), c[2] + a[2] + b[2]]
+          } else for (let k = 1; k < n.length; k++) if (Array.isArray(n[k])) {
+            const x = range(n[k]); r = [r[0] + x[0], r[1] + x[1], r[2] + x[2]]
+          }
+          ranges.set(n, r)
+          return r
+        }
+        const r = range(val)
+        if (r[0] !== 0 || r[1] !== 1) break
+        let root = null
+        walkN(val, n => { if (!root && (n[0] === 'select' || n[0] === 'if') && ranges.get(n)?.[2] === reads) root = n })
+        if (!root || !/^[if](32|64)$/.test(type(root))) break
+        const rewrite = n => {
+          if (n[0] === 'local.get' && n[1] === name) return clone(set[2])
+          if (n[0] === 'select' && ranges.get(n)?.[2]) return ['if', ['result', type(n)], rewrite(n[3]), ['then', rewrite(n[1])], ['else', rewrite(n[2])]]
+          return n.map((x, k) => k && Array.isArray(x) ? rewrite(x) : x)
+        }
+        const out = rewrite(root)
+        root.splice(0, root.length, ...out)
+        scope.splice(i--, 1)
+        counts = countLocalUses(fn)
+        break
+      }
+    }
+  }
+  return ast
 }
 
 /**
@@ -8709,6 +8799,7 @@ const PASSES = [
   ['merge',         mergeLocals,    true,  'merge alias locals written once by the same set(tee) value'],
   ['deadset',       deadset,        true,  'drop const local.set overwritten on every path before any read (ONCE pre-rounds: coalesced slots would alias liveness)'],
   ['valueNumber',   valueNumber,    false, 'one computation per value through locals, across chains named apart (ONCE pre-rounds; `pure` vouches for callees)'],
+  ['lazySelect',    lazySelect,     false, 'defer costly pure local initializers to exclusive value arms (speed-for-size; once before rounds)'],
   ['schedule',      schedule,       false, 'order straight-line statements by the work depending on them, so long independent work overlaps (ONCE pre-rounds)'],
   // default OFF: on a PREDICTABLE index stream the br_table hits (~1 cycle) and
   // the tree still pays every arm — a regression; on unpredictable streams the
@@ -8783,7 +8874,7 @@ const OPTS = Object.fromEntries(PASSES.map(p => [p[0], p[2]]))
  * about every workload — a profile the caller opts into, not a default.
  */
 const PROFILES = {
-  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true, seltree: true, unclamp: true, chainTable: true, unroll2: true }),
+  speed: Object.freeze({ outline: false, tailmerge: false, rettail: false, ifset: true, seltree: true, unclamp: true, chainTable: true, unroll2: true, lazySelect: true }),
 }
 
 /**
@@ -8826,8 +8917,8 @@ const normalize = (opts) => {
  * optimize(ast, { fold: true })      // explicit
  */
 /**
- * Could `inlineOnce`/`inline` grow the binary on this module? They are the only
- * size-*increasing* passes: splicing a callee body plus its `block`/param-setup
+ * Could the round loop grow the binary on this module? Its only
+ * size-*increasing* passes are `inlineOnce`/`inline`: splicing a callee body plus its `block`/param-setup
  * wrapper can exceed the `call` it removes. Every other pass strictly shrinks or
  * holds. So if no function is even a candidate (called exactly once, not pinned
  * by export/start/elem/ref.func, not its own exporter), nothing can inflate and
@@ -9008,8 +9099,10 @@ function optimizeModule(ast, opts) {
   // inliner's zero-inits) is input-borne, so pre-rounds loses nothing.
   if (opts.deadset) deadset(ast)
 
-  // Value numbering and scheduling run ONCE before the rounds, on the caller's shapes: the
-  // rounds then clean the holders value numbering leaves (propagate, merge, coalesce).
+  // Lazy selection runs before local reuse and before the size-guard snapshot:
+  // its bounded growth is an explicit speed trade. Value numbering/scheduling
+  // then use the caller's shapes; rounds clean their holders and shared locals.
+  if (opts.lazySelect) lazySelect(ast)
   if (opts.valueNumber) valueNumber(ast, opts)
   if (opts.schedule) schedule(ast, opts)
 
@@ -9041,7 +9134,7 @@ function optimizeModule(ast, opts) {
   }
 
   // Fast path: jz owns this optimizer and feeds it a controlled, type-aware IR.
-  // The only passes that can *grow* the binary are inlineOnce/inline; when no
+  // The only round passes that can *grow* the binary are inlineOnce/inline; when no
   // function is an inline candidate (the common case for scalar REPL kernels)
   // nothing can inflate, so we skip watr's per-round `binarySize` re-compile
   // guard — up to four full encodes per call — and iterate to a fixpoint with
@@ -9097,7 +9190,7 @@ function optimizeModule(ast, opts) {
       }
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'conditions' || key === 'unroll2' || key === 'sortLocals' || key === 'poolConstants' || key === 'valueNumber' || key === 'schedule' ||
+        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'conditions' || key === 'unroll2' || key === 'sortLocals' || key === 'poolConstants' || key === 'valueNumber' || key === 'schedule' || key === 'lazySelect' ||
             (skipInline && key === 'inlineOnce')) continue
         if (SIMPLIFY_KEYS.has(key)) {
           if (!fused) {
@@ -9246,4 +9339,4 @@ optimize.resetNameUids = resetNameUids
 // part of the optimize() pipeline; used by test/optimize.js's regionHooks test
 // to verify the clear actually holds at the boundary, not just "no throw".
 export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === 0 && SW_EXT === 0
-export { optimize, valueNumber, schedule, bool, conditions, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }
+export { optimize, valueNumber, schedule, lazySelect, bool, conditions, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }

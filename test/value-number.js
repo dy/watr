@@ -128,3 +128,15 @@ test('value numbering: a function in the flat form is left alone', () => {
     local.get $x f64.sqrt local.get $x f64.sqrt f64.add))`
   assert.equal(print(numbered(src)), print(parse(src)))
 })
+
+
+test('value numbering: partially folded operands are not identical values', () => {
+  const src = `(module (func $f (export "f") (result f64) (local $a f64) (local $b f64)
+    (f64.const 9) (local.set $a (f64.div (f64.const 2)))
+    (f64.const 16) (local.set $b (f64.div (f64.const 2)))
+    (f64.sub (local.get $a) (local.get $b))))`
+  const ast = numbered(src)
+  assert.equal(print(ast), print(parse(src)))
+  const { f } = instance(ast)
+  for (let i = 0; i < 2; i++) assert.equal(f(), -3.5)
+})

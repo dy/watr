@@ -215,6 +215,7 @@ sense when you control the host are **opt-in** (marked ◌); the rest are on by 
 | `conditions` ◌ | Short-circuit condition diamonds → branch chains | Evaluate each operand once, only when reached; runs once before local propagation |
 | `propagate` | Forward single-use locals & tiny consts | `(local.set $x (i32.const 1)) … (local.get $x)` → `(i32.const 1)` |
 | `valueNumber` ◌ | One computation per value, through locals | Two chains of locals holding the same values under different names (a helper inlined twice) compute once; runs once before the rounds |
+| `lazySelect` ◌ | Defer costly pure expressions to exclusive conditional arms | Speed profile only; bounded code duplication, at most one evaluation per taken path; runs once before local reuse |
 | `schedule` ◌ | Order straight-line statements by the work depending on them | Independent long computations (calls, divisions) start together and overlap; runs once before the rounds |
 | `inline` ◌ | Inline tiny functions | Single-expression functions without locals — may duplicate bodies |
 | `inlineOnce` | Inline functions called from exactly one site | Drops the callee and its `call` site; never duplicates |

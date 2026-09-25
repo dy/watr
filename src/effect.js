@@ -39,11 +39,16 @@ const SEQ = { block: seqStart, loop: seqStart, try_table: seqStart, then: () => 
 // Operands a node takes; a folded node carries them as children, a flat one pops them.
 const OPERANDS = { 'local.set': 1, 'local.tee': 1, 'global.set': 1, drop: 1, select: 3, br_if: 1 }
 const TYPED = /^(i32|i64|f32|f64|v128|i8x16|i16x8|i32x4|i64x2|f32x4|f64x2)\./
+// A partially folded binary op still pops its missing input from the stack.
+const BINARY = /\.(add|sub|mul|div|rem|and|andnot|or|xor|shl|shr|rotl|rotr|min|max|pmin|pmax|copysign|eq|ne|lt|gt|le|ge|shuffle|swizzle|replace_lane|narrow|extmul|dot|q15mulr|avgr|store\d*|load\d+_lane)(_|$)/
+const TERNARY = /\.(bitselect|relaxed_madd|relaxed_nmadd|relaxed_laneselect)$/
 const takesStack = (n) => {
   let args = 0
   for (let i = 1; i < n.length; i++) if (Array.isArray(n[i]) && !SIGNATURE.has(n[i][0])) args++
   const op = n[0]
-  return op in OPERANDS ? args < OPERANDS[op] : typeof op === 'string' && TYPED.test(op) && !op.endsWith('.const') && args === 0
+  if (op in OPERANDS) return args < OPERANDS[op]
+  if (typeof op !== 'string' || !TYPED.test(op) || op.endsWith('.const')) return false
+  return args === 0 || args === 1 && BINARY.test(op) || args < 3 && TERNARY.test(op)
 }
 
 /** Whether a function writes an instruction in the flat form: a bare token in an instruction
