@@ -345,7 +345,7 @@ function assemble(nodes, sizeOnly) {
   // section frame a small array before it. `codeItemLens` keeps each item's
   // byte length for the metadata offsets below.
   const codeList = ctx.code.filter(Boolean)
-  const codeBody = makeByteBuf(codeList.length ? 1 << 16 : 0), codeScratch = makeByteBuf(codeList.length ? 4096 : 0)
+  const codeBody = makeByteBuf(codeList.length ? 4096 : 0), codeScratch = makeByteBuf(codeList.length ? 4096 : 0)
   const codeItemLens = []
   if (codeList.length) uleb(codeList.length, codeBody)
   for (const item of codeList) codeItemLens.push(build[SECTION.code](item, ctx, codeBody, codeScratch))

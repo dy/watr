@@ -1,5 +1,5 @@
 import t, { is, ok, same, throws } from 'tst'
-import { parse } from './runner.js'
+import { parse, isWasm } from './runner.js'
 
 t('parser: s-expr', () => {
   const tree = parse('(module)')
@@ -191,4 +191,68 @@ t('parse: quotes', () => {
 
 t('parse: unclosed quote', () => {
   throws(() => parse(`(import "" ")`))
+})
+
+t('parse: source spans preserve token boundaries and parser reuse', () => {
+  const cases = [
+    ['', []], ['()', []], [' \t\r\n', []],
+    ['x', 'x'], ['(x)', ['x']], ['(x )', ['x']],
+    ['""', '""'], ['$"a b"', '$"a b"'],
+    ['x"y"', ['x', '"y"']], ['$$"y"', ['$$', '"y"']],
+    ['"a\\"b"', '"a\\"b"'], ['"a\\\\"', '"a\\\\"'],
+    ['(@a)', ['@a']], ['(@a "b")', ['@a', '"b"']],
+    ['(x(;a(;b;)c;)y)', ['x', '(;a(;b;)c;)', 'y']],
+    [';;', ';;'], [';;x', ';;x'], [';;x\n', ';;x\n'], [';;x\r', ';;x\r'],
+    ['(x;;y)', ['x', ';;y']], ['(x;;y\n)', ['x', ';;y\n']],
+    ['(x;;y\r)', ['x', ';;y\r']], ['(x;;y\r\nz)', ['x', ';;y\r', 'z']],
+    ['"😀\ud800"', '"😀\ud800"'],
+  ]
+  for (const [source, expected] of [...cases, ...cases, ...cases.slice().reverse()])
+    is(parse(source), expected, JSON.stringify(source))
+  // The Wasm boundary returns array elements, not their named properties.
+  // JZ's WAT-parser invariant checks these locations inside compiled code.
+  if (!isWasm) {
+    const tree = parse(' (x (y))')
+    is(tree.loc, 1)
+    is(tree[1].loc, 4)
+  }
+  for (const source of ['(', '(x', '"', '"x', '"x\\', '(;', '(;x;', '(;x(;y;)']) {
+    throws(() => parse(source), source)
+    is(parse('(ok)'), ['ok'], 'an error leaves the next parse independent')
+  }
+})
+
+t('parse: long tokens retain exact source spelling', () => {
+  const text = 'a😀'.repeat(4000)
+  for (const token of [text, `"${text}"`, `$"${text}"`, `(;${text};)`, `;;${text}\n`])
+    is(parse(`(x ${token})`), ['x', token])
+})
+
+
+t('parse: optional source locations preserve tokens, errors and reuse', () => {
+  const sources = ['', '()', '(x)', ' (x (y))', '(x "😀\ud800" (; c ;) (z))', '(a)(b)']
+  for (const source of [...sources, ...sources, ...sources.slice().reverse()]) {
+    const plain = parse(source, { locations: false }), located = parse(source)
+    is(JSON.stringify(plain), JSON.stringify(located))
+    if (!isWasm) {
+      const check = node => {
+        if (!Array.isArray(node)) return
+        ok(!Object.hasOwn(node, 'loc'))
+        node.forEach(check)
+      }
+      check(plain)
+    }
+  }
+  for (const source of ['(', '(x', '"', '(;', '(x)) trailing']) {
+    let expected, actual
+    try { parse(source) } catch (e) { expected = e.message }
+    try { parse(source, { locations: false }) } catch (e) { actual = e.message }
+    ok(expected)
+    is(actual, expected, 'parse errors retain offsets without node locations')
+  }
+  if (!isWasm) {
+    is(parse(' (x)', { locations: true }).loc, 1)
+    is(parse(' (x)', {}).loc, 1)
+    is([' (x)', '  (y)'].map(parse).map(n => n.loc), [1, 2])
+  }
 })
