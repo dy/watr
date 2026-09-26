@@ -333,6 +333,31 @@ test('identity: trailing convert hoists out of a label-less block', () => {
   assert(out2.includes('(block $B (result f64)'), 'labeled block keeps its type')
 })
 
+test('identity: a convert hoists out of an if whose other arm leaves or converts alike', () => {
+  const hoist = (thenA, elseA, conv = 'f64.convert_i32_s') => print(optimize(parse(`(module (func (param $n i32) (param $c i32) (result f64)
+    (if (result f64) (local.get $c) (then ${thenA.replaceAll('CONV', conv)}) (else ${elseA.replaceAll('CONV', conv)}))))`), 'identity')).replace(/\s+/g, ' ')
+  assert(hoist('(nop) (CONV (local.get $n))', '(unreachable)').includes('(f64.convert_i32_s (if (result i32)'), 'else traps')
+  assert(hoist('(return (f64.const 1))', '(CONV (local.get $n))', 'f64.convert_i32_u').includes('(f64.convert_i32_u (if (result i32)'), 'then returns')
+  assert(hoist('(CONV (local.get $n))', '(CONV (i32.const 7))').includes('(f64.convert_i32_s (if (result i32)'), 'both arms convert')
+  // an arm that completes with another value keeps the if f64
+  assert(hoist('(CONV (local.get $n))', '(f64.const 0.5)').includes('(if (result f64)'), 'fractional arm stays')
+  assert(hoist('(CONV (local.get $n))', '(f64.convert_i32_u (local.get $n))').includes('(if (result f64)'), 'mixed signedness stays')
+  // a call may return: not a leaving arm
+  assert(hoist('(CONV (local.get $n))', '(call $g)').includes('(if (result f64)'), 'returning call stays')
+  // the hoisted value is the same on every path
+  const run = (thenA, elseA) => {
+    const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(`(module (func (export "f") (param $n i32) (param $c i32) (result f64)
+      (if (result f64) (local.get $c) (then ${thenA}) (else ${elseA}))))`), 'identity'))))
+    return m.exports.f
+  }
+  const f = run('(f64.convert_i32_u (local.get $n))', '(f64.convert_i32_u (i32.const -1))')
+  assert.strictEqual(f(-2, 1), 4294967294)
+  assert.strictEqual(f(3, 0), 4294967295)
+  const g = run('(f64.convert_i32_s (local.get $n))', '(unreachable)')
+  assert.strictEqual(g(-5, 1), -5)
+  assert.throws(() => g(1, 0), WebAssembly.RuntimeError)
+})
+
 test('narrow: f64 local written only by exact i32 converts retypes to i32', () => {
   const src = `(module (func (param $n i32) (result f64)
     (local $x f64)
@@ -392,6 +417,49 @@ test('seltree: dense br_table of cheap pure arms → branchless select tree', ()
   const mod = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(ladder()), 'seltree'))), {}).exports
   const ref = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(ladder()))), {}).exports
   for (let i = 0; i < 6; i++) assert.equal(mod.d(i, 29, 13), ref.d(i, 29, 13), `idx ${i}`)
+})
+
+test('seltree: arms may share a temp each writes before reading it', () => {
+  // a value numbered alike on exclusive arms: every arm tees $v before its reads
+  const ladder = (arm0 = '(i32.xor (local.tee $v (i32.shr_u (local.get $a) (i32.const 3))) (local.get $v))') =>
+    `(module (func $d (export "d") (param $i i32) (param $a i32) (param $b i32) (result i32)
+    (local $v i32)
+    (block $out (result i32)
+      (block $dflt
+        (block $l3
+          (block $l2
+            (block $l1
+              (block $l0
+                (br_table $l0 $l1 $l2 $l3 $dflt (local.get $i)))
+              (br $out ${arm0}))
+            (br $out (i32.add (local.tee $v (i32.shr_u (local.get $a) (i32.const 3))) (local.get $v))))
+          (br $out (i32.sub (local.get $a) (local.get $b))))
+        (br $out (i32.and (local.tee $v (i32.shr_u (local.get $a) (i32.const 3))) (local.get $b))))
+      (i32.const 99))))`
+  const out = print(optimize(parse(ladder()), 'seltree'))
+  assert(!out.includes('br_table'), 'shared write-first temp speculates')
+  const mod = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(ladder()), 'seltree'))), {}).exports
+  const ref = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(ladder()))), {}).exports
+  for (let i = 0; i < 6; i++) assert.equal(mod.d(i, 1000, 13), ref.d(i, 1000, 13), `idx ${i}`)
+  // an arm reading the shared temp before writing it sees the previous value: keep the table
+  const readFirst = print(optimize(parse(ladder('(i32.add (local.get $v) (local.tee $v (local.get $b)))')), 'seltree'))
+  assert(readFirst.includes('br_table'), 'read-before-write arm keeps the branchy form')
+  // an arm that only reads the temp one other arm writes sees the value from before the dispatch
+  const oneWriter = `(module (func $d (export "d") (param $i i32) (param $a i32) (param $b i32) (result i32)
+    (local $v i32)
+    (block $out (result i32)
+      (block $dflt
+        (block $l3
+          (block $l2
+            (block $l1
+              (block $l0
+                (br_table $l0 $l1 $l2 $l3 $dflt (local.get $i)))
+              (br $out (i32.xor (local.get $v) (local.get $b))))
+            (br $out (i32.add (local.tee $v (local.get $a)) (local.get $b))))
+          (br $out (i32.sub (local.get $a) (local.get $b))))
+        (br $out (i32.and (local.get $a) (local.get $b))))
+      (i32.const 99))))`
+  assert(print(optimize(parse(oneWriter), 'seltree')).includes('br_table'), 'a reading arm keeps the branchy form')
 })
 
 test('unroll2: large branch-heavy bottom-tested loop partially unrolls exactly', () => {
@@ -670,6 +738,27 @@ test('intguard: shared scratch temp — every cluster self-contained collapses p
   const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(mod), 'intguard'))), {}).exports
   const r = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(mod))), {}).exports
   for (const [i, len] of [[0, 8], [6, 8], [7, 8], [9, 2]]) assert.equal(m.f(i, len), r.f(i, len), `gather @${i} len ${len}`)
+})
+
+test('intguard: exact rings sharing one scratch temp collapse per cluster', () => {
+  // devirtualized dispatch arms: `(x + k) | 0`, `(k - x) | 0`, `((x << 5) - x + k) | 0`
+  // inlined into one function, their ToInt32 guards tee'ing one temp
+  const guard = (V) => `(select (i32.wrap_i64 (i64.trunc_sat_f64_s (local.tee $t ${V})))
+      (i32.const 0) (f64.ne (local.get $t) (f64.const inf)))`
+  const cv = (n) => `(f64.convert_i32_s ${n})`
+  const mod = `(module (func $f (export "f") (param $x i32) (param $k i32) (param $i i32) (result i32)
+    (local $t f64)
+    (if (result i32) (i32.eqz (local.get $i))
+      (then ${guard(`(f64.add ${cv('(local.get $x)')} ${cv('(local.get $k)')})`)})
+      (else (if (result i32) (i32.eq (local.get $i) (i32.const 1))
+        (then ${guard(`(f64.sub ${cv('(local.get $k)')} ${cv('(local.get $x)')})`)})
+        (else ${guard(`(f64.add (f64.sub ${cv('(i32.shl (local.get $x) (i32.const 5))')} ${cv('(local.get $x)')}) ${cv('(local.get $k)')})`)}))))))`
+  const out = print(optimize(parse(mod), 'intguard'))
+  assert(!out.includes('select') && !out.includes('f64.'), 'every ring collapses to i32 ops')
+  const m = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(mod), 'intguard'))), {}).exports
+  const r = new WebAssembly.Instance(new WebAssembly.Module(compile(parse(mod))), {}).exports
+  for (const i of [0, 1, 2]) for (const [x, k] of [[3, 4], [2147483647, 1], [-2147483648, -1], [1 << 30, -7]])
+    assert.equal(m.f(x, k, i), r.f(x, k, i), `arm ${i}: ${x}, ${k}`)
 })
 
 test('intguard: single-read ring — OOB NaN propagates, bounds condition hoists', () => {

@@ -1001,6 +1001,9 @@ const INVERT = {
   'i64.lt_u': 'i64.ge_u', 'i64.ge_u': 'i64.lt_u', 'i64.gt_s': 'i64.le_s', 'i64.le_s': 'i64.gt_s',
   'i64.gt_u': 'i64.le_u', 'i64.le_u': 'i64.gt_u',
 }
+// Instructions after which control never reaches the next one.
+const LEAVES = new Set(['unreachable', 'return', 'br', 'br_table', 'throw', 'throw_ref', 'rethrow',
+  'return_call', 'return_call_indirect', 'return_call_ref'])
 
 const identityNode = (node) => {
     if (!Array.isArray(node)) return
@@ -1058,6 +1061,24 @@ const identityNode = (node) => {
       const tail = node[node.length - 1]
       if (Array.isArray(tail) && (tail[0] === 'f64.convert_i32_s' || tail[0] === 'f64.convert_i32_u') && node.length > 2)
         return [tail[0], ['block', ['result', 'i32'], ...node.slice(2, -1), tail[1]]]
+    }
+    // The same hoist through a label-less if, when every arm that completes ends in
+    // the same convert — the other may only leave (a throw, a trap, a branch out):
+    //   (if (result f64) C (then … (f64.convert_i32_s X)) (else … (unreachable)))
+    //   → (f64.convert_i32_s (if (result i32) C (then … X) (else … (unreachable))))
+    // A diverging arm pushes nothing, so it types against i32 as it did against f64.
+    if (node[0] === 'if' && node.length === 5 && Array.isArray(node[1]) && node[1][0] === 'result' &&
+        node[1].length === 2 && node[1][1] === 'f64') {
+      const [, , cond, a, b] = node
+      const tail = (arm) => Array.isArray(arm) && arm.length > 1 ? arm[arm.length - 1] : null
+      const conv = (arm) => { const t = tail(arm); return Array.isArray(t) && t.length === 2 && (t[0] === 'f64.convert_i32_s' || t[0] === 'f64.convert_i32_u') ? t[0] : null }
+      const leaves = (arm) => { const t = tail(arm); return LEAVES.has(Array.isArray(t) ? t[0] : t) }
+      const ca = conv(a), cb = conv(b)
+      const op = ca && cb ? (ca === cb ? ca : null) : ca && leaves(b) ? ca : cb && leaves(a) ? cb : null
+      if (op) {
+        const strip = (arm) => conv(arm) ? [...arm.slice(0, -1), tail(arm)[1]] : arm
+        return [op, ['if', ['result', 'i32'], cond, strip(a), strip(b)]]
+      }
     }
     const cast = simplifyCast(node)
     if (cast) return cast
@@ -1924,7 +1945,8 @@ const intguard = (ast, opts) => {
     //    before its tee gave 0.0 → guard picks wrap(trunc(0)) = 0; t′ gives
     //    its i32 default 0 — identical. Runs the round the shape is born,
     //    before merge ever sees the temps.
-    // Rule 5 rides the same sweep: def kinds widen to the checked read (`tee t
+    // Rules 2 and 5 ride the same sweep: def kinds widen to the exact ring (with
+    // or without one checked read), the checked read (`tee t
     // (if C cv(X) NaN)`) and the guarded const (`tee t (f64.const c)`), and a
     // temp whose EVERY touch is a def-cluster (no B/C uses) collapses each
     // cluster in place with no temp at all — each cluster's ne reads its own
@@ -1970,7 +1992,7 @@ const intguard = (ast, opts) => {
             }
             if (nonInt) {
               const st = { n: 0 }, tree = ring1(V, st)
-              if (tree && st.read) { rec2({ n, i, kind: 'ring', C: st.read.C, pre: st.read.pre, tree }); continue }
+              if (tree) { rec2({ n, i, kind: 'ring', C: st.read?.C, pre: st.read?.pre, tree }); continue }
             }
             // unmatched guarded tee: keep the cluster, but ACCOUNT for it — its
             // ne reads its own tee, so sibling clusters stay independently
@@ -2012,7 +2034,7 @@ const intguard = (ast, opts) => {
         for (const d of e.defs)
           if (d.kind) d.n[d.i] = d.kind === 'cv' ? d.cv[1]
             : d.kind === 'read' ? asI32If(d.cr)
-            : d.kind === 'ring' ? asI32If({ C: d.C, X: d.tree, pre: d.pre })
+            : d.kind === 'ring' ? (d.C ? asI32If({ C: d.C, X: d.tree, pre: d.pre }) : d.tree)
             : ['i32.const', d.v !== d.gc ? constToI32(d.v) : 0]
         continue
       }
@@ -2334,6 +2356,21 @@ const unroll2 = (ast) => {
   return ast
 }
 
+// Whether evaluating straight-line `n` writes local `t` before it reads it (or never reads it):
+// operands evaluate before their instruction, left to right.
+const writesBeforeReads = (n, t) => {
+  let seen = 0   // 1: written first, -1: read first
+  const walk = (x) => {
+    if (!Array.isArray(x) || seen) return
+    for (let i = 1; i < x.length; i++) walk(x[i])
+    if (seen || x[1] !== t) return
+    if (x[0] === 'local.get') seen = -1
+    else if (x[0] === 'local.tee' || x[0] === 'local.set') seen = 1
+  }
+  walk(n)
+  return seen !== -1
+}
+
 const seltree = (ast) => {
   let uid = 0
   walkN(ast, (fn) => {
@@ -2388,14 +2425,23 @@ const seltree = (ast) => {
       // idx needs NO speculation gate: it evaluated unconditionally before the
       // br_table and still does (teed once as the in-range cond) — any expression,
       // loads included, keeps its exact original evaluation.
+      const owners = new Map()   // local an arm writes → the arms writing it
       for (const arm of arms) {
         const teed = new Set()
         if (!speculable(arm, teed) || count(arm) > 96) return
-        for (const t of teed) {
-          fnCounts ??= tallyLocals(fn, new Map(), 1)
-          const u = fnCounts.get(t), a = tallyLocals(arm, new Map(), 1).get(t)
-          if (!u || !a || u.gets !== a.gets || u.tees !== a.tees || (u.sets || 0) !== (a.sets || 0)) return
-        }
+        for (const t of teed) (owners.get(t) ?? owners.set(t, []).get(t)).push(arm)
+      }
+      // Every touch of a local an arm writes lies in the arms. Arms sharing one
+      // (a value numbered alike on exclusive paths) must each write it before
+      // reading it: speculating the others then clobbers nothing a reader sees.
+      const armCounts = arms.map(arm => tallyLocals(arm, new Map(), 1))
+      for (const t of owners.keys()) {
+        fnCounts ??= tallyLocals(fn, new Map(), 1)
+        const u = fnCounts.get(t)
+        let gets = 0, tees = 0, sets = 0, touching = 0
+        for (const c of armCounts) { const a = c.get(t); if (a) { touching++; gets += a.gets; tees += a.tees; sets += a.sets || 0 } }
+        if (!u || u.gets !== gets || u.tees !== tees || (u.sets || 0) !== sets) return
+        if (touching > 1 && !arms.every(arm => writesBeforeReads(arm, t))) return
       }
       const st = `$__st${uid++}`
       let declEnd = 1
