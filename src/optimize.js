@@ -4569,7 +4569,7 @@ const commuteForSink = (scope) => {
   return changed
 }
 
-const sinkSets = (funcNode, params, useCounts) => {
+const sinkSets = (funcNode, params, useCounts, inTry = false) => {
   let changed = false
 
   // Per-statement interference summaries, memoized by statement IDENTITY (splice-
@@ -4590,8 +4590,8 @@ const sinkSets = (funcNode, params, useCounts) => {
       }
       else if (o === 'global.set') { S.gSAny = true; if (typeof n[1] === 'string') S.gS.add(n[1]) }
       else if (o === 'global.get') { if (typeof n[1] === 'string') S.gG.add(n[1]) }
-      else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect') S.calls = true
-      else if (isBranchScope(o) || o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' || o === 'throw') S.branchy = true
+      else if (CALLS.has(o) || o === 'return_call' || o === 'return_call_indirect' || o === 'return_call_ref') S.calls = true
+      else if (isBranchScope(o) || o === 'br' || o === 'br_if' || o === 'br_table' || o === 'return' || o === 'unreachable' || THROWS.has(o)) S.branchy = true
       else {
         if (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' || o === 'memory.init' || o === 'memory.grow' ||
             (o.includes('.atomic.') && !o.endsWith('.load'))) S.wMem = true
@@ -4674,8 +4674,9 @@ const sinkSets = (funcNode, params, useCounts) => {
       // one additionally requires the crossed statement to be free of OBSERVABLE
       // writes and calls (the call may trap — a skipped store would be visible
       // post-trap), with reads disjoint from the callee-side writes
+      // in a try_table's body a call may throw to a handler that reads the local unset
       let bad = (!vPure && !vFx) || ((vMem || vTrap) && S.wMem) || S.flat || S.branchy ||
-        (S.calls && (vMem || vTrap || vGlobals.size)) || (vTrap && S.gSAny)
+        (S.calls && (inTry || vMem || vTrap || vGlobals.size)) || (vTrap && S.gSAny)
       if (!bad) for (const x of vLocals) if (S.wL.has(x)) { bad = true; break }
       if (!bad && S.gS.size) for (const x of vGlobals) if (S.gS.has(x)) { bad = true; break }
       if (!bad && !vPure) {
@@ -5005,7 +5006,7 @@ const eliminateDeadStores = (funcNode, params, useCounts) => {
  * @param {Array} funcNode  a straight-line scope (body / block / loop / then / else)
  * @param {Set<string>} params
  */
-const eliminateAdjacentDeadStores = (funcNode, params) => {
+const eliminateAdjacentDeadStores = (funcNode, params, inTry = false) => {
   let changed = false
   for (let i = 1; i < funcNode.length - 1; i++) {
     const a = funcNode[i], b = funcNode[i + 1]
@@ -5018,6 +5019,8 @@ const eliminateAdjacentDeadStores = (funcNode, params) => {
     let reads = false
     walkN(b[2], n => { if (Array.isArray(n) && (n[0] === 'local.get' || n[0] === 'local.tee') && n[1] === a[1]) reads = true })
     if (reads) continue
+    // in a try_table's body, a throw from b's value lands in a handler that may read a's value
+    if (inTry && mayThrow(b[2])) continue
     cntSub(a)
     funcNode.splice(i, 1); changed = true; i--
   }
@@ -6178,6 +6181,28 @@ const mergeLocals = (ast) => {
 const isScopeNode = (n) => Array.isArray(n) &&
   (n[0] === 'func' || n[0] === 'block' || n[0] === 'loop' || n[0] === 'then' || n[0] === 'else')
 
+const THROWS = new Set(['throw', 'throw_ref', 'rethrow'])
+const CALLS = new Set(['call', 'call_indirect', 'call_ref'])
+/** Whether evaluating `n` may throw: a throw, or a call (the callee may). */
+const mayThrow = (n) => {
+  let r = false
+  walkN(n, c => { if (Array.isArray(c) && (THROWS.has(c[0]) || CALLS.has(c[0]))) r = true })
+  return r
+}
+/** The scopes of `funcNode` inside a try_table with a handler (or a legacy try):
+ *  a throw there lands in this function with every local live. */
+const tryScopes = (funcNode) => {
+  const out = new Set()
+  const mark = (n, inTry) => {
+    if (!Array.isArray(n)) return
+    if (inTry && isScopeNode(n)) out.add(n)
+    const t = inTry || n[0] === 'try' || (n[0] === 'try_table' && n.some(c => Array.isArray(c) && CATCHES.has(c[0])))
+    for (let i = 1; i < n.length; i++) mark(n[i], t)
+  }
+  mark(funcNode, false)
+  return out
+}
+
 /** Branch-target scopes: ops that carry an optional label/result header and can be jumped to via br/br_if. */
 const isBranchScope = (op) => op === 'block' || op === 'loop' || op === 'if'
 
@@ -6273,10 +6298,13 @@ const propagate = (ast) => {
       // (wasted work always; corrupted counts once they were maintained) and
       // never saw scopes newly created by substitution clones.
       const scopes = [], ifs = []
+      let hasTry = false
       walkPostN(funcNode, n => {
         if (isScopeNode(n)) scopes.push(n)
         if (n[0] === 'if') ifs.push(n)
+        if (n[0] === 'try_table' || n[0] === 'try') hasTry = true
       })
+      const inTry = hasTry ? tryScopes(funcNode) : null
       const useCounts = CNT
       let progressed = propagateConditionConsts(ifs)
       for (const scope of scopes) if (forwardPropagate(scope, params, useCounts)) progressed = true
@@ -6310,9 +6338,9 @@ const propagate = (ast) => {
         if (commuteForSink(scope)) { progressed = true; cntOracle(funcNode, 'commuteForSink') }
         if (sinkIntoBranch(scope, params, counts)) { progressed = true; cntOracle(funcNode, 'sinkIntoBranch') }
         if (mergeCopyThroughTee(scope, params, counts)) { progressed = true; cntOracle(funcNode, 'mergeCopyThroughTee') }
-        if (sinkSets(scope, params, counts)) { progressed = true; cntOracle(funcNode, 'sinkSets') }
+        if (sinkSets(scope, params, counts, inTry?.has(scope))) { progressed = true; cntOracle(funcNode, 'sinkSets') }
         if (eliminateDeadStores(scope, params, counts)) { progressed = true; cntOracle(funcNode, 'eliminateDeadStores') }
-        if (eliminateAdjacentDeadStores(scope, params)) { progressed = true; cntOracle(funcNode, 'adjacentDSE') }
+        if (eliminateAdjacentDeadStores(scope, params, inTry?.has(scope))) { progressed = true; cntOracle(funcNode, 'adjacentDSE') }
       }
       if (!progressed) break
     }

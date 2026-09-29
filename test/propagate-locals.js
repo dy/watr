@@ -309,6 +309,24 @@ test('propagate-locals: nested control, a zero-trip loop, an early exit and a ha
   check(handler, [['f'], ['f']], (s, a) => assert.deepEqual(a.out, [['ok', P0 + 1], ['ok', 8]], 'the handler receives the pre-write value'), {}, PATTERN)
 })
 
+// Inside a try_table's body, a call may throw to a handler of the same function,
+// which reads the local as the throw left it: a set before the call is neither
+// moved past it nor dropped for a later set the call's throw skips.
+test('propagate-locals: a set a handler may read stays before a call that can throw to it', () => {
+  const inTry = (body) => `(module (tag $e)
+    (func $thrower (param $c i32) (result i32) (if (local.get $c) (then (throw $e))) (local.get $c))
+    (func (export "f") (param $c i32) (result i32) (local $h i32)
+      (block $out (block $catch (try_table (catch $e $catch) (block ${body})) (br $out))
+        (local.set $h (i32.add (local.get $h) (i32.const 1000))))
+      (local.get $h)))`
+  check(inTry(`(local.set $h (i32.add (local.get $h) (i32.const 1))) (drop (call $thrower (local.get $c)))
+    (local.set $h (i32.add (local.get $h) (i32.const 10)))`), [['f', 0], ['f', 1]], (s, a) => assert.deepEqual(a.out, [['ok', 11], ['ok', 1001]]))
+  check(inTry(`(local.set $h (i32.const 5)) (local.set $h (call $thrower (local.get $c)))`), [['f', 0], ['f', 1]],
+    (s, a) => assert.deepEqual(a.out, [['ok', 0], ['ok', 1005]]))
+  check(inTry(`(local.set $h (i32.const 5)) (drop (call $thrower (local.get $c))) (local.set $h (i32.const 7))`), [['f', 0], ['f', 1]],
+    (s, a) => assert.deepEqual(a.out, [['ok', 7], ['ok', 1005]]))
+})
+
 test('propagate-locals: a dead if with discardable arms retains only its condition', () => {
   for (const condition of ['(local.get $x)', '(call $log (local.get $x))']) {
     const src = `(module (import "env" "log" (func $log (param i32) (result i32)))
