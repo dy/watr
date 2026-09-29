@@ -1339,6 +1339,30 @@ test('inline: bare param body substitutes at root', () => {
   assert.equal(exports.main(), 42)
 })
 
+// A macro's argument runs where its parameter is read, after the body's work before
+// that read: `k * 10 + a` with `a = bump()` read $k before bump set it.
+test('macro: an argument runs after the body\'s work before its read only where no order shows', () => {
+  const mod = (body, arg) => parse(`(module
+    (global $k (mut i32) (i32.const 0)) (global $c i32 (i32.const 3))
+    (func $bump (result i32) (global.set $k (i32.const 5)) (i32.const 1))
+    (func $m (param $a i32) (result i32) ${body})
+    (func (export "f") (result i32) (global.set $k (i32.const 1)) (call $m ${arg})))`)
+  const run = (ast) => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f()
+  for (const [body, arg, expands] of [
+    ['(i32.add (i32.mul (global.get $k) (i32.const 10)) (local.get $a))', '(call $bump)', false],  // reads what the arg writes
+    ['(i32.add (i32.mul (global.get $k) (i32.const 10)) (local.get $a))', '(i32.const 1)', true],  // an argument with no effect
+    ['(i32.add (i32.mul (global.get $c) (i32.const 10)) (local.get $a))', '(call $bump)', true],   // a global no set changes
+    ['(i32.add (local.get $a) (i32.mul (global.get $k) (i32.const 10)))', '(call $bump)', true],   // the read comes first
+    ['(i32.add (call $bump) (local.get $a))', '(global.get $k)', false],                           // writes what the arg reads
+    ['(i32.add (i32.div_s (i32.const 1) (global.get $c)) (local.get $a))', '(global.get $k)', true], // a trap before a read
+    ['(i32.add (i32.div_s (i32.const 1) (global.get $c)) (local.get $a))', '(call $bump)', false],  // a trap before a write
+  ]) {
+    const want = run(mod(body, arg)), opt = optimize(mod(body, arg), 'macro')
+    assert.equal(!print(opt).includes('call $m'), expands, `${body} with ${arg}: ${expands ? '' : 'not '}expanded`)
+    assert.equal(run(opt), want, `${body} with ${arg}`)
+  }
+})
+
 test('inline: preserves exports', () => {
   const ast = parse(`(module
     (func $helper (export "h") (result i32) (i32.const 1))

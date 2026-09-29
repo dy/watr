@@ -5341,11 +5341,31 @@ const cse = (ast) => {
 }
 
 /**
+ * Fold one node's own effect (not its children's) into `fx`: `r` reads state a write could
+ * change, `w` writes state or leaves the expression, `t` may trap. A local is no state here:
+ * a callee's expression cannot name its caller's locals.
+ */
+const opEffect = (n, fx, mutable) => {
+  const o = n[0]
+  if (typeof o !== 'string' || o === 'local.get' || o === 'local.set' || o === 'local.tee') return
+  if (o === 'global.get') { if (mutable(n[1])) fx.r = true; return }
+  if (o.startsWith('call') || o.startsWith('return_call')) { fx.r = fx.w = fx.t = true; return }
+  if (impureOp(o)) fx.w = true
+  if (isLoad(o) || o === 'memory.size' || o.startsWith('table.') || o.startsWith('struct.get') || o.startsWith('array.get') || o === 'array.len') fx.r = true
+  if (mayTrapOp(o)) fx.t = true
+}
+
+/**
  * Macro inlining: a function whose whole body is ONE small expression using each
  * param exactly once, in declaration order, expands at every call site by
  * substituting the arguments positionally — no wrapper, no locals, argument
- * evaluation order preserved verbatim (so impure args stay sound). The husk loses
- * its callers and treeshake collects it; the expansion feeds fold/offset/cse.
+ * evaluation order preserved verbatim. The husk loses its callers and treeshake
+ * collects it; the expansion feeds fold/offset/cse.
+ *
+ * An argument now runs after the body's work that precedes its parameter's read
+ * (`k * 10 + a` reads $k before `a`), so a site expands only where that order is
+ * unobservable: the work before a read writes nothing an argument reads or
+ * writes, and reads or traps on nothing an argument writes.
  * @param {Array} ast
  * @returns {Array}
  */
@@ -5361,6 +5381,10 @@ const inlineMacro = (ast, { pin = EMPTY_SET } = {}) => {
   const CAP = 3
   const callCount = new Map()
   walkN(ast, n => { if (Array.isArray(n) && n[0] === 'call' && typeof n[1] === 'string') callCount.set(n[1], (callCount.get(n[1]) || 0) + 1) })
+  // globals no set can change read as constants
+  const fixed = new Set()
+  for (const g of ast) if (Array.isArray(g) && g[0] === 'global' && typeof g[1] === 'string' && !g.some(c => Array.isArray(c) && (c[0] === 'mut' || c[0] === 'import'))) fixed.add(g[1])
+  const mutable = (name) => !fixed.has(name)
   const macros = new Map()
   for (const n of ast.slice(1)) {
     if (!Array.isArray(n) || n[0] !== 'func' || typeof n[1] !== 'string' || n[1][0] !== '$') continue
@@ -5395,13 +5419,32 @@ const inlineMacro = (ast, { pin = EMPTY_SET } = {}) => {
                ((o === 'call' || o === 'return_call') && c[1] === n[1])) bad = true
     })
     if (bad || seq.length !== params.length || seq.some((x, i) => x !== params[i])) continue
-    macros.set(n[1], { params, expr })
+    // the body's effects that run before each parameter's read, in evaluation order
+    const before = [], fx = { r: false, w: false, t: false }, own = new Set(params)
+    const scan = (c) => {
+      if (!Array.isArray(c)) return
+      if (c[0] === 'local.get' && own.has(c[1])) { before.push({ ...fx }); return }
+      for (let i = 1; i < c.length; i++) scan(c[i])
+      opEffect(c, fx, mutable)
+    }
+    scan(expr)
+    macros.set(n[1], { params, expr, before })
   }
   if (!macros.size) return ast
+  const conflicts = (b, arg) => {
+    if (!b.r && !b.w && !b.t) return false
+    const a = { r: false, w: false, t: false }
+    walkN(arg, (c, parent, idx) => {
+      if (Array.isArray(c)) opEffect(c, a, mutable)
+      else if (idx > 0 && typeof c === 'string' && OPCODE[c] !== undefined) a.w = true // a flat instruction: assume anything
+    })
+    return b.w ? a.r || a.w || a.t : a.w
+  }
   walkPostN(ast, n => {
     if (!Array.isArray(n) || n[0] !== 'call' || !macros.has(n[1])) return
     const m = macros.get(n[1])
     if (n.length - 2 !== m.params.length) return
+    if (m.before.some((b, i) => conflicts(b, n[2 + i]))) return
     inflations++
     const idx = new Map(m.params.map((p, i) => [p, i]))
     const out = clone(m.expr)
