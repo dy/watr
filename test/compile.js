@@ -312,6 +312,36 @@ t('compile: block multi', () => {
 
 })
 
+t('compile: multivalue block types cross signed index boundaries', () => {
+  // Repeated and changing modules also exercise the reusable wasm compiler.
+  for (const count of [0, 63, 64, 64, 127, 128, 0]) {
+    const types = Array.from({ length: count }, (_, i) => `(type (func (param ${'i32 '.repeat(i % 7)}) (result i32)))`).join('\n')
+    const src = `
+    ${types}
+    (type $pair (func (result i32 i32)))
+    (func $two (result i32 i32) (i32.const 3) (i32.const 4))
+    (func (export "sum") (result i32)
+      (block (type $pair) (call $two))
+      (i32.add))
+    (func (export "tried") (result i32)
+      (block (type $pair) (try_table (type $pair) (call $two)))
+      (i32.add))
+    (func (export "looped") (result i32)
+      (loop (type $pair) (call $two)) (i32.add))
+    (func (export "choose") (param i32) (result i32)
+      (if (type $pair) (local.get 0)
+        (then (call $two)) (else (i32.const 4) (i32.const 5)))
+      (i32.add))
+  `
+    const { sum, tried, looped, choose } = inline(src).exports
+    is(sum(), 7, `block type ${count}`)
+    is(tried(), 7, `try_table type ${count}`)
+    is(looped(), 7, `loop type ${count}`)
+    is(choose(0), 9, `if false type ${count}`)
+    is(choose(1), 7, `if true type ${count}`)
+  }
+})
+
 t('compile: br', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))

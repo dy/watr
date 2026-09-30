@@ -1151,14 +1151,15 @@ const HANDLER = {
     c.block.push(1)
     isId(instrPeek(n)) && (c.block[n.pop()] = c.block.length)
     let t = n.pop()
-    const b = !t ? [TYPE.void] : t[0] === 'result' ? reftype(t[1], c) : uleb(id(t[1], c.type))
+    // a type index is an s33: the 64th and past read negative as an unsigned byte
+    const b = !t ? [TYPE.void] : t[0] === 'result' ? reftype(t[1], c) : encode.i32(id(t[1], c.type))
     if (out) { for (let i = 0; i < b.length; i++) out.push(b[i]); return }
     return b
   },
   try_table: (n, c) => {
     isId(instrPeek(n)) && (c.block[n.pop()] = c.block.length + 1)
     let blocktype = n.pop()
-    let result = !blocktype ? [TYPE.void] : blocktype[0] === 'result' ? reftype(blocktype[1], c) : uleb(id(blocktype[1], c.type))
+    let result = !blocktype ? [TYPE.void] : blocktype[0] === 'result' ? reftype(blocktype[1], c) : encode.i32(id(blocktype[1], c.type))
     // Collect catch clauses BEFORE pushing try_table to block stack (catch labels are relative to outer blocks)
     let catches = [], count = 0
     while (instrPeek(n)?.[0] === 'catch' || instrPeek(n)?.[0] === 'catch_ref' || instrPeek(n)?.[0] === 'catch_all' || instrPeek(n)?.[0] === 'catch_all_ref') {
@@ -1430,7 +1431,7 @@ Object.assign(SIZE_HANDLER, {
     c.block.push(1)
     isId(instrPeek(n)) && (c.block[n.pop()] = c.block.length)
     const t = n.pop()
-    return !t ? 1 : t[0] === 'result' ? reftype(t[1], c).length : ulebSize(id(t[1], c.type))
+    return !t ? 1 : t[0] === 'result' ? reftype(t[1], c).length : slebSize32(id(t[1], c.type))
   },
   end: (_n, c) => (c.block.pop(), 0),
   stringidx: (n, c) => {

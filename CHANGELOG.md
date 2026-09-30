@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.11.9 (prepared, unpublished)
+
+- Preserve stores before calls that can throw to the enclosing function's handler.
+- Preserve argument side effects before an inlined function reads shared state.
+- Encode block type indices as signed LEB128, including the 63/64 and 127/128 boundaries.
+
 ## v5.10.2
 
 - Fix optimizer evaluation order, trap preservation, numeric-local tracking, and effect-state leakage between calls.
