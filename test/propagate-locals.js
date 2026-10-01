@@ -138,6 +138,55 @@ test('propagate-locals: nested control, a zero-trip loop and a branch exit keep 
   check(branchExit, [['f', 0], ['f', 1]], (s, a) => assert.deepEqual(a.out.map(o => o[1]), [80, 40]))
 })
 
+test('propagate-locals: value exits do not move past a later operand local write', () => {
+  for (const value of [
+    '(block (result i32) (br_if $bail (local.get $miss)) (i32.const 7))',
+    '(if (result i32) (local.get $miss) (then (br $bail)) (else (i32.const 7)))',
+    '(block (result i32) (br_table $bail $bail (local.get $miss)) (i32.const 7))',
+  ]) {
+    const src = `(module ${MEM} (func (export "f") (param $miss i32) (result i32)
+      (local $v i32) (local $p i32)
+      (block $bail
+        (local.set $v ${value})
+        (i32.store (local.tee $p (i32.const 4)) (local.get $v)))
+      (local.get $p)))`
+    check(src, [['f', 1], ['f', 1], ['f', 0], ['f', 1]], (s, a) => {
+      assert.deepEqual(a.out, value.includes('br_table')
+        ? [['ok', 0], ['ok', 0], ['ok', 0], ['ok', 0]]
+        : [['ok', 0], ['ok', 0], ['ok', 4], ['ok', 0]])
+    }, {}, PATTERN)
+  }
+  // Local-only operands may cross ordinary arithmetic and calls with no
+  // caller-local handler.
+  for (const value of ['(i32.add (local.get $x) (i32.const 7))', '(call $id (local.get $x))']) {
+    const src = `(module ${MEM} (func $id (param $x i32) (result i32) (local.get $x))
+      (func (export "f") (param $x i32) (result i32) (local $v i32) (local $p i32)
+        (local.set $v ${value})
+        (i32.store (local.tee $p (i32.const 4)) (local.get $v))
+        (local.get $p)))`
+    check(src, [['f', 3], ['f', 3], ['f', -1]], s =>
+      assert.ok(!s.includes('$v'), 'safe sinking across an unrelated local write remains enabled'))
+  }
+})
+
+test('propagate-locals: a value throwing to a caller handler stays before local writes', () => {
+  for (const value of [
+    '(call $thrower (local.get $miss))',
+    '(if (result i32) (local.get $miss) (then (throw $e)) (else (i32.const 7)))',
+  ]) {
+    const src = `(module ${MEM} (tag $e)
+      (func $thrower (param $miss i32) (result i32)
+        (if (local.get $miss) (then (throw $e))) (i32.const 7))
+      (func (export "f") (param $miss i32) (result i32) (local $v i32) (local $p i32)
+        (block $catch (try_table (catch $e $catch) (block
+          (local.set $v ${value})
+          (i32.store (local.tee $p (i32.const 4)) (local.get $v)))))
+        (local.get $p)))`
+    check(src, [['f', 1], ['f', 1], ['f', 0], ['f', 1]], (s, a) =>
+      assert.deepEqual(a.out, [['ok', 0], ['ok', 0], ['ok', 4], ['ok', 0]]), {}, PATTERN)
+  }
+})
+
 test('propagate-locals: a trapping definition keeps its place relative to stores, and the trap is the same', () => {
   const divTrap = `(module ${MEM} (func (export "f") (param $d i32) (result i32) (local $q i32)
     (local.set $q (i32.div_s (i32.const 100) (local.get $d)))

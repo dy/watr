@@ -4624,7 +4624,10 @@ const sinkSets = (funcNode, params, useCounts, inTry = false) => {
     // nothing). Crossed statements must not write the value's inputs, and when the
     // value reads memory they must not write memory or call out.
     const vLocals = new Set(), vGlobals = new Set()
+    let vExit = false
     walkN(val, n => {
+      const op = Array.isArray(n) ? n[0] : n
+      if (typeof op === 'string' && (SCHED_BRANCH.has(op) || op.startsWith('br_on_'))) vExit = true
       if (!Array.isArray(n)) return
       if ((n[0] === 'local.get' || n[0] === 'local.tee') && typeof n[1] === 'string') vLocals.add(n[1])
       else if (n[0] === 'global.get' && typeof n[1] === 'string') vGlobals.add(n[1])
@@ -4674,6 +4677,9 @@ const sinkSets = (funcNode, params, useCounts, inTry = false) => {
         if (hit && state.reads && !vPure && !(vFx && !vFx.wMem && !vFx.wGlob.size)) hit = null
         // a crossed local write clobbers the value's input, or the target before its read
         if (hit && state.writes.size && (state.writes.has(name) || [...vLocals].some(x => state.writes.has(x)))) hit = null
+        // An exit can expose caller locals without reading them in the value:
+        // a bailout or handler observes writes that originally had not run yet.
+        if (hit && state.writes.size && (vExit || inTry && mayThrow(val))) hit = null
         break
       }
       // a PURE value crosses on interference rules alone; a summarized call-valued
