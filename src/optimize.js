@@ -3933,24 +3933,24 @@ const isExtEffect = (op) => op === 'call' || op === 'call_indirect' || op === 'c
 // folded value replaces the expression only when it does not grow the body.
 // Transitive definitions can share an expression many times; cap total visits as
 // well as depth so a diamond of local definitions cannot expand exponentially.
-const constantExpr = (node, known, depth = 0, budget = [256]) => {
-  if (!Array.isArray(node) || depth > 32 || --budget[0] < 0) return null
-  if (getConst(node)) return [node, constInstrSize(node)]
+const constantExpr = (node, known, depth = 0, budget = 256) => {
+  if (!Array.isArray(node) || depth > 32 || budget < 1) return null
+  if (getConst(node)) return [node, constInstrSize(node), 1]
   if (node[0] === 'local.get') {
     const value = known.get(node[1])?.val
-    const folded = value && constantExpr(value, known, depth + 1, budget)
-    return folded ? [folded[0], 2] : null
+    const folded = value && constantExpr(value, known, depth + 1, budget - 1)
+    return folded ? [folded[0], 2, folded[2] + 1] : null
   }
   if (!FOLDABLE[node[0]] || (node.length !== 2 && node.length !== 3)) return null
   const expr = [node[0]]
-  let bytes = ownBytes(node)
+  let bytes = ownBytes(node), visits = 1
   for (let i = 1; i < node.length; i++) {
-    const child = constantExpr(node[i], known, depth + 1, budget)
+    const child = constantExpr(node[i], known, depth + 1, budget - visits)
     if (!child) return null
-    expr.push(child[0]); bytes += child[1]
+    expr.push(child[0]); bytes += child[1]; visits += child[2]
   }
   const folded = foldNode(expr)
-  return folded && getConst(folded) ? [folded, bytes] : null
+  return folded && getConst(folded) ? [folded, bytes, visits] : null
 }
 
 const substGets = (node, known) => {
