@@ -3404,6 +3404,42 @@ test('foldarms: strips inner result when hoisting common tail to outer block', (
   assert(mod instanceof WebAssembly.Module, 'should produce valid wasm after foldarms hoist')
 })
 
+// Numeric AST leaves (unlike parsed string tokens) must keep both zero signs
+// through equality, hash grouping and the full optimizer's convergence rounds.
+for (const pass of ['dedupe', 'foldarms', 'fold', 'tailmerge', 'cse', 'outline']) {
+  test(`${pass}: structural keys preserve numeric signed zero`, () => {
+    for (const t of ['f32', 'f64']) {
+      const expr = sign => `(${t}.div (${t}.sqrt (${t}.abs (${t}.mul (local.get $x) (local.get $x)))) (${t}.const ${sign}0))`
+      const funcs = ['0', '-0', '0', '-0'].map((z, i) => `(func $f${i} (export "f${i}") (param $x ${t}) (result ${t})
+        ${pass === 'outline' ? expr(z[0] === '-' ? '-' : '') : `(${t}.mul (local.get $x) (${t}.const ${z}))`})`)
+      const body = pass === 'foldarms' ? `(if (result ${t}) (local.get $c) (then (${t}.const 0)) (else (${t}.const -0)))`
+        : pass === 'fold' ? `(select (${t}.const 0) (${t}.const -0) (local.get $c))`
+        : pass === 'tailmerge' ? `(if (i32.eq (local.get $c) (i32.const 1)) (then (return ${expr('')})))
+          (if (i32.eq (local.get $c) (i32.const 2)) (then (return ${expr('-')}))) (return (${t}.const 7))`
+        : `(${t}.sub ${expr('')} ${expr('-')})`
+      const ast = parse(`(module ${pass === 'dedupe' || pass === 'outline' ? funcs.join('\n')
+        : `(func $f (export "f") (param $c i32) (param $x ${t}) (result ${t}) ${body})`})`)
+      const numeric = n => {
+        if (!Array.isArray(n)) return
+        if (n[0] === `${t}.const` && (n[1] === '0' || n[1] === '-0')) n[1] = Number(n[1])
+        for (const c of n) numeric(c)
+      }
+      numeric(ast)
+      const instantiate = tree => new WebAssembly.Instance(new WebAssembly.Module(compile(tree))).exports
+      const before = instantiate(ast)
+      for (const mode of [pass, true]) {
+        const after = instantiate(optimize(clone(ast), mode))
+        for (const name of Object.keys(before)) for (const c of [0, 1, 2]) {
+          for (const x of [0, -0, 1, -1, Infinity, -Infinity, NaN]) {
+            const args = name === 'f' ? [c, x] : [x]
+            assert.ok(Object.is(after[name](...args), before[name](...args)), `${t} ${mode} ${name}(${args})`)
+          }
+        }
+      }
+    }
+  })
+}
+
 // ==================== DUPLICATE FUNCTION ELIMINATION ====================
 
 test('dedupe: removes identical functions', () => {

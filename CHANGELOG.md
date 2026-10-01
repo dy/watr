@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v5.11.9 (prepared, unpublished)
 
+- Preserve signed zero in optimizer equality and structural hashes, including function deduplication, common expressions, outlining and branch tails.
 - Preserve stores before calls that can throw to the enclosing function's handler.
 - Preserve argument side effects before an inlined function reads shared state.
 - Encode block type indices as signed LEB128, including the 63/64 and 127/128 boundaries.

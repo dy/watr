@@ -49,7 +49,7 @@ const binarySize = (ast) => {
  * Stops at first difference. Handles BigInt without stringification.
  */
 const equal = (a, b) => {
-  if (a === b) return true
+  if (a === b) return a !== 0 || Object.is(a, b)
   if (typeof a !== typeof b) return false
   if (typeof a === 'bigint') return a === b
   if (!Array.isArray(a) || !Array.isArray(b)) return false
@@ -57,6 +57,9 @@ const equal = (a, b) => {
   for (let i = 0; i < a.length; i++) if (!equal(a[i], b[i])) return false
   return true
 }
+
+// Number/string AST leaves share a spelling, including the sign of float zero.
+const literalKey = v => Object.is(v, -0) ? '-0' : String(v)
 
 /**
  * Locate the parts of an `(if ...)` node:
@@ -3303,7 +3306,7 @@ function numberValues(fn, call) {
     let complete = true
     for (let i = 1; i < n.length; i++) {
       const c = n[i]
-      if (!Array.isArray(c)) { parts.push(Object.is(c, -0) ? '-0' : String(c)); continue }
+      if (!Array.isArray(c)) { parts.push(literalKey(c)); continue }
       const v = analyze(c)
       if (v == null) complete = false
       parts.push(`#${v}`)
@@ -5118,7 +5121,7 @@ const cseFactsOf = (n, sigT, memo) => {
     } else {
       f.est += typeof c === 'number' ? 2 : 1
       // csePureNode leaves non-array children unjudged — replicate exactly
-      const s = typeof c === 'string' && localOp && i === 1 && c !== '' && !isNaN(c) ? 'L' + +c : String(c) + (typeof c === 'bigint' ? 'n' : '')
+      const s = typeof c === 'string' && localOp && i === 1 && c !== '' && !isNaN(c) ? 'L' + +c : literalKey(c) + (typeof c === 'bigint' ? 'n' : '')
       cseMix(f, cseLeafH(s))
     }
   }
@@ -5766,7 +5769,7 @@ const outline = (ast) => {
             pure &&= f.pure
             b += f.b
             h += ',' + (c[0] === 'local.get' && c.length === 2 ? 'L' : f.h)
-          } else h += ',' + c
+          } else h += ',' + literalKey(c)
         }
         const rec = { pure, b, h: h.length > 64 ? 'H' + hash32(h) : h }
         facts.set(n, rec)
@@ -8709,7 +8712,7 @@ const hashFunc = (node, localNames) => {
     } else if (typeof v === 'bigint') {
       parts.push(v.toString() + 'n')
     } else if (typeof v === 'number') {
-      parts.push(v.toString())
+      parts.push(literalKey(v))
     } else if (v === null) {
       parts.push('null')
     } else if (v === true) {
@@ -9851,7 +9854,7 @@ const hashNode = (node) => {
     }
     if (typeof v === 'string') mixS(prevLocalOp && v !== '' && !isNaN(v) ? 'L' + +v : v)
     else if (typeof v === 'bigint') mixS(v.toString() + 'n')
-    else if (typeof v === 'number') mixS(prevLocalOp ? 'L' + v : String(v))
+    else if (typeof v === 'number') mixS(prevLocalOp ? 'L' + v : literalKey(v))
     else if (v === null) mixS('null')
     else if (v === true) mixS('t')
     else if (v === false) mixS('f')

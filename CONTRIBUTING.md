@@ -49,6 +49,7 @@ truncates the code section with the current packed encoder.
 - Early returns over nested ifs
 - No semicolons in watr.js (match source)
 - Keep optimizer passes and their private helpers in `src/optimize.js`; separate source files should represent a package entry or shared infrastructure
+- Structural equality and keys must distinguish numeric `0` from `-0`, just as parsed `"0"` and `"-0"` differ. Use `literalKey` for optimizer hash leaves; signed-zero regressions in `test/optimize.js` exercise both float widths and numeric AST inputs.
 
 ## What We're Looking For
 
