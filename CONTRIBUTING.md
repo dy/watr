@@ -53,6 +53,7 @@ truncates the code section with the current packed encoder.
 - Constant propagation may evaluate a local's pure defining expression through other known locals without expanding those constants into every read. Keep the existing write invalidation and constant folders authoritative, bound transitive work, and replace only expressions whose folded encoding does not grow.
 - Local slot reuse propagates exits through assignment values. A write skipped by its value cannot donate its destination's implicit zero; unrelated local lifetimes remain eligible for sharing.
 - Local propagation keeps branch-capable values before later operand writes: a bailout can observe caller locals without reading them in the value. The same rule applies to calls under a caller-local exception handler.
+- Block removal must retain depth-relative branch frames, including unnamed blocks and frames crossed on the way to an outer target. A missing named-label reference alone does not prove a frame removable.
 - Data packing uses the encoder's string decoder, so UTF-8 bytes and Unicode escapes determine both offsets and contents. String codecs collect pieces and join once; repeated concatenation retains quadratic storage in a bump allocator. Large byte runs use indexed pushes, not argument spreads.
 
 ## What We're Looking For

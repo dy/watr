@@ -2491,6 +2491,32 @@ test('mergeBlocks: keeps branched block', () => {
   assert(src.includes('block'), 'should keep block whose label is targeted')
 })
 
+test('mergeBlocks: numeric and flat branches retain every enclosing frame', () => {
+  const cases = [
+    '(block (br_if 0 (local.get $c)) (local.set $p (i32.const 7))) (local.get $p)',
+    '(block $b (br_if 0x0 (local.get $c)) (local.set $p (i32.const 7))) (local.get $p)',
+    '(block $out (block $unused (br_if 1 (local.get $c))) (local.set $p (i32.const 7))) (local.get $p)',
+    '(block $out (block $unused (br_table 1 1 (local.get $c))) (local.set $p (i32.const 7))) (local.get $p)',
+    '(block $out (local.get $c) br_if 0 (local.set $p (i32.const 7))) (local.get $p)',
+    '(block $out (local.get $c) br_if $out (local.set $p (i32.const 7))) (local.get $p)',
+    '(block (result i32) (br 0 (i32.const 7)))',
+    '(block $out (try_table (catch_all 0) (if (local.get $c) (then (throw $e))))) (local.get $c)',
+  ]
+  const build = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+  for (const body of cases) {
+    const src = `(module (tag $e) (func (export "f") (param $c i32) (result i32) (local $p i32) ${body}))`
+    const before = build(parse(src))
+    for (const passes of ['mergeBlocks', undefined]) {
+      const opt = optimize(parse(src), passes), after = build(opt)
+      for (const c of [0, 0, 1, -1, 0]) assert.equal(after(c), before(c), `${passes}: ${body}, c=${c}`)
+    }
+  }
+  // Numeric AST immediates carry the same depth as their parsed string form.
+  const ast = parse('(module (func (export "f") (result i32) (block (result i32) (br 0 (i32.const 7)))))')
+  ast[1][3][2][1] = 0
+  assert.equal(build(optimize(ast, 'mergeBlocks'))(), 7)
+})
+
 test('mergeBlocks: unwraps single-expr result-typed block', () => {
   // `(block (result i32) expr)` with no label use is equivalent to just `expr`.
   const ast = parse('(module (func (result i32) (block $l (result i32) (i32.const 7))))')

@@ -7383,33 +7383,35 @@ const inlineOnce = (ast, { pin = EMPTY_SET } = {}) => {
 // ==================== MERGE BLOCKS ====================
 
 /**
- * Does `body` contain a branch instruction targeting `label`, ignoring inner
- * blocks/loops that re-bind the same label?
+ * Does `body` depend on this block frame? Named branches respect shadowing;
+ * numeric/flat branches retain the frame because removing it changes depths.
  */
 const targetsLabel = (body, label) => {
   let found = false
+  const targets = (ref, shadowed) => typeof ref === 'number' ||
+    typeof ref === 'string' && (ref[0] !== '$' || !shadowed && ref === label)
   const search = (n, shadowed) => {
-    if (found || !Array.isArray(n)) return
+    if (found) return
+    if (!Array.isArray(n)) {
+      if (typeof n === 'string' && (IMM[n] === 'labelidx' || n === 'br_table' ||
+          n.startsWith('br_on_') || n.startsWith('catch'))) found = true
+      return
+    }
     const op = n[0]
     let inner = shadowed
-    if ((op === 'block' || op === 'loop') && typeof n[1] === 'string' && n[1] === label) inner = true
-    if (!shadowed) {
-      if (op === 'br' || op === 'br_if' || op === 'br_on_null' || op === 'br_on_non_null' ||
-          op === 'br_on_cast' || op === 'br_on_cast_fail') {
-        if (n[1] === label) { found = true; return }
-      } else if (op === 'br_table') {
-        for (let j = 1; j < n.length; j++) {
-          if (typeof n[j] === 'string') { if (n[j] === label) { found = true; return } }
-          else break
-        }
-      } else if (op === 'catch' || op === 'catch_ref') {
-        // `try_table` catch clause `(catch $tag $label)` / `(catch_ref $tag $label)`
-        // branches to an enclosing block label just like `br` does.
-        if (n[2] === label) { found = true; return }
-      } else if (op === 'catch_all' || op === 'catch_all_ref') {
-        // `(catch_all $label)` / `(catch_all_ref $label)`
-        if (n[1] === label) { found = true; return }
-      }
+    if ((isBranchScope(op) || op === 'try_table' || op === 'try') && n[1] === label) inner = true
+    if (op === 'br' || op === 'br_if' || typeof op === 'string' && op.startsWith('br_on_') || op === 'rethrow' || op === 'delegate') {
+      if (targets(n[1], shadowed)) { found = true; return }
+    } else if (op === 'br_table') {
+      for (let j = 1; j < n.length && !Array.isArray(n[j]); j++)
+        if (targets(n[j], shadowed)) { found = true; return }
+    } else if (op === 'catch' || op === 'catch_ref') {
+      // `try_table` catch clause `(catch $tag $label)` / `(catch_ref $tag $label)`
+      // branches to an enclosing block label just like `br` does.
+      if (targets(n[2], shadowed)) { found = true; return }
+    } else if (op === 'catch_all' || op === 'catch_all_ref') {
+      // `(catch_all $label)` / `(catch_all_ref $label)`
+      if (targets(n[1], shadowed)) { found = true; return }
     }
     for (let i = 1; i < n.length; i++) search(n[i], inner)
   }
@@ -7452,7 +7454,7 @@ const mergeBlocks = (ast) => {
       if (typeof node[i] === 'string' && node[i][0] === '$') label = node[i++]
       if (node[i]?.[0] !== 'result' || node[i].length !== 2) return node
       const body = node.slice(i + 1)
-      if (body.length < 2 || !body.every(Array.isArray) || (label && targetsLabel(body, label))) return node
+      if (body.length < 2 || !body.every(Array.isArray) || targetsLabel(body, label)) return node
       let depthBranch = false
       walkN(node, n => {
         if (typeof n[0] === 'string' && (n[0].startsWith('br') || n[0].startsWith('catch')))
@@ -7489,7 +7491,7 @@ const mergeBlocks = (ast) => {
     if (!hasResult || body.length !== 1) return
     const only = body[0]
     if (!Array.isArray(only)) return
-    if (label && targetsLabel(body, label)) return
+    if (targetsLabel(body, label)) return
     node.length = 0
     for (const tok of only) node.push(tok)
   })
@@ -7522,7 +7524,7 @@ const mergeBlocks = (ast) => {
         break
       }
       const body = child.slice(bi)
-      if (label && targetsLabel(body, label)) { i++; continue }
+      if (targetsLabel(body, label)) { i++; continue }
       node.splice(i, 1, ...body)
       i += body.length
     }

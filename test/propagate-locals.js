@@ -141,6 +141,7 @@ test('propagate-locals: nested control, a zero-trip loop and a branch exit keep 
 test('propagate-locals: value exits do not move past a later operand local write', () => {
   for (const value of [
     '(block (result i32) (br_if $bail (local.get $miss)) (i32.const 7))',
+    '(block (result i32) (br_if 1 (local.get $miss)) (i32.const 7))',
     '(if (result i32) (local.get $miss) (then (br $bail)) (else (i32.const 7)))',
     '(block (result i32) (br_table $bail $bail (local.get $miss)) (i32.const 7))',
   ]) {
