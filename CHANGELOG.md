@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v5.11.9 (prepared, unpublished)
 
+- Preserve UTF-8 and Unicode escapes when packing data, and keep string codecs linear for large segments.
+- Fold constant arithmetic through local definitions with bounded traversal and preserved write effects.
 - Preserve signed zero in optimizer equality and structural hashes, including function deduplication, common expressions, outlining and branch tails.
 - Preserve stores before calls that can throw to the enclosing function's handler.
 - Preserve argument side effects before an inlined function reads shared state.
