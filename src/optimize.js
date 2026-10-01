@@ -7590,7 +7590,7 @@ const coalesceLocals = (ast) => {
       return set
     }
 
-    const visit = (n, writeDepth = 0) => {
+    const visit = (n) => {
       if (abort) return Infinity
       // Flat local accesses and control tokens hide lifetimes from this walk.
       // Other stack instructions use captured values, not the locals' storage.
@@ -7612,9 +7612,6 @@ const coalesceLocals = (ast) => {
         // Catch labels are outside their try_table; their body can skip writes.
         escape = targetDepth(n[n.length - 1], labels.length - 1)
       }
-      // An exit contained by the value still reaches its enclosing assignment.
-      // One that leaves it can skip the write the interval would credit.
-      if (escape <= writeDepth) { abort = true; return Infinity }
       const isLoop = op === 'loop'
       if (isLoop) loopStack.push({ start: pos, end: pos })
       const isSet = op === 'local.set' || op === 'local.tee'
@@ -7625,7 +7622,14 @@ const coalesceLocals = (ast) => {
         // Execution order: evaluate set/tee value BEFORE recording the write,
         // so a `(local.set $x (… (local.get $x) …))` is correctly seen as a
         // read-then-write of $x (firstOp = local.get).
-        if (isSet) for (let i = 2; i < n.length; i++) visit(n[i], labels.length)
+        if (isSet) for (let i = 2; i < n.length; i++) {
+          const exited = visit(n[i])
+          if (exited <= labels.length && n.length !== 3) { abort = true; return Infinity }
+          escape = Math.min(escape, exited)
+        }
+        // An exit from the value can skip this write while a later read still
+        // runs. Preserve its implicit zero without blocking unrelated slots.
+        const skippedWrite = isSet && escape <= labels.length
         const here = pos++
         if (decls.has(name) || params.has(name)) {
           let u = uses.get(name)
@@ -7635,7 +7639,7 @@ const coalesceLocals = (ast) => {
           // a loop body, a suffix after an exit, or a try body can skip the write
           // while a later read still runs. Such reads need the implicit zero.
           if (!u) {
-            u = { start: here, end: here, firstOp: op,
+            u = { start: here, end: here, firstOp: skippedWrite ? 'local.get' : op,
                   firstArm: effArm(name), armEscapes: false,
                   firstLoop: loopStack[loopStack.length - 1] ?? null, escapes: false, loops: new Set() }
             uses.set(name, u)
@@ -7672,7 +7676,7 @@ const coalesceLocals = (ast) => {
             labels.push(typeof n[1] === 'string' && n[1][0] === '$' ? n[1] : null)
             condStack.push({ bothW })
           }
-          let childExit = visit(c, writeDepth)
+          let childExit = visit(c)
           if (isArm) {
             if (childExit >= labels.length) childExit = Infinity
             labels.pop(); condStack.pop()

@@ -2770,6 +2770,61 @@ test('coalesce: a value defined in an outer arm remains live across inner-loop b
   }
 })
 
+test('coalesce: exiting assignment values keep zero while unrelated locals share', () => {
+  for (const type of ['i32', 'i64', 'f32', 'f64']) for (const op of ['local.set', 'local.tee']) {
+    for (const exit of [
+      '(br_if $out (local.get $skip))',
+      '(br_if 1 (local.get $skip))',
+      '(block $keep (br_table $keep $out (local.get $skip)))',
+      '(try_table (catch_all $out) (if (local.get $skip) (then (throw $e))))',
+    ]) {
+      const write = `(${op} $value (block (result ${type}) ${exit} (${type}.const 7)))`
+      const ast = parse(`(module (tag $e)
+        (func (export "f") (param $skip i32) (result ${type})
+          (local $a ${type}) (local $value ${type}) (local $b ${type})
+          (local.set $a (${type}.const 99)) (drop (local.get $a))
+          (block $out ${op === 'local.tee' ? `(drop ${write})` : write})
+          (local.set $b (${type}.const 9))
+          (${type}.add (local.get $value) (local.get $b))))`)
+      const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+      const opt = optimize(ast, 'coalesce locals')
+      assert(opt.find(n => n[0] === 'func').filter(n => n[0] === 'local').length <= 2,
+        `${type} ${op}: an escaping value does not block independent slot reuse`)
+      const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(opt))).exports.f
+      for (const skip of [0, 0, 1, -1, 0]) {
+        const expected = type === 'i64' ? BigInt(skip ? 9 : 16) : skip ? 9 : 16
+        assert.equal(original(skip), expected)
+        assert.equal(changed(skip), expected)
+      }
+    }
+  }
+})
+
+test('coalesce: skipped value writes preserve loop-carried values and suffix zeros', () => {
+  const ast = parse(`(module (func (export "f") (param $n i32) (param $skip i32) (result i32)
+    (local $i i32) (local $x i32) (local $suffix i32) (local $sum i32)
+    (local.set $x (i32.const 5))
+    (block $done (loop $again
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (block $out
+        (drop (local.tee $x (block (result i32)
+          (br_if $out (i32.eq (local.get $i) (local.get $skip)))
+          (i32.add (local.get $x) (i32.const 2)))))
+        (local.set $suffix (i32.const 3)))
+      (local.set $sum (i32.add (local.get $sum) (i32.add (local.get $x) (local.get $suffix))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $again)))
+    (local.get $sum)))`)
+  const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+  const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+  for (const [n, skip] of [[0, 0], [1, 0], [4, 1], [4, 1], [3, 0], [3, 7], [0, 1], [4, 1]]) {
+    let x = 5, suffix = 0, expected = 0
+    for (let i = 0; i < n; i++) { if (i !== skip) { x += 2; suffix = 3 } expected += x + suffix }
+    assert.equal(original(n, skip), expected)
+    assert.equal(changed(n, skip), expected)
+  }
+})
+
 test('coalesce: caught exceptions do not make skipped writes dominate later reads', () => {
   for (const read of ['(return (local.get $value))', '(if (i32.const 1) (then (return (local.get $value))))']) {
     const ast = parse(`(module (tag $e)

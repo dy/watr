@@ -51,6 +51,7 @@ truncates the code section with the current packed encoder.
 - Keep optimizer passes and their private helpers in `src/optimize.js`; separate source files should represent a package entry or shared infrastructure
 - Structural equality and keys must distinguish numeric `0` from `-0`, just as parsed `"0"` and `"-0"` differ. Use `literalKey` for optimizer hash leaves; signed-zero regressions in `test/optimize.js` exercise both float widths and numeric AST inputs.
 - Constant propagation may evaluate a local's pure defining expression through other known locals without expanding those constants into every read. Keep the existing write invalidation and constant folders authoritative, bound transitive work, and replace only expressions whose folded encoding does not grow.
+- Local slot reuse propagates exits through assignment values. A write skipped by its value cannot donate its destination's implicit zero; unrelated local lifetimes remain eligible for sharing.
 - Data packing uses the encoder's string decoder, so UTF-8 bytes and Unicode escapes determine both offsets and contents. String codecs collect pieces and join once; repeated concatenation retains quadratic storage in a bump allocator. Large byte runs use indexed pushes, not argument spreads.
 
 ## What We're Looking For
