@@ -50,6 +50,7 @@ truncates the code section with the current packed encoder.
 - No semicolons in watr.js (match source)
 - Keep optimizer passes and their private helpers in `src/optimize.js`; separate source files should represent a package entry or shared infrastructure
 - Structural equality and keys must distinguish numeric `0` from `-0`, just as parsed `"0"` and `"-0"` differ. Use `literalKey` for optimizer hash leaves; signed-zero regressions in `test/optimize.js` exercise both float widths and numeric AST inputs.
+- Constant propagation may evaluate a local's pure defining expression through other known locals without expanding those constants into every read. Keep the existing write invalidation and constant folders authoritative, bound transitive work, and replace only expressions whose folded encoding does not grow.
 
 ## What We're Looking For
 

@@ -479,6 +479,64 @@ test('propagate-locals: sign operations retain NaN payloads through known locals
       (f64.store (i32.const 8) (local.get $x))))`, [['f']])
 })
 
+test('propagate-locals: transitive constant expressions fold before their locals become tees', () => {
+  const src = `(module (func $f (export "f") (result f64) (local $x f64) (local $x2 f64)
+    (local.set $x (f64.const -0.001))
+    (local.set $x2 (f64.mul (local.get $x) (local.get $x)))
+    (f64.add (f64.const 1) (f64.mul (local.get $x2)
+      (f64.add (f64.const -0.5) (f64.mul (local.get $x2) (f64.const 0.04)))))))`
+  check(src, [['f'], ['f']], (s, a) => {
+    assert.equal(a.out[0][1], 0.99999950000004)
+    assert.ok(!/f64\.(add|mul)|local/.test(s), 'the entire constant chain is one literal')
+    assert.equal(binarySize(parse(s)), 41)
+  })
+})
+
+test('propagate-locals: transitive constants retain captured values across writes and effects', () => {
+  for (const update of [
+    '(drop (local.tee $x (f64.const 7.5)))',
+    '(if (local.get $c) (then (local.set $x (f64.const 7.5))))',
+    '(loop $loop (if (local.get $c) (then (local.set $x (f64.const 7.5)) (local.set $c (i32.const 0)) (br $loop))))',
+  ]) check(`(module ${MEM} (import "env" "log" (func $log (param f64) (result f64)))
+    (func (export "f") (param $c i32) (result f64) (local $x f64) (local $y f64)
+      (local.set $x (f64.const 3.25))
+      (local.set $y (f64.mul (local.get $x) (local.get $x)))
+      ${update}
+      (f64.store (i32.const 0) (call $log (local.get $x)))
+      (f64.add (local.get $y) (local.get $x))))`, [['f', 0], ['f', 1], ['f', 1], ['f', 0]])
+  check(`(module ${MEM} (func (export "f") (param $p i32) (result f64)
+    (local $x f64) (local $y f64)
+    (local.set $x (f64.const 3.25))
+    (local.set $y (f64.mul (local.get $x) (local.get $x)))
+    (f64.store (i32.const 0) (local.get $y))
+    (f64.add (local.tee $x (f64.load (local.get $p))) (local.get $y))))`,
+  [['f', 0], ['f', 65535], ['f', 0]], (s, a) => assert.equal(a.out[1][0], 'throws'))
+})
+
+test('propagate-locals: transitive float constants retain zero signs and nonfinite bits', () => {
+  for (const type of ['f32', 'f64']) for (const value of ['0', '-0', 'inf', '-inf', 'nan'])
+    check(`(module ${MEM} (func (export "f") (local $x ${type}) (local $square ${type})
+      (local.set $x (${type}.const ${value}))
+      (local.set $square (${type}.mul (local.get $x) (local.get $x)))
+      (${type}.store (i32.const 0) (${type}.neg (local.get $x)))
+      (${type}.store (i32.const 8) (${type}.add (local.get $square) (local.get $square)))
+      (${type}.store (i32.const 16) (local.get $x))))`, [['f'], ['f']])
+})
+
+test('propagate-locals: transitive constant work is bounded for shared and cyclic definitions', () => {
+  const names = Array.from({ length: 23 }, (_, i) => `$x${i}`)
+  const src = `(module (func (export "f") (result f64)
+    ${names.map(n => `(local ${n} f64)`).join(' ')}
+    (local.set $x0 (f64.const 1.00000001))
+    ${names.slice(1).map((n, i) => `(local.set ${n} (f64.mul (local.get ${names[i]}) (local.get ${names[i]})))`).join(' ')}
+    (f64.add (local.get $x22) (local.get $x22))))`
+  check(src, [['f'], ['f']])
+  check(`(module (func (export "f") (result f64) (local $x f64)
+    (local.set $x (f64.const 3.25))
+    (local.set $x (f64.mul (local.get $x) (local.get $x)))
+    (f64.add (local.get $x) (local.get $x))))`, [['f']])
+})
+
 
 test('propagate-locals: dominating small constants reach nested control and zero-trip loops', () => {
   for (const type of ['i32', 'i64']) {

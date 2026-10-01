@@ -3931,18 +3931,21 @@ const isExtEffect = (op) => op === 'call' || op === 'call_indirect' || op === 'c
 // Evaluate pure constant expressions through dominating local definitions without
 // expanding wide constants at every use. Keep the original encoding cost so a
 // folded value replaces the expression only when it does not grow the body.
-const constantExpr = (node, known, depth = 0) => {
-  if (!Array.isArray(node) || depth > 32) return null
+// Transitive definitions can share an expression many times; cap total visits as
+// well as depth so a diamond of local definitions cannot expand exponentially.
+const constantExpr = (node, known, depth = 0, budget = [256]) => {
+  if (!Array.isArray(node) || depth > 32 || --budget[0] < 0) return null
   if (getConst(node)) return [node, constInstrSize(node)]
   if (node[0] === 'local.get') {
     const value = known.get(node[1])?.val
-    return getConst(value) ? [value, 2] : null
+    const folded = value && constantExpr(value, known, depth + 1, budget)
+    return folded ? [folded[0], 2] : null
   }
   if (!FOLDABLE[node[0]] || (node.length !== 2 && node.length !== 3)) return null
   const expr = [node[0]]
   let bytes = ownBytes(node)
   for (let i = 1; i < node.length; i++) {
-    const child = constantExpr(node[i], known, depth + 1)
+    const child = constantExpr(node[i], known, depth + 1, budget)
     if (!child) return null
     expr.push(child[0]); bytes += child[1]
   }
