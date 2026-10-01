@@ -72,28 +72,40 @@ const escape = { n: 10, r: 13, t: 9, '"': 34, "'": 39, '\\': 92 }
  * @returns {number[]} Byte array with valueOf() method
  */
 export const str = s => {
-  let bytes = [], i = 1, code, c, buf = '' // i=1 to skip opening quote
+  let bytes = [], i = 1, code, c, buf = [] // i=1 to skip opening quote
 
-  const commit = () => (buf && bytes.push(...tenc.encode(buf)), buf = '')
+  const commit = () => {
+    if (!buf.length) return
+    const encoded = tenc.encode(buf.join(''))
+    for (let j = 0; j < encoded.length; j++) bytes.push(encoded[j])
+    buf.length = 0
+  }
 
   while (i < s.length - 1) { // -1 to skip closing quote
     c = s[i++], code = null
 
     if (c === '\\') {
+      if (i >= s.length - 1) err('Unterminated string escape')
       // \u{abcd}
       if (s[i] === 'u') {
-        i++, i++ // 'u{'
-        c = String.fromCodePoint(parseInt(s.slice(i, i = s.indexOf('}', i)), 16))
-        i++ // '}'
+        const end = s.indexOf('}', i + 2), digits = s.slice(i + 2, end)
+        if (s[i + 1] !== '{' || end < 0 || !/^[0-9a-fA-F]+$/.test(digits)) err('Invalid Unicode escape')
+        const point = parseInt(digits, 16)
+        if (point > 0x10ffff || point >= 0xd800 && point <= 0xdfff) err('Invalid Unicode escape')
+        c = String.fromCodePoint(point)
+        i = end + 1
       }
       // \n, \t, \r
       else if (escape[s[i]]) code = escape[s[i++]]
       // \00 - raw bytes
-      else if (!isNaN(code = parseInt(s[i] + s[i + 1], 16))) i++, i++
-      // \*
-      else c += s[i]
+      else {
+        const digits = s.slice(i, i + 2)
+        if (!/^[0-9a-fA-F]{2}$/.test(digits)) err('Invalid byte escape')
+        code = parseInt(digits, 16)
+        i += 2
+      }
     }
-    code != null ? (commit(), bytes.push(code)) : buf += c
+    code != null ? (commit(), bytes.push(code)) : buf.push(c)
   }
   commit()
 

@@ -10,7 +10,7 @@ import { numdata, size } from './compile.js'
 import { f32 as _f32enc, f64 as _f64enc } from './encode.js'
 import { IMM, OPCODE, resultType } from './const.js'
 import parse from './parse.js'
-import { clone, walk, walkN, walkPost, walkPostN } from './util.js'
+import { clone, walk, walkN, walkPost, walkPostN, str as parseString } from './util.js'
 
 // Fixpoint round caps — empirical convergence bounds, not correctness limits.
 // Each pass only makes monotonic progress, so hitting a cap merely leaves a few
@@ -8942,56 +8942,29 @@ const dedupTypes = (ast) => {
 
 // ==================== DATA SEGMENT PACKING ====================
 
-/** Parse a WAT data string literal into a plain byte array. Plain arrays —
- *  not Uint8Array — throughout the data codecs: typed-array views/methods have
- *  spotty native lowerings (subarray dispatches to the HOST, in-situ variable-
- *  index reads misread in the kernel), while plain number arrays are the
- *  optimizer's lingua franca and proven kernel-faithful. */
-const parseDataString = (str) => {
-  if (typeof str !== 'string' || str.length < 2 || str[0] !== '"') return []
-  const bytes = []
-  // Hex digit value by char code, −1 for non-hex — pure number math (no
-  // regex/slice/parseInt on string views; see contract note above).
-  const hexv = (c) => c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1
-  const end = str.length - 1   // skip surrounding quotes
-  for (let i = 1; i < end; i++) {
-    const c = str.charCodeAt(i)
-    if (c !== 92) { bytes.push(c); continue }
-    const n = str.charCodeAt(++i)
-    if (n === 120 || n === 88) {        // \xHH
-      bytes.push((hexv(str.charCodeAt(i + 1)) << 4) | hexv(str.charCodeAt(i + 2)))
-      i += 2
-    } else {
-      const h1 = hexv(n), h2 = i + 1 < end ? hexv(str.charCodeAt(i + 1)) : -1
-      if (h1 >= 0 && h2 >= 0) { bytes.push((h1 << 4) | h2); i++ }
-      else if (n === 110) bytes.push(10)       // \n
-      else if (n === 116) bytes.push(9)        // \t
-      else if (n === 114) bytes.push(13)       // \r
-      else bytes.push(n)                       // \\ \" and any other escaped char
-    }
-  }
-  return bytes
-}
+// Share the encoder's byte codec: literal UTF-8 and Unicode escapes must occupy
+// exactly the same bytes when computing offsets, trimming and merging data.
+const parseDataString = value => typeof value === 'string' && value[0] === '"' ? parseString(value) : []
 
-/** Encode a plain byte array as a WAT data string literal; `end` bounds the
- *  bytes (always passed explicitly — see parseDataString's contract note).
+/** Encode a plain byte array as a WAT data string literal; `end` bounds the bytes.
  *  (`b` comes from a plain-array element read, i.e. an untyped receiver — the
  *  `.toString(16)` here is exactly the dispatch the tryRuntimeNumberMethod /
  *  runtime-string-fork number arm exists for; it used to yield `undefined`
  *  in-kernel and zeroed every escaped byte of the emitted data segment.) */
 const encodeDataString = (bytes, end) => {
-  let str = '"'
+  const parts = ['"']
   for (let i = 0; i < end; i++) {
     const b = bytes[i]
-    if (b >= 32 && b < 127 && b !== 34 && b !== 92) str += String.fromCharCode(b)
-    else str += '\\' + b.toString(16).padStart(2, '0')
+    if (b >= 32 && b < 127 && b !== 34 && b !== 92) parts.push(String.fromCharCode(b))
+    else parts.push('\\' + b.toString(16).padStart(2, '0'))
   }
-  return str + '"'
+  parts.push('"')
+  return parts.join('')
 }
 
 /** Trim trailing zeros from data content items. Per-byte pushes (never
  *  push(...spread) — a segment can be hundreds of KB and spreading overflows
- *  V8's argument stack; never Uint8Array — see parseDataString's note). */
+ *  V8's argument stack). */
 const trimTrailingZeros = (items) => {
   const bytes = []
   for (const item of items) {

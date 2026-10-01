@@ -1,9 +1,21 @@
 import t, { is, ok, same, throws } from 'tst'
 import compile, { size } from '../src/compile.js'
 import parse from '../src/parse.js'
+import { str } from '../src/util.js'
 
 // Independent framing oracle for one void function, including ULEB boundaries.
 const leb = n => { const a = []; do { const b = n % 128; n = Math.floor(n / 128); a.push(b + (n ? 128 : 0)) } while (n); return a }
+
+t('compile: long UTF-8 runs preserve exact bytes without spread limits', () => {
+  const texts = ['', 'a', 'é😀'.repeat(40000), 'é😀'.repeat(40000), '\ud800', 'different', '']
+  for (const text of texts) {
+    const literal = '"' + text + '"', decoded = str(literal)
+    same(Uint8Array.from(decoded), new TextEncoder().encode(text))
+    is(decoded.valueOf(), literal, 'byte arrays retain their original spelling')
+  }
+  throws(() => str('"\\q"'), /escape/)
+  same(Array.from(str('"\\22\\5c\\00"')), [34, 92, 0], 'valid decode after a rejected escape')
+})
 t('compile: packed function and section growth preserve exact framing', () => {
   for (const n of [0, 125, 126, 127, 4091, 4092, 4093, 4094, 4095, 65533, 65534, 65535]) {
     const ast = ['module', ['func', ...Array(n).fill('nop')]]

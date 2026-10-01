@@ -3710,6 +3710,46 @@ test('packData: trims a large data segment without overflowing', () => {
   assert(!src.includes('\\00'), 'trailing zero bytes trimmed')
 })
 
+test('packData: byte strings preserve UTF-8, escapes and repeated memory images', () => {
+  const all = Array.from({ length: 256 }, (_, i) => i)
+  const cases = [
+    ['""', []], ['"\\00"', [0]],
+    ['"\\00\\22\\5c\\0a\\7f\\80\\ff\\00"', [0, 34, 92, 10, 127, 128, 255, 0]],
+    ['"é😀\\00"', [...new TextEncoder().encode('é😀'), 0]],
+    ['"\\u{e9}\\u{1f600}\\00"', [...new TextEncoder().encode('é😀'), 0]],
+    ['"\\u{10ffff}\\n\\r\\t\\\"\\\\\\00"', [244, 143, 191, 191, 10, 13, 9, 34, 92, 0]],
+    ['"\ud800\\00"', [239, 191, 189, 0]],
+    ['"\udc00\\00"', [239, 191, 189, 0]],
+    ['"' + all.map(n => '\\' + n.toString(16).padStart(2, '0')).join('') + '\\00"', [...all, 0]],
+  ]
+  const image = ast => new Uint8Array(new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.m.buffer)
+  for (const [literal, expected] of [...cases, cases[3], cases[3], cases[2], cases[3], cases[0]]) {
+    const ast = parse(`(module (memory (export "m") 1) (data (i32.const 0) ${literal} (; ignored ;)))`)
+    const before = image(ast), packed = optimize(clone(ast), 'packData'), after = image(packed)
+    assert.deepEqual([...before.slice(0, expected.length)], expected)
+    assert.deepEqual(after, before, 'the entire memory image survives packing')
+    assert.deepEqual(image(optimize(clone(packed), 'packData')), before, 'packing twice preserves every byte')
+  }
+})
+
+test('packData: Unicode segment lengths and merged byte spelling share the encoder', () => {
+  const ast = parse('(module (memory (export "m") 1) (data (i32.const 0) "é") (data (i32.const 2) "\\u{1f600}\\00"))')
+  const packed = optimize(ast, 'packData'), segments = packed.filter(n => n[0] === 'data')
+  assert.equal(segments.length, 1, 'UTF-8 byte lengths identify adjacent segments')
+  assert.equal(segments[0].at(-1), '"\\c3\\a9\\f0\\9f\\98\\80"')
+  const memory = new WebAssembly.Instance(new WebAssembly.Module(compile(packed))).exports.m
+  assert.deepEqual([...new Uint8Array(memory.buffer).slice(0, 7)], [195, 169, 240, 159, 152, 128, 0])
+})
+
+test('packData: malformed byte and Unicode escapes reject and later inputs recover', () => {
+  const source = literal => `(module (memory 1) (data (i32.const 0) ${literal}))`
+  for (const literal of ['"\\x41"', '"\\q"', '"\\0z"', '"\\u{}"', '"\\u{zz}"', '"\\u{41g}"', '"\\u{41"', '"\\u{110000}"', '"\\u{d800}"', '"\\u{dfff}"']) {
+    assert.throws(() => compile(parse(source(literal))), /escape/)
+    assert.throws(() => optimize(parse(source(literal)), 'packData'), /escape/)
+    assert(WebAssembly.validate(compile(optimize(parse(source('"é\\00"')), 'packData'))))
+  }
+})
+
 // ==================== IMPORT FIELD MINIFICATION ====================
 
 test('minifyImports: shortens module and field names', () => {
