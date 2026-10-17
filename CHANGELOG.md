@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v5.11.10 (prepared, unpublished)
+## v5.11.10
 
 - Keep an exported global mutable and its reads: the host may write it, and its mutability is part of the export's type.
 - Fold comparisons of two float constants (a NaN answers false, but to `ne`).
