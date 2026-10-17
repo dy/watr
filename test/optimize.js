@@ -3343,6 +3343,33 @@ test('convergence: global const enables fold', () => {
 })
 
 
+// ==================== FLOAT COMPARISONS AND LOW-WORD MASKS ====================
+
+test('fold: a comparison of two float constants is its answer, a NaN false but to ne', () => {
+  const cases = [['f64.lt', '1', '2', 1], ['f64.ge', '1', '2', 0], ['f64.eq', '0', '-0', 1], ['f64.eq', 'nan', 'nan', 0],
+    ['f64.ne', 'nan', 'nan', 1], ['f64.ne', 'nan:0x7ff8000000000010', '1', 1], ['f64.le', 'nan', '1', 0], ['f64.gt', 'inf', '1', 1],
+    ['f32.lt', '1.5', '2', 1], ['f32.eq', 'nan', 'nan', 0], ['f32.ne', '0.1', '0.1', 0]]
+  for (const [op, a, b, want] of cases) {
+    const t = op.slice(0, 3)
+    const src = `(module (func (export "f") (result i32) (${op} (${t}.const ${a}) (${t}.const ${b}))))`
+    const opt = optimize(parse(src), 'fold')
+    assert(print(opt).includes(`(i32.const ${want})`), `${op} ${a} ${b} folds to ${want}`)
+    const run = ast => new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f()
+    assert.equal(run(opt), run(parse(src)), `${op} ${a} ${b} answers as the engine`)
+  }
+})
+
+test('identity: a wrap of a mask keeping the low word is the wrap', () => {
+  const src = (m) => `(module (func (export "f") (param i64) (result i32) (i32.wrap_i64 (i64.and (local.get 0) (i64.const ${m})))))`
+  for (const m of ['0xFFFFFFFF', '0xFFFFFFFFFFFFFFFF', '0x00FF0000FFFFFFFF']) {
+    const opt = optimize(parse(src(m)))
+    assert(!print(opt).includes('i64.and'), `${m}: the mask goes`)
+  }
+  assert(print(optimize(parse(src('0x7FFFFFFF')))).includes('i64.and'), 'a mask clearing a low bit stays')
+  const f = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src('0xFFFFFFFF')))))).exports.f
+  assert.equal(f(0x123456789ABCDEFn), 0x89ABCDEF | 0)
+})
+
 // ==================== STRIP MUT FROM GLOBALS ====================
 
 test('stripmut: removes mut from never-written global', () => {
@@ -3358,6 +3385,20 @@ test('stripmut: preserves mut on written global', () => {
   const opt = optimize(ast, 'stripmut')
   const src = print(opt)
   assert(src.includes('(mut i32)'), 'should keep mut when written')
+})
+
+test('stripmut: an exported global keeps its mutability and its reads', () => {
+  // the host may write it, and its mutability is part of the export's type
+  for (const src of ['(module (global $g (mut i32) (i32.const 5)) (export "g" (global $g)) (func (export "h") (result i32) (global.get $g)))',
+    '(module (global $g (export "g") (mut i32) (i32.const 5)) (func (export "h") (result i32) (global.get $g)))']) {
+    const opt = optimize(parse(src))
+    const out = print(opt)
+    assert(out.includes('(mut i32)'), 'stays mutable')
+    assert(out.includes('global.get $g'), 'is read as it stands')
+    const { exports } = new WebAssembly.Instance(new WebAssembly.Module(compile(opt)))
+    exports.g.value = 9
+    assert.equal(exports.h(), 9, 'reads what the host wrote')
+  }
 })
 
 test('stripmut: enables global const propagation', () => {

@@ -481,6 +481,7 @@ const f32FromI32 = (x) => { _ri32[0] = x | 0; return _rf32[0] }
 
 /** Build i32 comparison folder: returns 1/0 */
 const i32c = (fn) => (a, b) => fn(a, b) ? 1 : 0
+const fcmp = (a, b, nan, r) => (Number.isNaN(a) || Number.isNaN(b) ? nan : r) ? 1 : 0
 /** Build unsigned i32 comparison folder */
 const u32c = (fn) => (a, b) => fn(a >>> 0, b >>> 0) ? 1 : 0
 /** Signed i64 comparison folder — biased-hex lexicographic (kernel-safe). */
@@ -592,6 +593,21 @@ const FOLDABLE = {
   'f32.floor': (a) => Math.fround(Math.floor(a)),
   'f32.trunc': (a) => Math.fround(Math.trunc(a)),
   'f32.nearest': (a) => Math.fround(roundEven(a)),
+
+  // IEEE comparisons: a NaN answers false to all but ne. The NaN test goes
+  // first: in-kernel `===` compares a NaN's bits, not its value.
+  'f32.eq': (a, b) => fcmp(a, b, false, a === b),
+  'f32.ne': (a, b) => fcmp(a, b, true, a !== b),
+  'f32.lt': (a, b) => fcmp(a, b, false, a < b),
+  'f32.le': (a, b) => fcmp(a, b, false, a <= b),
+  'f32.gt': (a, b) => fcmp(a, b, false, a > b),
+  'f32.ge': (a, b) => fcmp(a, b, false, a >= b),
+  'f64.eq': (a, b) => fcmp(a, b, false, a === b),
+  'f64.ne': (a, b) => fcmp(a, b, true, a !== b),
+  'f64.lt': (a, b) => fcmp(a, b, false, a < b),
+  'f64.le': (a, b) => fcmp(a, b, false, a <= b),
+  'f64.gt': (a, b) => fcmp(a, b, false, a > b),
+  'f64.ge': (a, b) => fcmp(a, b, false, a >= b),
 
   'f64.add': (a, b) => a + b,
   'f64.sub': (a, b) => a - b,
@@ -1097,6 +1113,16 @@ const identityNode = (node) => {
         // contract — no BigInt): low 32 bits zero ⟺ trailing 8 hex zeros.
         const c = getConst(node[1][k])
         if (c && typeof c.value === 'string' && c.value.length === 18 && c.value.endsWith('00000000'))
+          return ['i32.wrap_i64', node[1][k === 1 ? 2 : 1]]
+      }
+    }
+    // wrap of a 64-bit AND whose constant keeps every low bit: the mask touches
+    // only the bits wrap drops — (i32.wrap_i64 (i64.and X 0x…FFFFFFFF)) → (i32.wrap_i64 X).
+    if (node[0] === 'i32.wrap_i64' && node.length === 2 &&
+        Array.isArray(node[1]) && node[1][0] === 'i64.and' && node[1].length === 3) {
+      for (const k of [1, 2]) {
+        const c = getConst(node[1][k])
+        if (c && typeof c.value === 'string' && c.value.length === 18 && c.value.slice(10).toLowerCase() === 'ffffffff')
           return ['i32.wrap_i64', node[1][k === 1 ? 2 : 1]]
       }
     }
@@ -8537,17 +8563,21 @@ const loopify = (ast) => {
 // ==================== STRIP MUT FROM GLOBALS ====================
 
 /**
- * Strip mutability from globals that are never written.
- * Enables globals constant-propagation for more globals.
+ * Strip mutability from globals that are never written, by the module or,
+ * through an export, by the host. Enables globals constant-propagation for more globals.
  * @param {Array} ast
  * @returns {Array}
  */
 const stripmut = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
 
+  // A global.set writes, and so may the host through an export: the global
+  // keeps its mutability, which is also part of the export's type.
   const written = new Set()
   walkN(ast, (n) => {
-    if (Array.isArray(n) && n[0] === 'global.set' && typeof n[1] === 'string') written.add(n[1])
+    if (!Array.isArray(n)) return
+    if (n[0] === 'global.set' && typeof n[1] === 'string') written.add(n[1])
+    else if (n[0] === 'export' && Array.isArray(n[2]) && n[2][0] === 'global' && typeof n[2][1] === 'string') written.add(n[2][1])
   })
 
   return walkPostN(ast, (node) => {
