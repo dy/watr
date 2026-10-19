@@ -9752,18 +9752,30 @@ const LSR_ARITH = new Set(['i32.add', 'i32.sub', 'i32.shl', 'i32.mul'])
 const lsrWork = (list) => {
   const ver = new Map()
   let seen = new Set()
+  // whether a subtree is index arithmetic over locals and literals, once per node: nested trees
+  // ask again for their parts, which a walk per question made quadratic in the nesting
+  const pure = new Map()
+  const pureOf = (c) => {
+    if (!Array.isArray(c) || c[0] === 'local.get') return true
+    let p = pure.get(c)
+    if (p !== undefined) return p
+    p = c[0] === 'i32.const' || LSR_ARITH.has(c[0])
+    for (let i = 1; i < c.length && p; i++) p = pureOf(c[i])
+    pure.set(c, p)
+    return p
+  }
   const keyOf = (n) => {
-    let pure = true, k = ''
+    if (!pureOf(n)) return null
+    let k = ''
     const vis = (c) => {
       if (!Array.isArray(c)) { k += c + ' '; return }
       if (c[0] === 'local.get') { k += `(get ${c[1]}@${ver.get(c[1]) || 0})`; return }
-      if (c[0] !== 'i32.const' && !LSR_ARITH.has(c[0])) pure = false
       k += '('
       for (const x of c) vis(x)
       k += ')'
     }
     vis(n)
-    return pure ? k : null
+    return k
   }
   const sum = (n, s, terms) => {
     const op = n[0]
@@ -9856,11 +9868,12 @@ const lsrLiveOut = (chain, names) => {
     if (op === 'block' || op === 'loop' || op === 'then' || op === 'else') { const k = new Set(kills); for (let i = 1; i < n.length; i++) scan(n[i], k); return }
     for (let i = 1; i < n.length; i++) scan(n[i], kills)
   }
-  for (let d = chain.length - 1; d >= 0; d--) {
+  // (once every name reads live, the rest of the function cannot add one)
+  for (let d = chain.length - 1; d >= 0 && live.size < names.size; d--) {
     const [parent, idx] = chain[d]
     const kills = new Set()
-    for (let i = idx + 1; i < parent.length; i++) scan(parent[i], kills)
-    if (parent[0] === 'loop') for (let i = 1; i < parent.length; i++) scan(parent[i], new Set())
+    for (let i = idx + 1; i < parent.length && live.size < names.size; i++) scan(parent[i], kills)
+    if (parent[0] === 'loop') for (let i = 1; i < parent.length && live.size < names.size; i++) scan(parent[i], new Set())
   }
   return live
 }
@@ -9941,7 +9954,8 @@ function lsrSweep(fn, cand) {
       if (!Array.isArray(n)) return
       const op = n[0]
       if (op === 'local.get') { if (!own.includes(n[1])) reads.set(n[1], (reads.get(n[1]) || 0) + 1); return }
-      const self = op === 'local.set' && n.length === 3 && isDiscardable(n[2])
+      // (only a candidate's own reads matter: no other local's set is tested)
+      const self = op === 'local.set' && n.length === 3 && cand.has(n[1]) && isDiscardable(n[2])
       if (self) own.push(n[1])
       for (let i = 1; i < n.length; i++) count(n[i])
       if (self) own.pop()
@@ -9973,12 +9987,14 @@ function lsrLoop(L, chain, state) {
   if (L.some(c => Array.isArray(c) && (c[0] === 'result' || c[0] === 'param' || c[0] === 'type'))) return []
   // ---- census: what the loop writes, and whether it can be reasoned about
   const writes = new Map(), nestedW = new Set(), globalSets = new Set()
-  let calls = false, bad = false
+  let calls = false, bad = false, addressed = false, placed = false
   const scan = (n, nested) => {
     if (bad || !Array.isArray(n)) return
     if (n !== L && refs.get(n) > 1) { bad = true; return }
     const op = n[0]
     if (LSR_BAIL.has(op)) { bad = true; return }
+    if (!nested && lsrMemOp(op)) addressed = true
+    if (inits.has(n) || offsets.has(n)) placed = true
     if (op === 'local.set' || op === 'local.tee' || op === 'local.get') {
       if (!types.has(n[1])) { bad = true; return }
       if (op !== 'local.get') {
@@ -10013,6 +10029,8 @@ function lsrLoop(L, chain, state) {
     for (const w of ws) { const s = lsrStep(w, x, inv); if (!s) break; steps.set(w, s) }
     if (steps.size === ws.length) ivs.set(x, steps)
   }
+  // nothing to reduce (an address needs a variable) and nothing an inner loop placed to lift
+  if (!placed && (!addressed || !ivs.size)) return []
 
   // ---- the walk: every value a local holds, as an affine form of the variables' current values
   const ivAff = (x) => affT('v:' + x, ['local.get', x])
@@ -10234,6 +10252,8 @@ function lsrLoop(L, chain, state) {
   walk(L, c => { if (Array.isArray(c) && c[0] === 'local.get') readsInL.set(c[1], (readsInL.get(c[1]) || 0) + 1) })
   const liveOut = lsrLiveOut(chain, new Set(writes.keys()))
   const privateTemp = (x) => !carried.has(x) && !liveOut.has(x) && !ivs.has(x)
+  // a local whose writes go once nothing reads it: no value of it outlives an iteration
+  const mayDie = (x) => writes.has(x) && !liveOut.has(x) && !carried.has(x)
 
   // ---- the objective: instructions an iteration executes, the reloads of integer values the
   // loop needs past the register file (a spilled value is reloaded at each use and stored at
@@ -10339,14 +10359,14 @@ function lsrLoop(L, chain, state) {
         if (!Array.isArray(n)) return
         const op = n[0]
         if (op === 'local.get') { if (!ownR.includes(n[1])) reads.set(n[1], (reads.get(n[1]) || 0) + 1); return }
-        const self = op === 'local.set' && n.length === 3 && isDiscardable(n[2])
+        const self = op === 'local.set' && n.length === 3 && mayDie(n[1]) && isDiscardable(n[2])
         if (self) ownR.push(n[1])
         for (let i = 1; i < n.length; i++) count(n[i])
         if (self) ownR.pop()
       }
       count(L)
       const dead = new Set()
-      for (const x of writes.keys()) if (!reads.get(x) && !liveOut.has(x) && !carried.has(x)) dead.add(x)
+      for (const x of writes.keys()) if (!reads.get(x) && mayDie(x)) dead.add(x)
       let changed = false
       const strip = (n) => {
         for (let i = 1; i < n.length; i++) {
