@@ -9649,6 +9649,774 @@ const licm = (ast) => {
   return ast
 }
 
+// ==================== LOOP STRENGTH REDUCTION ====================
+
+/**
+ * lsr: loop strength reduction of memory addresses.
+ *
+ * An i32 local `i` is an induction variable of a loop when every write of it
+ * in the loop is `i = i ± s`, `s` a constant or a value the loop never writes,
+ * and none sits in a nested loop. An address that is an affine combination of
+ * induction variables and loop-invariant terms (`base + (i << 3)`,
+ * `base + i*20 + 8`, `re + ((i + j + half) << 3)`, read through the locals and
+ * tees that carry it) becomes a pointer local `p`, set to the address before
+ * the loop and advanced by `c*s` beside every write `i = i ± s`: `p` equals
+ * the address at every point of the loop. i32 arithmetic wraps, so the
+ * relation holds modulo 2^32 and the rewrite is exact. Addresses differing by
+ * a constant share one pointer (`p + d`).
+ *
+ * A loop keeps the pointers that lower its cost: the instructions an iteration
+ * executes on a target whose one instruction forms base + index·{1,2,4,8} +
+ * displacement (x64 lea, arm64 add with a shifted operand), plus two for each
+ * integer value the loop needs past ten registers (a spilled value is reloaded
+ * at each use and stored at each write; ten is what V8 leaves a wasm loop on
+ * x64). A lone `base + (i << 3)` is one instruction, so its own pointer saves
+ * nothing; `base + i*20`, a scale of 16, or an index summed from several
+ * locals saves the arithmetic. Groups whose addresses share a temporary are
+ * chosen together (one without the other leaves the temporary alive), every
+ * subset while there are few, and a pointer the loop does not pay more without
+ * is dropped. V8 neither strength-reduces addresses nor folds a scaled 32-bit
+ * index into an x64 memory operand, so the engine does not do this itself.
+ *
+ * Runs once after the rounds, innermost loops first. A pointer's preheader
+ * value is an address to the enclosing loop, and a step or start that the
+ * enclosing loop never changes is computed once before it. Opt-in: new locals
+ * and preheader sets grow the binary.
+ */
+const LSR_MAX_PTRS = 8
+const LSR_LIST = new Set(['block', 'loop', 'then', 'else'])
+const LSR_CALL = new Set(['call', 'call_indirect', 'call_ref', 'return_call', 'return_call_indirect', 'return_call_ref'])
+const LSR_EXIT = new Set(['return', 'unreachable', 'throw', 'throw_ref', 'rethrow', 'return_call', 'return_call_indirect', 'return_call_ref'])
+// A handler resumes the loop mid-iteration, between a variable's write and its pointers' advance.
+const LSR_BAIL = new Set(['try', 'try_table', 'catch', 'catch_all', 'catch_ref', 'catch_all_ref', 'delegate'])
+const LSR_FREE = new Set(['local.get', 'local.set', 'local.tee', 'block', 'loop', 'then', 'else', 'nop', 'drop', 'result', 'param', 'type'])
+const I32_MIN = -2147483648
+const lsrMemOp = (op) => typeof op === 'string' && (op.includes('.load') || op.includes('.store')) &&
+  !op.includes('.atomic') && !op.startsWith('memory.')
+const lsrLabel = (n) => typeof n[1] === 'string' && n[1][0] === '$' ? n[1] : null
+
+// Affine forms {c, t}: constant c plus Σ k·term, int32 coefficients (arithmetic mod 2^32).
+// Term keys: 'v:$i' an induction variable, 'l:$x' an invariant local, 'e:…' an invariant expression.
+const affC = (c) => ({ c: c | 0, t: new Map() })
+const affT = (key, n) => { const t = new Map(); t.set(key, { k: 1, n }); return { c: 0, t } }
+const affAdd = (a, b, s = 1) => {
+  const t = new Map(a.t)
+  for (const [key, e] of b.t) {
+    const k = ((t.get(key)?.k || 0) + Math.imul(s, e.k)) | 0
+    if (k) t.set(key, { k, n: e.n }); else t.delete(key)
+  }
+  return { c: (a.c + Math.imul(s, b.c)) | 0, t }
+}
+const affScale = (a, s) => {
+  const t = new Map()
+  for (const [key, e] of a.t) { const k = Math.imul(e.k, s); if (k) t.set(key, { k, n: e.n }) }
+  return { c: Math.imul(a.c, s), t }
+}
+const affEq = (a, b) => {
+  if (!a || !b || a.c !== b.c || a.t.size !== b.t.size) return false
+  for (const [key, e] of a.t) if (b.t.get(key)?.k !== e.k) return false
+  return true
+}
+const affVars = (a) => { for (const key of a.t.keys()) if (key[0] === 'v') return true; return false }
+const affKey = (a) => [...a.t].map(([key, e]) => key + '*' + e.k).sort().join('|')
+const lsrScaled = (n, k) => k === 1 ? n
+  : (k & (k - 1)) === 0 ? ['i32.shl', n, makeConst('i32', 31 - Math.clz32(k))]
+  : ['i32.mul', n, makeConst('i32', k)]
+/** The expression computing an affine form; its terms read what they read in the loop. */
+const lsrBuild = (a) => {
+  let acc = null
+  for (const e of a.t.values()) if (e.k > 0 || e.k === I32_MIN) {
+    const term = lsrScaled(clone(e.n), e.k)
+    acc = acc ? ['i32.add', acc, term] : term
+  }
+  for (const e of a.t.values()) if (e.k < 0 && e.k !== I32_MIN)
+    acc = ['i32.sub', acc || makeConst('i32', 0), lsrScaled(clone(e.n), -e.k)]
+  if (!acc) return makeConst('i32', a.c)
+  return a.c ? ['i32.add', acc, makeConst('i32', a.c)] : acc
+}
+/** `local = local ± s`: the step, or null. */
+const lsrStep = (w, x, inv) => {
+  const v = w[2]
+  if (w.length !== 3 || !Array.isArray(v) || v.length !== 3 || (v[0] !== 'i32.add' && v[0] !== 'i32.sub')) return null
+  const isX = (n) => Array.isArray(n) && n[0] === 'local.get' && n[1] === x
+  if (isX(v[1]) && inv(v[2])) return { sign: v[0] === 'i32.add' ? 1 : -1, S: v[2] }
+  if (v[0] === 'i32.add' && isX(v[2]) && inv(v[1])) return { sign: 1, S: v[1] }
+  return null
+}
+const LSR_ARITH = new Set(['i32.add', 'i32.sub', 'i32.shl', 'i32.mul'])
+/** Instructions a statement list executes where one instruction forms base + index·{1,2,4,8} +
+ *  displacement (x64 lea, an arm64 add with a shifted operand): an i32 sum of terms costs a
+ *  combining step per term past the first, and a step per scaled term past the first. A pure
+ *  index tree recomputed over the same values in one straight-line region counts once: the
+ *  common-subexpression pass that follows shares it. */
+const lsrWork = (list) => {
+  const ver = new Map()
+  let seen = new Set()
+  const keyOf = (n) => {
+    let pure = true, k = ''
+    const vis = (c) => {
+      if (!Array.isArray(c)) { k += c + ' '; return }
+      if (c[0] === 'local.get') { k += `(get ${c[1]}@${ver.get(c[1]) || 0})`; return }
+      if (c[0] !== 'i32.const' && !LSR_ARITH.has(c[0])) pure = false
+      k += '('
+      for (const x of c) vis(x)
+      k += ')'
+    }
+    vis(n)
+    return pure ? k : null
+  }
+  const sum = (n, s, terms) => {
+    const op = n[0]
+    if (op === 'i32.const') return
+    if (op === 'i32.add' || op === 'i32.sub') { sum(n[1], s, terms); sum(n[2], op === 'i32.add' ? s : -s, terms); return }
+    const c = getConst(n[2])?.value, c1 = getConst(n[1])?.value
+    if (op === 'i32.shl' && c != null) { sum(n[1], Math.imul(s, 1 << (c & 31)), terms); return }
+    if (op === 'i32.mul' && (c != null || c1 != null)) { sum(c != null ? n[1] : n[2], Math.imul(s, c != null ? c : c1), terms); return }
+    terms.push([n, s])
+  }
+  const tree = (n) => {
+    const terms = []
+    sum(n, 1, terms)
+    let w = Math.max(1, terms.length - 1), lea = false
+    const plus = terms.some(([, s]) => s > 0)
+    for (const [leaf, s] of terms) {
+      // a shift or product by a variable is a term of its own: one instruction over its operands
+      if (LSR_ARITH.has(leaf[0])) { w++; for (let i = 1; i < leaf.length; i++) w += go(leaf[i]) }
+      else w += go(leaf)
+      if (s === 1 || (s === -1 && plus)) continue
+      if ((s === 2 || s === 4 || s === 8) && !lea) { lea = true; continue }
+      w++
+    }
+    return w
+  }
+  const go = (n) => {
+    if (!Array.isArray(n)) return 0
+    const op = n[0]
+    if (op === 'local.set' || op === 'local.tee') {
+      let w = 0
+      for (let i = 2; i < n.length; i++) w += go(n[i])
+      ver.set(n[1], (ver.get(n[1]) || 0) + 1)
+      return w
+    }
+    if (LSR_ARITH.has(op)) {
+      const k = keyOf(n)
+      if (k != null) { if (seen.has(k)) return 0; seen.add(k) }
+      return tree(n)
+    }
+    // an arm, a block or an inner loop body computes values no later statement may share
+    const region = op === 'then' || op === 'else' || op === 'block' || op === 'loop'
+    const outer = seen
+    if (region) seen = new Set(outer)
+    let w = LSR_FREE.has(op) || op === 'i32.const' ? 0 : 1
+    for (let i = 1; i < n.length; i++) w += go(n[i])
+    if (region) seen = outer
+    return w
+  }
+  let w = 0
+  for (const n of list) w += go(n)
+  return w
+}
+const LSR_GPR = 10   // x64: general registers V8 leaves a wasm loop beside its memory base and instance
+const LSR_TRIPS = 4  // iterations a loop is assumed to run per entry, over which its preheader's work spreads
+/** Integer values an iteration needs on entry: read before any write in the loop body. Past
+ *  the register file each costs a reload. */
+const lsrPressure = (loop, types) => {
+  const seen = new Set()
+  let live = 0
+  const go = (n) => {
+    if (!Array.isArray(n)) return
+    const op = n[0]
+    if (op === 'local.get') {
+      if (!seen.has(n[1])) { seen.add(n[1]); const t = types.get(n[1]); if (t === 'i32' || t === 'i64') live++ }
+      return
+    }
+    if (op === 'local.set' || op === 'local.tee') { for (let i = 2; i < n.length; i++) go(n[i]); seen.add(n[1]); return }
+    for (let i = 1; i < n.length; i++) go(n[i])
+  }
+  go(loop)
+  return live
+}
+/** Locals of `names` read at the loop's exit before a write: the statements after it at every
+ *  level, and an enclosing loop's whole body (its back edge). A write kills only later
+ *  reads of its own statement list, so one an early exit skips never hides a read. */
+const lsrLiveOut = (chain, names) => {
+  const live = new Set()
+  const scan = (n, kills) => {
+    if (!Array.isArray(n)) return
+    const op = n[0]
+    if (op === 'local.get') { if (names.has(n[1]) && !kills.has(n[1])) live.add(n[1]); return }
+    if (op === 'local.set' || op === 'local.tee') { for (let i = 2; i < n.length; i++) scan(n[i], kills); kills.add(n[1]); return }
+    if (op === 'if') {
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i]
+        if (Array.isArray(c) && (c[0] === 'then' || c[0] === 'else')) scan(c, new Set(kills)); else scan(c, kills)
+      }
+      return
+    }
+    if (op === 'block' || op === 'loop' || op === 'then' || op === 'else') { const k = new Set(kills); for (let i = 1; i < n.length; i++) scan(n[i], k); return }
+    for (let i = 1; i < n.length; i++) scan(n[i], kills)
+  }
+  for (let d = chain.length - 1; d >= 0; d--) {
+    const [parent, idx] = chain[d]
+    const kills = new Set()
+    for (let i = idx + 1; i < parent.length; i++) scan(parent[i], kills)
+    if (parent[0] === 'loop') for (let i = 1; i < parent.length; i++) scan(parent[i], new Set())
+  }
+  return live
+}
+
+const lsr = (ast) => {
+  const immut = new Set()
+  for (const g of ast) {
+    if (!Array.isArray(g)) continue
+    if (g[0] === 'global' && typeof g[1] === 'string' && !g.some(c => Array.isArray(c) && c[0] === 'mut')) immut.add(g[1])
+    if (g[0] === 'import') { const d = g[g.length - 1]; if (Array.isArray(d) && d[0] === 'global' && typeof d[1] === 'string' && !d.some(c => Array.isArray(c) && c[0] === 'mut')) immut.add(d[1]) }
+  }
+  for (const fn of funcsOf(ast)) lsrFunc(fn, immut)
+  return ast
+}
+
+function lsrFunc(fn, immut) {
+  if (!Array.isArray(fn) || fn[0] !== 'func') return
+  const start = findBodyStart(fn)
+  const types = new Map()
+  for (let i = 1; i < start; i++) {
+    const d = fn[i]
+    if (!Array.isArray(d) || (d[0] !== 'param' && d[0] !== 'local')) continue
+    // positional declarations: references are indices a new local could shift
+    if (typeof d[1] !== 'string' || d[1][0] !== '$') return
+    types.set(d[1], d[2])
+  }
+  const refs = new Map()
+  let hasLoop = false
+  const census = (n) => {
+    if (!Array.isArray(n)) return
+    const c = (refs.get(n) || 0) + 1
+    refs.set(n, c)
+    if (c > 1) return
+    if (n[0] === 'loop') hasLoop = true
+    for (let i = 1; i < n.length; i++) census(n[i])
+  }
+  census(fn)
+  if (!hasLoop || hasFlatCode(fn)) return
+  const fresh = (prefix) => {
+    let k = 0
+    while (types.has(`$__${prefix}${k}`)) k++
+    const name = `$__${prefix}${k}`
+    types.set(name, 'i32')
+    return name
+  }
+  const declared = new Set(), touched = new Set()
+  // what this pass placed before a loop, for the loops around it: pointer starts (addresses to
+  // an enclosing loop) and steps or offsets (computed once where an enclosing loop never changes them)
+  const inits = new Set(), offsets = new Set()
+  const chain = []
+  const visitLists = (n) => {
+    const list = n === fn || LSR_LIST.has(n[0])
+    const from = n === fn ? start : list ? seqStart(n) : 1
+    for (let i = 1; i < n.length; i++) {
+      const c = n[i]
+      if (!Array.isArray(c) || refs.get(c) > 1) continue
+      chain.push([n, i])
+      visitLists(c)
+      if (c[0] === 'loop' && list && i >= from) {
+        const pre = lsrLoop(c, chain, { types, refs, immut, fresh, declared, touched, inits, offsets })
+        if (pre.length) { n.splice(i, 0, ...pre); i += pre.length; chain[chain.length - 1][1] = i }
+      }
+      chain.pop()
+    }
+  }
+  visitLists(fn)
+  if (!declared.size) return
+  fn.splice(start, 0, ...[...declared].map(name => ['local', name, 'i32']))
+  lsrSweep(fn, touched)
+}
+
+/** Remove the writes of `cand` locals nothing reads: a read inside the value of a discardable
+ *  set of the same local is that set's own (an induction variable's step). */
+function lsrSweep(fn, cand) {
+  for (let round = 0; round < 8 && cand.size; round++) {
+    const reads = new Map(), own = []
+    const count = (n) => {
+      if (!Array.isArray(n)) return
+      const op = n[0]
+      if (op === 'local.get') { if (!own.includes(n[1])) reads.set(n[1], (reads.get(n[1]) || 0) + 1); return }
+      const self = op === 'local.set' && n.length === 3 && isDiscardable(n[2])
+      if (self) own.push(n[1])
+      for (let i = 1; i < n.length; i++) count(n[i])
+      if (self) own.pop()
+    }
+    count(fn)
+    const dead = new Set([...cand].filter(x => !reads.get(x)))
+    if (!dead.size) return
+    cand = new Set()
+    const strip = (n) => {
+      for (let i = 1; i < n.length; i++) {
+        let c = n[i]
+        if (!Array.isArray(c)) continue
+        strip(c)
+        if ((c[0] === 'local.set' || c[0] === 'local.tee') && dead.has(c[1]) && c.length === 3) {
+          const v = c[2]
+          walk(v, m => { if (Array.isArray(m) && m[0] === 'local.get') cand.add(m[1]) })
+          if (c[0] === 'local.tee') n[i] = v
+          else if (isDiscardable(v)) { n.splice(i, 1); i-- }
+          else n[i] = ['drop', v]
+        }
+      }
+    }
+    strip(fn)
+  }
+}
+
+function lsrLoop(L, chain, state) {
+  const { types, refs, immut, fresh, declared, touched, inits, offsets } = state
+  if (L.some(c => Array.isArray(c) && (c[0] === 'result' || c[0] === 'param' || c[0] === 'type'))) return []
+  // ---- census: what the loop writes, and whether it can be reasoned about
+  const writes = new Map(), nestedW = new Set(), globalSets = new Set()
+  let calls = false, bad = false
+  const scan = (n, nested) => {
+    if (bad || !Array.isArray(n)) return
+    if (n !== L && refs.get(n) > 1) { bad = true; return }
+    const op = n[0]
+    if (LSR_BAIL.has(op)) { bad = true; return }
+    if (op === 'local.set' || op === 'local.tee' || op === 'local.get') {
+      if (!types.has(n[1])) { bad = true; return }
+      if (op !== 'local.get') {
+        if (!writes.has(n[1])) writes.set(n[1], [])
+        writes.get(n[1]).push(n)
+        if (nested) nestedW.add(n[1])
+      }
+    } else if (op === 'global.set') globalSets.add(n[1])
+    else if (LSR_CALL.has(op)) calls = true
+    const inner = nested || (op === 'loop' && n !== L)
+    for (let i = 1; i < n.length; i++) scan(n[i], inner)
+  }
+  scan(L, false)
+  if (bad) return []
+  const inv = (n) => {
+    if (!Array.isArray(n)) return false
+    const op = n[0]
+    if (typeof op !== 'string') return false
+    if (op.endsWith('.const')) return true
+    if (op === 'local.get') return !writes.has(n[1])
+    if (op === 'global.get') return immut.has(n[1]) || (!globalSets.has(n[1]) && !calls)
+    if (!licmPure(op)) return false
+    for (let i = 1; i < n.length; i++) if (Array.isArray(n[i]) && !inv(n[i])) return false
+    return true
+  }
+
+  // ---- induction variables
+  const ivs = new Map()   // name → Map(write node → {sign, at, aff})
+  for (const [x, ws] of writes) {
+    if (types.get(x) !== 'i32' || nestedW.has(x)) continue
+    const steps = new Map()
+    for (const w of ws) { const s = lsrStep(w, x, inv); if (!s) break; steps.set(w, s) }
+    if (steps.size === ws.length) ivs.set(x, steps)
+  }
+
+  // ---- the walk: every value a local holds, as an affine form of the variables' current values
+  const ivAff = (x) => affT('v:' + x, ['local.get', x])
+  const envNew = () => ({ m: new Map(), d: new Set(), dead: false })
+  const envCopy = (e) => ({ m: new Map(e.m), d: new Set(e.d), dead: e.dead })
+  const envJoin = (list) => {
+    const live = list.filter(e => !e.dead)
+    if (!live.length) return { m: new Map(), d: new Set(), dead: true }
+    const m = new Map(live[0].m), d = new Set(live[0].d)
+    for (let i = 1; i < live.length; i++) {
+      for (const [x, a] of m) if (!affEq(live[i].m.get(x), a)) m.delete(x)
+      for (const x of d) if (!live[i].d.has(x)) d.delete(x)
+    }
+    return { m, d, dead: false }
+  }
+  const envSet = (e, f) => { e.m = f.m; e.d = f.d; e.dead = f.dead }
+  const writtenIn = (n, out = new Set()) => {
+    walk(n, c => { if (Array.isArray(c) && (c[0] === 'local.set' || c[0] === 'local.tee')) out.add(c[1]) })
+    return out
+  }
+
+  const sites = [], ivWrites = [], carried = new Set(), own = [], lifts = []
+  const frames = [{ label: lsrLabel(L) }]
+  let seq = 0, depth = 0, stmt = null
+  const target = (label) => {
+    if (typeof label === 'string' && label[0] === '$') {
+      for (let i = frames.length - 1; i >= 0; i--) if (frames[i].label === label) return frames[i]
+      return null
+    }
+    const d = +label
+    return Number.isInteger(d) && d >= 0 && d < frames.length ? frames[frames.length - 1 - d] : null
+  }
+  const runList = (list, from, env) => {
+    const outer = stmt
+    for (let i = from; i < list.length && !env.dead; i++) { stmt = { list, index: i }; ev(list[i], env) }
+    stmt = outer
+  }
+  // copies set on the straight path into the loop (`x = y`, neither written since nor in the
+  // loop) hold one value: one invariant term. The path runs back through enclosing blocks and
+  // arms, never past an enclosing loop's header.
+  const alias = new Map()
+  {
+    const killed = new Set()
+    for (let d = chain.length - 1; d >= 0; d--) {
+      const [parent, idx] = chain[d]
+      for (let i = idx - 1; i >= 1; i--) {
+        const st = parent[i]
+        if (!Array.isArray(st)) continue
+        if (st[0] === 'local.set' && st.length === 3 && Array.isArray(st[2]) && st[2][0] === 'local.get' && types.get(st[1]) === 'i32') {
+          const y = st[2][1]
+          if (!killed.has(st[1]) && !killed.has(y) && !writes.has(st[1]) && !writes.has(y) && !alias.has(st[1])) alias.set(st[1], y)
+        }
+        walk(st, c => { if (Array.isArray(c) && (c[0] === 'local.set' || c[0] === 'local.tee')) killed.add(c[1]) })
+      }
+      if (parent[0] !== 'block' && parent[0] !== 'then' && parent[0] !== 'else' && parent[0] !== 'if') break
+    }
+  }
+  const ev = (n, env) => {
+    if (!Array.isArray(n) || env.dead) return null
+    seq++
+    const op = n[0]
+    if (op === 'i32.const') return affC(getConst(n).value)
+    if (op === 'local.get') {
+      let x = n[1]
+      while (alias.has(x)) x = alias.get(x)
+      if (ivs.has(x)) return ivAff(x)
+      if (!writes.has(x)) return types.get(x) === 'i32' ? affT('l:' + x, ['local.get', x]) : null
+      if (!env.d.has(x) && !own.includes(x)) carried.add(x)
+      return env.m.get(x) || null
+    }
+    if (op === 'local.set' || op === 'local.tee') {
+      const x = n[1], self = op === 'local.set' && isDiscardable(n[2])
+      if (self) own.push(x)
+      const s0 = seq, v = ev(n[2], env)
+      if (self) own.pop()
+      if (env.dead) return null
+      const step = ivs.get(x)?.get(n)
+      if (step) {
+        ivWrites.push({ x, node: n, step, stmt, seq: seq++ })
+        // every known value stays in terms of the variable's new value: old = new ∓ s
+        for (const [y, a] of env.m) {
+          const k = a.t.get('v:' + x)?.k
+          if (k) env.m.set(y, affAdd(a, step.aff, -Math.imul(step.sign, k)))
+        }
+        return op === 'local.tee' ? ivAff(x) : null
+      }
+      env.d.add(x)
+      if (v && types.get(x) === 'i32') env.m.set(x, v); else env.m.delete(x)
+      if (op === 'local.set' && depth === 0 && inits.has(n) && v) {
+        if (affVars(v)) sites.push({ at: n, ai: 2, aff: v, stmt, s0, s1: seq })
+        else lifts.push({ n, aff: v })
+      }
+      if (op === 'local.set' && depth === 0 && offsets.has(n) && inv(n[2])) lifts.push({ n, list: stmt.list })
+      return op === 'local.tee' ? v : null
+    }
+    if (lsrMemOp(op)) {
+      let first = true
+      for (let i = 1; i < n.length; i++) {
+        if (!Array.isArray(n[i])) continue
+        const s0 = seq, v = ev(n[i], env)
+        if (env.dead) return null
+        if (first && depth === 0 && v && affVars(v)) {
+          // a tee of the address keeps its local: the pointer replaces the value it stores
+          let at = n, ai = i
+          while (Array.isArray(at[ai]) && at[ai][0] === 'local.tee' && at[ai].length === 3) { at = at[ai]; ai = 2 }
+          sites.push({ at, ai, aff: v, stmt, s0, s1: seq })
+        }
+        first = false
+      }
+      return null
+    }
+    if (op === 'block') {
+      const f = { label: lsrLabel(n), snaps: [] }
+      frames.push(f); runList(n, seqStart(n), env); frames.pop()
+      envSet(env, envJoin([env, ...f.snaps]))
+      return null
+    }
+    if (op === 'loop') {
+      // an inner loop's header joins all of its iterations: nothing it writes is known there
+      for (const x of writtenIn(n)) { env.m.delete(x); env.d.delete(x) }
+      frames.push({ label: lsrLabel(n) }); depth++
+      runList(n, seqStart(n), env)
+      depth--; frames.pop()
+      return null
+    }
+    if (op === 'if') {
+      let then = null, els = null
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i]
+        if (!Array.isArray(c)) continue
+        if (c[0] === 'then') then = c
+        else if (c[0] === 'else') els = c
+        else if (c[0] !== 'result' && c[0] !== 'param' && c[0] !== 'type') ev(c, env)
+      }
+      if (env.dead) return null
+      const f = { label: lsrLabel(n), snaps: [] }
+      frames.push(f)
+      const arms = [then, els].map(arm => { const e = envCopy(env); if (arm) runList(arm, 1, e); return e })
+      frames.pop()
+      envSet(env, envJoin([...arms, ...f.snaps]))
+      return null
+    }
+    if (op === 'br' || op === 'br_if' || op === 'br_table') {
+      const labels = []
+      for (let i = 1; i < n.length; i++) {
+        if (Array.isArray(n[i])) { ev(n[i], env); if (env.dead) return null }
+        else labels.push(n[i])
+      }
+      for (const l of labels) { const f = target(l); if (f?.snaps) f.snaps.push(envCopy(env)) }
+      if (op !== 'br_if') env.dead = true
+      return null
+    }
+    const vals = []
+    for (let i = 1; i < n.length; i++) if (Array.isArray(n[i])) { vals.push(ev(n[i], env)); if (env.dead) return null }
+    if (LSR_EXIT.has(op)) { env.dead = true; return null }
+    if (vals.length === 2 && vals[0] && vals[1]) {
+      const [a, b] = vals
+      if (op === 'i32.add') return affAdd(a, b)
+      if (op === 'i32.sub') return affAdd(a, b, -1)
+      if (op === 'i32.mul' && !b.t.size) return affScale(a, b.c)
+      if (op === 'i32.mul' && !a.t.size) return affScale(b, a.c)
+      if (op === 'i32.shl' && !b.t.size) return affScale(a, 1 << (b.c & 31))
+    }
+    return typeof op === 'string' && op.startsWith('i32.') && inv(n) ? affT('e:' + structuralKey(n), n) : null
+  }
+  for (const [x, steps] of ivs) for (const s of steps.values()) {
+    s.aff = ev(s.S, envNew())
+    if (!s.aff) ivs.delete(x)
+  }
+  runList(L, seqStart(L), envNew())
+  // what inner loops set before themselves and this loop never changes: computed once, before it
+  const lift = () => {
+    const out = []
+    for (const { n, aff, list } of lifts) {
+      if (list) { const i = list.indexOf(n); if (i >= 0) { list.splice(i, 1); out.push(n) } continue }
+      const value = lsrBuild(aff)
+      if (value[0] === 'local.get' || value[0] === 'i32.const') { n[2] = value; continue }
+      const t = fresh('lsrs')
+      declared.add(t); touched.add(t)
+      const set = ['local.set', t, value]
+      offsets.add(set)
+      out.push(set)
+      n[2] = ['local.get', t]
+    }
+    return out
+  }
+  if (!sites.length) return lift()
+
+  // ---- valid sites: no variable write inside, none read before a write its statement advances
+  const isIVWrite = (n) => Array.isArray(n) && (n[0] === 'local.set' || n[0] === 'local.tee') && ivs.has(n[1])
+  const before = ivWrites.filter(w => !(w.node[0] === 'local.set' && w.stmt.list[w.stmt.index] === w.node))
+  const valid = sites.filter(s => {
+    let hit = false
+    walk(s.at[s.ai], c => { if (isIVWrite(c)) hit = true })
+    if (hit) return false
+    return !before.some(w => w.stmt.list === s.stmt.list && w.stmt.index === s.stmt.index && s.s1 <= w.seq)
+  })
+  // the reads and the inner tees each replaced value takes with it
+  for (const s of valid) {
+    s.reads = new Map(); s.inner = new Set()
+    walk(s.at[s.ai], c => {
+      if (!Array.isArray(c)) return
+      if (c[0] === 'local.get') s.reads.set(c[1], (s.reads.get(c[1]) || 0) + 1)
+      else if (c[0] === 'local.tee' || c[0] === 'local.set') s.inner.add(c[1])
+    })
+  }
+  const groups = new Map()
+  for (const s of valid) {
+    const key = affKey(s.aff)
+    if (!groups.has(key)) groups.set(key, { sites: [], est: 0 })
+    const g = groups.get(key)
+    g.sites.push(s)
+    walk(s.at[s.ai], c => { if (Array.isArray(c) && !LSR_FREE.has(c[0])) g.est++ })
+  }
+  if (!groups.size) return lift()
+
+  // ---- liveness facts the rewrite relies on: a temporary is private to one iteration
+  const readsInL = new Map()
+  walk(L, c => { if (Array.isArray(c) && c[0] === 'local.get') readsInL.set(c[1], (readsInL.get(c[1]) || 0) + 1) })
+  const liveOut = lsrLiveOut(chain, new Set(writes.keys()))
+  const privateTemp = (x) => !carried.has(x) && !liveOut.has(x) && !ivs.has(x)
+
+  // ---- the objective: instructions an iteration executes, the reloads of integer values the
+  // loop needs past the register file (a spilled value is reloaded at each use and stored at
+  // each write: two per register; V8 keeps no general register across a call, so a loop that
+  // calls has none to spare), and the preheader's work spread over LSR_TRIPS iterations
+  const budget = calls ? 0 : LSR_GPR
+  const objective = (pre = []) => lsrWork(L.slice(1)) + 2 * Math.max(0, lsrPressure(L, types) - budget) + lsrWork(pre) / LSR_TRIPS
+
+  // ---- trial rewrites, undone unless kept
+  const log = []
+  const put = (o, i, v) => { const old = o[i]; o[i] = v; log.push(() => { o[i] = old }) }
+  const undo = () => { while (log.length) log.pop()() }
+  const names = new Map()   // group key → pointer name, value key → temporary name
+  const nameOf = (key) => {
+    if (!names.has(key)) names.set(key, fresh(key[0] === 'g' ? 'lsr' : 'lsrs'))
+    return names.get(key)
+  }
+  const apply = (chosen) => {
+    // sites whose inner tees no read outlives
+    let live = chosen.map(g => ({ g, sites: g.sites }))
+    for (;;) {
+      const gone = new Map()
+      for (const { sites } of live) for (const s of sites) for (const [x, c] of s.reads) gone.set(x, (gone.get(x) || 0) + c)
+      let changed = false
+      for (const l of live) {
+        const keep = l.sites.filter(s => [...s.inner].every(x => privateTemp(x) && readsInL.get(x) === (gone.get(x) || 0)))
+        if (keep.length !== l.sites.length) { l.sites = keep; changed = true }
+      }
+      live = live.filter(l => l.sites.length)
+      if (!changed) break
+    }
+    const pre = [], used = new Set(), temps = new Map(), made = []
+    // an invariant step: a literal, a local the loop never writes, or a temporary set before the loop
+    const valueOf = (a) => {
+      if (!a.t.size) return makeConst('i32', a.c)
+      if (a.c === 0 && a.t.size === 1) for (const [key, e] of a.t) if (e.k === 1 && key[0] === 'l') return clone(e.n)
+      const k = 's' + affKey(a) + '#' + a.c
+      if (!temps.has(k)) {
+        const t = nameOf(k), set = ['local.set', t, lsrBuild(a)]
+        temps.set(k, t); used.add(t); offsets.add(set); pre.unshift(set)
+      }
+      return ['local.get', temps.get(k)]
+    }
+    // simpler starts first: a later one may be an earlier pointer plus an invariant difference
+    live.sort((x, y) => x.sites[0].aff.t.size - y.sites[0].aff.t.size)
+    for (const { g, sites } of live) {
+      // the pointer holds the most frequent constant: the other sites add their difference
+      const freq = new Map()
+      for (const s of sites) freq.set(s.aff.c, (freq.get(s.aff.c) || 0) + 1)
+      let c0 = sites[0].aff.c
+      for (const [c, k] of freq) if (k > freq.get(c0) || (k === freq.get(c0) && Math.abs(c) < Math.abs(c0))) c0 = c
+      const p = nameOf('g' + g.key), base = { c: c0, t: sites[0].aff.t }
+      used.add(p)
+      let start = lsrBuild(base), work = lsrWork([start])
+      for (const q of made) {
+        const diff = affAdd(base, q.base, -1)
+        if (affVars(diff)) continue
+        const via = diff.t.size || diff.c ? ['i32.add', ['local.get', q.p], lsrBuild(diff)] : ['local.get', q.p]
+        const w = lsrWork([via])
+        if (w < work) { start = via; work = w }
+      }
+      const init = ['local.set', p, start]
+      inits.add(init)
+      pre.push(init)
+      for (const s of sites) {
+        const d = (s.aff.c - c0) | 0
+        put(s.at, s.ai, d ? ['i32.add', ['local.get', p], makeConst('i32', d)] : ['local.get', p])
+      }
+      made.push({ p, base })
+    }
+    // an advance beside every write of a variable; a step that costs work is computed once
+    const at = new Map()   // list → Map(index → statements)
+    const place = (list, index, items) => {
+      if (!at.has(list)) at.set(list, new Map())
+      const m = at.get(list)
+      m.set(index, [...(m.get(index) || []), ...items])
+    }
+    const advanced = [], dropped = new Set()
+    for (const w of ivWrites) {
+      const bumps = []
+      for (const { p, base } of made) {
+        const k = base.t.get('v:' + w.x)?.k
+        if (!k) continue
+        const by = affScale(w.step.aff, k)
+        const neg = w.step.sign < 0 && by.t.size
+        const step = valueOf(neg || w.step.sign > 0 ? by : affScale(by, -1))
+        bumps.push(['local.set', p, [neg ? 'i32.sub' : 'i32.add', ['local.get', p], step]])
+      }
+      if (!bumps.length) continue
+      advanced.push(w)
+      const after = w.node[0] === 'local.set' && w.stmt.list[w.stmt.index] === w.node
+      place(w.stmt.list, w.stmt.index + (after ? 1 : 0), bumps)
+    }
+    for (const [list, m] of at) for (const index of [...m.keys()].sort((a, b) => b - a)) {
+      const items = m.get(index)
+      list.splice(index, 0, ...items)
+      log.push(() => list.splice(index, items.length))
+    }
+    // the temporaries the replaced values carried, and a variable only its own step reads
+    for (let round = 0; round < 8; round++) {
+      const reads = new Map(), ownR = []
+      const count = (n) => {
+        if (!Array.isArray(n)) return
+        const op = n[0]
+        if (op === 'local.get') { if (!ownR.includes(n[1])) reads.set(n[1], (reads.get(n[1]) || 0) + 1); return }
+        const self = op === 'local.set' && n.length === 3 && isDiscardable(n[2])
+        if (self) ownR.push(n[1])
+        for (let i = 1; i < n.length; i++) count(n[i])
+        if (self) ownR.pop()
+      }
+      count(L)
+      const dead = new Set()
+      for (const x of writes.keys()) if (!reads.get(x) && !liveOut.has(x) && !carried.has(x)) dead.add(x)
+      let changed = false
+      const strip = (n) => {
+        for (let i = 1; i < n.length; i++) {
+          const c = n[i]
+          if (!Array.isArray(c)) continue
+          strip(c)
+          if ((c[0] === 'local.set' || c[0] === 'local.tee') && c.length === 3 && dead.has(c[1])) {
+            const v = c[2]
+            changed = true
+            dropped.add(c)
+            if (c[0] === 'local.tee') put(n, i, v)
+            else if (isDiscardable(v)) { n.splice(i, 1); const j = i; log.push(() => n.splice(j, 0, c)); i-- }
+            else put(n, i, ['drop', v])
+          }
+        }
+      }
+      strip(L)
+      if (!changed) break
+    }
+    // a surviving variable's step that costs work is computed once, before the loop
+    for (const w of advanced) {
+      const S = w.step.S
+      if (!dropped.has(w.node) && Array.isArray(S) && S[0] !== 'i32.const' && S[0] !== 'local.get')
+        put(w.node[2], w.node[2][1] === S ? 1 : 2, valueOf(w.step.aff))
+    }
+    return { pre, used, cost: objective(pre), made }
+  }
+  const trial = (chosen) => { const r = apply(chosen); undo(); return r.made.length ? r.cost : Infinity }
+
+  // ---- selection. Groups sharing a temporary stand or fall together (one replaced without the
+  // other leaves the temporary alive): choose among such clusters, exhaustively while few,
+  // then drop each pointer the loop does not pay more without.
+  for (const [key, g] of groups) g.key = key
+  const list = [...groups.values()].sort((a, b) => b.est - a.est).slice(0, LSR_MAX_PTRS)
+  const root = new Map(list.map(g => [g, g]))
+  const find = (g) => root.get(g) === g ? g : find(root.get(g))
+  const touches = (g) => { const s = new Set(); for (const t of g.sites) { for (const x of t.inner) s.add(x); for (const x of t.reads.keys()) s.add(x) } return s }
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    const a = touches(list[i])
+    if (list[j].sites.some(t => [...t.inner].some(x => a.has(x)) || [...t.reads.keys()].some(x => list[i].sites.some(u => u.inner.has(x)))))
+      root.set(find(list[j]), find(list[i]))
+  }
+  const clusters = [...new Set(list.map(find))].map(r => list.filter(g => find(g) === r))
+  const base = objective()
+  let best = { chosen: [], cost: base }
+  if (clusters.length <= 6) {
+    for (let mask = 1; mask < 1 << clusters.length; mask++) {
+      const chosen = clusters.filter((_, i) => mask & (1 << i)).flat(), cost = trial(chosen)
+      if (cost < best.cost) best = { chosen, cost }
+    }
+  } else {
+    // many clusters: add each that lowers the cost, the largest first
+    for (const c of clusters) {
+      const chosen = [...best.chosen, ...c], cost = trial(chosen)
+      if (cost < best.cost) best = { chosen, cost }
+    }
+  }
+  if (!best.chosen.length) return lift()
+  for (let i = best.chosen.length - 1; i >= 0 && best.chosen.length > 1; i--) {
+    const chosen = best.chosen.filter((_, j) => j !== i), cost = trial(chosen)
+    if (cost <= best.cost) best = { chosen, cost }
+  }
+  const r = apply(best.chosen)
+  log.length = 0
+  for (const name of r.used) { declared.add(name); touched.add(name) }
+  for (const x of ivs.keys()) touched.add(x)
+  for (const g of best.chosen) for (const s of g.sites) { for (const x of s.reads.keys()) touched.add(x); for (const x of s.inner) touched.add(x) }
+  return [...lift(), ...r.pre]
+}
+
 // ==================== MAIN ====================
 
 /**
@@ -9712,6 +10480,7 @@ const PASSES = [
   ['inline',        inline,         false, 'inline tiny functions — can duplicate bodies'],
   ['inlineWrappers', inlineWrappers, false, 'inline a callee into single-call wrapper functions (trampolines, thin dispatch heads) — grows bytes for speed'],
   ['licm',          licm,           false, 'hoist loop-invariant pure arithmetic out of loops — adds locals (speed-for-size); runs once after rounds'],
+  ['lsr',           lsr,            false, 'loop strength reduction: an address affine in a counter becomes a pointer advanced with it; adds locals (speed-for-size), runs once after rounds'],
   ['offset',        offset,         true,  'fold add+const into load/store offset'],
   ['cse',           cse,            true,  'reuse repeated pure subexpressions via a tee\'d local — runs once after rounds (byte-profit gated)'],
   ['unbranch',      unbranch,       true,  'remove redundant br at end of own block'],
@@ -10008,6 +10777,13 @@ function optimizeModule(ast, opts) {
     // cse runs ONCE at fixpoint: inside the rounds its tee'd locals block the very
     // collapses (propagate/sink/merge) that would erase the expressions outright,
     // and any net wobble trips the exit guard into unwinding a whole round.
+    // After licm (its hoists are invariant terms here), before cse: the pointers' starts share
+    // their terms there, and coalescing has not yet made one local hold several temporaries.
+    if (opts.lsr) {
+      a = lsr(a)
+      if (opts.coalesce && !opts.cse) a = coalesceLocals(a)
+      if (opts.locals && !opts.cse) a = localReuse(a)
+    }
     if (opts.cse) {
       a = cse(a)
       if (opts.coalesce) a = coalesceLocals(a)
@@ -10079,7 +10855,7 @@ function optimizeModule(ast, opts) {
       }
       let fused = false
       for (const [key, fn] of PASSES) {
-        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'cse' || key === 'deadset' || key === 'conditions' || key === 'unroll2' || key === 'sortLocals' || key === 'poolConstants' || key === 'valueNumber' || key === 'schedule' || key === 'lazySelect' ||
+        if (!opts[key] || key === 'inline' || key === 'inlineWrappers' || key === 'devirt' || key === 'licm' || key === 'lsr' || key === 'cse' || key === 'deadset' || key === 'conditions' || key === 'unroll2' || key === 'sortLocals' || key === 'poolConstants' || key === 'valueNumber' || key === 'schedule' || key === 'lazySelect' ||
             (skipInline && key === 'inlineOnce')) continue
         if (SIMPLIFY_KEYS.has(key)) {
           if (!fused) {
@@ -10228,4 +11004,4 @@ optimize.resetNameUids = resetNameUids
 // part of the optimize() pipeline; used by test/optimize.js's regionHooks test
 // to verify the clear actually holds at the boundary, not just "no throw".
 export const __regionScratchDrained = () => CNT === null && CNT_FN === null && SW.length === 0 && SW_MEM === 0 && SW_EXT === 0
-export { optimize, valueNumber, schedule, lazySelect, bool, conditions, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }
+export { optimize, valueNumber, schedule, lazySelect, lsr, bool, conditions, treeshake, fold, deadcode, localReuse, identity, strength, branch, propagate, mergeLocals, cse, inlineMacro, tailmerge, inline, inlineOnce, devirt, unroll2, normalize, OPTS, vacuum, peephole, globals, offset, unbranch, loopify, stripmut, brif, foldarms, dedupe, reorder, dedupTypes, packData, minifyImports, mergeBlocks, coalesceLocals, sortLocals }

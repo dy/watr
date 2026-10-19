@@ -217,6 +217,7 @@ sense when you control the host are **opt-in** (marked ◌); the rest are on by 
 | `valueNumber` ◌ | One computation per value, through locals | Two chains of locals holding the same values under different names (a helper inlined twice) compute once; runs once before the rounds |
 | `lazySelect` ◌ | Defer costly pure expressions to exclusive conditional arms | Speed profile only; bounded code duplication, at most one evaluation per taken path; runs once before local reuse |
 | `schedule` ◌ | Order straight-line statements by the work depending on them | Independent long computations (calls, divisions) start together and overlap; runs once before the rounds |
+| `lsr` ◌ | Loop strength reduction of memory addresses | `(f64.load (i32.add $a (i32.shl $i 3)))` in a loop stepping `$i` → a pointer set before the loop and advanced beside each step; kept only where it lowers instructions per iteration without pushing integer values past the register file; runs once after the rounds |
 | `inline` ◌ | Inline tiny functions | Single-expression functions without locals — may duplicate bodies |
 | `inlineOnce` | Inline functions called from exactly one site | Drops the callee and its `call` site; never duplicates |
 | `vacuum` | Remove no-ops | Nops, drop-of-pure, empty branches |

@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Add `lsr` (opt-in): an address affine in a loop counter becomes a pointer advanced with the counter, where that lowers the loop's instructions without spilling.
+
 ## v5.11.10
 
 - Keep an exported global mutable and its reads: the host may write it, and its mutability is part of the export's type.
