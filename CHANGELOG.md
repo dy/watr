@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.11.12
+
+- Alias no local to itself in `lsr`: a self-copy before a loop made resolving a read of it loop forever.
+
 ## v5.11.11
 
 - Add `lsr` (opt-in): an address affine in a loop counter becomes a pointer advanced with the counter, where that lowers the loop's instructions without spilling.
