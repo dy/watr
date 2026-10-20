@@ -281,6 +281,20 @@ test('lsr: a handler or a counter written in an inner loop declines', () => {
   same(inner, [[0, 200], [100, 50]])
 })
 
+test('lsr: a local copied into itself before the loop aliases nothing', () => {
+  // `(local.set $b (local.get $b))` on the straight path into the loop once made $b an alias of
+  // itself, and resolving a read of $b never returned
+  const src = mod('(param $base i32) (param $n i32)', '(local $i i32) (local $s i32) (local $b i32)', `
+    (local.set $b (local.get $base))
+    (local.set $b (local.get $b))
+    (block $out (loop $L
+      (br_if $out (i32.ge_s (local.get $i) (local.get $n)))
+      (local.set $s (i32.add (local.get $s) (i32.load (i32.add (local.get $b) (i32.mul (local.get $i) (i32.const 20))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $L)))`)
+  same(src, [[64, 100], [4000, 7], [0, 0]])
+})
+
 test('lsr: generated loops agree before and after', () => {
   // xorshift: a fixed sequence, so a failure reproduces
   let r = 0x2545f491

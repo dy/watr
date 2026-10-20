@@ -10081,7 +10081,8 @@ function lsrLoop(L, chain, state) {
         if (!Array.isArray(st)) continue
         if (st[0] === 'local.set' && st.length === 3 && Array.isArray(st[2]) && st[2][0] === 'local.get' && types.get(st[1]) === 'i32') {
           const y = st[2][1]
-          if (!killed.has(st[1]) && !killed.has(y) && !writes.has(st[1]) && !writes.has(y) && !alias.has(st[1])) alias.set(st[1], y)
+          // (a copy of a local into itself names no other value: it would alias the local to itself)
+          if (y !== st[1] && !killed.has(st[1]) && !killed.has(y) && !writes.has(st[1]) && !writes.has(y) && !alias.has(st[1])) alias.set(st[1], y)
         }
         walk(st, c => { if (Array.isArray(c) && (c[0] === 'local.set' || c[0] === 'local.tee')) killed.add(c[1]) })
       }
