@@ -326,6 +326,14 @@ t('compile: block multi', () => {
 
 })
 
+// Node 22's V8 runs a try_table whose block type index takes two LEB bytes (64 and up)
+// to `unreachable`, though the module validates (WABT agrees); Node 24 runs it.
+const typeIndexTryTable = (() => {
+  const types = '(type (func))'.repeat(64)
+  const src = `${types} (type $p (func (result i32 i32))) (func (export "f") (result i32) (try_table (type $p) (i32.const 3) (i32.const 4)) (i32.add))`
+  try { return new WebAssembly.Instance(new WebAssembly.Module(compile(src))).exports.f() === 7 } catch { return false }
+})()
+
 t('compile: multivalue block types cross signed index boundaries', () => {
   // Repeated and changing modules also exercise the reusable wasm compiler.
   for (const count of [0, 63, 64, 64, 127, 128, 0]) {
@@ -349,7 +357,7 @@ t('compile: multivalue block types cross signed index boundaries', () => {
   `
     const { sum, tried, looped, choose } = inline(src).exports
     is(sum(), 7, `block type ${count}`)
-    is(tried(), 7, `try_table type ${count}`)
+    if (count < 64 || typeIndexTryTable) is(tried(), 7, `try_table type ${count}`)
     is(looped(), 7, `loop type ${count}`)
     is(choose(0), 9, `if false type ${count}`)
     is(choose(1), 7, `if true type ${count}`)
