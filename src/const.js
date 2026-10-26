@@ -225,6 +225,18 @@ export const TYPE = {
   sub: 0x50, subfinal: 0x4F, rec: 0x4E
 }
 
+/**
+ * The abstract heap type a binary heap-type code names, for a printer that
+ * leaks the code into text as a negative index: -19 (0x6D) is `eq`.
+ *
+ * @param {number} n - Signed code, as `+'-19'`
+ * @returns {string|undefined}
+ */
+export const absHeap = (n) => ['func', 'extern', 'any', 'eq', 'i31', 'struct', 'array', 'exn', 'none', 'noextern', 'nofunc', 'noexn', 'cont', 'nocont'].find(h => TYPE[h] === 128 + n)
+
+/** Error text for a type index that resolves to nothing, naming the heap type a negative one encodes. */
+export const unknownType = (nm, h = absHeap(+nm)) => h ? `Numeric heap type ${nm} isn't valid text: write ${h}` : `Unknown type ${nm}`
+
 // Type definition codes (different from heap types - func is 0x60 not 0x70)
 export const DEFTYPE = { func: 0x60, struct: 0x5F, array: 0x5E, cont: 0x5D, sub: 0x50, subfinal: 0x4F, rec: 0x4E }
 

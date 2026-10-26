@@ -1,6 +1,6 @@
 import * as encode from './encode.js'
 import { uleb, i32, i64 } from './encode.js'
-import { SECTION, TYPE, KIND, OPCODE, IMM, DEFTYPE } from './const.js'
+import { SECTION, TYPE, KIND, OPCODE, IMM, DEFTYPE, unknownType } from './const.js'
 import parse from './parse.js'
 import { err, unescape, str, utf8, LOC, setErrLoc, setErrSrc, getErrLoc, getErrSrc } from './util.js'
 
@@ -1502,7 +1502,7 @@ const expr = (node, ctx) => instr(normalize([node], ctx), ctx)
 // deref id node to numeric idx
 // dense index spaces: a resolved name or an in-range number needs no second
 // dictionary hit — `n in list` only arbitrates the miss path
-const id = (nm, list, n) => (n = isId(nm) ? list[nm] : +nm, n >= 0 && n < list.length ? n : n in list ? n : err(`Unknown ${list.name} ${nm}`))
+const id = (nm, list, n) => (n = isId(nm) ? list[nm] : +nm, n >= 0 && n < list.length ? n : n in list ? n : err(list.name === 'type' ? unknownType(nm) : `Unknown ${list.name} ${nm}`))
 
 // block id - same as id but for block
 // index indicates how many block items to pop

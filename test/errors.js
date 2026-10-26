@@ -278,6 +278,20 @@ t('error: unknown type reference', () => {
   }
 })
 
+t('error: numeric heap type names the abstract type', () => {
+  // -19 is eq's binary code (0x6D); a printer that leaks it into text gets told what to write
+  for (const src of [
+    `(global eqref (ref.null -19))`,
+    `(func (param (ref null -19)))`,
+    `(type $s (struct (field (ref null -16))))`,
+  ]) {
+    try { compile(src); ok(false, `should throw: ${src}`) }
+    catch (e) { ok(/Numeric heap type -1[69] isn't valid text: write (eq|func)/.test(e.message), e.message) }
+  }
+  try { compile(`(func (type -3))`); ok(false, 'should throw') }
+  catch (e) { ok(e.message.includes('Unknown type -3'), e.message) }
+})
+
 // Demo tests (visual inspection)
 t.demo('Unknown instruction', () => {
   compile(`(module
