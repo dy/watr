@@ -133,6 +133,20 @@ t('compile: 1 global const (immutable)', () => {
   is(get(), 42)
 })
 
+t('compile: flat constant expressions in globals and segment offsets', () => {
+  // a flat initializer compiled its first token only: `i32.const 1 i32.const 2 i32.add` read as 0
+  const { exports: e } = new WebAssembly.Instance(new WebAssembly.Module(rawCompile(`(module
+    (memory (export "m") 1) (table (export "t") 4 funcref) (func $f)
+    (global (export "a") i32 i32.const 1 i32.const 2 i32.add)
+    (global (export "b") i64 (i64.const 7))
+    (data (offset i32.const 4 i32.const 4 i32.add) "x")
+    (elem (offset i32.const 1 i32.const 2 i32.add) func $f))`)))
+  is(e.a.value, 3)
+  is(e.b.value, 7n)
+  is(new Uint8Array(e.m.buffer)[8], 120)
+  ok(e.t.get(3) !== null)
+})
+
 t('compile: 1 global var (mut)', () => {
   let { get } = inline(`
     (global $answer (mut i32) (i32.const 42))

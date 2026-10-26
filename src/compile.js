@@ -895,15 +895,15 @@ const build = [
 
   // (table 1 2 funcref)
   (node, ctx) => {
-    let lims = limits(node), t = reftype(node.shift(), ctx), [init] = node
-    return init ? [0x40, 0x00, ...t, ...lims, ...expr(init, ctx)] : [...t, ...lims]
+    let lims = limits(node), t = reftype(node.shift(), ctx)
+    return node.length ? [0x40, 0x00, ...t, ...lims, ...exprs(node, ctx)] : [...t, ...lims]
   },
 
   // (memory id? export* min max shared)
   (node, ctx) => limits(node),
 
-  // (global $id? (mut i32) (i32.const 42))
-  ([t, init], ctx) => [...fieldtype(t, ctx), ...expr(init, ctx)],
+  // (global $id? (mut i32) (i32.const 42)), or flat: i32.const 1 i32.const 2 i32.add
+  ([t, ...init], ctx) => [...fieldtype(t, ctx), ...exprs(init, ctx)],
 
   // (export "name" (func|table|mem $name|idx))
   ([nm, [kind, l]], ctx) => ([...vec(nm), KIND[kind], ...uleb(id(l, ctx[kind]))]),
@@ -935,8 +935,7 @@ const build = [
     // (offset expr)|expr
     if (parts[0]?.[0] === 'offset' || (Array.isArray(parts[0]) && parts[0][0] !== 'item' && !parts[0][0].startsWith('ref'))) {
       offset = parts.shift()
-      if (offset[0] === 'offset') [, offset] = offset
-      offset = expr(offset, ctx)
+      offset = exprs(offset[0] === 'offset' ? offset.slice(1) : [offset], ctx)
     }
     // no offset = passive
     else if (!declare) passive = 1
@@ -1094,16 +1093,16 @@ const build = [
     // (offset (i32.const 0)) or (i32.const 0)
     if (Array.isArray(inits[0]) && typeof inits[0]?.[0] === 'string') {
       offset = inits.shift()
-      if (offset[0] === 'offset') [, offset] = offset
-      offset ?? err('Bad offset', offset)
+      offset = offset[0] === 'offset' ? offset.slice(1) : [offset]
+      offset.length || err('Bad offset')
     }
 
     return ([
       ...(
         // active: 2, x=memidx, e=expr
-        memidx ? [2, ...uleb(memidx), ...expr(offset, ctx)] :
+        memidx ? [2, ...uleb(memidx), ...exprs(offset, ctx)] :
           // active: 0, e=expr
-          offset ? [0, ...expr(offset, ctx)] :
+          offset ? [0, ...exprs(offset, ctx)] :
             // passive: 1
             [1]
       ),
@@ -1498,6 +1497,8 @@ const codeItemSize = (body, ctx) => {
 
 // instantiation time value initializer (consuming) - normalize then encode + add end byte
 const expr = (node, ctx) => instr(normalize([node], ctx), ctx)
+// the same for a sequence, folded or flat: (offset i32.const 1 i32.const 2 i32.add)
+const exprs = (nodes, ctx) => instr(normalize(nodes.slice().reverse(), ctx), ctx)
 
 // deref id node to numeric idx
 // dense index spaces: a resolved name or an in-range number needs no second
