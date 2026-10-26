@@ -1,5 +1,6 @@
-import t, { is, ok, same } from 'tst'
+import t, { is, ok, same, throws } from 'tst'
 import polyfill, { detect, normalize, FEATURES } from '../src/polyfill.js'
+import { walk } from '../src/util.js'
 import { parse, compile, print } from './runner.js'
 
 t('polyfill: normalize options', () => {
@@ -1257,4 +1258,391 @@ t('polyfill: ref.cast transform', () => {
 
   // Should have unreachable for failed cast
   ok(printed.includes('unreachable'), 'ref.cast has trap path')
+})
+
+// ============================================================================
+// GC LOWERING: the GC original and its polyfilled MVP form, call by call
+// ============================================================================
+
+// nothing GC may survive: no struct/array/rec/sub types, no reference value
+// types but funcref, no GC instructions (ref.func and ref.null func stay only
+// in a function table's elem segment)
+const GC_OPS = /^(struct\.|array\.|ref\.(test|cast|i31|eq|is_null|as_non_null)$|i31\.|br_on_|any\.convert_extern$|extern\.convert_any$|call_ref$|return_call_ref$)/
+const GC_TYPES = new Set(['anyref', 'eqref', 'i31ref', 'structref', 'arrayref', 'nullref', 'externref', 'nullexternref', 'nullfuncref'])
+const noGC = ast => {
+  const left = new Set()
+  walk(ast, n => {
+    if (typeof n === 'string' ? GC_OPS.test(n) || GC_TYPES.has(n) : Array.isArray(n) && ['ref', 'struct', 'array', 'sub', 'rec'].includes(n[0])) left.add(Array.isArray(n) ? `(${n[0]} …)` : n)
+  })
+  same([...left], [], 'no GC left in the output')
+}
+
+// every call answers the same (or traps in both) natively and polyfilled
+const gcSame = (src, calls, imports) => {
+  const gc = new WebAssembly.Instance(new WebAssembly.Module(compile(src)), imports).exports
+  const ast = polyfill(src)
+  noGC(ast)
+  const mvp = new WebAssembly.Instance(new WebAssembly.Module(compile(ast)), imports).exports
+  const run = (e, name, args) => { try { return e[name](...args) } catch (err) { if (err instanceof WebAssembly.RuntimeError) return 'trap'; throw err } }
+  for (const [name, ...args] of calls) {
+    const a = run(mvp, name, args), b = run(gc, name, args)
+    typeof b === 'object' && b ? same(a, b, `${name}(${args})`) : is(a, b, `${name}(${args})`)
+  }
+  return ast
+}
+
+t('polyfill gc: reference-typed fields and elements become i32 (issue #12)', () => {
+  gcSame(`(module (type $s (struct (field $r eqref)))
+    (func (export "f") (result i32) (ref.is_null (struct.get $s $r (struct.new $s (ref.null eq))))))`, [['f']])
+  gcSame(`(module (type $a (array (mut externref)))
+    (func (export "f") (result i32) (array.len (array.new $a (ref.null extern) (i32.const 4)))))`, [['f']])
+})
+
+t('polyfill gc: struct fields of every width, packed get_s/get_u, defaults', () => {
+  gcSame(`(module (type $s (struct (field $a (mut i8)) (field $b (mut i16)) (field $c i64) (field $d f32) (field $e (mut f64)) (field $r (mut (ref null $s)))))
+    (func $mk (param i32) (result (ref $s)) (struct.new $s (local.get 0) (local.get 0) (i64.const 7) (f32.const 2.5) (f64.const -1.25) (ref.null $s)))
+    (func (export "f") (param i32) (result i32) (local $x (ref $s))
+      (local.set $x (call $mk (local.get 0)))
+      (i32.add (i32.add (struct.get_s $s $a (local.get $x)) (i32.mul (struct.get_u $s $a (local.get $x)) (i32.const 1000)))
+        (i32.add (struct.get_s $s $b (local.get $x)) (i32.wrap_i64 (struct.get $s $c (local.get $x))))))
+    (func (export "g") (param i32) (result i32) (local $x (ref $s))
+      (local.set $x (struct.new_default $s))
+      (struct.set $s $b (local.get $x) (local.get 0))
+      (struct.set $s $r (local.get $x) (call $mk (i32.const 3)))
+      (i32.add (struct.get_u $s $b (local.get $x)) (i32.add (ref.is_null (struct.get $s $r (local.get $x))) (i32.trunc_f32_s (struct.get $s $d (local.get $x))))))
+    (func (export "h") (param f64) (result f64) (local $x (ref $s))
+      (local.set $x (call $mk (i32.const 1)))
+      (struct.set $s $e (local.get $x) (local.get 0))
+      (f64.add (struct.get $s $e (local.get $x)) (struct.get $s $e (struct.get $s $r (struct.new $s (i32.const 0) (i32.const 0) (i64.const 0) (f32.const 0) (f64.const 0) (local.get $x)))))))`,
+    [['f', 200], ['f', -1], ['f', 0x12345], ['g', 70000], ['g', -1], ['h', 0.5]])
+})
+
+t('polyfill gc: arrays: new, default, fixed, get, set, len, packed and wide', () => {
+  gcSame(`(module (type $a8 (array (mut i8))) (type $af (array (mut f64))) (type $al (array (mut i64))) (type $ar (array (mut (ref null $af))))
+    (func (export "f") (param i32) (result f64) (local $x (ref $af)) (local $r (ref $ar))
+      (local.set $x (array.new $af (f64.const 0.5) (local.get 0)))
+      (array.set $af (local.get $x) (i32.const 1) (f64.const 10))
+      (local.set $r (array.new_default $ar (i32.const 3)))
+      (array.set $ar (local.get $r) (i32.const 2) (local.get $x))
+      (f64.add (f64.convert_i32_s (array.len (local.get $x))) (array.get $af (array.get $ar (local.get $r) (i32.const 2)) (i32.const 1))))
+    (func (export "g") (param i32) (result i32) (local $b (ref $a8))
+      (local.set $b (array.new_fixed $a8 4 (i32.const 1) (i32.const 255) (i32.const 128) (local.get 0)))
+      (i32.add (array.get_s $a8 (local.get $b) (i32.const 1)) (i32.add (array.get_u $a8 (local.get $b) (i32.const 2)) (i32.mul (i32.const 1000) (array.get_s $a8 (local.get $b) (i32.const 3))))))
+    (func (export "h") (param i32) (result i64)
+      (array.get $al (array.new_fixed $al 3 (i64.const 1) (i64.const -2) (i64.const 3)) (local.get 0))))`,
+    [['f', 3], ['f', 2], ['f', 1], ['g', 5], ['g', 200], ['h', 0], ['h', 1], ['h', 2], ['h', 3], ['h', -1]])
+})
+
+t('polyfill gc: array.fill and array.copy, overlapping either way, in bounds or trapping', () => {
+  gcSame(`(module (type $a (array (mut i16)))
+    (func $mk (result (ref $a)) (local $x (ref $a)) (local $i i32)
+      (local.set $x (array.new_default $a (i32.const 10)))
+      (loop $l (array.set $a (local.get $x) (local.get $i) (local.get $i))
+        (br_if $l (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (i32.const 10))))
+      (local.get $x))
+    (func $hash (param $x (ref $a)) (result i32) (local $i i32) (local $s i32)
+      (loop $l (local.set $s (i32.add (i32.mul (local.get $s) (i32.const 3)) (array.get_u $a (local.get $x) (local.get $i))))
+        (br_if $l (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (array.len (local.get $x)))))
+      (local.get $s))
+    (func (export "copy") (param i32 i32 i32) (result i32) (local $x (ref $a))
+      (local.set $x (call $mk))
+      (array.copy $a $a (local.get $x) (local.get 0) (local.get $x) (local.get 1) (local.get 2))
+      (call $hash (local.get $x)))
+    (func (export "fill") (param i32 i32 i32) (result i32) (local $x (ref $a))
+      (local.set $x (call $mk))
+      (array.fill $a (local.get $x) (local.get 0) (local.get 1) (local.get 2))
+      (call $hash (local.get $x))))`,
+    [['copy', 0, 3, 5], ['copy', 3, 0, 5], ['copy', 2, 2, 8], ['copy', 5, 0, 6], ['copy', 10, 0, 0], ['copy', 11, 0, 0], ['copy', 0, -1, 2],
+     ['fill', 2, 7, 3], ['fill', 0, 65535, 10], ['fill', 8, 1, 3], ['fill', 10, 1, 0], ['fill', 0, 1, -1]])
+})
+
+t('polyfill gc: arrays from data and elem segments, and their drops', () => {
+  gcSame(`(module (type $a (array (mut i16))) (type $b (array i8)) (type $fa (array (mut funcref))) (type $ft (func (result i32)))
+    (data $d "\\01\\00\\02\\00\\03\\00\\04\\00hello")
+    (elem $e func $one $two)
+    (func $one (result i32) (i32.const 1)) (func $two (result i32) (i32.const 2))
+    (func (export "new_data") (param i32 i32) (result i32) (local $x (ref $a))
+      (local.set $x (array.new_data $a $d (local.get 0) (local.get 1)))
+      (i32.add (array.len (local.get $x)) (i32.mul (i32.const 10) (array.get_u $a (local.get $x) (i32.const 0)))))
+    (func (export "init_data") (param i32 i32 i32) (result i32) (local $x (ref $a))
+      (local.set $x (array.new_default $a (i32.const 4)))
+      (array.init_data $a $d (local.get $x) (local.get 0) (local.get 1) (local.get 2))
+      (i32.add (array.get_u $a (local.get $x) (i32.const 0)) (i32.mul (i32.const 10) (array.get_u $a (local.get $x) (i32.const 3)))))
+    (func (export "new_elem") (param i32) (result i32)
+      (call_ref $ft (ref.cast (ref $ft) (array.get $fa (array.new_elem $fa $e (i32.const 0) (i32.const 2)) (local.get 0)))))
+    (func (export "init_elem") (param i32) (result i32) (local $x (ref $fa))
+      (local.set $x (array.new_default $fa (i32.const 3)))
+      (array.init_elem $fa $e (local.get $x) (i32.const 1) (local.get 0) (i32.const 1))
+      (call_ref $ft (ref.cast (ref $ft) (array.get $fa (local.get $x) (i32.const 1)))))
+    (func (export "bytes") (result i32) (array.get_u $b (array.new_data $b $d (i32.const 8) (i32.const 5)) (i32.const 4)))
+    (func (export "drop") (data.drop $d) (elem.drop $e)))`,
+    [['new_data', 0, 4], ['new_data', 2, 2], ['new_data', 0, 7], ['new_data', 1, 1], ['init_data', 0, 0, 4], ['init_data', 1, 2, 2], ['init_data', 2, 2, 3],
+     ['new_elem', 0], ['new_elem', 1], ['new_elem', 2], ['init_elem', 0], ['init_elem', 1], ['init_elem', 2], ['bytes'],
+     ['drop'], ['new_data', 0, 0], ['new_data', 0, 1], ['bytes'], ['new_elem', 0], ['init_elem', 1]])
+})
+
+t('polyfill gc: null and bounds trap', () => {
+  gcSame(`(module (type $s (struct (field (mut i32)))) (type $a (array (mut i32)))
+    (func (export "get") (result i32) (struct.get $s 0 (ref.null $s)))
+    (func (export "set") (struct.set $s 0 (ref.null $s) (i32.const 1)))
+    (func (export "as_non_null") (result i32) (ref.is_null (ref.as_non_null (ref.null $s))))
+    (func (export "at") (param i32) (result i32) (array.get $a (array.new $a (i32.const 9) (i32.const 3)) (local.get 0)))
+    (func (export "set_at") (param i32) (array.set $a (array.new $a (i32.const 9) (i32.const 3)) (local.get 0) (i32.const 1)))
+    (func (export "len") (result i32) (array.len (ref.null $a)))
+    (func (export "huge") (result i32) (array.len (array.new $a (i32.const 0) (i32.const -1))))
+    (func (export "i31") (result i32) (i31.get_s (ref.null i31))))`,
+    [['get'], ['set'], ['as_non_null'], ['at', 2], ['at', 3], ['at', -1], ['set_at', 3], ['len'], ['huge'], ['i31']])
+})
+
+t('polyfill gc: i31 beside heap references, any/extern conversions as identity', () => {
+  gcSame(`(module (type $s (struct (field i32)))
+    (func (export "i31") (param i32) (result i32) (local $a anyref)
+      (local.set $a (ref.i31 (local.get 0)))
+      (i32.add (i31.get_s (ref.cast (ref i31) (local.get $a)))
+        (i32.add (i32.mul (i32.const 1000) (ref.test (ref i31) (local.get $a))) (i32.mul (i32.const 100) (ref.test (ref $s) (local.get $a))))))
+    (func (export "u") (param i32) (result i32) (i31.get_u (ref.i31 (local.get 0))))
+    (func (export "eq") (param i32 i32) (result i32) (ref.eq (ref.i31 (local.get 0)) (ref.i31 (local.get 1))))
+    (func (export "conv") (param i32) (result i32) (local $e externref)
+      (local.set $e (extern.convert_any (struct.new $s (local.get 0))))
+      (struct.get $s 0 (ref.cast (ref $s) (any.convert_extern (local.get $e)))))
+    (func (export "conv_null") (result i32) (ref.is_null (any.convert_extern (extern.convert_any (ref.null none))))))`,
+    [['i31', 5], ['i31', -5], ['i31', 0x40000000], ['u', -1], ['eq', 3, 3], ['eq', 3, 0x80000003], ['eq', 3, 4], ['conv', 7], ['conv_null']])
+})
+
+t('polyfill gc: casts follow the subtype hierarchy and canonical types', () => {
+  gcSame(`(module
+    (type $A (sub (struct (field i32))))
+    (type $B (sub $A (struct (field i32) (field f64))))
+    (type $C (sub final $B (struct (field i32) (field f64) (field i64))))
+    (type $D (sub $A (struct (field i32) (field i32))))
+    (type $X (array i8))
+    (type $A2 (sub (struct (field i32))))
+    (func $obj (param i32) (result anyref)
+      (block $b (block $7 (block $6 (block $5 (block $4 (block $3 (block $2 (block $1
+        (br_table $b $1 $2 $3 $4 $5 $6 $7 (local.get 0)))
+        (return (struct.new $A (i32.const 1))))
+        (return (struct.new $B (i32.const 2) (f64.const 0))))
+        (return (struct.new $C (i32.const 3) (f64.const 0) (i64.const 0))))
+        (return (struct.new $D (i32.const 4) (i32.const 0))))
+        (return (array.new_default $X (i32.const 2))))
+        (return (ref.i31 (i32.const 6))))
+        (return (struct.new $A2 (i32.const 7))))
+      (ref.null any))
+    (func (export "test") (param i32) (result i32) (local $o anyref)
+      (local.set $o (call $obj (local.get 0)))
+      (i32.or (i32.or (i32.or (i32.or (i32.or (i32.or (i32.or (i32.or (i32.or (i32.or (i32.or (i32.or
+        (ref.test (ref $A) (local.get $o))
+        (i32.shl (ref.test (ref $B) (local.get $o)) (i32.const 1)))
+        (i32.shl (ref.test (ref $C) (local.get $o)) (i32.const 2)))
+        (i32.shl (ref.test (ref $D) (local.get $o)) (i32.const 3)))
+        (i32.shl (ref.test (ref null $A) (local.get $o)) (i32.const 4)))
+        (i32.shl (ref.test (ref struct) (local.get $o)) (i32.const 5)))
+        (i32.shl (ref.test (ref array) (local.get $o)) (i32.const 6)))
+        (i32.shl (ref.test (ref i31) (local.get $o)) (i32.const 7)))
+        (i32.shl (ref.test (ref eq) (local.get $o)) (i32.const 8)))
+        (i32.shl (ref.test (ref null none) (local.get $o)) (i32.const 9)))
+        (i32.shl (ref.test (ref $A2) (local.get $o)) (i32.const 10)))
+        (i32.shl (ref.test (ref null i31) (local.get $o)) (i32.const 11)))
+        (i32.shl (ref.test (ref $X) (local.get $o)) (i32.const 12))))
+    (func (export "cast") (param i32) (result i32) (struct.get $A 0 (ref.cast (ref $A) (call $obj (local.get 0)))))
+    (func (export "cast_null") (param i32) (result i32) (ref.is_null (ref.cast (ref null $B) (call $obj (local.get 0)))))
+    (func (export "branch") (param i32) (result i32)
+      (block $isB (result (ref $B))
+        (block $notA (result anyref)
+          (br_on_cast_fail $notA anyref (ref $A) (call $obj (local.get 0)))
+          (br_on_cast $isB (ref $A) (ref $B))
+          (drop) (return (i32.const 100)))
+        (drop) (return (i32.const 200)))
+      (struct.get $B 0) (i32.add (i32.const 300))))`,
+    [0, 1, 2, 3, 4, 5, 6, 7].flatMap(i => [['test', i], ['cast', i], ['cast_null', i], ['branch', i]]))
+})
+
+t('polyfill gc: function references: call_ref, casts to function types, null, tail calls', () => {
+  gcSame(`(module
+    (type $f1 (func (param i32) (result i32)))
+    (type $f2 (func (param i32) (result i32)))
+    (type $g (func (result i32)))
+    (type $w (sub (struct (field $fn funcref))))
+    (type $w2 (sub $w (struct (field $fn funcref) (field $k i32))))
+    (elem declare func $inc $dbl $k)
+    (func $inc (type $f1) (i32.add (local.get 0) (i32.const 1)))
+    (func $dbl (param i32) (result i32) (i32.mul (local.get 0) (i32.const 2)))
+    (func $k (result i32) (i32.const 42))
+    (func (export "call") (param i32 i32) (result i32) (local $c (ref $w))
+      (local.set $c (if (result (ref $w)) (local.get 0)
+        (then (struct.new $w (ref.func $inc)))
+        (else (struct.new $w2 (ref.func $dbl) (i32.const 5)))))
+      (call_ref $f1 (local.get 1) (ref.cast (ref $f2) (struct.get $w $fn (local.get $c)))))
+    (func (export "test") (param i32) (result i32) (local $f funcref)
+      (local.set $f (if (result funcref) (i32.eqz (local.get 0)) (then (ref.func $inc))
+        (else (if (result funcref) (i32.eq (local.get 0) (i32.const 1)) (then (ref.func $k)) (else (ref.null func))))))
+      (i32.or (i32.or (ref.test (ref $f1) (local.get $f)) (i32.shl (ref.test (ref $g) (local.get $f)) (i32.const 1)))
+        (i32.or (i32.shl (ref.test (ref func) (local.get $f)) (i32.const 2)) (i32.shl (ref.test (ref null $g) (local.get $f)) (i32.const 3)))))
+    (func (export "call_null") (result i32) (call_ref $g (ref.null $g)))
+    (func (export "tail") (param i32) (result i32) (return_call_ref $f1 (local.get 0) (ref.func $dbl)))
+    (func (export "bad_cast") (result i32) (call_ref $g (ref.cast (ref $g) (ref.func $inc)))))`,
+    [['call', 1, 10], ['call', 0, 10], ['test', 0], ['test', 1], ['test', 2], ['call_null'], ['tail', 21], ['bad_cast']])
+})
+
+t('polyfill gc: globals of GC values are built at start, before the module\'s start', () => {
+  const ast = gcSame(`(module
+    (type $v (struct (field $tag i32) (field $i i32) (field $f f64) (field $r eqref) (field $e externref)))
+    (type $s (array (mut i16)))
+    (global $undef (ref null $v) (struct.new $v (i32.const 1) (i32.const 0) (f64.const nan) (ref.null eq) (ref.null extern)))
+    (global $one (ref $v) (struct.new $v (i32.const 2) (i32.const 1) (f64.const 1.5) (ref.i31 (i32.const 9)) (extern.convert_any (global.get $undef))))
+    (global $str (ref $s) (array.new_fixed $s 3 (i32.const 104) (i32.const 105) (i32.const 33)))
+    (global $n (mut i32) (i32.const 0))
+    (global $null eqref (ref.null none))
+    (start $go)
+    (func $go (global.set $n (i32.add (global.get $n) (array.len (global.get $str)))))
+    (func (export "f") (result i32)
+      (i32.add (i32.add (struct.get $v $tag (global.get $undef)) (i31.get_u (ref.cast (ref i31) (struct.get $v $r (global.get $one)))))
+        (i32.add (global.get $n) (i32.mul (i32.const 100) (ref.eq (ref.cast (ref eq) (any.convert_extern (struct.get $v $e (global.get $one)))) (global.get $undef))))))
+    (func (export "nan") (result i32) (f64.ne (struct.get $v $f (global.get $undef)) (struct.get $v $f (global.get $undef))))
+    (func (export "char") (param i32) (result i32) (array.get_u $s (global.get $str) (local.get 0)))
+    (func (export "is_null") (result i32) (ref.is_null (global.get $null))))`,
+    [['f'], ['nan'], ['char', 0], ['char', 2], ['char', 3], ['is_null']])
+  // the null global stays a constant; the rest move into the start function
+  const g = ast.find(n => n[0] === 'global' && n[1] === '$null')
+  is(JSON.stringify(g.slice(2)), '["i32",["i32.const",0]]', 'constant global kept')
+  ok(ast.some(n => n[0] === 'start' && n[1] === '$__gc_init'), 'start builds the rest')
+})
+
+t('polyfill gc: br_on_null, br_on_non_null, typed select, recursion groups', () => {
+  gcSame(`(module
+    (type $n (struct (field $v i32) (field $next (ref null $n))))
+    (rec (type $tree (struct (field $kids (ref null $forest)) (field $v i32))) (type $forest (array (ref null $tree))))
+    (func $list (param $k i32) (result (ref null $n)) (local $l (ref null $n))
+      (block $d (loop $l1 (br_if $d (i32.eqz (local.get $k)))
+        (local.set $l (struct.new $n (local.get $k) (local.get $l)))
+        (local.set $k (i32.sub (local.get $k) (i32.const 1))) (br $l1)))
+      (local.get $l))
+    (func (export "sum") (param i32) (result i32) (local $l (ref null $n)) (local $s i32)
+      (local.set $l (call $list (local.get 0)))
+      (loop $next (block $null
+        (local.set $s (i32.add (local.get $s) (struct.get $n $v (br_on_null $null (local.get $l)))))
+        (local.set $l (struct.get $n $next (local.get $l)))
+        (br $next)))
+      (local.get $s))
+    (func (export "first") (param i32) (result i32)
+      (block $some (result (ref $n))
+        (br_on_non_null $some (call $list (local.get 0)))
+        (return (i32.const -1)))
+      (struct.get $n $v))
+    (func (export "pick") (param i32) (result i32)
+      (struct.get $n $v (select (result (ref null $n)) (struct.new $n (i32.const 1) (ref.null $n)) (struct.new $n (i32.const 2) (ref.null $n)) (local.get 0))))
+    (func $grow (param $d i32) (result (ref $tree))
+      (if (result (ref $tree)) (i32.eqz (local.get $d)) (then (struct.new $tree (ref.null $forest) (i32.const 1)))
+        (else (struct.new $tree (array.new_fixed $forest 2 (call $grow (i32.sub (local.get $d) (i32.const 1))) (call $grow (i32.sub (local.get $d) (i32.const 1)))) (local.get $d)))))
+    (func $total (param $t (ref null $tree)) (result i32) (local $f (ref null $forest)) (local $i i32) (local $s i32)
+      (local.set $s (struct.get $tree $v (local.get $t)))
+      (local.set $f (struct.get $tree $kids (local.get $t)))
+      (if (ref.is_null (local.get $f)) (then (return (local.get $s))))
+      (loop $l (local.set $s (i32.add (local.get $s) (call $total (array.get $forest (local.get $f) (local.get $i)))))
+        (br_if $l (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (array.len (local.get $f)))))
+      (local.get $s))
+    (func (export "tree") (param i32) (result i32) (call $total (call $grow (local.get 0)))))`,
+    [['sum', 5], ['sum', 0], ['first', 3], ['first', 0], ['pick', 0], ['pick', 1], ['tree', 0], ['tree', 10]])
+})
+
+t('polyfill gc: exception payloads, flat code, numeric type indices, typed function tables', () => {
+  gcSame(`(module
+    (type $err (struct (field $code i32)))
+    (tag $e (param (ref $err)))
+    (func $throw (param i32) (if (local.get 0) (then (throw $e (struct.new $err (local.get 0))))))
+    (func (export "catch") (param i32) (result i32)
+      (block $h (result (ref $err))
+        (try_table (catch $e $h) (call $throw (local.get 0)))
+        (return (i32.const -1)))
+      (struct.get $err $code)))`, [['catch', 0], ['catch', 7]])
+  // struct and array types are dropped: (type 3) must still name the same function type
+  gcSame(`(module
+    (type (sub (struct (field (mut i32)))))
+    (type (array (mut f64)))
+    (type (sub 0 (struct (field (mut i32)) (field (mut (ref null 1))))))
+    (type (func (param i32) (result i32)))
+    (type (func (param (ref null 2)) (result f64)))
+    (table 2 funcref)
+    (elem (i32.const 0) func 0 1)
+    (func (type 3) i32.const 7 local.get 0 i32.add)
+    (func (type 3) local.get 0 i32.const 3 i32.mul)
+    (func (type 4) (local f64 i32)
+      block
+        loop
+          local.get 2 local.get 0 struct.get 2 0 i32.ge_s br_if 1
+          local.get 1 local.get 0 struct.get 2 1 local.get 2 array.get 1 f64.add local.set 1
+          local.get 2 i32.const 1 i32.add local.set 2
+          br 0
+        end
+      end
+      local.get 1)
+    (func (export "f") (param i32) (result f64) (local (ref null 2))
+      i32.const 3 f64.const 1.25 i32.const 3 array.new 1 struct.new 2 local.set 1
+      local.get 1 struct.get 2 1 i32.const 1 f64.const 10 array.set 1
+      local.get 1 call 2
+      i32.const 5 local.get 0 call_indirect (type 3) f64.convert_i32_s f64.add))`, [['f', 0], ['f', 1], ['f', 2]])
+  gcSame(`(module
+    (type $v (func (result i32))) (type $s (struct))
+    (table $t 2 (ref null $v))
+    (elem (table $t) (i32.const 0) (ref null $v) (ref.func $a) (ref.null $v))
+    (func $a (result i32) (i32.const 11))
+    (func (export "f") (param i32) (result i32) (call_indirect $t (type $v) (local.get 0))))`, [['f', 0], ['f', 1]])
+})
+
+t('polyfill gc: the heap is a memory of its own, growing past a page', () => {
+  // the module's memory and its passive data stay its own
+  const ast = gcSame(`(module
+    (memory (export "mem") 1)
+    (data (i32.const 0) "ABCDEFGH")
+    (data $p "\\05\\06\\07\\08")
+    (type $a (array (mut i8)))
+    (func (export "f") (param i32) (result i32) (local $x (ref $a)) (local $i i32)
+      (local.set $x (array.new_data $a $p (i32.const 0) (i32.const 4)))
+      (memory.init $p (i32.const 100) (i32.const 1) (i32.const 3))
+      (loop $l (i32.store8 (i32.add (i32.const 8) (local.get $i)) (i32.const 0xee))
+        (br_if $l (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (i32.const 64))))
+      (i32.add (i32.add (i32.load8_u (local.get 0)) (i32.mul (i32.const 1000) (array.get_u $a (local.get $x) (i32.const 3))))
+        (i32.mul (i32.const 100000) (i32.load8_u (i32.const 101)))))
+    (func (export "drop") (data.drop $p)))`, [['f', 0], ['f', 7], ['drop'], ['f', 1]])
+  ok(print(ast).includes('(memory $__gc_mem'), 'heap memory added after the module\'s')
+  // without a memory of its own, the heap is memory 0 and accesses carry no memory index
+  const mvp = gcSame(`(module (type $a (array (mut i32))) (type $s (struct (field (mut i32)) (field (ref null $s))))
+    (func (export "f") (param i32) (result i32) (local $x (ref $a)) (local $l (ref null $s)) (local $i i32) (local $t i32)
+      (local.set $x (array.new $a (i32.const 3) (local.get 0)))
+      (loop $m (local.set $l (struct.new $s (local.get $i) (local.get $l)))
+        (br_if $m (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (local.get 0))))
+      (array.set $a (local.get $x) (i32.sub (local.get 0) (i32.const 1)) (i32.const 5))
+      (block $d (loop $n (local.set $t (i32.add (local.get $t) (struct.get $s 0 (br_on_null $d (local.get $l)))))
+        (local.set $l (struct.get $s 1 (local.get $l))) (br $n)))
+      (i32.add (local.get $t) (i32.add (array.get $a (local.get $x) (i32.const 0)) (array.get $a (local.get $x) (i32.sub (local.get 0) (i32.const 1)))))))`,
+    [['f', 1], ['f', 100000], ['f', 300000]])
+  ok(!/\.(load|store)\S* \$__gc_mem/.test(print(mvp)), 'heap accesses address memory 0')
+})
+
+t('polyfill gc: host references are rejected at the boundary', () => {
+  for (const src of [
+    `(module (type $s (struct)) (import "env" "get" (func (result externref))))`,
+    `(module (type $s (struct)) (import "env" "g" (global externref)))`,
+    `(module (type $s (struct)) (func (export "f") (param externref)))`,
+    `(module (type $s (struct)) (func $f (param funcref)) (export "f" (func $f)))`,
+    `(module (type $s (struct)) (global (export "g") (mut externref) (ref.null extern)))`,
+  ]) throws(() => polyfill(src), /takes .* from the host, which an i32 can't hold/, src)
+  // a reference the module hands out is an i32 handle the host can only give back
+  ok(polyfill(`(module (type $s (struct)) (func (export "f") (result externref) (ref.null extern)))`), 'externref result')
+  ok(polyfill(`(module (type $s (struct)) (func (export "f") (param anyref) (result i32) (ref.test (ref $s) (local.get 0))))`), 'anyref param')
+})
+
+t('polyfill gc: numeric heap types name the abstract type', () => {
+  throws(() => polyfill(`(module (type $s (struct (field eqref))) (func (drop (struct.new $s (ref.null -19)))))`), /Numeric heap type -19 isn't valid text: write eq/)
+})
+
+t('polyfill gc: a module without GC polyfills as before', () => {
+  for (const src of [
+    `(module (type $fn (func (result i32))) (func $a (result i32) (i32.const 1)) (func (export "f") (result i32) (call_ref $fn (ref.func $a))))`,
+    `(module (func (export "f") (param externref) (result i32) (ref.is_null (local.get 0))))`,
+    `(module (func (export "make") (param i32) (result i32) (ref.i31 (local.get 0))))`,
+  ]) {
+    ok(!detect(parse(src)).has('gc'), 'no gc detected')
+    same([...compile(polyfill(src))], [...compile(polyfill(src, { gc: false, ref_cast: false }))], src)
+  }
 })
