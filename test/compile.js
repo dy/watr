@@ -342,6 +342,37 @@ t('compile: multivalue block types cross signed index boundaries', () => {
   }
 })
 
+t('compile: flat try_table reads its label, block type and catch clauses', () => {
+  const flat = rawCompile(`(module (tag $e (param i32)) (tag $f)
+    (func (export "f") (param i32) (result i32)
+      block $o
+        block $h (result i32)
+          try_table $t (result i32) (catch $e $h) (catch_all $o)
+            local.get 0 i32.eqz if i32.const 7 throw $e end
+            local.get 0 i32.const 1 i32.eq if throw $f end
+            i32.const 1
+          end
+          return
+        end
+        i32.const 100 i32.add return
+      end
+      i32.const -1))`)
+  const folded = rawCompile(`(module (tag $e (param i32)) (tag $f)
+    (func (export "f") (param i32) (result i32)
+      (block $o
+        (block $h (result i32)
+          (try_table $t (result i32) (catch $e $h) (catch_all $o)
+            (if (i32.eqz (local.get 0)) (then (throw $e (i32.const 7))))
+            (if (i32.eq (local.get 0) (i32.const 1)) (then (throw $f)))
+            (i32.const 1))
+          (return))
+        (return (i32.add (i32.const 100))))
+      (i32.const -1)))`)
+  same([...flat], [...folded])
+  const { f } = new WebAssembly.Instance(new WebAssembly.Module(flat)).exports
+  is(f(0), 107), is(f(1), -1), is(f(2), 1)
+})
+
 t('compile: br', () => {
   let src = `
     (global $answer (mut i32) (i32.const 42))

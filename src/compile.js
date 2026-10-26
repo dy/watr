@@ -532,7 +532,7 @@ const isMemParam = n => (n?.[0] === 'a' && n[1] === 'l') || (n?.[0] === 'o' && n
 // garbage classes, and mis-consumed `end` as a memory idx — "Unknown memory end").
 const NCLS = Object.create(null)
 for (const k in OPCODE) {
-  if (k === 'block' || k === 'if' || k === 'loop') NCLS[k] = 1
+  if (k === 'block' || k === 'if' || k === 'loop' || k === 'try_table') NCLS[k] = 1
   else if (k === 'else' || k === 'end') NCLS[k] = 2
   else if (k === 'select') NCLS[k] = 3
   else if (k.endsWith('call_indirect')) NCLS[k] = 4
@@ -554,6 +554,8 @@ const pushRev = (stk, node, from, to = node.length) => { for (let j = to - 1; j 
 // `if`'s head (`if`, its label and blocktype), pushed under its condition and
 // emitted after it.
 const END = ['end'], ELSE = ['else'], IF_HEAD = ['if']
+// a try_table's catch clause: (catch $tag $l), (catch_ref …), (catch_all $l), (catch_all_ref $l)
+const isCatch = (n) => n?.[0] === 'catch' || n?.[0] === 'catch_ref' || n?.[0] === 'catch_all' || n?.[0] === 'catch_all_ref'
 
 /**
  * Normalize and flatten a function body to stack form: `stk` is a work stack
@@ -577,6 +579,7 @@ function normalize(stk, ctx, out = []) {
       if (cls === 1) {
         if (isId(top(stk))) out.push(stk.pop())
         out.push(blocktype(stk, ctx))
+        if (node === 'try_table') while (isCatch(top(stk))) out.push(stk.pop())
       }
       else if (cls === 2) {
         if (isId(top(stk))) stk.pop()
@@ -648,10 +651,7 @@ function normalize(stk, ctx, out = []) {
         pushRev(stk, node, 1)
         if (isId(top(stk))) out.push(stk.pop())
         out.push(blocktype(stk, ctx))
-        // Collect catch clauses
-        while (top(stk)?.[0] === 'catch' || top(stk)?.[0] === 'catch_ref' || top(stk)?.[0] === 'catch_all' || top(stk)?.[0] === 'catch_all_ref') {
-          out.push(stk.pop())
-        }
+        while (isCatch(top(stk))) out.push(stk.pop())
       }
       else if (op === 'ref.test' || op === 'ref.cast') {
         const type = node[1]
