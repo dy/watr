@@ -1,4 +1,5 @@
 import t, { is, ok, same, throws } from 'tst'
+import { readFileSync } from 'node:fs'
 import polyfill, { detect, normalize, FEATURES } from '../src/polyfill.js'
 import { walk } from '../src/util.js'
 import { parse, compile, print } from './runner.js'
@@ -1645,4 +1646,24 @@ t('polyfill gc: a module without GC polyfills as before', () => {
     ok(!detect(parse(src)).has('gc'), 'no gc detected')
     same([...compile(polyfill(src))], [...compile(polyfill(src, { gc: false, ref_cast: false }))], src)
   }
+})
+
+t('polyfill gc: objects, strings and closures end to end (WASI fd_write only)', () => {
+  const src = readFileSync(new URL('./example/gc-objects.wat', import.meta.url), 'utf8')
+  const run = bin => {
+    let mem, out = ''
+    const wasi = { wasi_snapshot_preview1: { fd_write(fd, iov, n, nw) {
+      const v = new DataView(mem.buffer)
+      for (let i = 0; i < n; i++) out += new TextDecoder().decode(new Uint8Array(mem.buffer, v.getUint32(iov + i * 8, true), v.getUint32(iov + i * 8 + 4, true)))
+      return 0
+    } } }
+    const { exports } = new WebAssembly.Instance(new WebAssembly.Module(bin), wasi)
+    mem = exports.memory
+    return [exports.run(), out]
+  }
+  const ast = polyfill(src)
+  noGC(ast)
+  const expected = 'Hello, world! len=13 sum=24 n+x=47 undefined=-1 kinds=33\n'
+  same(run(compile(src)), [expected.length, expected], 'GC original')
+  same(run(compile(ast)), [expected.length, expected], 'polyfilled')
 })
