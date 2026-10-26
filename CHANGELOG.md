@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v5.11.12
+## Unreleased
+
+- `gc` polyfill lowers a closed GC module to `i32` references over a linear-memory heap, so it runs without GC, wasm2c included (#12): reference-typed fields and elements, `externref` and the any/extern conversions, i31 beside heap references, casts against the subtype hierarchy, packed fields, `array.fill`/`copy`/`new_data`/`new_elem`/`init_data`/`init_elem`, `call_ref`, GC globals.
+- `gc` polyfill rejects, by name, an import or export through which the host would pass in `externref` or `funcref`.
+- Name the abstract heap type when a printer leaks its binary code into text: `ref.null -19` says to write `eq`.
+- Compile a flat `try_table`, and flat constant expressions in global initializers and segment offsets (a flat initializer read 0).
+
 
 - Alias no local to itself in `lsr`: a self-copy before a loop made resolving a read of it loop forever.
 

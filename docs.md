@@ -22,7 +22,7 @@ Enables [polyfills](#available-polyfills) and [optimizations](#available-optimiz
 | [Sign extension](https://github.com/WebAssembly/sign-extension-ops) | yes | yes |
 | [Non-trapping conversions](https://github.com/WebAssembly/nontrapping-float-to-int-conversions) | yes | yes |
 | [Bulk memory](https://github.com/WebAssembly/bulk-memory-operations) | yes | copy/fill only |
-| [Reference types](https://github.com/WebAssembly/reference-types) | yes | funcref only |
+| [Reference types](https://github.com/WebAssembly/reference-types) | yes | funcref; externref in a [GC](#gc-lowering) module |
 | [Typed function refs](https://github.com/WebAssembly/function-references) | yes | yes |
 | [Tail calls](https://github.com/WebAssembly/tail-call) | yes | yes |
 | [Extended const](https://github.com/WebAssembly/extended-const) | yes | yes |
@@ -31,7 +31,7 @@ Enables [polyfills](#available-polyfills) and [optimizations](#available-optimiz
 | [SIMD](https://github.com/WebAssembly/simd) | yes | no |
 | [Relaxed SIMD](https://github.com/WebAssembly/relaxed-simd) | yes | no |
 | [Threads](https://github.com/WebAssembly/threads) | yes | no |
-| [GC](https://github.com/WebAssembly/gc) | yes | i31/struct/array/cast |
+| [GC](https://github.com/WebAssembly/gc) | yes | [closed modules](#gc-lowering) |
 | [Exceptions](https://github.com/WebAssembly/exception-handling) | yes | no |
 | [Annotations](https://github.com/WebAssembly/annotations) | yes | n/a |
 | [Wide arithmetic](https://github.com/WebAssembly/wide-arithmetic) | yes | n/a |
@@ -159,11 +159,11 @@ polyfill(ast, { funcref: true })      // object
 | `nontrapping` | `i32.trunc_sat_f32_s` → helper function, etc | Injects helper functions |
 | `bulk_memory` | `memory.copy`/`fill` → loop helpers | Byte-by-byte loops |
 | `return_call` | `return_call` → `return` + `call` | Loses tail call optimization |
-| `i31ref` | `ref.i31` → `i32.and`, `i31.get_s/u` → shift/mask | 31-bit tagged integers |
+| `i31ref` | `ref.i31` → `i32.and`, `i31.get_s/u` → shift/mask | 31-bit integers; in a GC module `gc` lowers i31 |
 | `extended_const` | `global.get` in initializers → evaluated constant | Compile-time evaluation |
 | `multi_value` | Multiple results → single + globals | Partial: functions only, not blocks |
-| `gc` | `struct.new/get/set`, `array.new/get/set/len` → memory ops | Bump allocator, type tags |
-| `ref_cast` | `ref.test`, `ref.cast`, `br_on_cast` → type tag checks | Runtime tag comparison |
+| `gc` | Every reference → `i32`; `struct.*`, `array.*`, `ref.*`, `i31.*`, `br_on_*`, `call_ref`, `any.convert_extern`/`extern.convert_any` → memory ops and checks | [GC lowering](#gc-lowering) |
+| `ref_cast` | `ref.test`, `ref.cast`, `br_on_cast(_fail)` → type tag range checks | Runs the `gc` lowering |
 
 **Not polyfillable:**
 
@@ -173,7 +173,34 @@ polyfill(ast, { funcref: true })      // object
 | Threads/Atomics | Requires host support |
 | Memory64 | Cannot emulate 64-bit address space |
 | Exception handling | Complex control flow transforms |
-| `externref` | Requires JS-side reference tracking |
+| `externref` from the host | An `i32` can't hold a host reference; `externref` inside a GC module is lowered |
+| GC tables | `table.get`/`set`/`grow`/`fill` move references between a table and `i32` values |
+
+#### GC lowering
+
+`gc` turns a GC module into one with `i32` references over a linear-memory heap, for runtimes without GC, wasm2c included. It assumes a closed module: the host hands it no references.
+
+| Value | Becomes |
+|-------|---------|
+| null | `0` |
+| struct, array | address of `[tag:i32 field*]` or `[tag:i32 len:i32 elem*]`, 8-aligned; packed `i8`/`i16` fields take 1 and 2 bytes |
+| `i31ref` | `(x << 1) \| 1`, odd, so it is never an address |
+| `funcref` | slot in a function table whose slot 0 stays empty: a call through null traps |
+| `externref` | the value it converts: `any.convert_extern` and `extern.convert_any` vanish |
+
+* Locals, params, results, globals, fields, elements, block types and type definitions follow; struct and array types, `sub`, `final` and `rec` leave the type section.
+* A tag is the preorder number of the object's canonical type in the subtype forest, so `ref.test`, `ref.cast` and `br_on_cast(_fail)` check one range. Types match iso-recursively, as GC casts see them.
+* Traps stay traps: null access, out-of-bounds index, failed cast, segment overrun, a dropped segment.
+* The heap is a bump allocator that never frees, growing its memory by doubling. It gets a memory of its own: memory 0 when the module has none (the output is MVP), one more memory otherwise (`wasm2c --enable-multi-memory`), so it never meets the module's own allocator. Data and elem segments that arrays read are copied into it.
+* A global initialized with a GC value becomes mutable and is built by a start function, before the module's own start.
+* An import or export through which the host would pass in `externref` or `funcref` (an imported function's result, an imported global, an exported function's parameter, an exported mutable global, a tag) is rejected. References the module hands out cross as `i32` handles the host can only give back.
+* Not lowered: tables of GC references and GC allocations in elem segments, custom descriptors, null tests on `exnref`. `call_indirect` compares lowered signatures, so function types that differ only in references or recursion groups no longer trap as mismatched.
+* Exception handling passes through; function bodies come out in flat (stack) form.
+
+```sh
+watr module.wat --polyfill -o module.wasm
+wasm2c --enable-multi-memory module.wasm -o module.c   # the flag only when the module had a memory
+```
 
 ### `optimize(ast, options?)`
 
