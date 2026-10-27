@@ -8,6 +8,7 @@
  *   watr input.wat --print            # pretty-print WAT
  *   watr input.wat --minify           # minify WAT
  *   watr input.wat --polyfill         # polyfill newer features to MVP
+ *   watr input.wat --polyfill --exports _start,memory  # and keep only these exports
  *   watr --help                       # show help
  *
  * @module watr/bin
@@ -17,7 +18,7 @@ import { readFileSync, writeFileSync } from 'fs'
 import { basename } from 'path'
 import compile, { sourceMapURL } from '../src/compile.js'
 import print from '../src/print.js'
-import polyfill from '../src/polyfill.js'
+import polyfill, { FEATURES, normalize } from '../src/polyfill.js'
 import optimize from '../src/optimize.js'
 import parse from '../src/parse.js'
 
@@ -52,6 +53,14 @@ if (optimizeIdx !== -1) {
   }
 }
 
+// Parse --exports arg: the exports polyfill keeps
+const exportsIdx = args.indexOf('--exports')
+const exportsArg = exportsIdx !== -1 ? args[exportsIdx + 1] : null
+if (exportsIdx !== -1) {
+  if (!polyfillOpts || exportsArg == null) { console.error('--exports <names> goes with --polyfill'); process.exit(1) }
+  polyfillOpts = { ...normalize(polyfillOpts), exports: exportsArg }
+}
+
 // Parse -o output arg
 const outIdx = args.findIndex(a => a === '-o' || a === '--output')
 const outArg = outIdx !== -1 ? args[outIdx + 1] : null
@@ -61,7 +70,18 @@ const smIdx = args.findIndex(a => a === '--source-map')
 const smArg = smIdx !== -1 && args[smIdx + 1]?.endsWith('.map') ? args[smIdx + 1] : null
 
 const flags = new Set(args.filter(a => a.startsWith('-') && a !== '-'))
-const files = args.filter(a => (!a.startsWith('-') || a === '-') && a !== polyfillFeatureArg && a !== optimizeFeatureArg && a !== outArg && a !== smArg)
+const files = args.filter(a => (!a.startsWith('-') || a === '-') && a !== polyfillFeatureArg && a !== optimizeFeatureArg && a !== outArg && a !== smArg && a !== exportsArg)
+
+// names in lines under a hanging label, in the help's option column
+const wrap = (label, names) => {
+  const pad = ' '.repeat(24), lines = []
+  let line = pad + label
+  for (const n of names) {
+    if (line.length + n.length > 76) lines.push(line), line = pad + ' '.repeat(label.length)
+    line += n + ' '
+  }
+  return [...lines, line].map(l => l.trimEnd()).join('\n')
+}
 
 // Help
 if (flags.has('-h') || flags.has('--help') || !files.length) {
@@ -79,8 +99,9 @@ Options:
                         Options: fold identity strength branch propagate inline
                                  deadcode locals treeshake
   --polyfill [features] Polyfill newer features to MVP (default: all)
-                        Features: funcref sign_ext nontrapping bulk_memory
-                                  return_call i31ref extended_const multi_value
+${wrap('Features: ', Object.keys(FEATURES))}
+  --exports <names>     With --polyfill: keep only these exports, comma-separated
+                        (_start,memory for a WASI command a native host runs)
   --source-map [file]   Write source map from \`;;@ file:line:col\` comments
                         (default: <output>.map) + embed sourceMappingURL
   -h, --help            Show this help
@@ -93,6 +114,7 @@ Examples:
   watr add.wat -O treeshake       # optimize specific
   watr add.wat --polyfill         # polyfill all features
   watr add.wat --polyfill funcref # polyfill specific features
+  watr gc.wat --polyfill --exports _start,memory  # GC module → MVP for wasm2c
   watr add.wat --source-map       # → add.wasm + add.wasm.map
   cat add.wat | watr -            # stdin → stdout (binary)
 

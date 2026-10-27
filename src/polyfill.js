@@ -6,7 +6,7 @@
  */
 
 import parse from './parse.js'
-import { walk, walkPost, clone, str, LOC } from './util.js'
+import { walk, walkPost, clone, str, unescape, LOC } from './util.js'
 import { OPCODE, unknownType } from './const.js'
 
 const isId = n => typeof n === 'string' && n[0] === '$'
@@ -792,17 +792,18 @@ const gc = (ast, ctx) => {
 
   // -- the host boundary: a reference the host makes can't become an i32
   const hostRef = t => { const r = refOf(t?.[0] === 'mut' ? t[1] : t); return r && (isFunc(r) || isExtern(r)) }
-  const takes = (where, ts) => { const t = ts.find(hostRef); if (t) fail(`${where} takes ${show(t)} from the host, which an i32 can't hold`) }
+  const takes = (where, ts, hint = '') => { const t = ts.find(hostRef); if (t) fail(`${where} takes ${show(t)} from the host, which an i32 can't hold${hint}`) }
+  const unless = '; if the host never calls it, keep only the exports it calls (exports option, --exports)'
   // what an export lets the host pass in: a function's params, a tag's, a mutable global's value
   const into = (k, e) => k === 'global' ? (gtype(e.node)[0] === 'mut' ? [gtype(e.node)] : []) : sig(e.node).params
   const KINDS = ['func', 'global', 'tag']
   for (const e of imps.func) takes(e.imp, sig(e.node).results)
   for (const e of imps.global) takes(e.imp, [gtype(e.node)])
   for (const e of imps.tag) takes(e.imp, sig(e.node).params)
-  for (const k of KINDS) for (const e of space(k)) for (const x of e.node) if (x[0] === 'export') takes(`export ${x[1]}`, into(k, e))
+  for (const k of KINDS) for (const e of space(k)) for (const x of e.node) if (x[0] === 'export') takes(`export ${x[1]}`, into(k, e), unless)
   for (const n of m.slice(first)) if (n[0] === 'export' && KINDS.includes(n[2][0])) {
     const [k, x] = n[2], e = space(k)[at(byName(space(k)), x)]
-    if (e) takes(`export ${n[1]}`, into(k, e))
+    if (e) takes(`export ${n[1]}`, into(k, e), unless)
   }
 
   // -- bodies and global initializers, flat
@@ -1287,6 +1288,24 @@ const detect = (ast) => {
 }
 
 /**
+ * Keep only the named exports (an array, or names split by spaces or commas); the
+ * rest become internal. Through a dropped export the host can't pass the gc lowering
+ * a reference it can't hold.
+ */
+const only = (ast, names) => {
+  const keep = new Set(typeof names === 'string' ? names.split(/[\s,]+/).filter(Boolean) : names), seen = new Set()
+  const kept = x => keep.has(x = unescape(x[1])) && seen.add(x)
+  const fields = ast[0] === 'module' || Array.isArray(ast[0]) ? ast : [ast]
+  for (let i = fields.length; i--;) {
+    const n = fields[i]
+    if (!Array.isArray(n)) continue
+    if (n[0] === 'export') { kept(n) || fields.splice(i, 1); continue }
+    for (let j = n.length; j--;) if (Array.isArray(n[j]) && n[j][0] === 'export' && !kept(n[j])) n.splice(j, 1)
+  }
+  for (const x of keep) if (!seen.has(x)) throw Error(`polyfill: no export "${x}" to keep`)
+}
+
+/**
  * Apply polyfill transforms to AST.
  *
  * @param {Array|string} ast - Module AST or source string
@@ -1294,17 +1313,20 @@ const detect = (ast) => {
  *   - true: polyfill all detected features
  *   - 'funcref struct': space-separated feature list
  *   - { funcref: true, struct: false }: feature map
+ *   - { exports: ['_start', 'memory'] }: keep only these exports, the rest become internal
  * @returns {Array} Transformed AST
  *
  * @example
  * polyfill(ast)                      // auto-detect and polyfill all
  * polyfill(ast, 'funcref')           // only funcref
  * polyfill(ast, { funcref: true })   // explicit
+ * polyfill(ast, { exports: '_start memory' })  // a WASI command, for a host that calls only _start
  */
 export default function polyfill(ast, opts = true) {
   if (typeof ast === 'string') ast = parse(ast)
   ast = clone(ast)
   opts = normalize(opts)
+  if (opts.exports) only(ast, opts.exports)
 
   const used = detect(ast)
   // gc (or ref_cast, which needs it) lowers every reference; funcref defers to it

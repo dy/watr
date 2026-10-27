@@ -1669,6 +1669,16 @@ t('polyfill gc: host references are rejected at the boundary', () => {
   ]) throws(() => polyfill(src), /takes .* from the host, which an i32 can't hold/, src)
   // a reference the module hands out is an i32 handle the host can only give back
   ok(polyfill(`(module (type $s (struct)) (func (export "f") (result externref) (ref.null extern)))`), 'externref result')
+  // keeping only the exports the host calls closes the module
+  const src = `(module (type $s (struct)) (memory 1)
+    (func $f (export "f") (export "f2") (param externref)) (func (export "_start")) (export "mem" (memory 0)) (export "g" (func $f)))`
+  throws(() => polyfill(src), /export "f" takes externref from the host, .*keep only the exports it calls/)
+  const names = ast => WebAssembly.Module.exports(new WebAssembly.Module(compile(ast))).map(e => e.name)
+  same(names(polyfill(src, { exports: ['_start', 'mem'] })), ['_start', 'mem'])
+  same(names(polyfill(src, { exports: '_start' })), ['_start'])
+  throws(() => polyfill(src, { exports: '_start,_strat' }), /no export "_strat" to keep/)
+  // without GC too: only the named ones stay
+  same(names(polyfill(`(func (export "a")) (func (export "b"))`, { exports: 'b' })), ['b'])
   ok(polyfill(`(module (type $s (struct)) (func (export "f") (param anyref) (result i32) (ref.test (ref $s) (local.get 0))))`), 'anyref param')
 })
 

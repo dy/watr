@@ -148,6 +148,9 @@ compile(ast)
 // specific features
 polyfill(ast, 'funcref')              // space-separated string
 polyfill(ast, { funcref: true })      // object
+
+// keep only the exports the host calls; the rest become internal
+polyfill(ast, { exports: ['_start', 'memory'] })
 ```
 
 **Available polyfills:**
@@ -194,11 +197,12 @@ polyfill(ast, { funcref: true })      // object
 * The heap is a bump allocator that never frees, growing its memory by doubling. It gets a memory of its own: memory 0 when the module has none (the output is MVP), one more memory otherwise (`wasm2c --enable-multi-memory`), so it never meets the module's own allocator. Data and elem segments that arrays read are copied into it.
 * A global initialized with a GC value becomes mutable and is built by a start function, before the module's own start.
 * An import or export through which the host would pass in `externref` or `funcref` (an imported function's result, an imported global, an exported function's parameter, an exported mutable global, a tag) is rejected. References the module hands out cross as `i32` handles the host can only give back.
+* A module may export helpers its own host never calls, as a JS compiler's WASI output does for JS glue. `exports` (CLI `--exports`) keeps only the named exports, so a native host that calls `_start` gets a closed module; the boundary still checks what stays.
 * Not lowered: tables of GC references and GC allocations in elem segments, custom descriptors, null tests on `exnref`. `call_indirect` compares lowered signatures, so function types that differ only in references or recursion groups no longer trap as mismatched.
 * Exception handling passes through; function bodies come out in flat (stack) form.
 
 ```sh
-watr module.wat --polyfill -o module.wasm
+watr module.wat --polyfill --exports _start,memory -o module.wasm
 wasm2c --enable-multi-memory module.wasm -o module.c   # the flag only when the module had a memory
 ```
 
