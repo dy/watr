@@ -194,7 +194,7 @@ polyfill(ast, { exports: ['_start', 'memory'] })
 * Locals, params, results, globals, fields, elements, block types and type definitions follow; struct and array types, `sub`, `final` and `rec` leave the type section.
 * A tag is the preorder number of the object's canonical type in the subtype forest, so `ref.test`, `ref.cast` and `br_on_cast(_fail)` check one range. Types match iso-recursively, as GC casts see them.
 * Traps stay traps: null access, out-of-bounds index, failed cast, segment overrun, a dropped segment.
-* The heap is a bump allocator that never frees, growing its memory by doubling. It gets a memory of its own: memory 0 when the module has none (the output is MVP), one more memory otherwise (`wasm2c --enable-multi-memory`), so it never meets the module's own allocator. Data and elem segments that arrays read are copied into it.
+* The heap is a bump allocator that never frees, growing its memory by doubling. It gets a memory of its own: memory 0 when the module has none (the output is MVP), one more memory otherwise, so it never meets the module's own allocator. Data and elem segments that arrays read are copied into it.
 * A global initialized with a GC value becomes mutable and is built by a start function, before the module's own start.
 * An import or export through which the host would pass in `externref` or `funcref` (an imported function's result, an imported global, an exported function's parameter, an exported mutable global, a tag) is rejected. References the module hands out cross as `i32` handles the host can only give back.
 * A module may export helpers its own host never calls, as a JS compiler's WASI output does for JS glue. `exports` (CLI `--exports`) keeps only the named exports, so a native host that calls `_start` gets a closed module; the boundary still checks what stays.
@@ -203,8 +203,11 @@ polyfill(ast, { exports: ['_start', 'memory'] })
 
 ```sh
 watr module.wat --polyfill --exports _start,memory -o module.wasm
-wasm2c --enable-multi-memory module.wasm -o module.c   # the flag only when the module had a memory
+wasm2c module.wasm -o module.c   # WABT 1.0.42
+wasm2c --enable-multi-memory --enable-exceptions module.wasm -o module.c   # WABT 1.0.39
 ```
+
+WABT 1.0.42 enables multi-memory and exceptions by default and rejects their `--enable-` flags; 1.0.39 needs `--enable-multi-memory` when the module had a memory of its own and `--enable-exceptions` when it has tags. `wasm2c --help` shows which a version takes. For a GC binary without its text: wasm2wat can't read packed fields (1.0.42 included), binaryen's `wasm-dis` can, and `watr --polyfill` takes its output.
 
 ### `optimize(ast, options?)`
 
