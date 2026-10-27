@@ -5128,6 +5128,31 @@ test('deadset: a read-first arm keeps the store (the zero IS the else-value)', (
   assert.equal(run.g(3), 9)
 })
 
+test('deadset: a branch carrying the value reads it before it jumps', () => {
+  const src = `(module
+    (func (export "br") (param $c i32) (result i32) (local $x i32)
+      (local.set $x (i32.const 7))
+      (block $b (result i32)
+        (if (local.get $c) (then (local.set $x (i32.const 1))))
+        (br $b (local.get $x))))
+    (func (export "brif") (param $c i32) (result i32) (local $x i32)
+      (local.set $x (i32.const 7))
+      (block $b (result i32)
+        (if (local.get $c) (then (local.set $x (i32.const 1))))
+        (drop (br_if $b (local.get $x) (i32.const 1)))
+        (i32.const 0)))
+    (func (export "table") (param $c i32) (result i32) (local $x i32)
+      (local.set $x (i32.const 7))
+      (block $b (result i32)
+        (if (local.get $c) (then (local.set $x (i32.const 1))))
+        (br_table $b (local.get $x) (i32.const 0)))))`
+  const run = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(src), 'deadset')))).exports
+  for (const f of ['br', 'brif', 'table']) {
+    assert.equal(run[f](0), 7, `${f}: the store the branch carries stays`)
+    assert.equal(run[f](1), 1, `${f}: the overwrite still reads`)
+  }
+})
+
 test('deadset: loop back-edge counts the body-top re-store as the killer', () => {
   // t zeroed at body top, read AFTER the loop → the back-edge path is killed
   // by the re-execution of the store itself, but the EXIT path reads t → keep

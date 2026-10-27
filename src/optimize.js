@@ -6005,6 +6005,7 @@ const deadset = (ast) => {
       while (true) {
         if (++steps > 200000 || depth > 512) return 'get'
         if (k.done || k.set) return 'set'
+        if (k.jump) return k.t ? followLabel(x, k.t, spin, depth + 1) : 'get'
         if (k.brif) {
           // taken path recurses (bounded by the depth cap); the not-taken
           // fall-through CONTINUES this loop — keeps br_if chains linear.
@@ -6044,9 +6045,9 @@ const deadset = (ast) => {
           // hop stacked one frame per scanned non-leaf node (kernel-size
           // functions overflowed); only terminal/fork kinds leave the loop.
           let u = k
-          while (!u.done && !u.set && !u.brif && !u.table && !u.arms && u.i >= u.list.length) u = u.k
+          while (!u.done && !u.set && !u.jump && !u.brif && !u.table && !u.arms && u.i >= u.list.length) u = u.k
           if (u.done || u.set) return 'set'
-          if (u.brif || u.table || u.arms) return evalK(x, u, spin, depth)
+          if (u.jump || u.brif || u.table || u.arms) return evalK(x, u, spin, depth)
           list = u.list; i = u.i; env = u.env; k = u.k
           continue
         }
@@ -6087,26 +6088,30 @@ const deadset = (ast) => {
           }
           k = restK(); list = n; i = j; env = env2; continue
         }
+        // a branch's operands (a carried value, then br_if's condition) are
+        // evaluated before it jumps: scan them all, then follow the label
         if (op === 'br') {
           const t = env[n[1]]
-          return t ? followLabel(x, t, spin, depth + 1) : 'get'
+          const ops = n.filter((c, j) => j > 1 && Array.isArray(c))
+          const cont = { jump: true, t }
+          if (ops.length) { list = [null, ...ops]; i = 1; k = cont; continue }
+          return evalK(x, cont, spin, depth)
         }
         if (op === 'br_if') {
           const t = env[n[1]]
           const cont = { brif: true, t, k: restK(), env }
-          const cond = n.length > 2 && Array.isArray(n[2]) ? n[2] : null
-          if (cond) { list = [null, cond]; i = 1; k = cont; continue }
+          const ops = n.filter((c, j) => j > 1 && Array.isArray(c))
+          if (ops.length) { list = [null, ...ops]; i = 1; k = cont; continue }
           return evalK(x, cont, spin, depth)
         }
         if (op === 'br_table') {
-          const labels = []
-          let idx = null
+          const labels = [], ops = []
           for (let j = 1; j < n.length; j++) {
             if (typeof n[j] === 'string') labels.push(n[j])
-            else if (Array.isArray(n[j])) idx = n[j]
+            else if (Array.isArray(n[j])) ops.push(n[j])
           }
           const cont = { table: true, labels, env }
-          if (idx) { list = [null, idx]; i = 1; k = cont; continue }
+          if (ops.length) { list = [null, ...ops]; i = 1; k = cont; continue }
           return evalK(x, cont, spin, depth)
         }
         if (op === 'if') {
