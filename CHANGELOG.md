@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Keep the names of a typed function's inline params: `(func (type $t) (param $a i32) ...)`, as wasm2wat and binaryen print it, read `$a` as unknown.
+
 ## v5.12.0
 
 - `gc` polyfill lowers a closed GC module to `i32` references over a linear-memory heap, so it runs without GC, wasm2c included (#12): reference-typed fields and elements, `externref` and the any/extern conversions, i31 beside heap references, casts against the subtype hierarchy, packed fields, `array.fill`/`copy`/`new_data`/`new_elem`/`init_data`/`init_elem`, `call_ref`, GC globals.

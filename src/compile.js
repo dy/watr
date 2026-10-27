@@ -730,8 +730,10 @@ const typeuse = (stk, ctx) => {
   let [, idx] = stk.pop(), [param, result] = paramres(stk)
   const entry = ctx.type[(typeof idx === 'string' && isNaN(idx)) ? ctx.type[idx] : +idx]
   if (!entry) throw Error(`Unknown type ${idx}`)
-  if ((param.length || result.length) && entry[1].join('>') !== param + '>' + result) throw Error(`Type ${idx} mismatch`)
-  return [idx, ...entry[1]]
+  if (!param.length && !result.length) return [idx, ...entry[1]]
+  if (entry[1].join('>') !== param + '>' + result) throw Error(`Type ${idx} mismatch`)
+  // the inline params match the type's and carry their names
+  return [idx, param, result]
 }
 
 /**

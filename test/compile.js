@@ -99,6 +99,18 @@ t('compile: named function named param', () => {
   is(dbl(21), 42)
 })
 
+t('compile: a typed function names its params inline', () => {
+  // wasm2wat and binaryen print a function this way
+  let { dbl } = inline(`
+    (type $t (func (param i32) (result i32)))
+    (func $dbl (export "dbl") (type $t) (param $a i32) (result i32)
+      (i32.add (local.get $a) (local.get $a))
+    )
+  `).exports
+  is(dbl(21), 42)
+  throws(() => compile(parse(`(type $t (func (param i32))) (func (type $t) (param $a i64))`)), /mismatch/)
+})
+
 t('compile: call function direct', () => {
   let { f } = inline(`
   (func $dbl (param $a i32) (result i32)
