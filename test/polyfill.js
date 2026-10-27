@@ -26,6 +26,13 @@ t('polyfill: normalize options', () => {
   same(normalize({ funcref: false }), { funcref: false })
 })
 
+t('polyfill: a single field gets its helpers beside it', () => {
+  // parse('(func ...)') is the field itself: a table or helper a pass adds goes beside it, not into it
+  const f = src => new WebAssembly.Instance(new WebAssembly.Module(compile(polyfill(src)))).exports.f
+  is(f(`(func (export "f") (param f32) (result i32) (i32.trunc_sat_f32_s (local.get 0)))`)(1e10), 2147483647)
+  is(f(`(func $f (export "f") (result i32) (drop (ref.func $f)) (i32.const 1))`)(), 1)
+})
+
 t('polyfill: detect features', () => {
   let ast
 

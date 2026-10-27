@@ -653,10 +653,10 @@ const unflatten = recs => recs.flatMap(r => r[0] === '@raw' ? r.slice(1) : r)
 const gc = (ast, ctx) => {
   if (ctx.gcDone) return ast
   ctx.gcDone = true
-  // a module, one field, or a list of fields (comments around a module included)
+  // a module or a list of fields (comments around a module included)
   let m = ast
   if (m[0] !== 'module') {
-    const nodes = (typeof m[0] === 'string' && !isNote(m[0]) ? [m] : m).filter(n => !isNote(n))
+    const nodes = m.filter(n => !isNote(n))
     m = nodes.length === 1 && nodes[0][0] === 'module' ? nodes[0] : ['module', ...nodes]
   }
   const first = isId(m[1]) ? 2 : 1
@@ -1295,11 +1295,10 @@ const detect = (ast) => {
 const only = (ast, names) => {
   const keep = new Set(typeof names === 'string' ? names.split(/[\s,]+/).filter(Boolean) : names), seen = new Set()
   const kept = x => keep.has(x = unescape(x[1])) && seen.add(x)
-  const fields = ast[0] === 'module' || Array.isArray(ast[0]) ? ast : [ast]
-  for (let i = fields.length; i--;) {
-    const n = fields[i]
+  for (let i = ast.length; i--;) {
+    const n = ast[i]
     if (!Array.isArray(n)) continue
-    if (n[0] === 'export') { kept(n) || fields.splice(i, 1); continue }
+    if (n[0] === 'export') { kept(n) || ast.splice(i, 1); continue }
     for (let j = n.length; j--;) if (Array.isArray(n[j]) && n[j][0] === 'export' && !kept(n[j])) n.splice(j, 1)
   }
   for (const x of keep) if (!seen.has(x)) throw Error(`polyfill: no export "${x}" to keep`)
@@ -1325,6 +1324,8 @@ const only = (ast, names) => {
 export default function polyfill(ast, opts = true) {
   if (typeof ast === 'string') ast = parse(ast)
   ast = clone(ast)
+  // one field parses to the field itself: a list of it lets a pass add fields beside it
+  if (typeof ast[0] === 'string' && ast[0] !== 'module' && !isNote(ast[0])) ast = [ast]
   opts = normalize(opts)
   if (opts.exports) only(ast, opts.exports)
 

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lower a folded block, loop, if or try_table whose body is flat in the `gc` polyfill: its instructions were read as the block's immediates and left unlowered.
 - `polyfill(ast, { exports })` and `--exports` keep only the named exports, so a GC module whose helper exports take `externref` (the JS glue's) lowers for a native host that calls `_start`. The rejection says so.
 - `--help` lists every polyfill feature, `gc` and `ref_cast` included, from the feature table.
+- Polyfill a single field, as `parse('(func ...)')` gives it: the table or helper function a pass adds went inside the field.
 
 ## v5.12.0
 
