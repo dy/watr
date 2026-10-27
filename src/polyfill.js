@@ -9,6 +9,24 @@ import parse from './parse.js'
 import { walk, walkPost, clone, str, LOC } from './util.js'
 import { OPCODE, unknownType } from './const.js'
 
+const isId = n => typeof n === 'string' && n[0] === '$'
+const isNote = n => typeof n === 'string' && (n[0] === ';' || n[0] === '(' && n[1] === ';')
+const HEAD = new Set(['export', 'import', 'type', 'param', 'result', 'local'])
+
+/** A function's head: the clauses before its body. A flat body's `(type)`, `(param)` and `(result)` aren't the function's. */
+const head = n => {
+  let k = 1
+  while (k < n.length && (isId(n[k]) || isNote(n[k]) || Array.isArray(n[k]) && HEAD.has(n[k][0]))) k++
+  return n.slice(1, k)
+}
+
+/** `{ params, results }` of (param ...) and (result ...) clauses. */
+const sigOf = cs => {
+  const params = [], results = []
+  for (const c of cs) if (c[0] === 'param') params.push(...c.slice(isId(c[1]) ? 2 : 1)); else if (c[0] === 'result') results.push(...c.slice(1))
+  return { params, results }
+}
+
 /**
  * Find module-level nodes by kind (func, table, etc).
  * @param {Array} ast - Module AST
@@ -74,25 +92,6 @@ const funcref = (ast, ctx) => {
 
   // Insert table with inline elem: (table $id funcref (elem $f1 $f2 ...))
   insert(ast, insertPos, ['table', tableId, 'funcref', ['elem', ...refList]])
-
-  // Collect function signatures for call_indirect
-  const funcSigs = {}
-  walk(ast, node => {
-    if (!Array.isArray(node) || node[0] !== 'func') return
-    const id = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
-    if (!id) return
-    // Extract type info
-    const params = [], results = []
-    for (const part of node) {
-      if (Array.isArray(part) && part[0] === 'param') {
-        for (let i = 1; i < part.length; i++) if (part[i][0] !== '$') params.push(part[i])
-      }
-      if (Array.isArray(part) && part[0] === 'result') {
-        for (let i = 1; i < part.length; i++) results.push(part[i])
-      }
-    }
-    funcSigs[id] = { params, results }
-  })
 
   // Transform instructions (post-order so children are transformed first)
   walkPost(ast, (node, parent, idx) => {
@@ -514,14 +513,7 @@ const multi_value = (ast, ctx) => {
   walk(ast, node => {
     if (!Array.isArray(node) || node[0] !== 'func') return
     const id = typeof node[1] === 'string' && node[1][0] === '$' ? node[1] : null
-
-    // Count results
-    const results = []
-    for (const part of node) {
-      if (Array.isArray(part) && part[0] === 'result') {
-        for (let i = 1; i < part.length; i++) results.push(part[i])
-      }
-    }
+    const { results } = sigOf(head(node))
 
     if (results.length > 1 && id) {
       multiResultFuncs.set(id, results)
@@ -600,11 +592,8 @@ const ABS = new Set(['any', 'eq', 'i31', 'struct', 'array', 'none', 'func', 'nof
 const SIZE = { i8: 1, i16: 2, i32: 4, f32: 4, i64: 8, f64: 8, v128: 16 }
 // a folded instruction's leading immediates, as compile's normalize reads them
 const IMMS = new Set(['type', 'param', 'result', 'ref', 'exact', 'on', 'catch', 'catch_ref', 'catch_all', 'catch_all_ref'])
-const HEAD = new Set(['export', 'import', 'type', 'param', 'result', 'local'])
 
-const isId = n => typeof n === 'string' && n[0] === '$'
 const isNum = n => typeof n === 'number' || typeof n === 'string' && /^[+-]?\d+$/.test(n)
-const isNote = n => typeof n === 'string' && (n[0] === ';' || n[0] === '(' && n[1] === ';')
 const isOp = n => typeof n === 'string' && typeof OPCODE[n] === 'number'
 const isImm = n => Array.isArray(n) ? IMMS.has(n[0]) : !isNote(n) && !isOp(n)
 const show = t => Array.isArray(t) ? `(${t.map(show).join(' ')})` : String(t)
@@ -698,11 +687,6 @@ const gc = (ast, ctx) => {
   walk(m, n => { if (Array.isArray(n) && n[0] === 'type' && n.length === 2 && isNum(n[1])) n[1] = tn(n[1]) })
 
   const fld = f => f?.[0] === 'mut' ? { st: f[1], mut: true } : { st: f, mut: false }
-  const sigOf = cs => {
-    const params = [], results = []
-    for (const c of cs) if (c[0] === 'param') params.push(...c.slice(isId(c[1]) ? 2 : 1)); else if (c[0] === 'result') results.push(...c.slice(1))
-    return { params, results }
-  }
   for (const nm of tnames) {
     const def = T[nm], parts = def.node.slice(2)
     if (parts.length !== 1) fail(`type ${nm}: descriptors aren't polyfilled`)
@@ -801,7 +785,7 @@ const gc = (ast, ctx) => {
   const byName = list => Object.fromEntries(list.map((e, i) => [isId(e.node[1]) ? e.node[1] : i, i]))
   const fn = byName(funcs), gn = byName(globals)
   const at = (map, x) => isId(x) ? map[x] : +x
-  const sig = n => { const ty = n.find(x => x[0] === 'type'); return ty ? kind(tn(ty[1]), 'func') : sigOf(n.filter(Array.isArray)) }
+  const sig = n => { const h = head(n), ty = h.find(x => x[0] === 'type'); return ty ? kind(tn(ty[1]), 'func') : sigOf(h) }
   const gtype = n => n.slice(1).find(x => !isId(x) && !(x[0] === 'export' || x[0] === 'import'))
 
   // -- the host boundary: a reference the host makes can't become an i32
@@ -903,9 +887,9 @@ const gc = (ast, ctx) => {
   let ftags = 0
   if (fcast) {
     const fsig = f => {
-      const ty = f.node.find(x => x[0] === 'type')
+      const h = head(f.node), ty = h.find(x => x[0] === 'type')
       if (ty) return lo[canon[tn(ty[1])]]
-      const c = groupKey.get(['final', '', 'func', ...sigKey(sigOf(f.node.filter(Array.isArray)), [])].join(' '))
+      const c = groupKey.get(['final', '', 'func', ...sigKey(sigOf(h), [])].join(' '))
       return c == null ? 0 : lo[c + '.0']
     }
     const vals = [0, ...slots.map(x => fsig(funcs[at(fn, x)]))]
@@ -1294,12 +1278,7 @@ const detect = (ast) => {
 
   // Special: multi_value — functions with >1 result
   walk(ast, node => {
-    if (!Array.isArray(node) || node[0] !== 'func') return
-    let resultCount = 0
-    for (const part of node) {
-      if (Array.isArray(part) && part[0] === 'result') resultCount += part.length - 1
-    }
-    if (resultCount > 1) used.add('multi_value')
+    if (Array.isArray(node) && node[0] === 'func' && sigOf(head(node)).results.length > 1) used.add('multi_value')
   })
 
   return used

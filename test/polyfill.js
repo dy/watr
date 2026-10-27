@@ -1016,6 +1016,25 @@ t('polyfill: multi_value single result ok', () => {
   ok(!detected.has('multi_value'), 'no multi_value for single result')
 })
 
+t('polyfill: a flat body\'s block types are not the function\'s signature', () => {
+  // flat, a block's (param)/(result) and call_indirect's (type) sit beside the function's own
+  const flat = `(module
+    (type $t (func (param externref)))
+    (table 1 funcref)
+    (func $f (export "f") (param i32) (result i32)
+      i32.const 1
+      block (param i32) (result i32)
+      end
+      ref.null extern
+      local.get 0
+      call_indirect (type $t)))`
+  ok(!detect(parse(flat)).has('multi_value'), 'one result')
+  is(compile(polyfill(parse(flat))), compile(parse(flat)), 'nothing to polyfill')
+  // the gc boundary reads the head: f takes an i32, not the externref call_indirect passes
+  const gc = flat.replace('(table', '(type $s (struct)) (global (ref null $s) (struct.new $s)) (table')
+  new WebAssembly.Module(compile(polyfill(parse(gc))))
+})
+
 t('polyfill: multi_value transform', () => {
   const src = `(module
     (func $swap (param i32 i32) (result i32 i32)
