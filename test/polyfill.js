@@ -1609,6 +1609,26 @@ t('polyfill gc: exception payloads, flat code, numeric type indices, typed funct
     (func (export "f") (param i32) (result i32) (call_indirect $t (type $v) (local.get 0))))`, [['f', 0], ['f', 1]])
 })
 
+t('polyfill gc: a folded block\'s body may be flat', () => {
+  // past a block's label and block type, its leading tokens are instructions, not immediates
+  gcSame(`(module
+    (type $a (array (mut i32)))
+    (tag $e (param i32))
+    (func (export "sum") (param i32) (result i32) (local $x (ref null $a)) (local $i i32) (local $s i32)
+      (local.set $x (array.new $a (i32.const 5) (local.get 0)))
+      (block $out
+        (loop $next
+          local.get $i local.get $x array.len i32.ge_u br_if $out
+          local.get $s local.get $x local.get $i array.get $a i32.add local.set $s
+          local.get $i i32.const 1 i32.add local.set $i
+          br $next))
+      (if (result i32) (i32.eqz (local.get 0)) (then local.get $x array.len) (else local.get $s)))
+    (func (export "tried") (result i32)
+      (block $h (result i32)
+        (try_table (result i32) (catch $e $h) i32.const 3 array.new_default $a array.len))))`,
+    [['sum', 0], ['sum', 4], ['tried']])
+})
+
 t('polyfill gc: the heap is a memory of its own, growing past a page', () => {
   // the module's memory and its passive data stay its own
   const ast = gcSame(`(module

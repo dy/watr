@@ -630,9 +630,11 @@ const flatten = (nodes, out = [], stmt = true) => {
     }
     const op = n[0]
     if (!isOp(op)) { out.push(['@raw', n]); continue }
-    // as compile reads a folded node: every leading token and type form follows the op, the arrays after them come first
+    // as compile reads a folded node: every leading token and type form follows the op, the arrays after them come first;
+    // a block's leading tokens past its label are its body, flat
+    const ctl = op === 'block' || op === 'loop' || op === 'if' || op === 'try_table'
     let k = 1
-    while (k < n.length && (!Array.isArray(n[k]) || IMMS.has(n[k][0]))) k++
+    while (k < n.length && (Array.isArray(n[k]) ? IMMS.has(n[k][0]) : !ctl || k === 1 && isId(n[k]))) k++
     const imm = n.slice(1, k).filter(x => !isNote(x))
     if (op === 'block' || op === 'loop' || op === 'try_table') out.push([op, ...imm]), flatten(n.slice(k), out), out.push(['end'])
     else if (op === 'if') {
