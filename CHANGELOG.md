@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.13.1
+
+- Keep a constant store that a branch carries out of its block in `deadset`: `(br $b (local.get $x))`, a `br_if` value and a `br_table` value read the local before the jump, and the store before them was dropped.
+
 ## v5.13.0
 
 - Keep the names of a typed function's inline params: `(func (type $t) (param $a i32) ...)`, as wasm2wat and binaryen print it, read `$a` as unknown.
