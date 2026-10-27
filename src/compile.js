@@ -1127,13 +1127,16 @@ const reftype = (t, ctx) => (
     t[1] == 'null' ?
       // (ref null (exact $T)) - exact nullable ref
       Array.isArray(t[2]) && t[2][0] === 'exact' ? [TYPE.refnull, 0x62, ...uleb(id(t[2][1], ctx.type))] :
-      TYPE[t[2]] ? [TYPE[t[2]]] : [TYPE.refnull, ...uleb(id(t[t.length - 1], ctx.type))] :
+      TYPE[t[2]] ? [TYPE[t[2]]] : [TYPE.refnull, ...heaptype(t[t.length - 1], ctx)] :
       // (ref (exact $T)) - exact non-null ref
       Array.isArray(t[1]) && t[1][0] === 'exact' ? [TYPE.ref, 0x62, ...uleb(id(t[1][1], ctx.type))] :
-      [TYPE.ref, ...uleb(TYPE[t[t.length - 1]] || id(t[t.length - 1], ctx.type))] :
+      [TYPE.ref, ...heaptype(t[t.length - 1], ctx)] :
     // abbrs
     [TYPE[t] ?? err(`Unknown type ${t}`)]
 );
+
+// a heap type is an s33: an abstract one is its code, a type index from 64 on takes a byte more than as a u32
+const heaptype = (h, ctx) => TYPE[h] ? [TYPE[h]] : i32(id(h, ctx.type))
 
 // build type with mutable flag (mut t) or t
 const fieldtype = (t, ctx, mut = t[0] === 'mut' ? 1 : 0) => [...reftype(mut ? t[1] : t, ctx), mut];
@@ -1185,7 +1188,7 @@ const HANDLER = {
     return [...uleb(count - 1), ...labels]
   },
   select: (n, c) => { let r = n.pop() || []; return r.length ? vec(r.map(t => reftype(t, c))) : [] },
-  ref_null: (n, c) => { let t = n.pop(); return Array.isArray(t) && t[0] === 'exact' ? [0x62, ...uleb(id(t[1], c.type))] : TYPE[t] ? [TYPE[t]] : uleb(id(t, c.type)) },
+  ref_null: (n, c) => { let t = n.pop(); return Array.isArray(t) && t[0] === 'exact' ? [0x62, ...uleb(id(t[1], c.type))] : heaptype(t, c) },
   memarg: (n, c, op, out) => memargEnc(n, op, isIdx(instrPeek(n)) && !isMemParam(instrPeek(n)) ? id(n.pop(), c.memory) : 0, out),
   // memarg + trailing ordering keyword (acquire-release atomics): seqcst=0x00, acqrel=0x01;
   // flags bit 4 signals the ordering byte, placed between align (+memidx) and offset

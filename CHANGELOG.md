@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Keep the names of a typed function's inline params: `(func (type $t) (param $a i32) ...)`, as wasm2wat and binaryen print it, read `$a` as unknown.
 - Read a function's signature from its head in the polyfill: in a flat body, a block's `(result ...)` made `multi_value` rewrite a single-result function, and a `call_indirect (type ...)` or a block's `(param ...)` made `gc` check the wrong parameters at an export.
+- Encode a heap type's index as s33: `(ref $t)`, `ref.null`, `ref.test`, `ref.cast`, `br_on_cast` and typed `select` wrote type 64-127 in one byte, which reads back negative (`Unknown heap type -63`).
 
 ## v5.12.0
 

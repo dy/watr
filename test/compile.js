@@ -376,6 +376,26 @@ t('compile: multivalue block types cross signed index boundaries', () => {
   }
 })
 
+t('compile: heap types cross signed index boundaries', () => {
+  // a heap type is an s33: index 64 is two bytes, though one as a u32
+  for (const count of [0, 63, 64, 127, 128]) {
+    const types = Array.from({ length: count }, (_, i) => `(type (struct (field i32) ${'(field f64) '.repeat(i % 5)}))`).join('\n')
+    const { f, g } = inline(`
+    ${types}
+    (type $box (struct (field (mut i32)) (field (ref null $box))))
+    (global $none (ref null $box) (ref.null $box))
+    (func (export "f") (param i32) (result i32)
+      (local $b (ref null $box))
+      (local.set $b (struct.new $box (local.get 0) (global.get $none)))
+      (struct.get $box 0 (ref.cast (ref $box) (struct.new $box (i32.const 1) (local.get $b)))))
+    (func (export "g") (result i32)
+      (ref.test (ref $box) (select (result (ref null $box)) (ref.null $box) (ref.null none) (i32.const 1))))
+    `).exports
+    is(f(5), 1, `ref.cast, field, local, global at type ${count}`)
+    is(g(), 0, `ref.test, ref.null, typed select at type ${count}`)
+  }
+})
+
 t('compile: flat try_table reads its label, block type and catch clauses', () => {
   const flat = rawCompile(`(module (tag $e (param i32)) (tag $f)
     (func (export "f") (param i32) (result i32)
