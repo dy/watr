@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.13.2
+
+- Count references once in `inline` and walk only the callers of the callee each round inlines, where every round walked the whole module twice: 1.6–2.3× faster on jz's bench programs (webaudio 5.15 → 2.27 s), with identical output.
+
 ## v5.13.1
 
 - Keep a constant store that a branch carries out of its block in `deadset`: `(br $b (local.get $x))`, a `br_if` value and a `br_table` value read the local before the jump, and the store before them was dropped.
