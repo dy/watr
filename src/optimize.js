@@ -6748,23 +6748,50 @@ const inline = (ast, { simdOnly = false, pin = EMPTY_SET, touched = null } = {})
     if (!any) return ast
   }
 
+  // The module's references, counted once and kept per function: a splice
+  // rewrites only the callers of one callee, so only they are counted again,
+  // and only they are walked (a function with no call of the callee changes
+  // nothing, in a round that takes the callers in module order as before).
+  const callRefs = new Map(), otherRef = new Map()   // name → calls; name → functions with a return_call of it
+  const refsOf = new Map()                           // func node → [name → calls, return_call names]
+  const callersOf = new Map()                        // name → funcs that call it (a superset: a caller keeps its place)
+  const bump = (m, k, d) => { const v = (m.get(k) || 0) + d; if (v) m.set(k, v); else m.delete(k) }
+  const tally = (fn, sign) => {
+    const r = refsOf.get(fn)
+    if (!r) return
+    for (const [k, c] of r[0]) bump(callRefs, k, sign * c)
+    for (const k of r[1]) bump(otherRef, k, sign)
+  }
+  const refVisit = (n, calls, tails) => {
+    if (!Array.isArray(n)) return
+    const op = n[0]
+    if (op === 'call' && typeof n[1] === 'string') calls.set(n[1], (calls.get(n[1]) || 0) + 1)
+    else if (op === 'return_call' && typeof n[1] === 'string') tails.add(n[1])
+    for (let i = 1; i < n.length; i++) refVisit(n[i], calls, tails)
+  }
+  const recount = (fn) => {
+    tally(fn, -1)
+    const calls = new Map(), tails = new Set()
+    refVisit(fn, calls, tails)
+    refsOf.set(fn, [calls, tails])
+    tally(fn, 1)
+    for (const k of calls.keys()) { let c = callersOf.get(k); if (!c) callersOf.set(k, c = new Set()); c.add(fn) }
+  }
+  for (const n of ast) {
+    if (Array.isArray(n) && n[0] === 'func') { recount(n); continue }
+    // what lies outside the functions holds its references for good
+    const calls = new Map(), tails = new Set()
+    refVisit(n, calls, tails)
+    for (const [k, c] of calls) bump(callRefs, k, c)
+    for (const k of tails) bump(otherRef, k, 1)
+  }
+  const pinned = inlBuildPinned(ast)
+
   const skip = new Set()  // callees with a non-inlinable site (arity mismatch) — don't re-pick
   for (let round = 0; round < MAX_INLINE_ROUNDS; round++) {
     const funcs = ast.filter(n => Array.isArray(n) && n[0] === 'func')
     const funcByName = new Map()
     for (const n of funcs) if (typeof n[1] === 'string') funcByName.set(n[1], n)
-
-    const callRefs = new Map(), otherRef = new Set()
-    const countRefs = (n) => {
-      if (!Array.isArray(n)) return
-      const op = n[0]
-      if (op === 'call' && typeof n[1] === 'string') callRefs.set(n[1], (callRefs.get(n[1]) || 0) + 1)
-      else if (op === 'return_call' && typeof n[1] === 'string') otherRef.add(n[1])
-      for (let i = 1; i < n.length; i++) countRefs(n[i])
-    }
-    countRefs(ast)
-    const pinned = new Set()
-    for (const n of ast) if (!Array.isArray(n) || n[0] !== 'func') inlCollectPinned(n, pinned)
 
     // Pick a small, liftable, non-recursive callee with ≥1 plain-call site.
     let calleeName = null, parsed = null
@@ -6787,12 +6814,13 @@ const inline = (ast, { simdOnly = false, pin = EMPTY_SET, touched = null } = {})
     const { params, locals, inlResult } = parsed
     const cBody = callee.slice(inlBodyStart(callee))
     const expected = callRefs.get(calleeName) || 0  // callee is non-recursive ⇒ all sites are in other funcs
+    const callers = callersOf.get(calleeName)
     let replaced = 0
 
     // Splice into EVERY caller. A body that itself still calls an as-yet-uninlined
     // helper is fine — later rounds collapse it (or it stays a call).
     for (const fn of funcs) {
-      if (fn === callee) continue
+      if (fn === callee || !callers?.has(fn)) continue
       const addDecls = []
       const before = replaced
       for (let i = inlBodyStart(fn); i < fn.length; i++) {
@@ -6814,11 +6842,16 @@ const inline = (ast, { simdOnly = false, pin = EMPTY_SET, touched = null } = {})
       // module-wide re-scan of it is pure repeated work on a module this large (measured:
       // ~6400 funcs, propagate's own per-func cost dwarfs every sibling pass — see
       // watopt-mem session profiling). touched accumulates across MAX_INLINE_ROUNDS rounds.
-      if (touched && replaced > before) touched.add(fn)
+      if (replaced > before) { recount(fn); if (touched) touched.add(fn) }
     }
 
     // Drop the callee only if every site inlined; else keep it and stop re-picking it.
-    if (replaced === expected) { const idx = ast.indexOf(callee); if (idx >= 0) ast.splice(idx, 1) }
+    if (replaced === expected) {
+      const idx = ast.indexOf(callee)
+      if (idx >= 0) ast.splice(idx, 1)
+      tally(callee, -1)
+      refsOf.delete(callee)
+    }
     else skip.add(calleeName)
   }
 
