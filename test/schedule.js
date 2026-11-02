@@ -106,6 +106,51 @@ test('scheduling: integer min/max chains consume recurrence inputs last', () => 
   }
 })
 
+// An unrolled recurrence as compilers emit it: each step reads the previous
+// result through copies past a bail-out, and the second step sits in an arm.
+const steppedModule = (type, sign) => {
+  const lt = `${type}.lt_${sign}`, c = n => `(${type}.const ${n})`
+  const word = x => type === 'i64' ? `(i64.extend_i32_s ${x})` : x
+  const step = (k, at) => `
+    (local.set $w (local.get $prev))
+    (if (${type}.gt_s (local.get $w) ${c(1000000)}) (then (br $done)))
+    (local.set $next${k} (${type}.add (local.get $w) ${c(1)}))
+    (local.set $other${k} (${type}.add (local.get $bound) ${word(at)}))
+    (local.set $m (${type}.add (local.get $other${k}) ${c(5)}))
+    (if (${lt} (local.get $next${k}) (local.get $m)) (then (local.set $m (local.get $next${k}))))
+    (if (${lt} (local.get $other${k}) (local.get $m)) (then (local.set $m (local.get $other${k}))))
+    (local.set $prev (local.get $m))`
+  return parse(`(module
+    (func $f (export "f") (param $n i32) (param $carry ${type}) (param $bound ${type}) (result ${type})
+      (local $i i32) (local $w ${type}) (local $m ${type}) (local $prev ${type})
+      (local $next0 ${type}) (local $other0 ${type}) (local $next1 ${type}) (local $other1 ${type})
+      (local.set $prev (local.get $carry))
+      (block $done (loop $again
+        (br_if $done (i32.ge_s (local.get $i) (local.get $n)))
+        ${step(0, '(i32.and (local.get $i) (i32.const 3))')}
+        (if (i32.lt_s (i32.add (local.get $i) (i32.const 1)) (local.get $n)) (then
+          ${step(1, '(i32.and (i32.sub (local.get $i) (i32.const 1)) (i32.const 7))')}))
+        (local.set $i (i32.add (local.get $i) (i32.const 2)))
+        (br $again)))
+      (local.get $prev)))`)
+}
+
+test('scheduling: a carried input reached through copies and bail-outs, in a loop or its arms, goes last', () => {
+  for (const type of ['i32', 'i64']) for (const sign of ['s', 'u']) {
+    const ast = steppedModule(type, sign), original = instance(ast), loop = loopOf(ast)
+    const arm = loop.find(n => n?.[0] === 'if' && n[2]?.[0] === 'then' && n[2].length > 3)[2]
+    const pairs = [loop, arm].map(seq => { const i = seq.findIndex(n => n?.[0] === 'if' && n[2]?.[1]?.[0] === 'local.set' && n[2][1][1] === '$m'); return [seq, i, seq[i], seq[i + 1]] })
+    schedule(ast)
+    for (const [seq, i, first, second] of pairs) assert.ok(seq[i] === second && seq[i + 1] === first, `${type}/${sign}: independent update first`)
+    const once = print(ast)
+    schedule(ast)
+    assert.equal(print(ast), once, 'scheduling is stable when repeated')
+    const changed = instance(ast), big = type === 'i64' ? BigInt : Number
+    for (const n of [0, 1, 2, 3, 9]) for (const carry of [-2147483648, -9, 0, 3, 999999, 2147483647]) for (const bound of [-2147483648, -4, 0, 2, 2147483647])
+      assert.equal(changed.f(n, big(carry), big(bound)), original.f(n, big(carry), big(bound)), `${type}/${sign}: n=${n}, carry=${carry}, bound=${bound}`)
+  }
+})
+
 test('scheduling: float, mixed reductions and observable updates retain their order', () => {
   for (const [op, second, type, effect] of [
     ['i32.lt_s', 'i32.gt_s', 'i32', ''],

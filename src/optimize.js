@@ -3588,7 +3588,7 @@ const scheduleRun = (seq, start, end, call) => {
 const minMaxUpdate = n => {
   if (n?.[0] !== 'if' || n.length !== 3) return null
   const c = n[1], b = n[2], s = b?.[1]
-  if (!/^i32\.(lt|le|gt|ge)_[su]$/.test(c?.[0]) ||
+  if (!/^i(32|64)\.(lt|le|gt|ge)_[su]$/.test(c?.[0]) ||
       c[1]?.[0] !== 'local.get' || c[2]?.[0] !== 'local.get' ||
       b?.[0] !== 'then' || b.length !== 2 || s?.[0] !== 'local.set' || s[2]?.[0] !== 'local.get') return null
   const acc = s[1], input = s[2][1]
@@ -3601,36 +3601,51 @@ const minMaxUpdate = n => {
 const deferCarriedReduction = (seq, from, i) => {
   const a = minMaxUpdate(seq[i]), b = a && minMaxUpdate(seq[i + 1])
   if (!b || a.acc !== b.acc || a.kind !== b.kind) return
-  const carries = new Set([a.acc])
+  // The result and its copies after the pair (`prev = m`) are what the next
+  // iteration, or the next unrolled step, starts from.
+  const carried = new Set([a.acc])
   for (let j = i + 2; j < seq.length; j++) {
     const s = seq[j]
     if (SCHED_CONTROL.has(s?.[0]) || s?.[0] === 'local.set' && s[1] === a.acc) break
-    if (s?.[0] === 'local.set' && s[2]?.[0] === 'local.get' && s[2][1] === a.acc) carries.add(s[1])
+    if (s?.[0] === 'local.set' && s[2]?.[0] === 'local.get' && s[2][1] === a.acc) carried.add(s[1])
   }
-  const carried = name => {
-    for (let j = i - 1; j >= from; j--) {
-      const s = seq[j]
-      if (SCHED_CONTROL.has(s?.[0])) break
-      if (s?.[0] !== 'local.set' || s[1] !== name) continue
-      let found = false
-      visit(s[2], n => { if (n[0] === 'local.get' && carries.has(n[1])) found = true })
-      return found
-    }
-    return carries.has(name)
+  // Forward over the statements before the pair, a write holds a carried value
+  // where it reads one, through any chain of copies and steps (`w = prev; x = w + 1`).
+  // A control statement leaves what it writes unknown and the rest as it was.
+  for (let j = from; j < i; j++) {
+    const s = seq[j], control = SCHED_CONTROL.has(s?.[0]), defs = []
+    let reads = false
+    visit(s, n => {
+      if (n[0] === 'local.set' || n[0] === 'local.tee') defs.push(n[1])
+      else if (n[0] === 'local.get' && carried.has(n[1])) reads = true
+    })
+    for (const d of defs) if (reads && !control) carried.add(d); else carried.delete(d)
   }
-  if (carried(a.input) && !carried(b.input)) {
+  if (carried.has(a.input) && !carried.has(b.input)) {
     const first = seq[i]; seq[i] = seq[i + 1]; seq[i + 1] = first
   }
 }
 
 /** Schedule every run of movable statements in the sequence seq[from..]. */
-const scheduleSeq = (seq, from, call) => {
+const scheduleSeq = (seq, from, call, inLoop) => {
   let start = from
   for (let i = from; i <= seq.length; i++) {
-    if (seq[0] === 'loop') deferCarriedReduction(seq, from, i)
+    if (inLoop) deferCarriedReduction(seq, from, i)
     if (i < seq.length && schedMovable(seq[i])) continue
     scheduleRun(seq, start, i, call)
     start = i + 1
+  }
+}
+
+/** Schedule the sequences nested in `n`, knowing whether a loop encloses them. */
+const scheduleNested = (n, call, inLoop) => {
+  for (let i = 1; i < n.length; i++) {
+    const c = n[i]
+    if (!Array.isArray(c)) continue
+    const loop = inLoop || c[0] === 'loop'
+    if (c[0] === 'loop' || c[0] === 'block') scheduleSeq(c, seqStart(c), call, loop)
+    else if (c[0] === 'then' || c[0] === 'else') scheduleSeq(c, 1, call, loop)
+    scheduleNested(c, call, loop)
   }
 }
 
@@ -3642,11 +3657,8 @@ function scheduleRuns(fn, call) {
   if (!Array.isArray(fn) || fn[0] !== 'func' || hasFlatCode(fn)) return
   const bodyStart = findBodyStart(fn)
   if (bodyStart < 0) return
-  scheduleSeq(fn, bodyStart, call)
-  visit(fn, (c) => {
-    if (c[0] === 'loop' || c[0] === 'block') scheduleSeq(c, seqStart(c), call)
-    else if (c[0] === 'then' || c[0] === 'else') scheduleSeq(c, 1, call)
-  })
+  scheduleSeq(fn, bodyStart, call, false)
+  scheduleNested(fn, call, false)
 }
 
 /** Order straight-line statements by the work depending on them, in every function. */
