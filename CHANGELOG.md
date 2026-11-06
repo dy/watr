@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.13.4
+
+- Forward into a loop nested in an expression (a `drop`'s or a `local.set`'s block) only what a loop at statement level admits: a copy was read as its source after the loop wrote that source, from the second round on (a three-round sum gave 201 where it gives 3).
+
 ## v5.13.3
 
 - Order an integer min/max update (`if (x < m) m = x`) with the input that carries the previous iteration's result last where it reaches the update through copies, past a bail-out, or in an arm of a loop (a recurrence's unrolled second cell), and for i64 as for i32: the edit-distance recurrence's carried chain goes from 5 operations to 3, 0.82× the time of jz's levenshtein bench. Floats keep their order, since a ±0 tie depends on it.
