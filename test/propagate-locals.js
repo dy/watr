@@ -138,6 +138,21 @@ test('propagate-locals: nested control, a zero-trip loop and a branch exit keep 
   check(branchExit, [['f', 0], ['f', 1]], (s, a) => assert.deepEqual(a.out.map(o => o[1]), [80, 40]))
 })
 
+test('propagate-locals: a copy does not enter a loop nested in an expression past the loop\'s write of its source', () => {
+  // The back edge runs the body again after the write: $s read as $p would add 100 from the second round.
+  const loop = `(block (result f64) (loop $l
+      (local.set $acc (f64.add (local.get $acc) (local.get $s)))
+      (local.set $p (f64.const 100))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $l (i32.lt_u (local.get $i) (i32.const 3))))
+    (f64.const 0))`
+  for (const stmt of [`(drop ${loop})`, `(local.set $i (i32.trunc_f64_s ${loop}))`])
+    check(`(module (func (export "f") (param $p f64) (result f64) (local $s f64) (local $acc f64) (local $i i32)
+      (local.set $s (local.get $p))
+      ${stmt}
+      (local.get $acc)))`, [['f', 1], ['f', 2]], (s, a) => assert.deepEqual(a.out.map(o => o[1]), [3, 6]))
+})
+
 test('propagate-locals: value exits do not move past a later operand local write', () => {
   for (const value of [
     '(block (result i32) (br_if $bail (local.get $miss)) (i32.const 7))',

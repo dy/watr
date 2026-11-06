@@ -4004,6 +4004,17 @@ const substGets = (node, known) => {
     return node
   }
   let inner = known
+  // A loop's back edge runs its body again after any write in it: the same entries enter it
+  // here, inside an expression, as enter one at statement level (forwardPropagate's branch scope).
+  if (op === 'loop' && known.size) {
+    for (const [name, k] of known) {
+      const uses = CNT?.get(name)
+      if (!getConst(k.val) || constInstrSize(k.val) > 3 || !canSubst(k) || !uses || uses.sets + uses.tees !== 1) {
+        if (inner === known) inner = new Map(known)
+        inner.delete(name)
+      }
+    }
+  }
   if (isBranchScope(op)) {
     let cloned = null
     // Direct recursion instead of walk(): fires on EVERY branch-scope node entered
@@ -4014,8 +4025,8 @@ const substGets = (node, known) => {
     // leaf-visit branch never matched here — skip it outright instead of paying
     // the generic dispatch to discover that every time.
     const rec = (n) => {
-      if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string' && known.has(n[1])) {
-        if (!cloned) cloned = new Map(known)
+      if ((n[0] === 'local.set' || n[0] === 'local.tee') && typeof n[1] === 'string' && inner.has(n[1])) {
+        if (!cloned) cloned = new Map(inner)
         cloned.delete(n[1])
       }
       for (let i = 1; i < n.length; i++) if (Array.isArray(n[i])) rec(n[i])
