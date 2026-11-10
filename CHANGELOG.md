@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.13.5
+
+- Count an `if` arm's write of a local as made on every path only where the arm read nothing of the local first, in `coalesceLocals`: with both arms writing it, one of them by adding to its implicit zero (`(else (local.set $r (f64.add (local.get $r) …)))`), the local joined an earlier temp's slot and read that temp's value where it reads zero.
+
 ## v5.13.4
 
 - Forward into a loop nested in an expression (a `drop`'s or a `local.set`'s block) only what a loop at statement level admits: a copy was read as its source after the loop wrote that source, from the second round on (a three-round sum gave 201 where it gives 3).
