@@ -2777,6 +2777,43 @@ test('coalesce: sibling arms and skipped suffixes retain implicit zero', () => {
   }
 })
 
+test('coalesce: an arm that reads a local before writing it keeps its implicit zero', () => {
+  // Both arms write $value at statement level, so the write looked unconditional
+  // and $value joined $dead's slot; the else arm adds to the zero it starts with.
+  for (const type of ['i32', 'f64']) for (const arm of [
+    `(local.set $value (${type}.add (local.get $value) (${type}.const 4)))`,
+    `(drop (local.get $value)) (local.set $value (${type}.add (local.get $value) (${type}.const 4)))`,
+    `(local.set $other (local.get $value)) (local.set $value (${type}.add (local.get $other) (${type}.const 4)))`,
+    `(drop (local.tee $value (${type}.add (local.get $value) (${type}.const 4))))`,
+  ]) {
+    const ast = parse(`(module (func (export "f") (param $c i32) (result ${type})
+      (local $dead ${type}) (local $value ${type}) (local $other ${type})
+      (local.set $dead (${type}.const 99)) (drop (local.get $dead))
+      (if (local.get $c)
+        (then (local.set $value (${type}.const -1)))
+        (else ${arm}))
+      (local.get $value)))`)
+    const original = new WebAssembly.Instance(new WebAssembly.Module(compile(ast))).exports.f
+    const changed = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(ast, 'coalesce locals')))).exports.f
+    for (const c of [0, 1, 0, 0, 1]) {
+      assert.equal(original(c), c ? -1 : 4)
+      assert.equal(changed(c), original(c), `${type}: ${arm}`)
+    }
+  }
+  // Arms that write before any read still share: the write is on every path.
+  const shared = parse(`(module (func (export "f") (param $c i32) (result i32)
+    (local $dead i32) (local $value i32)
+    (local.set $dead (i32.const 99)) (drop (local.get $dead))
+    (if (local.get $c)
+      (then (local.set $value (i32.const 7)))
+      (else (local.set $value (i32.const 3)) (local.set $value (i32.add (local.get $value) (i32.const 1)))))
+    (local.get $value)))`)
+  const merged = optimize(shared, 'coalesce locals')
+  assert.ok(!/\$value/.test(print(merged)), 'a local both arms write first joins the dead slot')
+  const f = new WebAssembly.Instance(new WebAssembly.Module(compile(merged))).exports.f
+  assert.equal(f(1), 7); assert.equal(f(0), 4)
+})
+
 test('coalesce: a value defined in an outer arm remains live across inner-loop backedges', () => {
   const ast = parse(`(module (func (export "f") (param $n i32) (result i32)
     (local $a i32) (local $b i32) (local $i i32) (local $sum i32)

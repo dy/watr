@@ -7677,10 +7677,16 @@ const coalesceLocals = (ast) => {
             o === 'throw' || o === 'return_call' || o === 'return_call_indirect') ok = false
       })
       if (!ok) return null
-      const set = new Set()
+      // A write counts only where the arm read nothing of the local before it:
+      // `(local.set $r (f64.add (local.get $r) …))`, or a read in an earlier
+      // statement, takes the value the arm was entered with.
+      const set = new Set(), read = new Set()
+      const reads = (x) => walk(x, y => { if (Array.isArray(y) && y[0] === 'local.get' && typeof y[1] === 'string') read.add(y[1]) })
       for (let k = 1; k < arm.length; k++) {
         const st = arm[k]
-        if (Array.isArray(st) && (st[0] === 'local.set' || st[0] === 'local.tee') && typeof st[1] === 'string') set.add(st[1])
+        const sets = Array.isArray(st) && (st[0] === 'local.set' || st[0] === 'local.tee') && typeof st[1] === 'string'
+        if (sets) for (let j = 2; j < st.length; j++) reads(st[j]); else reads(st)
+        if (sets && !read.has(st[1])) set.add(st[1])
       }
       return set
     }
