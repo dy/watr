@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.13.7
+
+- Compare the leaves of two `outline` sites by their spelling, as the group's key does: a constant an emitter wrote as a number and the same constant the parser read as a string are one token. 5.13.6 (tagged, not published) compared them by type and kept such sites apart.
+
 ## v5.13.6
 
 - Share an `outline` helper only between sites that are one expression: the group's key takes the position each local repeats at, and a site takes the first site's body only where the two compare equal node for node. `A[i*16+j]*x[j]` beside `A[j*16+i]*x[j]` shared a helper and the second read the first's local; two expressions past 64 characters whose 32-bit keys collide shared the first's constant.
