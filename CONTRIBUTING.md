@@ -27,6 +27,10 @@ npm run test:repl           # REPL integration tests
 
 Tests must pass on Node 24+ with `--experimental-wasm-exnref`.
 
+`npm publish` does not rerun the suites: it checks that CI passed for the commit
+being published (`npm run ci:passed`, through `gh`), then builds `dist/` and `types/`.
+CI runs `npm test`'s three suites plain and against the wasm build.
+
 The lockfile pins the working JZ source revision for both compilation and
 interop; `npm ci`, `npm run build:wasm`, and `npm run test:wasm` need no override.
 Replace the source pin with an npm release once it includes these fixes.

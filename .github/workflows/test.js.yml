@@ -31,5 +31,8 @@ jobs:
     - run: npm ci
     - run: npm run build --if-present
     - name: Test
-      run: node test
+      run: node test && npm run test:propagate
       # watr's own tests; the official spec testsuite runs in spec.yml
+    - name: Test against the wasm build
+      run: WATR_WASM=1 node test && WATR_WASM=1 npm run test:propagate
+      # publishing checks this workflow's result (npm run ci:passed), not the suites again

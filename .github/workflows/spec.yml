@@ -28,3 +28,5 @@ jobs:
         cache: 'npm'
     - run: npm ci
     - run: npm run test:spec
+    - name: Spec against the wasm build
+      run: npm run build:wasm && WATR_WASM=1 npm run test:spec

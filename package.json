@@ -66,7 +66,8 @@
     "test:wasm": "WATR_WASM=1 npm test",
     "test:repl": "npx playwright test",
     "types": "npx tsc src/*.js watr.js --allowJs --declaration --emitDeclarationOnly --declarationMap --outDir types",
-    "prepublishOnly": "npm run build && npm run types && npm test && npm run test:wasm",
+    "ci:passed": "git diff-index --quiet HEAD --ignore-submodules && gh run list --commit $(git rev-parse HEAD) --event push --json conclusion --jq 'length > 0 and all(.[]; .conclusion == \"success\")' | grep -qx true || (echo 'not published: CI has not passed for this commit, or the tree differs from it' >&2; exit 1)",
+    "prepublishOnly": "npm run ci:passed && npm run build && npm run types",
     "prepare": "git submodule update --init --recursive 2>/dev/null || true"
   },
   "repository": {
