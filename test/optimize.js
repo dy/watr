@@ -4895,6 +4895,26 @@ test('outline: two expressions of one 32-bit key keep their own bodies', () => {
   assert.equal(g(7), e(7, 622382), 'the second keeps its own constant')
 })
 
+test('outline: a constant written as a number and the same one read as a string are one', () => {
+  // The parser leaves a constant a string, an emitter building nodes writes a number: one
+  // token either way, and the sites one expression (a compiler's emitted code beside its
+  // runtime's parsed text). Compared by type they shared nothing.
+  const E = (p, q) => `(i32.mul (i32.xor (local.get ${p}) (i32.const 1640531527)) (i32.add (i32.mul (local.get ${q}) (i32.const 40503)) (local.get ${q})))`
+  const ast = parse(`(module
+    (func (export "f") (param $a i32) (param $b i32) (result i32) ${E('$a', '$b')})
+    (func (export "g") (param $x i32) (param $y i32) (result i32) ${E('$y', '$x')})
+    (func (export "h") (param $c i32) (param $x i32) (param $y i32) (result i32) ${E('$x', '$y')}))`)
+  const numbers = (n) => { if (!Array.isArray(n)) return; if (n[0] === 'i32.const') n[1] = Number(n[1]); else n.forEach(numbers) }
+  ast.slice(2).forEach(numbers)
+  const out = optimize(ast)
+  assert.equal((print(out).match(/i32\.mul/g) || []).length, 2, 'the three compute in one helper')
+  const { f, g, h } = new WebAssembly.Instance(new WebAssembly.Module(compile(out))).exports
+  const e = (p, q) => Math.imul(p ^ 1640531527, (Math.imul(q, 40503) + q) | 0)
+  assert.equal(f(2, 3), e(2, 3))
+  assert.equal(g(2, 3), e(3, 2))
+  assert.equal(h(9, 2, 3), e(2, 3))
+})
+
 test('cse: an effect-clean call dedupes like any pure subtree', () => {
   // The callee reads only its args — the interprocedural summary proves it
   // writes nothing, so two identical calls compute once (colorpq's duplicated

@@ -5791,9 +5791,11 @@ const ownBytes = (n) => {
 const ulebBytes = (v) => { let k = 1; v = v >>> 7; while (v) k++, v >>>= 7; return k }
 
 // whether two sites are one expression but for their locals' names: the same tree, each
-// `local.get` naming the parameter of the same position in its own site's list
+// `local.get` naming the parameter of the same position in its own site's list, a leaf
+// the same by its spelling (a constant is a number where an emitter built the node and a
+// string where the parser read it: one token either way, as the key spells it)
 const sameSite = (a, b, pa, pb) => {
-  if (!Array.isArray(a) || !Array.isArray(b)) return equal(a, b)
+  if (!Array.isArray(a) || !Array.isArray(b)) return !Array.isArray(a) && !Array.isArray(b) && literalKey(a) === literalKey(b)
   if (a.length !== b.length) return false
   if (a[0] === 'local.get' && b[0] === 'local.get' && a.length === 2) return pa.indexOf(a[1]) === pb.indexOf(b[1])
   for (let i = 0; i < a.length; i++) if (!sameSite(a[i], b[i], pa, pb)) return false
