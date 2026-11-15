@@ -5790,6 +5790,16 @@ const ownBytes = (n) => {
 }
 const ulebBytes = (v) => { let k = 1; v = v >>> 7; while (v) k++, v >>>= 7; return k }
 
+// whether two sites are one expression but for their locals' names: the same tree, each
+// `local.get` naming the parameter of the same position in its own site's list
+const sameSite = (a, b, pa, pb) => {
+  if (!Array.isArray(a) || !Array.isArray(b)) return equal(a, b)
+  if (a.length !== b.length) return false
+  if (a[0] === 'local.get' && b[0] === 'local.get' && a.length === 2) return pa.indexOf(a[1]) === pb.indexOf(b[1])
+  for (let i = 0; i < a.length; i++) if (!sameSite(a[i], b[i], pa, pb)) return false
+  return true
+}
+
 let outUid = 0
 const outline = (ast) => {
   if (!Array.isArray(ast) || ast[0] !== 'module') return ast
@@ -5837,29 +5847,33 @@ const outline = (ast) => {
         g.push({ node: n, parent, idx, fn, ltype, bytes: rec.b })
       })
     }
-    // exact grouping only within collisions: params + types collected per site,
-    // canonical body built once per chosen group at apply time
+    // grouping within collisions: params + types collected per site, and the position
+    // each `local.get` takes among them (`a*b + b` and `a*b + a` hash alike, name-blind,
+    // and are two expressions); canonical body built once per chosen group at apply time
     const exact = new Map()
     for (const cands of groups.values()) {
       if (cands.length < 2) continue
       for (const cand of cands) {
-        const params = []
+        const params = [], at = []
         let ok = true
         walkN(cand.node, (c) => {
           if (!ok || !Array.isArray(c)) return
           if (c[0] === 'local.get') {
             if (typeof c[1] !== 'string') { ok = false; return }
-            if (!params.some(p => p.name === c[1])) {
+            let i = 0
+            while (i < params.length && params[i].name !== c[1]) i++
+            if (i === params.length) {
               const t = cand.ltype.get(c[1])
               if (!t) { ok = false; return }
               params.push({ name: c[1], type: t })
             }
+            at.push(i)
           }
           else if (c[0] === 'local.tee' || c[0] === 'local.set') ok = false
         })
         if (!ok || params.length > 4) continue
         const rt = resultType(cand.node[0])
-        const key = facts.get(cand.node).h + '|' + params.map(p => p.type).join(',') + '|' + rt
+        const key = facts.get(cand.node).h + '|' + params.map(p => p.type).join(',') + '|' + at.join('') + '|' + rt
         let g = exact.get(key)
         if (!g) exact.set(key, g = { first: cand, ptypes: params.map(p => p.type), rt, bytes: cand.bytes, arity: params.length, sites: [] })
         g.sites.push({ node: cand.node, parent: cand.parent, idx: cand.idx, fn: cand.fn, args: params.map(p => p.name) })
@@ -5874,13 +5888,17 @@ const outline = (ast) => {
     const consumed = new Set()
     const touched = new Set()
     for (const { g } of chosen) {
-      const live = g.sites.filter(st => {
+      let live = g.sites.filter(st => {
         if (st.parent[st.idx] !== st.node) return false // ancestor already replaced this slot
         if (consumed.has(st.node)) return false // inside an applied site's detached subtree
         let hit = false
         walk(st.node, c => { if (consumed.has(c)) hit = true })
         return !hit
       })
+      // the group's key is a hash past 64 characters: a site takes the first's body only
+      // where the two are compared equal, node for node
+      const head = live[0]
+      live = live.filter(st => st === head || sameSite(head.node, st.node, head.args, st.args))
       const net = live.length * (g.bytes - callB - 2 * g.arity) - (g.bytes + 5 + 3)
       if (live.length < 2 || net < 4) continue
       // canonicalize the FIRST live site once: positional params, shared body

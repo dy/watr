@@ -4859,6 +4859,42 @@ test('outline: repeated pure expressions extract into one shared helper', () => 
   assert.equal(run(impure).h(0), 5 + 300009 + 6 + 300009)
 })
 
+test('outline: sites share a helper only where their locals repeat in the same positions', () => {
+  // `(p^K) * (q*M + q)` and `(p^K) * (q*M + p)` are one shape with the names taken out and
+  // two expressions: the second took the first's helper and read the wrong local (two
+  // matrix loops of one module, `A[i*16+j]*x[j]` beside `A[j*16+i]*x[j]`). No part of the
+  // expression is worth a helper of its own, so what is shared is the whole.
+  const E = (p, q, r) => `(i32.mul (i32.xor (local.get ${p}) (i32.const 2654435761)) (i32.add (i32.mul (local.get ${q}) (i32.const 40503)) (local.get ${r})))`
+  const src = `(module
+    (func (export "g") (param $a i32) (param $b i32) (result i32) ${E('$a', '$b', '$a')})
+    (func (export "f") (param $a i32) (param $b i32) (result i32) ${E('$a', '$b', '$b')})
+    (func (export "h") (param $x i32) (param $y i32) (result i32) ${E('$y', '$x', '$x')})
+    (func (export "k") (param $c i32) (param $x i32) (param $y i32) (result i32) ${E('$x', '$y', '$y')}))`
+  const e = (p, q, r) => Math.imul(p ^ 2654435761, (Math.imul(q, 40503) + r) | 0)
+  const { f, g, h, k } = run(src)
+  assert.equal(g(2, 3), e(2, 3, 2), 'the first local again')
+  assert.equal(f(2, 3), e(2, 3, 3), 'the second local again')
+  assert.equal(h(2, 3), e(3, 2, 2), 'the second again, the parameters in the other order')
+  assert.equal(k(9, 2, 3), e(2, 3, 3), 'the second again, among three parameters')
+  // the three of one kind still share, though the module's first site is of the other
+  const txt = print(optimize(parse(src)))
+  assert.equal((txt.match(/i32\.mul/g) || []).length, 4, 'f, h and k compute in one helper, g in its own body')
+})
+
+test('outline: two expressions of one 32-bit key keep their own bodies', () => {
+  // A candidate past 64 characters is keyed by a 32-bit hash of its spelling, and these two
+  // constants were searched for the same one (hash32 over `i32.add,<the xor>,i32.const,K`):
+  // the second site took the first's constant. A site shares a body it is compared equal to.
+  const at = (k) => `(i32.add (i32.xor (i32.mul (local.get $x) (i32.const 2654435761)) (i32.mul (local.get $x) (i32.const 40503))) (i32.const ${k}))`
+  const src = `(module
+    (func (export "f") (param $x i32) (result i32) ${at(439599)})
+    (func (export "g") (param $x i32) (result i32) ${at(622382)}))`
+  const e = (x, k) => ((Math.imul(x, 2654435761) ^ Math.imul(x, 40503)) + k) | 0
+  const { f, g } = run(src)
+  assert.equal(f(7), e(7, 439599))
+  assert.equal(g(7), e(7, 622382), 'the second keeps its own constant')
+})
+
 test('cse: an effect-clean call dedupes like any pure subtree', () => {
   // The callee reads only its args — the interprocedural summary proves it
   // writes nothing, so two identical calls compute once (colorpq's duplicated
