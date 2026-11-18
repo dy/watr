@@ -983,6 +983,25 @@ t(`compile: 3 locals [i32, i32, i64] (joined)`, () => {
   is(value(), 42)
 })
 
+// The locals were taken off the body a shift each, which moved the body each
+// time: 40,000 locals ahead of 200,000 instructions compiled in 10 to 48 s, 14
+// to 91 times the same body behind 400 locals (0.5 s).
+t('compile: many locals take a time in the body, not in locals times body', () => {
+  const B = 200000
+  const timed = (L) => {
+    let src = '(func (export "f") (result i32)'
+    for (let i = 0; i < L; i++) src += ` (local $l${i} ${i % 2 ? 'i32' : 'f64'})`
+    for (let i = 0; i < B; i++) src += ` (local.set $l${i % L | 1} (i32.const ${i}))`
+    src += ' (local.get $l1))'
+    const t0 = performance.now(), { f } = inline(src).exports, ms = performance.now() - t0
+    return [ms, f()]
+  }
+  const [few, a] = timed(400), [many, b] = timed(40000)
+  is(a, 199601)
+  is(b, 160001)
+  ok(many < 4 * few, `40,000 locals ${many.toFixed(0)} ms, 400 locals ${few.toFixed(0)} ms`)
+})
+
 t('compile: call function indirect (table)', () => {
   let src = `
     (type $return_i32 (func (result i32)))

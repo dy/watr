@@ -1019,19 +1019,7 @@ const build = [
     if (ctx._codeIdx === undefined) ctx._codeIdx = 0
     let codeIdx = ctx._codeIdx++
 
-    // collect locals (;;@ markers may precede them — hoist past, order kept)
-    let leadloc = []
-    while (body[0]?.[0] === 'local' || body[0]?.[0] === '@loc') {
-      if (body[0][0] === '@loc') { leadloc.push(body.shift()); continue }
-      let [, ...types] = body.shift()
-      if (isId(types[0])) {
-        let nm = types.shift()
-        if (nm in ctx.local) err(`Duplicate local ${nm}`)
-        else ctx.local[nm] = ctx.local.length
-      }
-      ctx.local.push(...types)
-    }
-    for (let i = leadloc.length; i--;) body.unshift(leadloc[i])
+    takeLocals(body, ctx)
 
     // Setup metadata / source-location tracking for this function
     ctx.meta = {}
@@ -1471,6 +1459,29 @@ const instrSize = (nodes, ctx) => {
   return size + 1   // trailing 0x0b (end)
 }
 
+// Declare a code item's leading (local …) in ctx.local and take them off the body
+// in one splice, the ;;@ markers among them kept, in order, ahead of the
+// instructions. A shift a local moved the rest of the body each time: the
+// locals times the body.
+const takeLocals = (body, ctx) => {
+  let i = 0, n = 0
+  for (; i < body.length; i++) {
+    const node = body[i]
+    if (node?.[0] === '@loc') { body[n++] = node; continue }
+    if (node?.[0] !== 'local') break
+    let [, ...types] = node
+    if (isId(types[0])) {
+      let nm = types.shift()
+      if (nm in ctx.local) err(`Duplicate local ${nm}`)
+      else ctx.local[nm] = ctx.local.length
+    }
+    ctx.local.push(...types)
+  }
+  // the markers sit at [0, n): move them to just before the first instruction
+  for (let j = n; j--;) body[i - n + j] = body[j]
+  body.splice(0, i - n)
+}
+
 // Size-only twin of build[SECTION.code]: byte LENGTH of one function's code item.
 // Mirrors the builder exactly (local setup, squash, metadata bookkeeping, vec
 // framing) but uses instrSize for the body — so locals/strings/metadata side
@@ -1482,12 +1493,7 @@ const codeItemSize = (body, ctx) => {
   ctx.local.name = 'local'; ctx.block.name = 'block'
   if (ctx._codeIdx === undefined) ctx._codeIdx = 0
   let codeIdx = ctx._codeIdx++
-  while (body[0]?.[0] === 'local' || body[0]?.[0] === '@loc') {
-    if (body[0][0] === '@loc') { body.shift(); continue } // ;;@ marker — no bytes
-    let [, ...types] = body.shift()
-    if (isId(types[0])) { let nm = types.shift(); if (nm in ctx.local) err(`Duplicate local ${nm}`); else ctx.local[nm] = ctx.local.length }
-    ctx.local.push(...types)
-  }
+  takeLocals(body, ctx)   // the ;;@ markers it keeps have no bytes
   ctx.meta = {}
   const bytesLen = instrSize(body, ctx)
   let loctypes = ctx.local.slice(param.length).reduce((a, type) => (type == a[a.length - 1]?.[1] ? a[a.length - 1][0]++ : a.push([1, type]), a), [])
