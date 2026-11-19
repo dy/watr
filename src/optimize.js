@@ -6476,11 +6476,17 @@ const propagate = (ast) => {
       for (const scope of scopes) {
         // pure set feeding a loop (possibly through a run of other pure sets that
         // don't read it) which provably clobbers it on every path before any read,
-        // with no reads outside the loop: dead
+        // with no reads outside the loop: dead. The run after a set is found once
+        // for all the sets in it: scanned from each, a run of n pure sets that no
+        // loop ends took the square of n (10,000 forwarded sets in a row).
+        const pureSet = (nx) => Array.isArray(nx) && nx[0] === 'local.set' && nx.length === 3 && Array.isArray(nx[2]) && isPure(nx[2])
+        let runTo = -1
         for (let i = 1; i < scope.length - 1; i++) {
           const st = scope[i]
           if (!(Array.isArray(st) && st[0] === 'local.set' && st.length === 3 && typeof st[1] === 'string' &&
                 Array.isArray(st[2]) && isPure(st[2]) && !hasTrap(st[2]))) continue
+          if (i + 1 > runTo) { runTo = i + 1; while (runTo < scope.length && pureSet(scope[runTo])) runTo++ }
+          if (!(Array.isArray(scope[runTo]) && scope[runTo][0] === 'loop')) continue
           let j = i + 1, blocked = false
           while (j < scope.length) {
             const nx = scope[j]
@@ -6495,7 +6501,7 @@ const propagate = (ast) => {
             j++
           }
           if (blocked || j >= scope.length || !Array.isArray(scope[j]) || scope[j][0] !== 'loop') continue
-          if (deadThroughLoop(funcNode, st[1], scope[j])) { cntSub(st); scope.splice(i, 1); i--; progressed = true }
+          if (deadThroughLoop(funcNode, st[1], scope[j])) { cntSub(st); scope.splice(i, 1); i--; runTo--; progressed = true }
         }
         cntOracle(funcNode, 'deadThroughLoop')
         if (commuteForSink(scope)) { progressed = true; cntOracle(funcNode, 'commuteForSink') }

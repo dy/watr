@@ -5364,6 +5364,28 @@ test('propagate: a run of 5,000 statements reading the last nests to the bound',
   }
 })
 
+// A pass over a run of n statements takes a time in n: t(4n) / t(n) at most 8,
+// where linear is 4 and quadratic 16 (the thread's CPU time, the least of three).
+const timeRatio = (gen, n, opts) => {
+  const time = (src) => { const ast = parse(src), c0 = process.threadCpuUsage(); optimize(ast, opts); const c = process.threadCpuUsage(c0); return c.user + c.system }
+  time(gen(n))
+  let r = Infinity
+  for (let k = 0; k < 3 && !(r <= 8); k++) r = Math.min(r, time(gen(4 * n)) / time(gen(n)))
+  return r
+}
+
+// propagate looked for a loop after each pure set by scanning the run of pure sets
+// after it: forwarded, no set of a chain reads the one before, and the scan from
+// each ran to the end of the run (2,000 sets 36 s, from 8 s at 1,000).
+test('propagate: a run of pure sets no loop ends takes a time in the run', () => {
+  const gen = (n) => `(module (func (export "f") (param $a0 i32) (result i32)
+    ${Array.from({ length: n }, (_, i) => `(local $a${i + 1} i32)`).join(' ')}
+    ${Array.from({ length: n }, (_, i) => `(local.set $a${i + 1} (i32.add (local.get $a${i}) (i32.const ${i % 7})))`).join('\n')}
+    (local.get $a${n})))`
+  const r = timeRatio(gen, 500, 'propagate')
+  assert(r <= 8, `t(2,000) / t(500) = ${r.toFixed(1)}`)
+})
+
 test('branch: constant-index br_table folds to the selected br (unsigned, OOR → default)', () => {
   // a chainTable'd dispatch whose scrutinee folds post-inline must keep
   // folding like the if-chain it replaced — dead arms must not freeze
