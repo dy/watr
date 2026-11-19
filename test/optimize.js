@@ -5386,6 +5386,18 @@ test('propagate: a run of pure sets no loop ends takes a time in the run', () =>
   assert(r <= 8, `t(2,000) / t(500) = ${r.toFixed(1)}`)
 })
 
+// cse copied what was live into each arm of a run of ifs and scanned all of it at
+// each statement: a guard list of 10,000 returns took 6.7 s, 0.4 s with one table.
+test('cse: a run of guarded returns takes a time in the run', () => {
+  const gen = (n) => `(module (func (export "f") (param $x i32) (result i32)
+    ${Array.from({ length: n }, (_, i) => `(if (i32.eq (i32.mul (local.get $x) (i32.const 3)) (i32.const ${i})) (then (return (i32.add (local.get $x) (i32.const ${i})))))`).join('\n')}
+    (i32.const -1)))`
+  const r = timeRatio(gen, 1000, 'cse')
+  assert(r <= 8, `t(4,000) / t(1,000) = ${r.toFixed(1)}`)
+  const f = new WebAssembly.Instance(new WebAssembly.Module(compile(optimize(parse(gen(100)), 'cse')))).exports.f
+  assert.equal(f(3), 12); assert.equal(f(40), -1)
+})
+
 test('branch: constant-index br_table folds to the selected br (unsigned, OOR → default)', () => {
   // a chainTable'd dispatch whose scrutinee folds post-inline must keep
   // folding like the if-chain it replaced — dead arms must not freeze

@@ -5252,15 +5252,55 @@ const cse = (ast) => {
     // A loop body starts FRESH: a tee outside the loop goes stale on iteration 2
     // if anything the expression reads is rewritten later in the body (linear
     // invalidation can't see the back edge). try_table bodies likewise fresh.
-    const processScope = (scope, inherited) => {
-      const live = new Map(inherited)
+    // What is live is one table a scope and the scopes it inherits into share: a
+    // nested scope runs on its parent's table and takes back what it added and
+    // removed (the log) when it ends, and an invalidation finds the groups a write
+    // reaches by what they read. Copied into each arm, and scanned whole at each
+    // statement, the table took the square of a run of ifs (a guard list of
+    // 10,000 returns: 6.7 s here). A loop or try body starts a table of its own.
+    const table = () => ({ map: new Map(), byRead: new Map(), mem: new Set(), glob: new Set(), log: [] })
+    const index = (T, key, g, on) => {
+      for (const r of g.reads) {
+        let ks = T.byRead.get(r)
+        if (on) { if (!ks) T.byRead.set(r, ks = new Set()); ks.add(key) } else ks?.delete(key)
+      }
+      if (g.mem) on ? T.mem.add(key) : T.mem.delete(key)
+      if (g.glob) on ? T.glob.add(key) : T.glob.delete(key)
+    }
+    const tSet = (T, key, g) => {
+      const prev = T.map.get(key)
+      T.log.push(key, prev)
+      if (prev) index(T, key, prev, false)
+      T.map.set(key, g); index(T, key, g, true)
+    }
+    const tDel = (T, key) => {
+      const prev = T.map.get(key)
+      if (!prev) return
+      T.log.push(key, prev)
+      index(T, key, prev, false); T.map.delete(key)
+    }
+    const undo = (T, mark) => {
+      while (T.log.length > mark) {
+        const prev = T.log.pop(), key = T.log.pop(), cur = T.map.get(key)
+        if (cur) index(T, key, cur, false)
+        if (prev) { T.map.set(key, prev); index(T, key, prev, true) } else T.map.delete(key)
+      }
+    }
+    // drop what a write of these locals, of memory, a global or a call leaves stale
+    const invalidate = (T, wLocals, wGlob, wMem) => {
+      if (wMem) for (const k of [...T.mem]) tDel(T, k)
+      if (wGlob) for (const k of [...T.glob]) tDel(T, k)
+      for (const l of wLocals) { const ks = T.byRead.get(l); if (ks) for (const k of [...ks]) tDel(T, k) }
+    }
+    const processScope = (scope, T) => {
+      const mark = T.log.length
       let si = 1
       // leading label of a block/loop is structure, not a flat token — skip
       // without clearing what was inherited
       if (typeof scope[si] === 'string' && scope[si][0] === '$') si++
       for (; si < scope.length; si++) {
         const stmt = scope[si]
-        if (!Array.isArray(stmt)) { live.clear(); continue } // flat token — unknown order
+        if (!Array.isArray(stmt)) { for (const k of [...T.map.keys()]) tDel(T, k); continue } // flat token — unknown order
         const h = stmt[0]
         if (h === 'param' || h === 'result' || h === 'local' || h === 'type' || h === 'export') continue
         // this statement's write effects (one walk — memory writes included,
@@ -5289,13 +5329,13 @@ const cse = (ast) => {
             if (Array.isArray(cond)) collect(cond, n, condIdx)
             if (n !== stmt) { // expression-nested arms: own fresh scopes (the
               // statement-level branch below owns top-level arms, with inheritance)
-              if (thenBranch) processScope(thenBranch, EMPTY_MAP)
-              if (elseBranch) processScope(elseBranch, EMPTY_MAP)
+              if (thenBranch) processScope(thenBranch, table())
+              if (elseBranch) processScope(elseBranch, table())
             }
             return
           }
           if (o === 'block' || o === 'loop' || o === 'try_table') {
-            if (n !== stmt) processScope(n, EMPTY_MAP)
+            if (n !== stmt) processScope(n, table())
             return
           }
           if (o === 'then' || o === 'else') return
@@ -5304,7 +5344,7 @@ const cse = (ast) => {
             const facts = cseFactsOf(n, sigT, factsMemo)
             if (facts.pure && facts.est >= 4) {
               const key = facts.key
-              let g = live.get(key)
+              let g = T.map.get(key)
               // hash collision (different expr, same key): never mis-group —
               // deep-verify against the seed. A miss only forfeits a share.
               if (g && !equal(g.expr, n)) g = null
@@ -5325,7 +5365,7 @@ const cse = (ast) => {
                   }
                 })
                 g.stamp = stampOf(g)
-                live.set(key, g); all.push(g)
+                tSet(T, key, g); all.push(g)
               }
               g.sites.push([parent, idx])
               // repeats never yield sub-candidates: a group seeded inside a repeat
@@ -5365,31 +5405,23 @@ const cse = (ast) => {
             else if (typeof o === 'string' && (o.includes('.store') || o === 'memory.copy' || o === 'memory.fill' ||
                      o === 'memory.init' || o === 'memory.grow' || (o.includes('.atomic.') && !o.endsWith('.load')))) cMemCall = true
           })
-          const armLive = new Map()
-          for (const [k, g] of live) {
-            if (g.mem && cMemCall) continue
-            if (g.glob && cGlob) continue
-            let stale = false
-            for (const l of cw) if (g.reads.has(l)) { stale = true; break }
-            if (!stale) armLive.set(k, g)
-          }
-          if (thenBranch) processScope(thenBranch, armLive)
-          if (elseBranch) processScope(elseBranch, armLive)
+          const armMark = T.log.length
+          invalidate(T, cw, cGlob, cMemCall)
+          if (thenBranch) processScope(thenBranch, T)
+          if (elseBranch) processScope(elseBranch, T)
+          undo(T, armMark)
         } else if (h === 'block') {
-          processScope(stmt, live)
+          processScope(stmt, T)
         } else if (h === 'loop' || h === 'try_table') {
-          processScope(stmt, EMPTY_MAP)
+          processScope(stmt, table())
         }
         // invalidate against this statement's writes (arms included — a
         // conditional write still poisons everything after the statement)
-        for (const [k, g] of live) {
-          if (g.mem && (wMem || call)) { live.delete(k); continue }
-          if (g.glob && (call || wGlobals.size)) { live.delete(k); continue }
-          for (const l of wLocals) if (g.reads.has(l)) { live.delete(k); break }
-        }
+        invalidate(T, wLocals, call || wGlobals.size > 0, wMem || call)
       }
+      undo(T, mark)
     }
-    processScope(fn, EMPTY_MAP)
+    processScope(fn, table())
     const decls = []
     // A fresh local appended to the locals vector costs 2 B (new count+type run) —
     // unless its type matches the run it lands after, where the count just
