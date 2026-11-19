@@ -6284,14 +6284,25 @@ const deadset = (ast) => {
     // (a switch of 10,000 breaks lowered, each arm's store scanning the arms after).
     const LONG = 2000
     const liveAfter = new Map()   // local → Map(store → a path reads the local after it)
+    // The walk recurses a level of the tree a frame or two; past LIVE_DEPTH levels it
+    // gives up, and the local's stores are scanned as before: walked whole, 300
+    // nested trys (609 levels) ran out of stack where the scans had held.
+    const LIVE_DEPTH = 200
     const backward = (x) => {
       const after = new Map(), labels = []
-      let catchLive = 0
+      let catchLive = 0, level = 0, deep = false
       const target = (name) => { for (let i = labels.length - 1; i >= 0; i--) if (labels[i][0] === name) return labels[i][1]; return true }
       const list = (ns, from, out) => { for (let i = ns.length - 1; i >= from; i--) out = node(ns[i], out); return out }
       const labelOf = (n) => typeof n[1] === 'string' && n[1][0] === '$' ? n[1] : null
       const node = (n, out) => {
-        if (!Array.isArray(n)) return out
+        if (deep || !Array.isArray(n)) return out
+        if (level >= LIVE_DEPTH) { deep = true; return out }
+        level++
+        const r = step(n, out)
+        level--
+        return r
+      }
+      const step = (n, out) => {
         const op = n[0]
         if (op === 'local.get') return n[1] === x ? true : out
         if (op === 'local.set' || op === 'local.tee') {
@@ -6366,7 +6377,7 @@ const deadset = (ast) => {
         return list(n, 1, out)
       }
       list(fn, bodyStart, false)
-      return after
+      return deep ? new Map() : after
     }
 
     // Driver: mirror S's environment construction structurally; at each

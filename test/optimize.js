@@ -5413,6 +5413,21 @@ test('deadset: the stores in a run of case arms take a time in the run', () => {
   assert.equal(f(3), 9); assert.equal(f(-5), 0); assert.equal(f(5000), 0)
 })
 
+// The walk backward recursed a level of the tree a frame or two, from inside the
+// driver's own recursion down to the store: a store at the bottom of 1,000 nested
+// blocks, a long scan after it, ran out of stack there (where the scans hold
+// 1,500); jz's 300 nested trys at its default level did not compile. Past 200
+// levels the walk gives up and the scans decide.
+test('deadset: a long scan from deep in a nesting stays a scan', () => {
+  const n = 1000
+  const src = `(module (func (export "f") (param $x i32) (result i32) (local $t i32) (local $u i32)
+    ${'(block '.repeat(n)}(local.set $t (i32.const 5))${')'.repeat(n)}
+    ${Array.from({ length: 3000 }, (_, i) => `(local.set $u (i32.add (local.get $u) (i32.const ${i})))`).join('\n')}
+    (i32.add (local.get $t) (local.get $u))))`
+  const out = optimize(parse(src), 'deadset')
+  assert(print(out).includes('(local.set $t (i32.const 5))'), 'read past the run: the store stays')
+})
+
 test('branch: constant-index br_table folds to the selected br (unsigned, OOR → default)', () => {
   // a chainTable'd dispatch whose scrutinee folds post-inline must keep
   // folding like the if-chain it replaced — dead arms must not freeze
