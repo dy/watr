@@ -5398,6 +5398,21 @@ test('cse: a run of guarded returns takes a time in the run', () => {
   assert.equal(f(3), 12); assert.equal(f(40), -1)
 })
 
+// deadset scanned from each const store what follows it: the stores in the arms of a
+// run of n ifs (a switch's cases each storing the result and a flag, the result read
+// past the run) each scanned the arms after them (2,000 arms 0.43 s, 8,000 7.1 s). A
+// local whose store took a long scan is answered by one walk backward instead.
+test('deadset: the stores in a run of case arms take a time in the run', () => {
+  const gen = (n) => `(module (func (export "f") (param $x i32) (result i32) (local $r i32) (local $brk i32)
+    ${Array.from({ length: n }, (_, i) => `(if (i32.and (i32.eqz (local.get $brk)) (i32.le_s (local.get $x) (i32.const ${i}))) (then (local.set $r (i32.const ${i * 3})) (local.set $brk (i32.const 1))))`).join('\n')}
+    (local.get $r)))`
+  const r = timeRatio(gen, 1000, 'deadset')
+  assert(r <= 8, `t(4,000) / t(1,000) = ${r.toFixed(1)}`)
+  const out = optimize(parse(gen(3000)), 'deadset')
+  const f = new WebAssembly.Instance(new WebAssembly.Module(compile(out))).exports.f
+  assert.equal(f(3), 9); assert.equal(f(-5), 0); assert.equal(f(5000), 0)
+})
+
 test('branch: constant-index br_table folds to the selected br (unsigned, OOR → default)', () => {
   // a chainTable'd dispatch whose scrutinee folds post-inline must keep
   // folding like the if-chain it replaced — dead arms must not freeze

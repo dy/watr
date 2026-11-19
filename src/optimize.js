@@ -6263,6 +6263,103 @@ const deadset = (ast) => {
       return r
     }
 
+    // Whether a path from after each const store of `x` reads x before a write, by
+    // one walk of the function backward, on the scan's own model of the code: the
+    // same nodes branch, end and read, every other node runs its children in order
+    // and goes on (a branch the scan does not follow is no branch here either), a
+    // label it cannot resolve reads. Where this says no path reads, the scan still
+    // decides (its caps and its loop re-entry answer 'get' where this answers
+    // dead); where a path reads, the scan answers 'get' too, and is skipped. Taken
+    // for a local once a scan of one of its stores passed LONG steps: scanned from
+    // each, the stores in the n arms of a run of ifs took the square of n
+    // (a switch of 10,000 breaks lowered, each arm's store scanning the arms after).
+    const LONG = 2000
+    const liveAfter = new Map()   // local → Map(store → a path reads the local after it)
+    const backward = (x) => {
+      const after = new Map(), labels = []
+      let catchLive = 0
+      const target = (name) => { for (let i = labels.length - 1; i >= 0; i--) if (labels[i][0] === name) return labels[i][1]; return true }
+      const list = (ns, from, out) => { for (let i = ns.length - 1; i >= from; i--) out = node(ns[i], out); return out }
+      const labelOf = (n) => typeof n[1] === 'string' && n[1][0] === '$' ? n[1] : null
+      const node = (n, out) => {
+        if (!Array.isArray(n)) return out
+        const op = n[0]
+        if (op === 'local.get') return n[1] === x ? true : out
+        if (op === 'local.set' || op === 'local.tee') {
+          if (op === 'local.set' && n[1] === x && n.length === 3 && isConstNode(n[2])) after.set(n, out || catchLive > 0)
+          const o = n[1] === x ? false : out
+          return n.length > 2 && Array.isArray(n[2]) ? list(n, 2, o) : o
+        }
+        if (op === 'return' || op === 'unreachable' || op === 'throw' || op === 'throw_ref' || op === 'rethrow')
+          return n.length > 1 && Array.isArray(n[1]) ? list(n, 1, false) : false
+        if (op === 'try_table') {
+          let j = 1
+          const label = labelOf(n)
+          if (label) { labels.push([label, out]); j = 2 }
+          while (j < n.length && Array.isArray(n[j]) && (n[j][0] === 'result' || n[j][0] === 'type')) j++
+          let live = false
+          for (; j < n.length && Array.isArray(n[j]) && (n[j][0] === 'catch' || n[j][0] === 'catch_ref'
+              || n[j][0] === 'catch_all' || n[j][0] === 'catch_all_ref'); j++) live ||= target(n[j][n[j].length - 1])
+          if (live) catchLive++
+          const body = list(n, j, out)
+          if (live) catchLive--
+          const r = live || body
+          if (label) labels.pop()
+          return r
+        }
+        const ops = (from) => n.filter((c, j) => j >= from && Array.isArray(c))
+        if (op === 'br') return list([null, ...ops(2)], 1, target(n[1]))
+        if (op === 'br_if') return list([null, ...ops(2)], 1, target(n[1]) || out)
+        if (op === 'br_table') {
+          let live = false
+          for (let j = 1; j < n.length; j++) if (typeof n[j] === 'string') live ||= target(n[j])
+          return list([null, ...ops(1)], 1, live)
+        }
+        if (op === 'if') {
+          let j = 1
+          const label = labelOf(n)
+          if (label) j = 2
+          let cond = null, thn = null, els = null
+          for (; j < n.length; j++) {
+            const c = n[j]
+            if (!Array.isArray(c)) continue
+            if (c[0] === 'then') thn = c
+            else if (c[0] === 'else') els = c
+            else if (c[0] !== 'result') cond = c
+          }
+          if (label) labels.push([label, out])
+          const yes = thn ? list(thn, 1, out) : out, no = els ? list(els, 1, out) : out
+          const arms = yes || no
+          if (label) labels.pop()
+          return cond ? node(cond, arms) : arms
+        }
+        if (op === 'block' || op === 'loop') {
+          let j = 1
+          const label = labelOf(n)
+          if (label) j = 2
+          while (j < n.length && Array.isArray(n[j]) && n[j][0] === 'result') j++
+          if (op === 'block' || !label) {
+            if (label) labels.push([label, out])
+            const r = list(n, j, out)
+            if (label) labels.pop()
+            return r
+          }
+          // the head is live where the body is: a false start, then the body again
+          let head = false
+          for (;;) {
+            labels.push([label, head])
+            const r = list(n, j, out)
+            labels.pop()
+            if (r === head) return r
+            head = r
+          }
+        }
+        return list(n, 1, out)
+      }
+      list(fn, bodyStart, false)
+      return after
+    }
+
     // Driver: mirror S's environment construction structurally; at each
     // const-store candidate evaluate its continuation. Collect first, drop
     // after (queries must all see the original tree). `catches` carries the
@@ -6277,6 +6374,7 @@ const deadset = (ast) => {
       if (!Array.isArray(n)) return
       const op = n[0]
       if (op === 'local.set' && n.length === 3 && isConstNode(n[2])) {
+        if (liveAfter.get(n[1])?.get(n)) return
         steps = 0
         let st = evalK(n[1], k, new Set(), 0)
         for (const t of catches) {
@@ -6284,6 +6382,7 @@ const deadset = (ast) => {
           st = t == null ? 'get' : combine(st, followLabel(n[1], t, new Set(), 0))
         }
         if (st === 'set') drops.push(n)
+        if (steps > LONG && !liveAfter.has(n[1])) liveAfter.set(n[1], backward(n[1]))
         return
       }
       if (op === 'if') {
