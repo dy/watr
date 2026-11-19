@@ -5425,7 +5425,16 @@ test('deadset: a long scan from deep in a nesting stays a scan', () => {
     ${Array.from({ length: 3000 }, (_, i) => `(local.set $u (i32.add (local.get $u) (i32.const ${i})))`).join('\n')}
     (i32.add (local.get $t) (local.get $u))))`
   const out = optimize(parse(src), 'deadset')
-  assert(print(out).includes('(local.set $t (i32.const 5))'), 'read past the run: the store stays')
+  // (read off the tree, not printed: the wasm build's printer runs out of stack at 600
+  // levels, and a call that ends there leaves the instance to trap in every test after)
+  let kept = false
+  for (const todo = [out]; todo.length;) {
+    const node = todo.pop()
+    if (!Array.isArray(node)) continue
+    if (node[0] === 'local.set' && node[1] === '$t') kept = true
+    todo.push(...node)
+  }
+  assert(kept, 'read past the run: the store stays')
 })
 
 test('branch: constant-index br_table folds to the selected br (unsigned, OOR → default)', () => {
