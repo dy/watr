@@ -3262,9 +3262,15 @@ function numberValues(fn, call) {
   const vnOf = new Map(), sites = new Map(), keys = new Map(), unstable = new Set()
   let next = 1, clock = 0
   const fresh = () => next++
-  let locals = new Map()
-  const readLocal = (name) => { let v = locals.get(name); if (v == null) locals.set(name, v = fresh()); return v }
-  const kill = (names) => { for (const name of names) locals.set(name, fresh()) }
+  // What each local holds, one map an if's arms share: a write is logged with what
+  // it replaced, and the else arm starts from the then arm's taken back. Copied
+  // for each arm (and again in the rewrite), a run of n ifs over many locals took
+  // n times the locals (a balanced && of 5,000 links: 10 s of 21 here).
+  const locals = new Map(), llog = []
+  const lset = (name, v) => { llog.push(name, locals.get(name)); locals.set(name, v) }
+  const lundo = (mark) => { while (llog.length > mark) { const prev = llog.pop(), name = llog.pop(); if (prev === undefined) locals.delete(name); else locals.set(name, prev) } }
+  const readLocal = (name) => { let v = locals.get(name); if (v == null) lset(name, v = fresh()); return v }
+  const kill = (names) => { for (const name of names) lset(name, fresh()) }
   const record = (n, v, site = n[0] !== 'local.get' && n[0] !== 'local.tee') => {
     if (unstable.has(n)) return v
     if (vnOf.has(n)) { if (vnOf.get(n) !== v) { vnOf.delete(n); unstable.add(n) } return v }
@@ -3274,7 +3280,7 @@ function numberValues(fn, call) {
   }
   const analyzeChildren = (n, from = 1) => { for (let i = from; i < n.length; i++) analyze(n[i]) }
   /** Analyze a `local.set`: the local takes its value's number; returns that number (null when it has none). */
-  const analyzeSet = (n) => { const v = analyze(n[2]); locals.set(n[1], v ?? fresh()); return v }
+  const analyzeSet = (n) => { const v = analyze(n[2]); lset(n[1], v ?? fresh()); return v }
   /** Analyze a node in evaluation order; returns its value number, or null when it has none. */
   const analyze = (n) => {
     if (!Array.isArray(n)) return null
@@ -3283,7 +3289,7 @@ function numberValues(fn, call) {
     if (op === 'local.set') { analyzeSet(n); return null }
     if (op === 'local.tee') {
       const v = analyze(n[2])
-      locals.set(n[1], v ?? fresh())
+      lset(n[1], v ?? fresh())
       return v != null ? record(n, v) : null
     }
     if (op === 'loop') { kill(assignedOf(n)); clock++; analyzeChildren(n); kill(assignedOf(n)); clock++; return null }
@@ -3292,10 +3298,10 @@ function numberValues(fn, call) {
       // itself (a select that evaluates one arm); any other arm is a region.
       const { cond, then, els } = ifParts(n)
       const vc = cond != null ? analyze(n[cond]) : null
-      const before = new Map(locals), clockBefore = clock
+      const mark = llog.length, clockBefore = clock
       const arm = (a) => { if (a.length === 2 && Array.isArray(a[1])) return analyze(a[1]); analyzeChildren(a); return null }
       const vt = then ? arm(then) : null
-      locals = new Map(before); clock = clockBefore
+      lundo(mark); clock = clockBefore
       const ve = els ? arm(els) : null
       // Either arm's assignments (a tee inside a value) hold only on its own path.
       kill(armsAssigned(then, els))
@@ -3367,10 +3373,13 @@ function numberValues(fn, call) {
     return false
   }
   const holders = new Map()
-  let held = new Map(), minted = vnNextId(fn)
+  const held = new Map(), hlog = []
+  const hset = (name, v) => { hlog.push(name, held.get(name)); held.set(name, v) }
+  const hundo = (mark) => { while (hlog.length > mark) { const prev = hlog.pop(), name = hlog.pop(); if (prev === undefined) held.delete(name); else held.set(name, prev) } }
+  let minted = vnNextId(fn)
   const captures = new Map(), mintedNames = []
   /** Forget a region's assignments: the tree's own, and the holders minted inside it. */
-  const forgetRegion = (names, mark) => { forget(names); for (let i = mark; i < mintedNames.length; i++) held.set(mintedNames[i], token()) }
+  const forgetRegion = (names, mark) => { forget(names); for (let i = mark; i < mintedNames.length; i++) hset(mintedNames[i], token()) }
   // The statement being rewritten: its sequence and position, the conditional
   // depth it starts at, and the holder statements to insert before it.
   let stmt = null, depth = 0
@@ -3404,9 +3413,9 @@ function numberValues(fn, call) {
   }
   const rewriteArm = (seq, from) => { depth++; rewriteSeq(seq, from); depth-- }
   const token = () => -(next++)
-  const hold = (v, name) => { if (v == null) return; let list = holders.get(v); if (!list) holders.set(v, list = []); list.push(name); held.set(name, v) }
+  const hold = (v, name) => { if (v == null) return; let list = holders.get(v); if (!list) holders.set(v, list = []); list.push(name); hset(name, v) }
   const holderOf = (v) => { const list = holders.get(v); if (list) for (let i = list.length - 1; i >= 0; i--) if (held.get(list[i]) === v) return list[i]; return null }
-  const forget = (names) => { for (const name of names) held.set(name, token()) }
+  const forget = (names) => { for (const name of names) hset(name, token()) }
   const rewriteChildren = (n, from = 1) => { for (let i = from; i < n.length; i++) rewrite(n[i], n, i) }
   const rewrite = (n, parent, idx) => {
     if (!Array.isArray(n)) return
@@ -3414,7 +3423,7 @@ function numberValues(fn, call) {
     if (op === 'local.set' || op === 'local.tee') {
       const v = vnOf.get(n[2]) ?? null
       rewrite(n[2], n, 2)
-      held.set(n[1], v ?? token())
+      hset(n[1], v ?? token())
       hold(v, n[1])
       return
     }
@@ -3434,9 +3443,9 @@ function numberValues(fn, call) {
     else if (op === 'if') {
       const { cond, then, els } = ifParts(n)
       if (cond != null) rewrite(n[cond], n, cond)
-      const before = new Map(held)
+      const hmark = hlog.length
       if (then) rewriteArm(then, 1)
-      held = new Map(before)
+      hundo(hmark)
       if (els) rewriteArm(els, 1)
       forgetRegion(armsAssigned(then, els), mark)
     }

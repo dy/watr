@@ -140,3 +140,24 @@ test('value numbering: partially folded operands are not identical values', () =
   const { f } = instance(ast)
   for (let i = 0; i < 2; i++) assert.equal(f(), -3.5)
 })
+
+// What each local holds was copied into each arm of an if, in the analysis and in
+// the rewrite: a run of n ifs after n locals took n times the locals (a balanced
+// && of 5,000 links jz lowers: 10 s of 21 in this pass). One map the arms share,
+// each arm's writes taken back from a log, takes a time in the run: t(4n) / t(n)
+// at most 8, where linear is 4 and quadratic 16. The answers are as before.
+test('value numbering: a run of ifs over many locals takes a time in the run', () => {
+  const gen = (n) => `(module (func (export "f") (param $x i32) (result i32) (local $r i32)
+    ${Array.from({ length: n }, (_, i) => `(local $a${i} i32)`).join(' ')}
+    ${Array.from({ length: n }, (_, i) => `(local.set $a${i} (i32.mul (local.get $x) (i32.const ${i + 1})))
+      (if (i32.eq (local.get $a${i}) (i32.const ${3 * (i + 1)})) (then (nop)) (else (local.set $r (i32.add (i32.div_u (local.get $x) (i32.const 3)) (local.get $r)))))
+      (local.set $r (i32.add (local.get $r) (i32.div_u (local.get $x) (i32.const 3))))`).join('\n')}
+    (local.get $r)))`
+  const time = (src) => { const ast = parse(src), c0 = process.threadCpuUsage(); valueNumber(ast); const c = process.threadCpuUsage(c0); return c.user + c.system }
+  time(gen(500))
+  let r = Infinity
+  for (let k = 0; k < 3 && !(r <= 8); k++) r = Math.min(r, time(gen(4000)) / time(gen(1000)))
+  assert.ok(r <= 8, `t(4,000) / t(1,000) = ${r.toFixed(1)}`)
+  const src = gen(40), before = instance(parse(src)).f, after = instance(numbered(src)).f
+  for (const x of [0, 1, 3, 5, -2]) assert.equal(after(x), before(x), `f(${x})`)
+})
