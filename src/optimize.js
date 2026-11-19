@@ -17,6 +17,14 @@ import { clone, walk, walkN, walkPost, walkPostN, str as parseString } from './u
 // residual simplifications for the next compile rather than producing wrong output.
 const MAX_PROP_ROUNDS = 6     // forward-prop / set-get / tee fixpoint per scope
 const MAX_INLINE_ROUNDS = 16  // single-caller inline-chain depth (deep generated stdlib)
+// The deepest a forwarded value may land: forwarding a local's one use into the
+// statement that reads it (forwardPropagate, sinkSets) stops where the statement
+// it builds would nest past this many levels. A run of statements each reading
+// the last, which a compiler writes for a long chain in its source (a sum of
+// 10,000 terms as steps on an accumulator), otherwise became one tree 10,000
+// levels deep, and every recursive walk after it ran out of stack; each forwarded
+// value copied and scanned the whole chain before it, the square of the run.
+const FORWARD_DEPTH = 256
 
 // === WAT optimizer passes ===
 
@@ -3825,25 +3833,29 @@ const purgeGlobalRefs = (known, name) => {
 
 /** One walk over a tracked value collecting every fact the invalidation paths ask
  *  later: which locals/globals it reads, whether it reads memory, and whether it
- *  reads any state a call could mutate (memory, globals, tables, nested calls). */
+ *  reads any state a call could mutate (memory, globals, tables, nested calls),
+ *  and its height (the levels of nodes it nests, FORWARD_DEPTH). */
 const scanVal = (val) => {
   const refs = new Set(), grefs = new Set()
   let mem = false, ext = false
-  walkN(val, n => {
-    if (!Array.isArray(n)) return
+  const rec = (n) => {
     const o = n[0]
     if (o === 'local.get' || o === 'local.tee') { if (typeof n[1] === 'string' || typeof n[1] === 'number') refs.add(n[1]) }
     else if (o === 'global.get') { if (typeof n[1] === 'string' || typeof n[1] === 'number') grefs.add(n[1]); ext = true }
     else if (o === 'call' || o === 'call_indirect' || o === 'return_call' || o === 'return_call_indirect' ||
              o === 'table.get' || o === 'table.size') ext = true
     else if (typeof o === 'string' && (o.includes('.load') || o === 'memory.copy' || o === 'memory.size')) mem = ext = true
-  })
+    let h = 0
+    for (let i = 0; i < n.length; i++) if (Array.isArray(n[i])) { const c = rec(n[i]); if (c > h) h = c }
+    return h + 1
+  }
+  const height = Array.isArray(val) ? rec(val) : 0
   // A value that can trap (div/rem/trunc) is stale past any store, global write or
   // call the same way a memory read is: moved after them, the trap would leave their
   // effects behind where the original left none.
   const trap = hasTrap(val)
   if (trap) mem = ext = true
-  return { refs, grefs, mem, ext, trap }
+  return { refs, grefs, mem, ext, trap, height }
 }
 
 /** Whether moving a state read past `node` can change its value. Callers
@@ -3991,7 +4003,9 @@ const constantExpr = (node, known, depth = 0, budget = 256) => {
   return folded && getConst(folded) ? [folded, bytes, visits] : null
 }
 
-const substGets = (node, known) => {
+// `d`: the level of `node` in the statement substGets was called for; a value lands
+// only where its height keeps the statement within FORWARD_DEPTH.
+const substGets = (node, known, d = 0) => {
   if (!Array.isArray(node)) return node
   const op = node[0]
   if (known.size && FOLDABLE[op]) {
@@ -4000,7 +4014,7 @@ const substGets = (node, known) => {
   }
   if (op === 'local.get' && node.length === 2) {
     const k = typeof node[1] === 'string' && known.get(node[1])
-    if (k && canSubst(k)) { retireMovedDef(k); return clone(k.val) }
+    if (k && canSubst(k) && d + k.height <= FORWARD_DEPTH) { retireMovedDef(k); return clone(k.val) }
     return node
   }
   let inner = known
@@ -4036,7 +4050,7 @@ const substGets = (node, known) => {
   }
   for (let i = 1; i < node.length; i++) {
     const w0 = SW.length, m0 = SW_MEM, e0 = SW_EXT
-    const r = substGets(node[i], inner)
+    const r = substGets(node[i], inner, d + 1)
     if (r !== node[i]) { cntSub(node[i]); cntAdd(r); node[i] = r; substHits++ }
     // WASM evaluates operands left-to-right. A `local.set`/`local.tee` in this
     // child updates the local before the next sibling reads it — drop tracked
@@ -4090,7 +4104,7 @@ const conditionConsts = (node) => {
       if (n.length === 3) rec(n[2]) // the value evaluates before the write
       if (n.length === 3 && isTinyConst(n[2])) (known ||= new Map()).set(n[1], {
         val: n[2], pure: true, refs: new Set(), grefs: new Set(),
-        readsMem: false, ext: false, singleUse: false, copy: false, depth: 0
+        readsMem: false, ext: false, singleUse: false, copy: false, depth: 0, height: 1
       })
       else known?.delete(n[1])
       return
@@ -4193,7 +4207,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       // resolves to a substitution (bare `(local.get $x)` root case) — assign
       // back so the bare-RHS pattern actually propagates.
       SW.length = 0; SW_MEM = 0; SW_EXT = 0
-      const sr = substGets(instr[2], known)
+      const sr = substGets(instr[2], known, 1)
       if (sr !== instr[2]) { cntSub(instr[2]); cntAdd(sr); instr[2] = sr; changed = true }
       // Nested `local.set`/`local.tee` inside the RHS already ran when the next
       // statement begins — drop tracked values that read those locals, else a
@@ -4219,7 +4233,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
         def: op === 'local.set' ? instr : null,
         singleUse: uses.gets <= 1 && uses.sets <= 1 && uses.tees === 0,
         copy: isLocalCopy(instr[2], instr[1]),
-        depth
+        depth, height: facts.height
       })
       continue
     }
@@ -4236,7 +4250,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
       if (Array.isArray(cond)) {
         const h0 = substHits
         SW.length = 0; SW_MEM = 0; SW_EXT = 0   // log unused: the branch-scope clear below covers cond writes
-        const r = substGets(cond, known)
+        const r = substGets(cond, known, 1)
         if (r !== cond) { cntSub(cond); cntAdd(r); instr[condIdx] = r; changed = true }
         else if (substHits !== h0) changed = true
       }
@@ -4266,7 +4280,7 @@ const forwardPropagate = (funcNode, params, useCounts) => {
     // Substitute: standalone local.get (walkPost can't replace root)
     if (op === 'local.get' && instr.length === 2 && typeof instr[1] === 'string') {
       const tracked = known.get(instr[1])
-      if (tracked && canSubst(tracked)) {
+      if (tracked && canSubst(tracked) && tracked.height <= FORWARD_DEPTH) {
         retireMovedDef(tracked)
         const replacement = clone(tracked.val)
         cntSub(instr)
@@ -4674,13 +4688,16 @@ const sinkSets = (funcNode, params, useCounts, inTry = false) => {
     // value reads memory they must not write memory or call out.
     const vLocals = new Set(), vGlobals = new Set()
     let vExit = false
-    walkN(val, n => {
-      const op = Array.isArray(n) ? n[0] : n
+    const vScan = (n) => {
+      const op = n[0]
       if (typeof op === 'string' && (SCHED_BRANCH.has(op) || op.startsWith('br_on_'))) vExit = true
-      if (!Array.isArray(n)) return
-      if ((n[0] === 'local.get' || n[0] === 'local.tee') && typeof n[1] === 'string') vLocals.add(n[1])
-      else if (n[0] === 'global.get' && typeof n[1] === 'string') vGlobals.add(n[1])
-    })
+      if ((op === 'local.get' || op === 'local.tee') && typeof n[1] === 'string') vLocals.add(n[1])
+      else if (op === 'global.get' && typeof n[1] === 'string') vGlobals.add(n[1])
+      let h = 0
+      for (let k = 0; k < n.length; k++) if (Array.isArray(n[k])) { const c = vScan(n[k]); if (c > h) h = c }
+      return h + 1
+    }
+    const vHeight = vScan(val)
     const vMem = readsMemory(val)
     const vPure = isPure(val)
     // A pure value that can trap (div/rem/trunc) must not cross a store, a global
@@ -4720,7 +4737,9 @@ const sinkSets = (funcNode, params, useCounts, inTry = false) => {
         hitJ = j
         const state = { reads: false, writes: new Set() }
         hit = stmt[0] === 'local.get' && stmt[1] === name && stmt.length === 2
-          ? [funcNode, j] : firstEvalGet(stmt, name, skipped, state)
+          ? [funcNode, j, 0] : firstEvalGet(stmt, name, skipped, state)
+        // the value, a tee around it where the local stays, lands within FORWARD_DEPTH
+        if (hit && hit[2] + vHeight + 1 > FORWARD_DEPTH) hit = null
         // crossed pure subtrees may read globals/memory — an effectful value must
         // not move past them unless its summarized callees write neither
         if (hit && state.reads && !vPure && !(vFx && !vFx.wMem && !vFx.wGlob.size)) hit = null
@@ -4784,7 +4803,8 @@ const sinkSets = (funcNode, params, useCounts, inTry = false) => {
  * `stmt`, descending the first-evaluated path: at each level the first non-immediate
  * (array) child of a left-to-right op is what runs first. Annotation heads are
  * skipped; bodies that are entered conditionally or repeatedly (then/else arms,
- * loops, try_table) are opaque — descent stops there. → [parent, idx] or null.
+ * loops, try_table) are opaque — descent stops there. → [parent, idx, level of the
+ * get in stmt] or null.
  */
 const firstEvalGet = (stmt, name, skipped, state) => {
   // Full evaluation-order scan: operands are visited left-to-right; the target get
@@ -4794,7 +4814,7 @@ const firstEvalGet = (stmt, name, skipped, state) => {
   // global/memory read sets `state.reads` (the caller then requires a pure value).
   // Conditionally or repeatedly (re-)entered bodies stay opaque.
   let hit = null
-  const scan = (cur) => {
+  const scan = (cur, lv) => {
     if (hit) return true
     if (!Array.isArray(cur)) return true
     const h = cur[0]
@@ -4805,13 +4825,13 @@ const firstEvalGet = (stmt, name, skipped, state) => {
       const ch = c[0]
       if (ch === 'result' || ch === 'param' || ch === 'type' || ch === 'local' || ch === 'export') continue
       if (ch === 'local.get' && c.length === 2) {
-        if (c[1] === name) { hit = [cur, i]; return true }
+        if (c[1] === name) { hit = [cur, i, lv + 1]; return true }
         skipped?.add(c[1])
         continue
       }
       let containsTarget = false
       walkN(c, x => { if (Array.isArray(x) && x[0] === 'local.get' && x[1] === name) containsTarget = true })
-      if (containsTarget) return scan(c) // the target lives here — descend, same rules
+      if (containsTarget) return scan(c, lv + 1) // the target lives here — descend, same rules
       // crossable — a pure trap-free subtree, or one whose only effects are writes to
       // locals (a tee, a set) over such values: collect what it observes, and the locals
       // it writes (the caller refuses a value reading one of them, or the target itself)
@@ -4826,11 +4846,11 @@ const firstEvalGet = (stmt, name, skipped, state) => {
         continue
       }
       // first non-crossable child: the spine — descend; failure inside blocks the scan
-      return scan(c)
+      return scan(c, lv + 1)
     }
     return true
   }
-  const ok = scan(stmt)
+  const ok = scan(stmt, 0)
   return ok && hit ? hit : null
 }
 

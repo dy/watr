@@ -5334,6 +5334,36 @@ test('deadset: a run of 5,000 ifs is scanned in a loop', () => {
   assert.equal(f(5), 15); assert.equal(f(-1), -7777)
 })
 
+// A run of statements each reading the local the one before set, as a compiler
+// writes a long chain of its source, is forwarded into a tree no deeper than the
+// bound (optimize.js FORWARD_DEPTH): forwarded whole it nested a level a statement
+// and the walks after ran out of stack near 2,500, by forwardPropagate's
+// substitution or by sinkSets' (a local written again, its reads fused into tees).
+test('propagate: a run of 5,000 statements reading the last nests to the bound', () => {
+  const N = 5000, height = (n) => Array.isArray(n) ? 1 + Math.max(0, ...n.map(height)) : 0
+  const R = (f) => Array.from({ length: N }, (_, i) => f(i)).join('\n')
+  const forms = {
+    'a local a link': `(module (func (export "f") (param $a0 i32) (result i32)
+      ${R(i => `(local $a${i + 1} i32)`)}
+      ${R(i => `(local.set $a${i + 1} (i32.add (i32.mul (local.get $a${i}) (i32.const 3)) (local.get $a0)))`)}
+      (local.get $a${N})))`,
+    'one local written again': `(module (func (export "f") (param $a0 i32) (result i32) (local $s i32)
+      (local.set $s (local.get $a0))
+      ${R(i => `(local.set $s (i32.add (i32.mul (local.get $s) (i32.const 3)) (local.get $a0)))`)}
+      (local.get $s)))`,
+  }
+  let want = 3; for (let i = 0; i < N; i++) want = (Math.imul(want, 3) + 3) | 0
+  for (const [form, src] of Object.entries(forms)) {
+    const out = optimize(parse(src))
+    const fn = out.find(n => Array.isArray(n) && n[0] === 'func')
+    const deepest = Math.max(...fn.map(height))
+    assert(deepest <= 300, `${form}: the deepest statement ${deepest} levels`)
+    assert(deepest > 100, `${form}: still forwarded, ${deepest} levels`)
+    const f = new WebAssembly.Instance(new WebAssembly.Module(compile(out))).exports.f
+    assert.equal(f(3), want, `${form}: answers`)
+  }
+})
+
 test('branch: constant-index br_table folds to the selected br (unsigned, OOR → default)', () => {
   // a chainTable'd dispatch whose scrutinee folds post-inline must keep
   // folding like the if-chain it replaced — dead arms must not freeze
