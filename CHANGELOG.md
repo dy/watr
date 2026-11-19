@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.13.8
+
+- The encoder takes a function's locals in one splice: encoding took the locals times the body.
+- Forwarding (`forwardPropagate`, `sinkSets`) stops where its statement would nest past 256 levels: a run of 2,500 statements overflowed the stack.
+- `deadset` scans a run of `if`s in a loop, and answers a local's const stores by one walk backward past 2,000 steps.
+- `propagate`, `cse` and value numbering keep one state a scope instead of a copy an arm: 10,000 guarded returns optimize in 0.4 s, was 6.7 s.
+
 ## v5.13.7
 
 - Compare the leaves of two `outline` sites by their spelling, as the group's key does: a constant an emitter wrote as a number and the same constant the parser read as a string are one token. 5.13.6 (tagged, not published) compared them by type and kept such sites apart.
