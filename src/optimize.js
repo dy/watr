@@ -6043,7 +6043,11 @@ const deadset = (ast) => {
     // nodes) is a while-loop over an explicit work state — only genuine FORKS
     // (if-arms, br_if's two paths, br_table fan-out, loop re-entry) recurse,
     // so stack depth is bounded by control NESTING, not code length (the CPS
-    // draft blew the stack on the watr-compiler corpus function).
+    // draft blew the stack on the watr-compiler corpus function). A scan that
+    // ends in a continuation hands it back to evalK's loop rather than calling
+    // evalK, and evalK scans a list position in its loop rather than calling S:
+    // as two calls a frame each, a run of 2,500 ifs (each a fork whose
+    // fall-through continues the scan) overflowed the stack.
     const evalK = (x, k, spin, depth) => {
       while (true) {
         if (++steps > 200000 || depth > 512) return 'get'
@@ -6069,15 +6073,25 @@ const deadset = (ast) => {
           // continues into k.k inside the recursion (depth-capped).
           if ((k.thn ? S(x, { list: k.thn, i: 1, k: k.k, env: k.env }, spin, depth + 1) : evalK(x, k.k, spin, depth + 1)) === 'get') return 'get'
           if (!k.els) { k = k.k; continue }
-          return S(x, { list: k.els, i: 1, k: k.k, env: k.env }, spin, depth + 1)
+          depth++
+          const r = scan(x, { list: k.els, i: 1, k: k.k, env: k.env }, spin, depth)
+          if (typeof r === 'string') return r
+          k = r; continue
         }
         if (k.i >= k.list.length) { k = k.k; continue }
-        return S(x, k, spin, depth)
+        const r = scan(x, k, spin, depth)
+        if (typeof r === 'string') return r
+        k = r
       }
     }
-    // S consumes a list-position continuation {list, i, k, env}: scan forward
-    // node by node, descending into node children by PUSHING list positions.
-    const S = (x, pos, spin, depth = 0) => {
+    const S = (x, pos, spin, depth) => {
+      const r = scan(x, pos, spin, depth)
+      return typeof r === 'string' ? r : evalK(x, r, spin, depth)
+    }
+    // scan consumes a list-position continuation {list, i, k, env}: scan forward
+    // node by node, descending into node children by PUSHING list positions. It
+    // answers 'get' or 'set', or the fork continuation to evaluate next.
+    const scan = (x, pos, spin, depth) => {
       let { list, i, k, env } = pos
       // the current "rest" continuation as data (rebuilt lazily on descend)
       const restK = () => ({ list, i: i + 1, k, env })
@@ -6090,7 +6104,7 @@ const deadset = (ast) => {
           let u = k
           while (!u.done && !u.set && !u.jump && !u.brif && !u.table && !u.arms && u.i >= u.list.length) u = u.k
           if (u.done || u.set) return 'set'
-          if (u.jump || u.brif || u.table || u.arms) return evalK(x, u, spin, depth)
+          if (u.jump || u.brif || u.table || u.arms) return u
           list = u.list; i = u.i; env = u.env; k = u.k
           continue
         }
@@ -6138,14 +6152,14 @@ const deadset = (ast) => {
           const ops = n.filter((c, j) => j > 1 && Array.isArray(c))
           const cont = { jump: true, t }
           if (ops.length) { list = [null, ...ops]; i = 1; k = cont; continue }
-          return evalK(x, cont, spin, depth)
+          return cont
         }
         if (op === 'br_if') {
           const t = env[n[1]]
           const cont = { brif: true, t, k: restK(), env }
           const ops = n.filter((c, j) => j > 1 && Array.isArray(c))
           if (ops.length) { list = [null, ...ops]; i = 1; k = cont; continue }
-          return evalK(x, cont, spin, depth)
+          return cont
         }
         if (op === 'br_table') {
           const labels = [], ops = []
@@ -6155,7 +6169,7 @@ const deadset = (ast) => {
           }
           const cont = { table: true, labels, env }
           if (ops.length) { list = [null, ...ops]; i = 1; k = cont; continue }
-          return evalK(x, cont, spin, depth)
+          return cont
         }
         if (op === 'if') {
           let j = 1, label = null
@@ -6171,7 +6185,7 @@ const deadset = (ast) => {
           const env2 = label ? { ...env, [label]: { exit: true, k: restK() } } : env
           const cont = { arms: true, thn, els, k: restK(), env: env2 }
           if (cond) { list = [null, cond]; i = 1; k = cont; env = env2; continue }
-          return evalK(x, cont, spin, depth)
+          return cont
         }
         if (op === 'block' || op === 'loop') {
           let j = 1, label = null

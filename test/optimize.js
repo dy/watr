@@ -5316,6 +5316,24 @@ test('deadset: exception edge to a reading catch keeps the store', () => {
   assert(!out2.includes('1000000'), 'no read anywhere — the store still drops')
 })
 
+// A run of ifs is a fork each, its fall-through the scan's continuation: the scan
+// and the evaluator called each other at every one, two frames an if, and 2,500
+// guarded returns (a switch a compiler lowered) ran out of stack; 5,000 hold.
+test('deadset: a run of 5,000 ifs is scanned in a loop', () => {
+  const N = 5000
+  const ifs = Array.from({ length: N }, (_, i) => `(if (i32.eq (local.get $x) (i32.const ${i})) (then (return (i32.const ${i * 3}))))`).join('\n')
+  const src = (tail) => `(module (func (export "f") (param $x i32) (result i32) (local $t i32)
+    (local.set $t (i32.const -7777))
+    ${ifs}
+    ${tail}))`
+  const kept = optimize(parse(src('(local.get $t)')), 'deadset')
+  assert(print(kept).includes('(local.set $t (i32.const -7777))'), 'read past the run: the store stays')
+  const dead = optimize(parse(src('(local.set $t (i32.const 1)) (local.get $t)')), 'deadset')
+  assert(!print(dead).includes('-7777'), 'overwritten past the run: the store drops')
+  const f = new WebAssembly.Instance(new WebAssembly.Module(compile(kept))).exports.f
+  assert.equal(f(5), 15); assert.equal(f(-1), -7777)
+})
+
 test('branch: constant-index br_table folds to the selected br (unsigned, OOR → default)', () => {
   // a chainTable'd dispatch whose scrutinee folds post-inline must keep
   // folding like the if-chain it replaced — dead arms must not freeze
